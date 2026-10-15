@@ -35,9 +35,24 @@ Import (STL three.js loader; STEP via occt-import-js later)
    → Feature detection + primitives (edge/loop/hole picker and user-added shapes — see docs/edge-tracing.md)
    → Operations (ordered list: type + features + tool + params)
    → Toolpath gen (parametric wrapped generators + Clipper2 2.5D + opencamlib WASM for 3-axis)
+   → Preview (Move[] IR → viewport polylines — see below)
    → Post-processor (Carvera dialect, pluggable)
    → .nc handoff (community controller)
 ```
+
+### Toolpath preview
+
+Verify paths on screen before they go near the machine. Rendered directly
+from the **Move[] IR** (before the post — never by re-parsing emitted G-code):
+modal axis accumulation over the move list, feed moves and rapids as
+distinctly colored polylines in the machine-coordinate scene, with the
+stock and placed model visible under them. A-axis words map back onto the
+cylinder (rotation about the stock axis) so wrapped moves preview on the
+real surface; pure XYZ moves draw as-is. Optional later: an animated cutter
+marker scrubbing the path, and feed-rate/depth shading. No external
+library — three.js GCodeLoader and Kiri:Moto's viewer exist as prior art,
+but the IR is a strictly better input and the wrapped-rotary mapping is
+our own transform.
 
 ### The cylinder canvas (core 4-axis abstraction)
 
@@ -108,7 +123,7 @@ later).
 | Phase | Deliverable | Acceptance | Est. (part-time) |
 |---|---|---|---|
 | 0 | Repo, viewer, post skeleton, facing generator | `npm test` green; drag an STL; face a virtual Ø50→Ø40 cylinder emits valid G93 gcode | done in scaffold |
-| 1 | Stock setup, model placement, tool library, flat 2.5D ops + indexed 4-axis + edge/hole tracing | cut a sign job and an indexed pocket job on real hardware | ~2–3 months |
+| 1 | Stock setup, model placement, tool library, flat 2.5D ops + indexed 4-axis + edge/hole tracing, toolpath preview | cut a sign job and an indexed pocket job on real hardware | ~2–3 months |
 | 2 | Cylinder canvas: facing, threads, wrapped grooves | cut a V-bit thread that mates with a nut; face a cylinder to ±0.05 mm | +4–6 weeks |
 | 3 | 3-axis custom (opencamlib) | 3D part roughed+finished | ~6–10 weeks, may slip to v2 |
 
