@@ -32,7 +32,7 @@ tests. Optionally wrapped in Tauri for a desktop build later.
 Import (STL three.js loader; STEP via occt-import-js later)
    → Mesh library (three.js render, decimation for viewport)
    → Placement (ModelTransform: position/rotate vs stock, snap-to-stock)
-   → Feature detection (edge/loop/hole picker — see docs/edge-tracing.md)
+   → Feature detection + primitives (edge/loop/hole picker and user-added shapes — see docs/edge-tracing.md)
    → Operations (ordered list: type + features + tool + params)
    → Toolpath gen (parametric wrapped generators + Clipper2 2.5D + opencamlib WASM for 3-axis)
    → Post-processor (Carvera dialect, pluggable)
