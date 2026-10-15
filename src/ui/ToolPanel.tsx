@@ -18,6 +18,7 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
   const [draft, setDraft] = useState<Tool | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<Tool['type'] | 'all'>('all');
 
   const editing = draft ?? selected;
   const upd = (p: Partial<Tool>) => setDraft({ ...(draft ?? selected), ...p });
@@ -44,11 +45,11 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
     onChange(tools.filter((t) => t.id !== selected.id));
   };
 
-  const filtered = search
-    ? tools.filter((t) =>
-        `${t.name} ${t.type} ${t.diameter}`.toLowerCase().includes(search.toLowerCase()),
-      )
-    : tools;
+  const filtered = tools.filter(
+    (t) =>
+      (typeFilter === 'all' || t.type === typeFilter) &&
+      (!search || `${t.name} ${t.type} ${t.diameter}`.toLowerCase().includes(search.toLowerCase())),
+  );
 
   return (
     <>
@@ -62,6 +63,17 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+        </label>
+        <label className="field">
+          <span>Bit type</span>
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as Tool['type'] | 'all')}>
+            <option value="all">All types</option>
+            {TOOL_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="tool-list">
           {filtered.map((t) => (
