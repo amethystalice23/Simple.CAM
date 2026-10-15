@@ -380,6 +380,12 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
   const circles: CircleFeature[] = [];
   const edges: EdgeFeature[] = [];
   const edgeKeys = new Set<string>();
+  /**
+   * Mesh edges lying along circle-classified loops — tessellation chords of
+   * the circle, not meaningful straight edges. Suppressed from edge features
+   * so they don't duplicate the circle (and out-vote it in hover snapping).
+   */
+  const circleEdges = new Set<string>();
 
   const emitEdge = (a: Vec3, b: Vec3) => {
     const ka = vkey(a.x, a.y, a.z);
@@ -396,6 +402,11 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     });
   };
 
+  // Pass 1: circle recognition on every loop. The fitted center comes from
+  // the plane equation (u·cx + v·cy + n·h with h = centroid·n) — the 2D fit
+  // is measured from the origin, so adding it to the centroid would double
+  // the in-plane offset on off-origin planes.
+  const straightLoops: { pts3: Vec3[]; idx: number[] }[] = [];
   for (const { plane: p, verts: loop } of loops) {
     const lp = loopPlane(verts, loop);
     const { u, v } = basis(lp.normal);
@@ -406,10 +417,11 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
 
     const circ = fitCircle(pts2);
     if (circ) {
+      const h = dot(lp.point, lp.normal); // plane offset along its normal
       const center = {
-        x: lp.point.x + u.x * circ.cx + v.x * circ.cy,
-        y: lp.point.y + u.y * circ.cx + v.y * circ.cy,
-        z: lp.point.z + u.z * circ.cx + v.z * circ.cy,
+        x: u.x * circ.cx + v.x * circ.cy + lp.normal.x * h,
+        y: u.y * circ.cx + v.y * circ.cy + lp.normal.y * h,
+        z: u.z * circ.cx + v.z * circ.cy + lp.normal.z * h,
       };
       circles.push({
         kind: 'circle',
@@ -427,12 +439,28 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
         radius: circ.r,
         inner: dot(lp.normal, normals[p]) < 0,
       });
+      for (let i = 0; i < loop.length; i++) {
+        const a = loop[i];
+        const b = loop[(i + 1) % loop.length];
+        circleEdges.add(a < b ? `${a}_${b}` : `${b}_${a}`);
+      }
       continue;
     }
+    straightLoops.push({ pts3: loop.map((vi) => verts[vi]), idx: loop });
+  }
 
-    // straight runs: split the loop at direction changes, merge collinear
-    const pts3 = loop.map((vi) => verts[vi]);
+  // Pass 2: straight-edge runs on the remaining loops: split at direction
+  // changes, merge collinear segments, skip runs that touch a circle chord.
+  for (const { pts3, idx } of straightLoops) {
     const N = pts3.length;
+    const emitRun = (start: number, end: number) => {
+      for (let i = start; i !== end; i = (i + 1) % N) {
+        const a = idx[i];
+        const b = idx[(i + 1) % N];
+        if (circleEdges.has(a < b ? `${a}_${b}` : `${b}_${a}`)) return;
+      }
+      emitEdge(pts3[start], pts3[end]);
+    };
     let runStart = 0;
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
@@ -454,7 +482,7 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
         l2 > 0 &&
         dot(u1, u2) / (l1 * l2) > 1 - 1e-9; // collinear and same direction
       if (!sameDir) {
-        emitEdge(pts3[runStart], pts3[j]);
+        emitRun(runStart, j);
         runStart = j;
       }
     }

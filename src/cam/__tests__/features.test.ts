@@ -56,6 +56,34 @@ describe('detectFeatures', () => {
     expect(inner.length).toBeGreaterThanOrEqual(2);
     for (const c of inner) expect(Math.abs(c.radius - 2)).toBeLessThan(0.05);
   });
+
+  it('places circle centers on off-origin planes (no doubled coordinates)', () => {
+    // cylinder at (10, ·, 5): cap planes do not pass through the model origin
+    const geo = new THREE.CylinderGeometry(3, 3, 10, 24).toNonIndexed();
+    geo.translate(10, 0, 5);
+    const f = detectFeatures(geo);
+    const caps = f.circles.filter((c) => Math.abs(c.axis.y) > 0.99);
+    expect(caps.length).toBeGreaterThanOrEqual(2);
+    for (const c of caps) {
+      expect(Math.abs(c.center.x - 10)).toBeLessThan(0.05);
+      expect(Math.abs(Math.abs(c.center.y) - 5)).toBeLessThan(0.05);
+      expect(Math.abs(c.center.z - 5)).toBeLessThan(0.05);
+      expect(c.radius).toBeCloseTo(3, 1);
+    }
+  });
+
+  it('suppresses tessellation chords lying on detected circles', () => {
+    const geo = new THREE.CylinderGeometry(3, 3, 10, 24).toNonIndexed();
+    geo.rotateZ(Math.PI / 2); // axis along X: cap chords run at constant x
+    const f = detectFeatures(geo);
+    expect(f.circles.length).toBeGreaterThanOrEqual(2);
+    for (const e of f.edges) {
+      // every remaining edge must run axially; constant-x edges are cap
+      // chords that duplicate the end circles
+      expect(Math.abs(e.a.x - e.b.x)).toBeGreaterThan(1e-6);
+    }
+    expect(f.edges.length).toBeGreaterThanOrEqual(24); // wall seams survive
+  });
 });
 
 describe('holesFromCircles', () => {
