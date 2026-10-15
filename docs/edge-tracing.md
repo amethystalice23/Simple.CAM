@@ -223,9 +223,10 @@ selection state and panels in `src/ui`.
 1. **Hover snap is zoom-dependent**: a screen-space radius with a ~0.5 mm
    floor, so precision holds when zoomed in but the picker stays usable
    when zoomed out. Circles and holes are key dimensions and take
-   precedence: they snap within 2.5× the tolerance (25 px / 1.25 mm
+   precedence: they snap within 1.65× the tolerance (~16.5 px / 0.83 mm
    floors) and win outright over edges inside that radius; edges are the
-   fallback.
+   fallback. The boost stays modest so flat faces between features remain
+   easy to click.
 2. **v1 features are straight lines and circles only** — no arcs, no
    regular polygons. Loops that fit neither stay unclassified polylines.
 3. **Feature ids hash model-space geometry only**, so moving or rotating

@@ -222,12 +222,12 @@ const RING_SAMPLES = 24; // hover-snap sampling density
 const SNAP_PX_FLOOR = 10;
 const SNAP_MM = 0.5;
 /**
- * Key features (circles, holes) snap with this much extra generosity, and
- * candidates compete on distance-normalized-by-tolerance — so a circle wins
- * anywhere inside its boosted radius unless the pointer is genuinely closer
- * (relative to tolerance) to an edge.
+ * Key features (circles, holes) snap with this much extra generosity and
+ * win outright over edges inside that radius — tuned low enough that flat
+ * faces between features stay easy to click (edge tolerance ×1.65 ≈ 16.5 px
+ * screen floor).
  */
-const CIRCLE_PRIORITY = 2.5;
+const CIRCLE_PRIORITY = 1.65;
 
 export interface FeatureOverlayData {
   edgeLines: THREE.LineSegments;

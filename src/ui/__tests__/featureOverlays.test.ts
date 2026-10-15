@@ -66,8 +66,8 @@ describe('findNearestFeature (measure-mode snap)', () => {
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
     const sample = data.circleSamples[capIdx][6];
     const ndc = sample.clone().project(camera);
-    const mx = ((ndc.x + 1) / 2) * w + 14; // well off the ring, still inside
-    const my = ((1 - ndc.y) / 2) * h + 10; // the boosted circle tolerance
+    const mx = ((ndc.x + 1) / 2) * w + 10; // ~12px off the ring, still inside
+    const my = ((1 - ndc.y) / 2) * h + 7; // the boosted circle tolerance
 
     const nearest = findNearestFeature(data, mx, my, camera, w, h);
     expect(nearest?.kind).toBe('circle');
