@@ -41,7 +41,7 @@ function rotate(t: ModelTransform, axis: 'x' | 'y' | 'z', deg: number): ModelTra
 
 describe('rotatedBBox', () => {
   it('returns the geometry bbox when unrotated', () => {
-    const bb = rotatedBBox(box(), identityTransform().rotationDeg);
+    const bb = rotatedBBox(box(), identityTransform());
     expect(bb.min.x).toBeCloseTo(-1);
     expect(bb.min.y).toBeCloseTo(-2);
     expect(bb.min.z).toBeCloseTo(-3);
@@ -49,7 +49,7 @@ describe('rotatedBBox', () => {
   });
 
   it('swaps Y/Z extents for a 90° rotation about X', () => {
-    const bb = rotatedBBox(box(), rotate(identityTransform(), 'x', 90).rotationDeg);
+    const bb = rotatedBBox(box(), rotate(identityTransform(), 'x', 90));
     expect(bb.min.x).toBeCloseTo(-1);
     expect(bb.min.y).toBeCloseTo(-3); // was ±3 in Z
     expect(bb.max.y).toBeCloseTo(3);

@@ -149,10 +149,13 @@ Z = const and stitch closed contours for Clipper2.
   are planes. Subsequent picks replace the second item; right-clicking
   empty space clears both. Selections are highlighted persistently with
   a dashed center-to-center connector.
-- **Features tab** (fifth sidebar tab): list of detected features grouped
-  by kind (Planes / Circles & holes / Edges), search by dimension, the
-  current selection, and measurements shown next to each feature (Ø for
-  circles, length for edges, normal for planes).
+- **Selection mode and objects share the Model tab** (no separate feature
+  list): an objects list at the top (loaded model + primitives) selects
+  which object the placement and size controls edit; a Size section with
+  per-dimension revert and a uniform-scale checkbox resizes the selected
+  object (the loaded model via ModelTransform.scale); Select features /
+  + Cylinder / + Box / Delete object sit at the bottom. Primitives carry
+  their creation-time dimensions for the revert buttons.
 - Operation dialogs reference feature ids (Phase 1 step 4 builds this UI);
   a feature consumed by an op shows a badge in the list.
 

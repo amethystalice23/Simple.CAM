@@ -424,6 +424,7 @@ export function Viewport({
       transform.rotationDeg.z * D2R,
     );
     model.position.set(transform.position.x, transform.position.y, transform.position.z);
+    model.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
   }, [transform, stock]);
 
   // Feature overlays: static outlines + the measure-mode hover line. Runs

@@ -15,7 +15,6 @@ import type {
   Tool,
 } from '../core/types';
 import { MAKERA_TOOLS } from '../core/makeraTools.generated';
-import { FeaturesPanel } from './FeaturesPanel';
 import { ModelPanel } from './ModelPanel';
 import {
   boxFromPlane,
@@ -53,12 +52,11 @@ function defaultToolId(tools: Tool[]): string {
   return (tools.find((t) => t.type === 'flat' && t.diameter === 6) ?? tools[0]).id;
 }
 
-type Tab = 'stock' | 'model' | 'features' | 'tools' | 'ops';
+type Tab = 'stock' | 'model' | 'tools' | 'ops';
 
 const TAB_LABELS: Record<Tab, string> = {
   stock: 'Stock',
   model: 'Model',
-  features: 'Features',
   tools: 'Tools',
   ops: 'Ops',
 };
@@ -77,7 +75,8 @@ export function App() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
-  const [selectedPrimitiveId, setSelectedPrimitiveId] = useState<string | null>(null);
+  const [selectedObjectId, setSelectedObjectId] = useState('model');
+  const [modelName, setModelName] = useState('Loaded model');
   const dropRef = useRef<HTMLDivElement>(null);
 
   // feature detection is model-space only: reruns on model load, not moves
@@ -131,7 +130,13 @@ export function App() {
     if (!prim) prim = kind === 'cylinder' ? defaultCylinder(stock) : defaultBox(stock);
     const p = prim;
     setPrimitives((prev) => [...prev, p]);
-    setSelectedPrimitiveId(p.id);
+    setSelectedObjectId(p.id);
+  };
+
+  const deleteSelectedObject = () => {
+    if (selectedObjectId === 'model') return;
+    setPrimitives((prev) => prev.filter((p) => p.id !== selectedObjectId));
+    setSelectedObjectId('model');
   };
 
   useEffect(() => {
@@ -169,8 +174,10 @@ export function App() {
       const buf = await file.arrayBuffer();
       const geo = new STLLoader().parse(buf);
       setGeometry(geo);
+      setModelName(file.name);
       setTransform(identityTransform()); // each model starts at its own origin
       setSelection([]); // ids belong to the old model
+      setSelectedObjectId('model');
       setTab('model');
       setError(null);
     } catch (e) {
@@ -244,7 +251,7 @@ export function App() {
                 key={t}
                 type="button"
                 className={t === tab ? 'active' : ''}
-                disabled={(t === 'model' || t === 'features') && !geometry}
+                disabled={t === 'model' && !geometry}
                 onClick={() => setTab(t)}
               >
                 {TAB_LABELS[t]}
@@ -255,36 +262,24 @@ export function App() {
           {tab === 'model' && geometry && (
             <ModelPanel
               geometry={geometry}
+              modelName={modelName}
               stock={stock}
               transform={transform}
-              onChange={setTransform}
+              onTransformChange={setTransform}
+              primitives={primitives}
+              selectedObjectId={selectedObjectId}
+              onSelectObject={setSelectedObjectId}
+              onPrimitiveChange={(p) =>
+                setPrimitives((prev) => prev.map((x) => (x.id === p.id ? p : x)))
+              }
+              onDeleteObject={deleteSelectedObject}
+              onAddPrimitive={addPrimitive}
+              selectionMode={selectionMode}
+              onSelectionModeChange={setSelectionMode}
               showFeatures={showFeatures}
               measureMode={measureMode}
               onShowFeaturesChange={setShowFeatures}
               onMeasureModeChange={setMeasureMode}
-            />
-          )}
-          {tab === 'features' && features && (
-            <FeaturesPanel
-              stock={stock}
-              features={features}
-              transform={transform}
-              selectionMode={selectionMode}
-              onSelectionModeChange={setSelectionMode}
-              selection={selection}
-              onToggle={toggleSelect}
-              onClearSelection={() => setSelection([])}
-              primitives={primitives}
-              selectedPrimitiveId={selectedPrimitiveId}
-              onSelectPrimitive={setSelectedPrimitiveId}
-              onAddPrimitive={addPrimitive}
-              onChangePrimitive={(p) =>
-                setPrimitives((prev) => prev.map((x) => (x.id === p.id ? p : x)))
-              }
-              onDeletePrimitive={(id) => {
-                setPrimitives((prev) => prev.filter((x) => x.id !== id));
-                if (selectedPrimitiveId === id) setSelectedPrimitiveId(null);
-              }}
             />
           )}
           {tab === 'tools' && (

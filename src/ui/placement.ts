@@ -23,20 +23,22 @@ function rotationMatrix(rotationDeg: Vec3): THREE.Matrix4 {
 }
 
 /**
- * AABB of the geometry once the transform's rotation is applied, before
- * translation — i.e. relative to the model's (rotated) origin. Rotating the
- * 8 bbox corners and re-enclosing gives the exact rotated AABB.
+ * AABB of the geometry once the transform's scale and rotation are applied,
+ * before translation — i.e. relative to the model's (scaled, rotated)
+ * origin. Scaling the 8 bbox corners, rotating, and re-enclosing gives the
+ * exact rotated AABB.
  */
-export function rotatedBBox(geometry: THREE.BufferGeometry, rotationDeg: Vec3): THREE.Box3 {
+export function rotatedBBox(geometry: THREE.BufferGeometry, transform: ModelTransform): THREE.Box3 {
   geometry.computeBoundingBox();
   const bb = geometry.boundingBox!;
-  const m = rotationMatrix(rotationDeg);
+  const m = rotationMatrix(transform.rotationDeg);
+  const s = transform.scale;
   const out = new THREE.Box3();
   for (let i = 0; i < 8; i++) {
     const corner = new THREE.Vector3(
-      i & 1 ? bb.max.x : bb.min.x,
-      i & 2 ? bb.max.y : bb.min.y,
-      i & 4 ? bb.max.z : bb.min.z,
+      (i & 1 ? bb.max.x : bb.min.x) * s.x,
+      (i & 2 ? bb.max.y : bb.min.y) * s.y,
+      (i & 4 ? bb.max.z : bb.min.z) * s.z,
     );
     out.expandByPoint(corner.applyMatrix4(m));
   }
@@ -88,7 +90,7 @@ export function alignAxisToStock(
   axis: 'x' | 'y' | 'z',
   edge: OriginEdge,
 ): ModelTransform {
-  const bb = rotatedBBox(geometry, transform.rotationDeg);
+  const bb = rotatedBBox(geometry, transform);
   const [s0, s1] = stockSpan(stock, axis);
   const target = edge === 'min' ? s0 : edge === 'max' ? s1 : (s0 + s1) / 2;
   const extent =
@@ -123,7 +125,7 @@ export function dropToSurface(
   transform: ModelTransform,
   stock: Stock,
 ): ModelTransform {
-  const bb = rotatedBBox(geometry, transform.rotationDeg);
+  const bb = rotatedBBox(geometry, transform);
   return {
     ...transform,
     position: { ...transform.position, z: stockTopZ(stock) - bb.min.z },

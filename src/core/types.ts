@@ -202,12 +202,16 @@ export type Primitive =
       /** axis ∥ machine X (the stock rotation axis) */
       diameter: number;
       length: number;
+      /** creation-time dimensions, for the revert buttons */
+      original: { diameter: number; length: number };
       transform: ModelTransform;
     }
   | {
       kind: 'box';
       id: string;
       size: Vec3;
+      /** creation-time dimensions, for the revert buttons */
+      original: Vec3;
       transform: ModelTransform;
     };
 
@@ -221,18 +225,21 @@ export interface Vec3 {
 
 /**
  * Placement of a loaded model in machine coordinates. The model keeps its
- * own coordinate system (STL coords are not recentered): `position` moves
- * the model's origin, `rotationDeg` rotates about it first (Euler XYZ).
+ * own coordinate system (STL coords are not recentered): `scale` stretches
+ * in model space first, then `rotationDeg` rotates about the origin, then
+ * `position` moves it (Euler XYZ).
  */
 export interface ModelTransform {
   position: Vec3;
   rotationDeg: Vec3;
+  scale: Vec3;
 }
 
 export function identityTransform(): ModelTransform {
   return {
     position: { x: 0, y: 0, z: 0 },
     rotationDeg: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
   };
 }
 // Phase 1 adds: profile2d | pocket | drill | engrave | indexedPocket

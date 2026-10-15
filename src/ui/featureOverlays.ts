@@ -183,7 +183,10 @@ export function transformFn(t: ModelTransform): (v: Vec3) => THREE.Vector3 {
     ),
   );
   const off = new THREE.Vector3(t.position.x, t.position.y, t.position.z);
-  return (v) => new THREE.Vector3(v.x, v.y, v.z).applyQuaternion(rot).add(off);
+  return (v) =>
+    new THREE.Vector3(v.x * t.scale.x, v.y * t.scale.y, v.z * t.scale.z)
+      .applyQuaternion(rot)
+      .add(off);
 }
 
 /** In-plane basis ⊥ axis. */

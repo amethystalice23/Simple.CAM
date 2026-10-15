@@ -32,7 +32,9 @@ export function transformedPositions(
   );
   const v = new THREE.Vector3();
   for (let i = 0; i < attr.count; i++) {
-    v.fromBufferAttribute(attr, i).applyQuaternion(rot);
+    v.fromBufferAttribute(attr, i);
+    v.set(v.x * t.scale.x, v.y * t.scale.y, v.z * t.scale.z); // scale first
+    v.applyQuaternion(rot);
     out[i * 3] = v.x + t.position.x;
     out[i * 3 + 1] = v.y + t.position.y;
     out[i * 3 + 2] = v.z + t.position.z;

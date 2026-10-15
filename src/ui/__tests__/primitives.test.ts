@@ -8,6 +8,10 @@ import {
   cylinderFromCircle,
   defaultBox,
   defaultCylinder,
+  resizePrimitive,
+  revertPrimitive,
+  scaleForSize,
+  scaledDims,
 } from '../primitives';
 
 const cylinderStock: Extract<Stock, { kind: 'cylinder' }> = {
@@ -122,6 +126,7 @@ describe('defaults', () => {
     expect(prim.diameter).toBeCloseTo(50);
     expect(prim.length).toBeCloseTo(100);
     expect(prim.transform.position).toEqual({ x: 50, y: 0, z: 0 });
+    expect(prim.original).toEqual({ diameter: 50, length: 100 });
   });
 
   it('box defaults to a tab on the stock top', () => {
@@ -129,5 +134,52 @@ describe('defaults', () => {
     if (prim.kind !== 'box') return;
     expect(prim.size).toEqual({ x: 10, y: 10, z: 5 });
     expect(prim.transform.position.z).toBeCloseTo(25 + 2.5); // stock top + half height
+  });
+});
+
+describe('size editing', () => {
+  it('edits one axis alone when uniform is off', () => {
+    const dims = scaledDims({ x: 10, y: 4, z: 2 }, 'x', 12, false);
+    expect(dims).toEqual({ x: 12, y: 4, z: 2 });
+  });
+
+  it('scales all axes by the edit ratio when uniform is on', () => {
+    const dims = scaledDims({ x: 10, y: 4, z: 2 }, 'x', 20, true);
+    expect(dims.x).toBeCloseTo(20);
+    expect(dims.y).toBeCloseTo(8);
+    expect(dims.z).toBeCloseTo(4);
+  });
+
+  it('derives model scale from an edited display size', () => {
+    const native = { x: 10, y: 4, z: 2 };
+    const displayed = { ...native };
+    const scale = scaleForSize(native, displayed, 'x', 5, false);
+    expect(scale.x).toBeCloseTo(0.5);
+    expect(scale.y).toBeCloseTo(1);
+    // uniform: halving X halves everything
+    const uni = scaleForSize(native, displayed, 'x', 5, true);
+    expect(uni).toEqual({ x: 0.5, y: 0.5, z: 0.5 });
+  });
+
+  it('resizes and reverts primitives, keeping originals', () => {
+    const box = defaultBox(cylinderStock);
+    if (box.kind !== 'box') return;
+    const grown = resizePrimitive(box, 'x', 20, true);
+    if (grown.kind !== 'box') return;
+    expect(grown.size.x).toBeCloseTo(20);
+    expect(grown.size.y).toBeCloseTo(20); // uniform
+    const reverted = revertPrimitive(grown, 'x');
+    if (reverted.kind !== 'box') return;
+    expect(reverted.size.x).toBeCloseTo(10);
+    expect(reverted.size.y).toBeCloseTo(20); // only the edited axis reverts
+    const cyl = defaultCylinder(cylinderStock);
+    if (cyl.kind !== 'cylinder') return;
+    const bigger = resizePrimitive(cyl, 'x', 100, false);
+    if (bigger.kind !== 'cylinder') return;
+    expect(bigger.diameter).toBeCloseTo(100);
+    expect(bigger.length).toBeCloseTo(100); // untouched
+    const restored = revertPrimitive(bigger, 'x');
+    if (restored.kind !== 'cylinder') return;
+    expect(restored.diameter).toBeCloseTo(50);
   });
 });
