@@ -19,6 +19,12 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
   const [isNew, setIsNew] = useState(false);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<Tool['type'] | 'all'>('all');
+  const [shankFilter, setShankFilter] = useState<string>('all');
+
+  /** distinct shank sizes in the library, ascending */
+  const shankSizes = [
+    ...new Set(tools.map((t) => t.shaftDiameter).filter((d): d is number => d !== undefined)),
+  ].sort((a, b) => a - b);
 
   const editing = draft ?? selected;
   const upd = (p: Partial<Tool>) => setDraft({ ...(draft ?? selected), ...p });
@@ -48,6 +54,7 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
   const filtered = tools.filter(
     (t) =>
       (typeFilter === 'all' || t.type === typeFilter) &&
+      (shankFilter === 'all' || String(t.shaftDiameter) === shankFilter) &&
       (!search || `${t.name} ${t.type} ${t.diameter}`.toLowerCase().includes(search.toLowerCase())),
   );
 
@@ -75,6 +82,17 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
             ))}
           </select>
         </label>
+        <label className="field">
+          <span>Shank Ø</span>
+          <select value={shankFilter} onChange={(e) => setShankFilter(e.target.value)}>
+            <option value="all">All shanks</option>
+            {shankSizes.map((d) => (
+              <option key={d} value={String(d)}>
+                {d} mm
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="tool-list">
           {filtered.map((t) => (
             <button
@@ -90,6 +108,7 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
               <span className="tool-name">{t.name}</span>
               <span className="tool-meta">
                 {t.type} · Ø{t.diameter}
+                {t.shaftDiameter !== undefined ? ` · shank ${t.shaftDiameter}` : ''}
               </span>
             </button>
           ))}
