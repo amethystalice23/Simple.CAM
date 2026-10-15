@@ -275,7 +275,10 @@ export function App() {
               onDeleteObject={deleteSelectedObject}
               onAddPrimitive={addPrimitive}
               selectionMode={selectionMode}
-              onSelectionModeChange={setSelectionMode}
+              onSelectionModeChange={(v) => {
+                setSelectionMode(v);
+                if (!v) setSelection([]); // leaving select mode clears the picks
+              }}
               showFeatures={showFeatures}
               measureMode={measureMode}
               onShowFeaturesChange={setShowFeatures}
