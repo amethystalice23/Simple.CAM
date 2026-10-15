@@ -4,8 +4,9 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { faceCylinder } from '../cam/faceCylinder';
 import { postCarvera } from '../post/carvera';
 import { getMaterial } from '../core/materials';
-import { originSpan } from '../core/types';
-import type { FaceCylinderOp, Stock, Tool } from '../core/types';
+import { identityTransform, originSpan } from '../core/types';
+import type { FaceCylinderOp, ModelTransform, Stock, Tool } from '../core/types';
+import { ModelPanel } from './ModelPanel';
 import { StockPanel } from './StockPanel';
 import { Viewport } from './Viewport';
 
@@ -24,6 +25,7 @@ export function App() {
   const [gcode, setGcode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stock, setStock] = useState<Stock>(initialStock);
+  const [transform, setTransform] = useState<ModelTransform>(identityTransform());
   const dropRef = useRef<HTMLDivElement>(null);
 
   // Demo job: face the stock cylinder 5mm down on the diameter. Parameters
@@ -51,7 +53,9 @@ export function App() {
   const loadStl = async (file: File) => {
     try {
       const buf = await file.arrayBuffer();
-      setGeometry(new STLLoader().parse(buf));
+      const geo = new STLLoader().parse(buf);
+      setGeometry(geo);
+      setTransform(identityTransform()); // each model starts at its own origin
       setError(null);
     } catch (e) {
       setError(`could not parse STL: ${String(e)}`);
@@ -103,11 +107,19 @@ export function App() {
             if (f) void loadStl(f);
           }}
         >
-          <Viewport geometry={geometry} stock={stock} />
+          <Viewport geometry={geometry} stock={stock} transform={transform} />
           <div className="drop-hint">{geometry ? 'STL loaded' : 'drop an STL here (Phase 1: feature tracing)'}</div>
         </div>
         <aside>
           <StockPanel stock={stock} onChange={setStock} />
+          {geometry && (
+            <ModelPanel
+              geometry={geometry}
+              stock={stock}
+              transform={transform}
+              onChange={setTransform}
+            />
+          )}
           <section>
             <h2>Operations</h2>
             {stock.kind === 'cylinder' ? (

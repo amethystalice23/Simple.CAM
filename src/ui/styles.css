@@ -90,6 +90,11 @@ section p { font-size: 13px; margin: 4px 0 8px; color: #b8c0c8; }
 .segmented.wide { display: flex; width: 100%; margin: 6px 0 10px; }
 .segmented.wide button { flex: 1; }
 .origin-grid { display: flex; flex-direction: column; gap: 2px; }
+
+.buttons { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 0; }
+.buttons button { padding: 5px 10px; font-size: 11px; }
+button.secondary { background: #31373e; }
+button.secondary:hover { background: #3d444d; }
 pre {
   font-size: 11px;
   background: #101315;

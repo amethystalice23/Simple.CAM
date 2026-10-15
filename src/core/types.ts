@@ -127,5 +127,28 @@ export interface FaceCylinderOp {
 }
 
 export type Operation = FaceCylinderOp;
+
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Placement of a loaded model in machine coordinates. The model keeps its
+ * own coordinate system (STL coords are not recentered): `position` moves
+ * the model's origin, `rotationDeg` rotates about it first (Euler XYZ).
+ */
+export interface ModelTransform {
+  position: Vec3;
+  rotationDeg: Vec3;
+}
+
+export function identityTransform(): ModelTransform {
+  return {
+    position: { x: 0, y: 0, z: 0 },
+    rotationDeg: { x: 0, y: 0, z: 0 },
+  };
+}
 // Phase 1 adds: profile2d | pocket | drill | engrave | indexedPocket
 // Phase 2 adds: thread | wrappedGroove
