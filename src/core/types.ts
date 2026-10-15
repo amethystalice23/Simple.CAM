@@ -8,7 +8,7 @@
 export interface Tool {
   id: string;
   name: string;
-  type: 'flat' | 'ball' | 'bull' | 'vbit' | 'drill' | 'threadmill';
+  type: 'flat' | 'ball' | 'bull' | 'vbit' | 'drill' | 'threadmill' | 'corn';
   /** cutting diameter, mm (for vbit: the large end) */
   diameter: number;
   /** included tip angle, degrees (vbit/engraver) */

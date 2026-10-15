@@ -10,7 +10,7 @@ interface Props {
   onRestorePresets: () => void;
 }
 
-const TOOL_TYPES: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill'];
+const TOOL_TYPES: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill', 'corn'];
 
 /** Nested grouping for the list: shank → subtype → tools by ascending diameter. */
 function groupTools(tools: Tool[]) {

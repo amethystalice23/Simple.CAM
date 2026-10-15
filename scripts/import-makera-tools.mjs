@@ -22,7 +22,9 @@ const DIR = 'CAM_Post_Processors/Fusion360-profiles/Tool Files';
 /** [remote file name, our type] — see src/core/types.ts Tool.type */
 const CATEGORIES = [
   ['Makera Ball Endmills', 'ball'],
-  ['Makera Corn Bits', 'flat'], // corner-radius bits, but Fusion declares them flat (no CR field)
+  // Corn bits are serrated "corn-cob" router bits for PCB/composites: flat
+  // bottom profile (Fusion declares them flat end mills), but their own type.
+  ['Makera Corn Bits', 'corn'],
   ['Makera Drill Bits', 'drill'],
   ['Makera Engraving Bits', 'vbit'],
   ['Makera O Flute Bits', 'flat'],

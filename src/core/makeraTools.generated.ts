@@ -249,7 +249,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-0-6-3mm",
     "name": "TiN Coating Corn Bit 0.6*3mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 0.6,
     "spindleRpm": 18000,
@@ -262,7 +262,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-0-7-4mm",
     "name": "TiN Coating Corn Bit 0.7*4mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 0.7,
     "spindleRpm": 18000,
@@ -275,7 +275,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-0-8-5-5mm",
     "name": "TiN Coating Corn Bit 0.8*5.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 0.8,
     "spindleRpm": 18000,
@@ -288,7 +288,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-0-9-6mm",
     "name": "TiN Coating Corn Bit 0.9*6mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 0.9,
     "spindleRpm": 18000,
@@ -301,7 +301,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-7mm",
     "name": "TiN Coating Corn Bit 1*7mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1,
     "spindleRpm": 18000,
@@ -314,7 +314,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-1-7mm",
     "name": "TiN Coating Corn Bit 1.1*7mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.1,
     "spindleRpm": 18000,
@@ -327,7 +327,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-2-7mm",
     "name": "TiN Coating Corn Bit 1.2*7mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.2,
     "spindleRpm": 18000,
@@ -340,7 +340,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-3-7-5mm",
     "name": "TiN Coating Corn Bit 1.3*7.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.3,
     "spindleRpm": 18000,
@@ -353,7 +353,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-4-7-5mm",
     "name": "TiN Coating Corn Bit 1.4*7.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.4,
     "spindleRpm": 18000,
@@ -366,7 +366,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-5-8-5mm",
     "name": "TiN Coating Corn Bit 1.5*8.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.5,
     "spindleRpm": 18000,
@@ -379,7 +379,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-6-8-5mm",
     "name": "TiN Coating Corn Bit 1.6*8.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.6,
     "spindleRpm": 18000,
@@ -392,7 +392,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-7-9-5mm",
     "name": "TiN Coating Corn Bit 1.7*9.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.7,
     "spindleRpm": 18000,
@@ -405,7 +405,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-8-9-5mm",
     "name": "TiN Coating Corn Bit 1.8*9.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.8,
     "spindleRpm": 18000,
@@ -418,7 +418,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-1-9-9-5mm",
     "name": "TiN Coating Corn Bit 1.9*9.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 1.9,
     "spindleRpm": 18000,
@@ -431,7 +431,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-2-10-5mm",
     "name": "TiN Coating Corn Bit 2*10.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 2,
     "spindleRpm": 18000,
@@ -444,7 +444,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-2-1-10-5mm",
     "name": "TiN Coating Corn Bit 2.1*10.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 2.1,
     "spindleRpm": 18000,
@@ -457,7 +457,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-2-4-10-5mm",
     "name": "TiN Coating Corn Bit 2.4*10.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 2.4,
     "spindleRpm": 18000,
@@ -470,7 +470,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-2-5-10-5mm",
     "name": "TiN Coating Corn Bit 2.5*10.5mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 2.5,
     "spindleRpm": 18000,
@@ -483,7 +483,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-3-12mm",
     "name": "TiN Coating Corn Bit 3*12mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 3,
     "spindleRpm": 18000,
@@ -496,7 +496,7 @@ export const MAKERA_TOOLS: Tool[] = [
   {
     "id": "makera-corn-bits-tin-coating-corn-bit-3-175-12mm",
     "name": "TiN Coating Corn Bit 3.175*12mm",
-    "type": "flat",
+    "type": "corn",
     "subtype": "Corn (TiN)",
     "diameter": 3.175,
     "spindleRpm": 18000,

@@ -20,9 +20,10 @@ describe('imported Makera tool library', () => {
 
   it('maps Fusion categories onto our tool types', () => {
     const types = new Set(MAKERA_TOOLS.map((t) => t.type));
-    for (const expected of ['ball', 'flat', 'drill', 'vbit', 'threadmill'] as const) {
+    for (const expected of ['ball', 'flat', 'drill', 'vbit', 'threadmill', 'corn'] as const) {
       expect(types.has(expected), `no ${expected} imported`).toBe(true);
     }
+    expect(types.has('bull')).toBe(false); // Makera ships no corner-radius bits
   });
 
   it('gives vbits an included angle and tip diameter', () => {

@@ -20,7 +20,7 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   materialId: 'aluminum-6061',
 };
 
-const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v1';
+const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v2'; // v2: corn bits split out of flat
 
 function loadToolLibrary(): Tool[] {
   try {
