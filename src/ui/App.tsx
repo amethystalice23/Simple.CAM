@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BufferGeometry } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { faceCylinder } from '../cam/faceCylinder';
+import { detectFeatures } from '../cam/features';
 import { postCarvera } from '../post/carvera';
 import { getMaterial } from '../core/materials';
 import { identityTransform, originSpan } from '../core/types';
@@ -51,7 +52,12 @@ export function App() {
   const [tab, setTab] = useState<Tab>('stock');
   const [tools, setTools] = useState<Tool[]>(loadToolLibrary);
   const [toolId, setToolId] = useState<string>(() => defaultToolId(loadToolLibrary()));
+  const [showFeatures, setShowFeatures] = useState(false);
+  const [measureMode, setMeasureMode] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
+
+  // feature detection is model-space only: reruns on model load, not moves
+  const features = useMemo(() => (geometry ? detectFeatures(geometry) : null), [geometry]);
 
   useEffect(() => {
     try {
@@ -141,7 +147,14 @@ export function App() {
             if (f) void loadStl(f);
           }}
         >
-          <Viewport geometry={geometry} stock={stock} transform={transform} />
+          <Viewport
+            geometry={geometry}
+            stock={stock}
+            transform={transform}
+            features={features}
+            showFeatures={showFeatures}
+            measureMode={measureMode}
+          />
           <div className="drop-hint">{geometry ? 'STL loaded' : 'drop an STL here (Phase 1: feature tracing)'}</div>
         </div>
         <aside>
@@ -160,7 +173,16 @@ export function App() {
           </nav>
           {tab === 'stock' && <StockPanel stock={stock} onChange={setStock} />}
           {tab === 'model' && geometry && (
-            <ModelPanel geometry={geometry} stock={stock} transform={transform} onChange={setTransform} />
+            <ModelPanel
+              geometry={geometry}
+              stock={stock}
+              transform={transform}
+              onChange={setTransform}
+              showFeatures={showFeatures}
+              measureMode={measureMode}
+              onShowFeaturesChange={setShowFeatures}
+              onMeasureModeChange={setMeasureMode}
+            />
           )}
           {tab === 'tools' && (
             <ToolPanel

@@ -9,6 +9,10 @@ interface Props {
   stock: Stock;
   transform: ModelTransform;
   onChange: (t: ModelTransform) => void;
+  showFeatures: boolean;
+  measureMode: boolean;
+  onShowFeaturesChange: (v: boolean) => void;
+  onMeasureModeChange: (v: boolean) => void;
 }
 
 const AXES = ['x', 'y', 'z'] as const;
@@ -22,7 +26,16 @@ const EDGE_LABELS: Record<Axis, Record<OriginEdge, string>> = {
 };
 
 /** Move/rotate the loaded model relative to the stock. */
-export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
+export function ModelPanel({
+  geometry,
+  stock,
+  transform,
+  onChange,
+  showFeatures,
+  measureMode,
+  onShowFeaturesChange,
+  onMeasureModeChange,
+}: Props) {
   geometry.computeBoundingBox();
   const bb = geometry.boundingBox!;
   const size = bb.getSize(new THREE.Vector3());
@@ -45,6 +58,28 @@ export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
       <p>
         size {size.x.toFixed(1)} × {size.y.toFixed(1)} × {size.z.toFixed(1)} mm (model coords)
       </p>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={showFeatures}
+          onChange={(e) => onShowFeaturesChange(e.target.checked)}
+        />
+        <span>
+          Show detected features
+          <span className="legend">edges red · circles green · holes cyan</span>
+        </span>
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={measureMode}
+          onChange={(e) => onMeasureModeChange(e.target.checked)}
+        />
+        <span>
+          Measure mode
+          <span className="legend">hover snaps to the nearest feature</span>
+        </span>
+      </label>
 
       <p className="subhead">Position (mm)</p>
       {AXES.map((a) => (

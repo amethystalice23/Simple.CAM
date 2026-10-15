@@ -1,9 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { originSpan } from '../core/types';
 import type { ModelTransform, Stock } from '../core/types';
+import type { DetectedFeatures } from '../cam/features';
 import { NavCube } from './navcube';
+import {
+  buildFeatureOverlayData,
+  findNearestFeature,
+  hoverLineGeometry,
+  type FeatureOverlayData,
+} from './featureOverlays';
 
 const D2R = Math.PI / 180;
 
@@ -11,6 +18,9 @@ interface Props {
   geometry: THREE.BufferGeometry | null;
   stock: Stock;
   transform: ModelTransform;
+  features: DetectedFeatures | null;
+  showFeatures: boolean;
+  measureMode: boolean;
 }
 
 /**
@@ -22,9 +32,15 @@ interface Props {
  * machine (0,0,0). Toolpath preview (wrapped U,V,Z moves mapped back onto
  * the cylinder) lands in Phase 1.
  */
-export function Viewport({ geometry, stock, transform }: Props) {
+export function Viewport({ geometry, stock, transform, features, showFeatures, measureMode }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
+  const featureGroupRef = useRef<THREE.Group | null>(null);
+  const overlayRef = useRef<FeatureOverlayData | null>(null);
+  const hoverLineRef = useRef<THREE.LineSegments | null>(null);
+  const measureRef = useRef(measureMode);
+  measureRef.current = measureMode;
+  const [label, setLabel] = useState<{ text: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const el = host.current;
@@ -93,7 +109,34 @@ export function Viewport({ geometry, stock, transform }: Props) {
       if (normal) startOrient(normal);
     };
     const onPointerMove = (e: PointerEvent) => {
-      renderer.domElement.style.cursor = hit(e) ? 'pointer' : '';
+      const rect = renderer.domElement.getBoundingClientRect();
+      const overNav = hit(e);
+      renderer.domElement.style.cursor = overNav ? 'pointer' : '';
+      const hoverLine = hoverLineRef.current;
+      const overlay = overlayRef.current;
+      if (overNav || !measureRef.current || !hoverLine || !overlay) {
+        if (hoverLine) hoverLine.visible = false;
+        setLabel(null);
+        return;
+      }
+      const nearest = findNearestFeature(
+        overlay,
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        camera,
+        rect.width,
+        rect.height,
+      );
+      if (nearest) {
+        hoverLine.geometry.dispose();
+        hoverLine.geometry = hoverLineGeometry(overlay, nearest.kind, nearest.index);
+        (hoverLine.material as THREE.LineBasicMaterial).color.setHex(nearest.color);
+        hoverLine.visible = true;
+        setLabel({ text: nearest.text, x: nearest.anchor.x, y: nearest.anchor.y });
+      } else {
+        hoverLine.visible = false;
+        setLabel(null);
+      }
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
@@ -159,6 +202,11 @@ export function Viewport({ geometry, stock, transform }: Props) {
     scene.add(model);
     if (geometry) geometry.computeBoundingBox();
 
+    // feature overlay group: children managed by the overlay effect below
+    const featureGroup = new THREE.Group();
+    scene.add(featureGroup);
+    featureGroupRef.current = featureGroup;
+
     controls.target.copy(center);
 
     const onResize = () => {
@@ -202,6 +250,9 @@ export function Viewport({ geometry, stock, transform }: Props) {
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       navCube.dispose();
+      featureGroupRef.current = null;
+      overlayRef.current = null;
+      hoverLineRef.current = null;
       controls.dispose();
       renderer.dispose();
       el.removeChild(renderer.domElement);
@@ -236,5 +287,58 @@ export function Viewport({ geometry, stock, transform }: Props) {
     model.position.set(transform.position.x, transform.position.y, transform.position.z);
   }, [transform, stock]);
 
-  return <div ref={host} className="viewport-canvas" />;
+  // Feature overlays: static outlines + the measure-mode hover line. Runs
+  // after the scene effect (which owns the feature group) and re-runs when
+  // the stock rebuilds the scene.
+  useEffect(() => {
+    const group = featureGroupRef.current;
+    if (!group) return;
+    if (!features) {
+      overlayRef.current = null;
+      hoverLineRef.current = null;
+      setLabel(null);
+      return;
+    }
+
+    const data = buildFeatureOverlayData(features, transform);
+    data.edgeLines.visible = showFeatures;
+    data.circleLines.visible = showFeatures;
+    data.holeLines.visible = showFeatures;
+    group.add(data.edgeLines, data.circleLines, data.holeLines);
+
+    const hoverLine = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false }),
+    );
+    hoverLine.renderOrder = 5;
+    hoverLine.visible = false;
+    group.add(hoverLine);
+
+    overlayRef.current = data;
+    hoverLineRef.current = hoverLine;
+
+    return () => {
+      for (const l of [data.edgeLines, data.circleLines, data.holeLines]) {
+        group.remove(l);
+        l.geometry.dispose();
+        (l.material as THREE.Material).dispose();
+      }
+      group.remove(hoverLine);
+      hoverLine.geometry.dispose();
+      (hoverLine.material as THREE.Material).dispose();
+      overlayRef.current = null;
+      hoverLineRef.current = null;
+    };
+  }, [features, transform, stock, showFeatures]);
+
+  return (
+    <>
+      <div ref={host} className="viewport-canvas" />
+      {label && (
+        <div className="measure-label" style={{ left: label.x, top: label.y }}>
+          {label.text}
+        </div>
+      )}
+    </>
+  );
 }
