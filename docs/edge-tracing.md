@@ -91,6 +91,20 @@ which bounds material *inside* it (the mesh has faces below the circle's
 plane) is a **hole**: candidate drill target (center + diameter) and/or
 pocket boundary.
 
+### Sharp-junction circles (chamfer roots)
+
+A chamfer's root circle — the true wall/bore diameter — lies between two
+multi-plane surface bands (chamfer + wall), so no single plane's border
+loop contains it and the plane path above can never see it. A second path
+detects these: mesh edges whose adjacent face normals deviate by more
+than 30° (so smooth tessellation joins are excluded) are stitched into
+loops — taking the straightest continuation at junctions — and closed
+loops are circle-fitted like plane borders. Duplicates of plane-path
+circles are merged geometrically (center/radius/axis, sign-insensitive).
+The hole test for junction circles votes on the radial component of the
+adjacent surface normals: surfaces facing back toward the circle's axis
+mean material outside the loop (a bore).
+
 ### Bounding measurements (for auto-sizing primitives)
 
 v1 deliberately skips full cylindrical-surface fitting. We provide the

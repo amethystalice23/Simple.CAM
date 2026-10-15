@@ -84,6 +84,38 @@ describe('detectFeatures', () => {
     }
     expect(f.edges.length).toBeGreaterThanOrEqual(24); // wall seams survive
   });
+
+  it('detects chamfer-root circles: the true outer and bore diameters', () => {
+    // closed lathe profile (ends where it starts): Ø20 tube, bore Ø12,
+    // 45° chamfers on the top outer edge and the bore edge
+    const profile = [
+      [6, 0],
+      [10, 0],
+      [10, 3],
+      [9, 4],
+      [9, 5],
+      [5, 5],
+      [6, 4],
+      [6, 0],
+    ].map(([r, y]) => new THREE.Vector2(r, y));
+    const geo = new THREE.LatheGeometry(profile, 32).toNonIndexed();
+    const f = detectFeatures(geo);
+
+    // outer chamfer root at y=3: the true Ø20, invisible to plane-loop
+    // detection (it sits between the chamfer band and the wall band)
+    const outerRoot = f.circles.find(
+      (c) => Math.abs(c.radius - 10) < 0.02 && Math.abs(c.center.y - 3) < 0.05,
+    );
+    expect(outerRoot).toBeDefined();
+    expect(outerRoot?.inner).toBe(false);
+
+    // bore chamfer root at y=4: the true Ø12 bore, flagged as a hole
+    const boreRoot = f.circles.find(
+      (c) => Math.abs(c.radius - 6) < 0.02 && Math.abs(c.center.y - 4) < 0.05,
+    );
+    expect(boreRoot).toBeDefined();
+    expect(boreRoot?.inner).toBe(true);
+  });
 });
 
 describe('holesFromCircles', () => {

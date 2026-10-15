@@ -24,6 +24,12 @@ export interface DetectedFeatures {
 
 /** Coplanar grouping tolerance, degrees. */
 const ANGLE_TOL = 0.5;
+/**
+ * Adjacent faces deviating by more than this (degrees) form a feature edge.
+ * Smooth tessellation joins (e.g. 24-segment cylinder walls at 15°) stay
+ * below it; real corners (chamfers at 45°, flats, caps) clear it.
+ */
+const SHARP_DEG = 30;
 /** Vertex welding precision, mm. */
 const WELD = 1e6;
 
@@ -35,6 +41,29 @@ function vkey(x: number, y: number, z: number): string {
 
 function dot(a: Vec3, b: Vec3): number {
   return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function sub(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+function norm(a: Vec3): Vec3 {
+  const l = Math.hypot(a.x, a.y, a.z);
+  return l > 0 ? { x: a.x / l, y: a.y / l, z: a.z / l } : { x: 0, y: 0, z: 0 };
+}
+
+/** Geometric circle equality (id hashes can differ on axis sign). */
+function sameCircle(a: CircleFeature, b: CircleFeature): boolean {
+  const dc = Math.hypot(
+    a.center.x - b.center.x,
+    a.center.y - b.center.y,
+    a.center.z - b.center.z,
+  );
+  return (
+    dc < 1e-3 &&
+    Math.abs(a.radius - b.radius) < 1e-4 &&
+    Math.abs(Math.abs(dot(a.axis, b.axis)) - 1) < 1e-6
+  );
 }
 
 function cross(a: Vec3, b: Vec3): Vec3 {
@@ -486,6 +515,120 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
         runStart = j;
       }
     }
+  }
+
+  // Pass 3: sharp-junction circles (chamfer roots). A chamfer's root circle
+  // — the true wall/bore diameter — lies between two multi-plane surface
+  // bands (chamfer + wall), so no single plane's border loop contains it.
+  // Stitch mesh edges whose adjacent faces deviate sharply into loops
+  // (taking the straightest continuation at junctions) and circle-fit them.
+  const cosSharp = Math.cos((SHARP_DEG * Math.PI) / 180);
+  const incident = new Map<number, { other: number; key: string }[]>();
+  const featureKeys: string[] = [];
+  for (const [key, faces] of topo.edgeFaces) {
+    if (faces.length >= 2 && dot(topo.faceNormal[faces[0]], topo.faceNormal[faces[1]]) >= cosSharp) {
+      continue; // smooth join, not a feature edge
+    }
+    featureKeys.push(key);
+    const [a, b] = key.split('_').map(Number);
+    for (const [from, to] of [
+      [a, b],
+      [b, a],
+    ] as const) {
+      const arr = incident.get(from);
+      if (arr) arr.push({ other: to, key });
+      else incident.set(from, [{ other: to, key }]);
+    }
+  }
+
+  const walked = new Set<string>();
+  for (const key of featureKeys) {
+    if (walked.has(key)) continue;
+    const [a, b] = key.split('_').map(Number);
+    walked.add(key);
+    const loop: number[] = [a, b];
+    let prev = a;
+    let cur = b;
+    let guard = verts.length + 2;
+    let closed = false;
+    while (guard-- > 0) {
+      const cands = (incident.get(cur) ?? []).filter((c) => !walked.has(c.key));
+      if (cands.length === 0) break; // open chain: not a loop
+      let pick = cands[0];
+      if (cands.length > 1) {
+        const dir = norm(sub(verts[cur], verts[prev]));
+        let bestCos = -Infinity;
+        for (const c of cands) {
+          const cos = dot(dir, norm(sub(verts[c.other], verts[cur])));
+          if (cos > bestCos) {
+            bestCos = cos;
+            pick = c;
+          }
+        }
+      }
+      walked.add(pick.key);
+      if (pick.other === loop[0]) {
+        closed = true;
+        break;
+      }
+      loop.push(pick.other);
+      prev = cur;
+      cur = pick.other;
+    }
+    if (!closed) continue;
+
+    const pts3 = loop.map((vi) => verts[vi]);
+    const lp = loopPlane(pts3, pts3.map((_, i) => i));
+    const { u, v } = basis(lp.normal);
+    const pts2: Vec2[] = pts3.map((w) => ({ x: dot(w, u), y: dot(w, v) }));
+    const circ = fitCircle(pts2);
+    if (!circ) continue;
+
+    const h = dot(lp.point, lp.normal);
+    const center = {
+      x: u.x * circ.cx + v.x * circ.cy + lp.normal.x * h,
+      y: u.y * circ.cx + v.y * circ.cy + lp.normal.y * h,
+      z: u.z * circ.cx + v.z * circ.cy + lp.normal.z * h,
+    };
+    // Hole test: vote on the radial component of the adjacent surface
+    // normals at each ring edge — surfaces facing back toward the circle's
+    // axis mean material outside the loop (a bore).
+    let vote = 0;
+    for (let i = 0; i < loop.length; i++) {
+      const ea = loop[i];
+      const eb = loop[(i + 1) % loop.length];
+      const faces = topo.edgeFaces.get(ea < eb ? `${ea}_${eb}` : `${eb}_${ea}`) ?? [];
+      if (faces.length < 2) continue;
+      const m = norm({
+        x: topo.faceNormal[faces[0]].x + topo.faceNormal[faces[1]].x,
+        y: topo.faceNormal[faces[0]].y + topo.faceNormal[faces[1]].y,
+        z: topo.faceNormal[faces[0]].z + topo.faceNormal[faces[1]].z,
+      });
+      const mid = {
+        x: (verts[ea].x + verts[eb].x) / 2,
+        y: (verts[ea].y + verts[eb].y) / 2,
+        z: (verts[ea].z + verts[eb].z) / 2,
+      };
+      vote += dot(m, norm(sub(mid, center)));
+    }
+
+    const circle: CircleFeature = {
+      kind: 'circle',
+      id: featureId('circle', [
+        center.x,
+        center.y,
+        center.z,
+        lp.normal.x,
+        lp.normal.y,
+        lp.normal.z,
+        circ.r,
+      ]),
+      center,
+      axis: lp.normal,
+      radius: circ.r,
+      inner: vote < 0,
+    };
+    if (!circles.some((c) => sameCircle(c, circle))) circles.push(circle);
   }
 
   return { planes, circles, edges };
