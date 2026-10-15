@@ -23,6 +23,11 @@ export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
     onChange({ ...transform, position: { ...pos, [axis]: v } });
   const setRotation = (axis: 'x' | 'y' | 'z', v: number) =>
     onChange({ ...transform, rotationDeg: { ...rot, [axis]: v } });
+  /** Nudge a rotation by ±90° and normalize into −180…180. */
+  const bumpRot = (axis: 'x' | 'y' | 'z', delta: number) => {
+    const n = (((rot[axis] + delta) % 360) + 360) % 360;
+    setRotation(axis, n > 180 ? n - 360 : n);
+  };
 
   return (
     <section>
@@ -36,6 +41,15 @@ export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
       <NumberField label="Rotate X (°)" value={rot.x} step={15} onCommit={(v) => setRotation('x', v)} />
       <NumberField label="Rotate Y (°)" value={rot.y} step={15} onCommit={(v) => setRotation('y', v)} />
       <NumberField label="Rotate Z (°)" value={rot.z} step={15} onCommit={(v) => setRotation('z', v)} />
+      <div className="buttons">
+        {(['x', 'y', 'z'] as const).flatMap((a) =>
+          [-90, 90].map((d) => (
+            <button key={`${a}${d}`} type="button" onClick={() => bumpRot(a, d)}>
+              {`${a.toUpperCase()} ${d > 0 ? '+' : '−'}90°`}
+            </button>
+          )),
+        )}
+      </div>
       <div className="buttons">
         <button type="button" onClick={() => onChange(centerOnX(geometry, transform, stock))}>
           Center X
