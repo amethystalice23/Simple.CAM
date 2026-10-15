@@ -184,12 +184,16 @@ selection state and panels in `src/ui`.
   vertices, vertex exactly on the slice plane, non-manifold edge.
 - Detection tolerances: circle fit error just inside/outside tolerance.
 
-## Open questions (decide during implementation)
+## Decisions (2026-10-15)
 
-1. Hover snap: screen-space radius vs fixed mm tolerance (measure tools
-   use ~0.5 mm; screen-space scales better when zoomed out)?
-2. Do we need arcs in v1 edges, or straight edges + circles only?
-3. Feature id stability across transform edits: ids hash model-space
-   geometry only (placed coords), so moving the model keeps ids?
-4. Primitive↔operation binding: by value at generation time, or live link
-   (edit primitive → op re-generates)?
+1. **Hover snap is zoom-dependent**: a screen-space radius with a ~0.5 mm
+   floor, so precision holds when zoomed in but the picker stays usable
+   when zoomed out.
+2. **v1 features are straight lines and circles only** — no arcs, no
+   regular polygons. Loops that fit neither stay unclassified polylines.
+3. **Feature ids hash model-space geometry only**, so moving or rotating
+   the model keeps ids — and therefore selections and op bindings —
+   stable.
+4. **Primitive↔operation binding is live**: operations store target ids
+   and generation resolves them at run time, so editing a primitive or
+   its placement re-generates the affected ops.

@@ -143,6 +143,47 @@ export interface FaceCylinderOp {
   rotation: 'cw' | 'ccw';
 }
 
+export interface Vec2 {
+  x: number;
+  y: number;
+}
+
+/** Detected features — see docs/edge-tracing.md. Model-space geometry. */
+export interface PlaneFeature {
+  kind: 'plane';
+  id: string;
+  point: Vec3;
+  normal: Vec3;
+}
+
+export interface CircleFeature {
+  kind: 'circle';
+  id: string;
+  center: Vec3;
+  /** loop normal (Newell); sign distinguishes outer boundaries from holes */
+  axis: Vec3;
+  radius: number;
+  /** true when the loop bounds material outside it — an interior hole */
+  inner: boolean;
+}
+
+export interface EdgeFeature {
+  kind: 'edge';
+  id: string;
+  a: Vec3;
+  b: Vec3;
+}
+
+/** A circle whose loop is an interior hole aligned to the machine drill axis. */
+export interface HoleFeature {
+  kind: 'hole';
+  id: string;
+  center: Vec3;
+  diameter: number;
+}
+
+export type Feature = PlaneFeature | CircleFeature | EdgeFeature | HoleFeature;
+
 export type Operation = FaceCylinderOp;
 
 export interface Vec3 {
