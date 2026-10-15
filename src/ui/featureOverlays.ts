@@ -84,6 +84,7 @@ export function planeHighlightMesh(
   features: DetectedFeatures,
   transform: ModelTransform,
   planeIndex: number,
+  color: number = PLANE_SELECT,
 ): THREE.Mesh | null {
   const geo = geometry.index ? geometry.toNonIndexed() : geometry;
   const attr = geo.getAttribute('position') as THREE.BufferAttribute;
@@ -103,7 +104,7 @@ export function planeHighlightMesh(
   return new THREE.Mesh(
     g,
     new THREE.MeshBasicMaterial({
-      color: PLANE_SELECT,
+      color,
       transparent: true,
       opacity: 0.3,
       depthTest: false,
@@ -140,6 +141,8 @@ export const CIRCLE_HOVER = 0x88ffbb;
 export const HOLE_HOVER = 0x99eeff;
 /** face/plane selection highlight */
 export const PLANE_SELECT = 0xf0c050;
+/** operation-selection highlight (distinct from measure picks) */
+export const SELECT_COLOR = 0x7fdfff;
 
 const RING_SEGMENTS = 72;
 const RING_SAMPLES = 24; // hover-snap sampling density
@@ -169,7 +172,8 @@ export interface FeatureOverlayData {
   circleInner: boolean[];
 }
 
-function transformFn(t: ModelTransform): (v: Vec3) => THREE.Vector3 {
+/** Model-space point → machine-space point under a transform. */
+export function transformFn(t: ModelTransform): (v: Vec3) => THREE.Vector3 {
   const rot = new THREE.Quaternion().setFromEuler(
     new THREE.Euler(
       (t.rotationDeg.x * Math.PI) / 180,

@@ -168,9 +168,16 @@ Types for v1:
 
 - Placement reuses ModelTransform and the same snap buttons
   (`alignAxisToStock`) — a primitive is placed like a model.
-- **Auto-sizing**: when adding a cylinder primitive, the dialog offers
-  the measured defaults — diameter = 2 × bounding radius (about the stock
-  axis) + margin, length = model axial extent — editable before creation.
+- **Auto-sizing from the selection**: adding a cylinder with a circle
+  selected creates it at the same diameter and center (axis ∥ X, length
+  from the model's axial extent); adding a box with a plane selected
+  creates it with one face matching that face's in-plane extent, sitting
+  on the face (thickness along its normal). Without a matching selection
+  the primitives default from the stock (stock-sized cylinder; a 10×10×5
+  tab on the stock top) and are sized afterwards.
+- Selection mode is a toggle on the Features tab: while on, viewport
+  left-clicks toggle features/faces into the operation selection set
+  (stable ids); rows in the tab's feature list do the same.
 - Primitives are first-class scene objects: rendered in the viewport
   (distinct color from the model), listed under the Features tab, and
   deletable.

@@ -190,6 +190,27 @@ export interface HoleFeature {
 
 export type Feature = PlaneFeature | CircleFeature | EdgeFeature | HoleFeature;
 
+/**
+ * User-added operation targets — roughing volumes, tabs, keep-out regions.
+ * See docs/edge-tracing.md §4. `position` in the transform is the primitive's
+ * center (not an arbitrary origin), machine coordinates.
+ */
+export type Primitive =
+  | {
+      kind: 'cylinder';
+      id: string;
+      /** axis ∥ machine X (the stock rotation axis) */
+      diameter: number;
+      length: number;
+      transform: ModelTransform;
+    }
+  | {
+      kind: 'box';
+      id: string;
+      size: Vec3;
+      transform: ModelTransform;
+    };
+
 export type Operation = FaceCylinderOp;
 
 export interface Vec3 {

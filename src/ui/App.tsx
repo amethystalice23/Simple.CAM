@@ -2,16 +2,30 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BufferGeometry } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { faceCylinder } from '../cam/faceCylinder';
-import { detectFeatures } from '../cam/features';
+import { axialExtentX, detectFeatures } from '../cam/features';
+import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
 import { getMaterial } from '../core/materials';
 import { identityTransform, originSpan } from '../core/types';
-import type { FaceCylinderOp, ModelTransform, Stock, Tool } from '../core/types';
+import type {
+  FaceCylinderOp,
+  ModelTransform,
+  Primitive,
+  Stock,
+  Tool,
+} from '../core/types';
 import { MAKERA_TOOLS } from '../core/makeraTools.generated';
+import { FeaturesPanel } from './FeaturesPanel';
 import { ModelPanel } from './ModelPanel';
+import {
+  boxFromPlane,
+  cylinderFromCircle,
+  defaultBox,
+  defaultCylinder,
+} from './primitives';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
-import { Viewport } from './Viewport';
+import { Viewport, type ResolvedSelection } from './Viewport';
 
 const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
@@ -39,9 +53,15 @@ function defaultToolId(tools: Tool[]): string {
   return (tools.find((t) => t.type === 'flat' && t.diameter === 6) ?? tools[0]).id;
 }
 
-type Tab = 'stock' | 'model' | 'tools' | 'ops';
+type Tab = 'stock' | 'model' | 'features' | 'tools' | 'ops';
 
-const TAB_LABELS: Record<Tab, string> = { stock: 'Stock', model: 'Model', tools: 'Tools', ops: 'Ops' };
+const TAB_LABELS: Record<Tab, string> = {
+  stock: 'Stock',
+  model: 'Model',
+  features: 'Features',
+  tools: 'Tools',
+  ops: 'Ops',
+};
 
 export function App() {
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
@@ -54,10 +74,65 @@ export function App() {
   const [toolId, setToolId] = useState<string>(() => defaultToolId(loadToolLibrary()));
   const [showFeatures, setShowFeatures] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selection, setSelection] = useState<string[]>([]);
+  const [primitives, setPrimitives] = useState<Primitive[]>([]);
+  const [selectedPrimitiveId, setSelectedPrimitiveId] = useState<string | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
 
   // feature detection is model-space only: reruns on model load, not moves
   const features = useMemo(() => (geometry ? detectFeatures(geometry) : null), [geometry]);
+
+  /** selection ids resolved to kind+index for viewport highlighting */
+  const resolvedSelection: ResolvedSelection[] = useMemo(() => {
+    if (!features) return [];
+    const out: ResolvedSelection[] = [];
+    for (const id of selection) {
+      const ci = features.circles.findIndex((c) => c.id === id);
+      if (ci >= 0) {
+        out.push({ kind: 'circle', index: ci });
+        continue;
+      }
+      const ei = features.edges.findIndex((e) => e.id === id);
+      if (ei >= 0) {
+        out.push({ kind: 'edge', index: ei });
+        continue;
+      }
+      const pi = features.planes.findIndex((p) => p.id === id);
+      if (pi >= 0) out.push({ kind: 'plane', index: pi });
+    }
+    return out;
+  }, [selection, features]);
+
+  const toggleSelect = (id: string) =>
+    setSelection((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  /** Create a primitive, sized from the selection when it matches the kind. */
+  const addPrimitive = (kind: 'cylinder' | 'box') => {
+    let prim: Primitive | null = null;
+    if (features && geometry) {
+      if (kind === 'cylinder') {
+        const circle = selection
+          .map((id) => features.circles.find((c) => c.id === id))
+          .find((c) => c !== undefined);
+        if (circle) {
+          const span = axialExtentX(transformedPositions(geometry, transform));
+          prim = cylinderFromCircle(circle, transform, span);
+        }
+      } else {
+        const idx = selection
+          .map((id) => features.planes.findIndex((p) => p.id === id))
+          .find((i) => i >= 0);
+        if (idx !== undefined && idx >= 0) {
+          prim = boxFromPlane(geometry, features, transform, idx);
+        }
+      }
+    }
+    if (!prim) prim = kind === 'cylinder' ? defaultCylinder(stock) : defaultBox(stock);
+    const p = prim;
+    setPrimitives((prev) => [...prev, p]);
+    setSelectedPrimitiveId(p.id);
+  };
 
   useEffect(() => {
     try {
@@ -95,6 +170,7 @@ export function App() {
       const geo = new STLLoader().parse(buf);
       setGeometry(geo);
       setTransform(identityTransform()); // each model starts at its own origin
+      setSelection([]); // ids belong to the old model
       setTab('model');
       setError(null);
     } catch (e) {
@@ -154,6 +230,10 @@ export function App() {
             features={features}
             showFeatures={showFeatures}
             measureMode={measureMode}
+            selectionMode={selectionMode}
+            opSelection={resolvedSelection}
+            primitives={primitives}
+            onToggleSelect={toggleSelect}
           />
           <div className="drop-hint">{geometry ? 'STL loaded' : 'drop an STL here (Phase 1: feature tracing)'}</div>
         </div>
@@ -164,7 +244,7 @@ export function App() {
                 key={t}
                 type="button"
                 className={t === tab ? 'active' : ''}
-                disabled={t === 'model' && !geometry}
+                disabled={(t === 'model' || t === 'features') && !geometry}
                 onClick={() => setTab(t)}
               >
                 {TAB_LABELS[t]}
@@ -182,6 +262,29 @@ export function App() {
               measureMode={measureMode}
               onShowFeaturesChange={setShowFeatures}
               onMeasureModeChange={setMeasureMode}
+            />
+          )}
+          {tab === 'features' && features && (
+            <FeaturesPanel
+              stock={stock}
+              features={features}
+              transform={transform}
+              selectionMode={selectionMode}
+              onSelectionModeChange={setSelectionMode}
+              selection={selection}
+              onToggle={toggleSelect}
+              onClearSelection={() => setSelection([])}
+              primitives={primitives}
+              selectedPrimitiveId={selectedPrimitiveId}
+              onSelectPrimitive={setSelectedPrimitiveId}
+              onAddPrimitive={addPrimitive}
+              onChangePrimitive={(p) =>
+                setPrimitives((prev) => prev.map((x) => (x.id === p.id ? p : x)))
+              }
+              onDeletePrimitive={(id) => {
+                setPrimitives((prev) => prev.filter((x) => x.id !== id));
+                if (selectedPrimitiveId === id) setSelectedPrimitiveId(null);
+              }}
             />
           )}
           {tab === 'tools' && (

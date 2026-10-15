@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { originSpan } from '../core/types';
-import type { ModelTransform, Stock } from '../core/types';
+import type { ModelTransform, Primitive, Stock } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 import { NavCube } from './navcube';
 import {
@@ -14,11 +14,18 @@ import {
   pickFromNearest,
   planeHighlightMesh,
   planePick,
+  SELECT_COLOR,
   type FeatureOverlayData,
   type MeasurePick,
 } from './featureOverlays';
 
 const D2R = Math.PI / 180;
+
+/** A selected feature resolved to its kind and index for highlighting. */
+export interface ResolvedSelection {
+  kind: 'plane' | 'circle' | 'edge';
+  index: number;
+}
 
 interface Props {
   geometry: THREE.BufferGeometry | null;
@@ -27,6 +34,10 @@ interface Props {
   features: DetectedFeatures | null;
   showFeatures: boolean;
   measureMode: boolean;
+  selectionMode: boolean;
+  opSelection: ResolvedSelection[];
+  primitives: Primitive[];
+  onToggleSelect: (id: string) => void;
 }
 
 /**
@@ -38,7 +49,18 @@ interface Props {
  * machine (0,0,0). Toolpath preview (wrapped U,V,Z moves mapped back onto
  * the cylinder) lands in Phase 1.
  */
-export function Viewport({ geometry, stock, transform, features, showFeatures, measureMode }: Props) {
+export function Viewport({
+  geometry,
+  stock,
+  transform,
+  features,
+  showFeatures,
+  measureMode,
+  selectionMode,
+  opSelection,
+  primitives,
+  onToggleSelect,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
   const featureGroupRef = useRef<THREE.Group | null>(null);
@@ -46,6 +68,10 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
   const hoverLineRef = useRef<THREE.LineSegments | null>(null);
   const measureRef = useRef(measureMode);
   measureRef.current = measureMode;
+  const selectModeRef = useRef(selectionMode);
+  selectModeRef.current = selectionMode;
+  const onToggleSelectRef = useRef(onToggleSelect);
+  onToggleSelectRef.current = onToggleSelect;
   const featuresRef = useRef(features);
   featuresRef.current = features;
   const transformRef = useRef(transform);
@@ -144,7 +170,29 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
       }
       if (e.button !== 0) return;
       const normal = hit(e);
-      if (normal) startOrient(normal);
+      if (normal) {
+        startOrient(normal);
+        return;
+      }
+      if (selectModeRef.current) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const pick = measurePickAt(
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+          rect.width,
+          rect.height,
+        );
+        if (pick) {
+          const feats = featuresRef.current;
+          const id =
+            pick.kind === 'plane'
+              ? feats?.planes[pick.index]?.id
+              : pick.kind === 'circle'
+                ? feats?.circles[pick.index]?.id
+                : feats?.edges[pick.index]?.id;
+          if (id) onToggleSelectRef.current(id);
+        }
+      }
     };
     /** right-click target: nearest feature, else the plane under the face */
     const measurePickAt = (mx: number, my: number, w: number, h: number): MeasurePick | null => {
@@ -433,6 +481,27 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
       selObjects.push(conn);
     }
 
+    // operation-selection highlights (light blue, above measure picks)
+    for (const sel of opSelection) {
+      if (sel.kind === 'plane') {
+        const mesh = planeHighlightMesh(geometry, features, transform, sel.index, SELECT_COLOR);
+        if (mesh) {
+          mesh.renderOrder = 7;
+          (mesh.material as THREE.MeshBasicMaterial).opacity = 0.35;
+          group.add(mesh);
+          selObjects.push(mesh);
+        }
+      } else {
+        const line = new THREE.LineSegments(
+          hoverLineGeometry(data, sel.kind, sel.index),
+          new THREE.LineBasicMaterial({ color: SELECT_COLOR, transparent: true, depthTest: false }),
+        );
+        line.renderOrder = 6;
+        group.add(line);
+        selObjects.push(line);
+      }
+    }
+
     overlayRef.current = data;
     hoverLineRef.current = hoverLine;
 
@@ -455,7 +524,60 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
       overlayRef.current = null;
       hoverLineRef.current = null;
     };
-  }, [features, transform, stock, showFeatures, selection, geometry]);
+  }, [features, transform, stock, showFeatures, selection, opSelection, geometry]);
+
+  // user primitives (roughing volumes, tabs): translucent orange volumes
+  useEffect(() => {
+    const group = featureGroupRef.current;
+    if (!group) return;
+    const objs: THREE.Mesh[] = [];
+    for (const p of primitives) {
+      const geo =
+        p.kind === 'cylinder'
+          ? new THREE.CylinderGeometry(p.diameter / 2, p.diameter / 2, p.length, 48)
+          : new THREE.BoxGeometry(p.size.x, p.size.y, p.size.z);
+      const mesh = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({
+          color: 0xd08850,
+          transparent: true,
+          opacity: 0.22,
+          depthTest: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      const t = p.transform;
+      mesh.rotation.set(
+        t.rotationDeg.x * D2R,
+        t.rotationDeg.y * D2R,
+        t.rotationDeg.z * D2R,
+      );
+      if (p.kind === 'cylinder') mesh.rotateZ(Math.PI / 2); // geometry Y axis → machine X
+      mesh.position.set(t.position.x, t.position.y, t.position.z);
+      mesh.renderOrder = 2;
+      // wireframe edge for definition
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: 0xf0a860, depthTest: false }),
+      );
+      mesh.add(edges);
+      group.add(mesh);
+      objs.push(mesh);
+    }
+    return () => {
+      for (const m of objs) {
+        group.remove(m);
+        m.geometry.dispose();
+        (m.material as THREE.Material).dispose();
+        for (const child of m.children) {
+          if (child instanceof THREE.LineSegments) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        }
+      }
+    };
+  }, [primitives, stock]);
 
   return (
     <>
