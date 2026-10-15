@@ -1,0 +1,50 @@
+import { describe, expect, it } from 'vitest';
+import { MAKERA_TOOLS } from '../makeraTools.generated';
+import type { Tool } from '../types';
+
+describe('imported Makera tool library', () => {
+  it('imports a substantial library', () => {
+    expect(MAKERA_TOOLS.length).toBeGreaterThanOrEqual(120);
+  });
+
+  it('has unique ids and well-formed entries', () => {
+    const ids = new Set<string>();
+    for (const t of MAKERA_TOOLS) {
+      expect(ids.has(t.id), `duplicate id ${t.id}`).toBe(false);
+      ids.add(t.id);
+      expect(t.name.length).toBeGreaterThan(0);
+      expect(t.diameter).toBeGreaterThan(0);
+      expect(t.spindleRpm).toBeGreaterThan(0);
+    }
+  });
+
+  it('maps Fusion categories onto our tool types', () => {
+    const types = new Set(MAKERA_TOOLS.map((t) => t.type));
+    for (const expected of ['ball', 'flat', 'drill', 'vbit', 'threadmill'] as const) {
+      expect(types.has(expected), `no ${expected} imported`).toBe(true);
+    }
+  });
+
+  it('gives vbits an included angle and tip diameter', () => {
+    const vbits = MAKERA_TOOLS.filter((t) => t.type === 'vbit');
+    expect(vbits.length).toBeGreaterThan(0);
+    for (const t of vbits) {
+      expect(t.vAngle).toBeGreaterThan(0);
+      expect(t.tipDiameter).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('gives drills a point angle and threadmills a pitch', () => {
+    for (const t of MAKERA_TOOLS) {
+      if (t.type === 'drill') expect(t.drillPointAngle).toBeGreaterThan(0);
+      if (t.type === 'threadmill') expect(t.pitch).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps every entry assignable to the core Tool model', () => {
+    for (const t of MAKERA_TOOLS) {
+      const tool: Tool = t;
+      expect(tool).toBeDefined();
+    }
+  });
+});

@@ -73,6 +73,17 @@ stock at reference X), effective radius, optional center offsets. Source:
 controller probe routines. The post emits a (commented or active) prep header
 (M465.1 / establish A0 / verify crown) documenting what the job assumes.
 
+### Tool library (early Phase 1)
+
+Tools are first-class user data, not per-operation settings. The initial
+library is imported from Makera's public profiles repo
+(MakeraInc/CarveraProfiles, Fusion `.tools` archives) by
+`scripts/import-makera-tools.mjs` into `src/core/makeraTools.generated.ts`
+(124 tools: ball/flat endmills, drills, engraving V-bits, thread mills).
+Users add/modify/delete tools in the Tools panel; the user library persists
+in browser storage. Feeds/speeds defaults come from material presets × tool
+type, not from the tool record.
+
 ## License policy (hard rule)
 
 Project license: MIT. Code may be taken only from MIT/BSL/Apache/LGPL
@@ -90,7 +101,7 @@ STEP), Clipper2 (BSL), manifold (Apache-2.0, later).
 | Phase | Deliverable | Acceptance | Est. (part-time) |
 |---|---|---|---|
 | 0 | Repo, viewer, post skeleton, facing generator | `npm test` green; drag an STL; face a virtual Ø50→Ø40 cylinder emits valid G93 gcode | done in scaffold |
-| 1 | Flat 2.5D ops + indexed 4-axis + edge/hole tracing | cut a sign job and an indexed pocket job on real hardware | ~2–3 months |
+| 1 | Stock setup, model placement, tool library, flat 2.5D ops + indexed 4-axis + edge/hole tracing | cut a sign job and an indexed pocket job on real hardware | ~2–3 months |
 | 2 | Cylinder canvas: facing, threads, wrapped grooves | cut a V-bit thread that mates with a nut; face a cylinder to ±0.05 mm | +4–6 weeks |
 | 3 | 3-axis custom (opencamlib) | 3D part roughed+finished | ~6–10 weeks, may slip to v2 |
 

@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react';
 import type { OriginEdge } from '../core/types';
 
+/** Labeled text field; commits on change. */
+export function TextField(props: { label: string; value: string; onCommit: (v: string) => void }) {
+  const [text, setText] = useState(props.value);
+  // keep the field in sync when the value is changed elsewhere
+  useEffect(() => setText(props.value), [props.value]);
+  return (
+    <label className="field">
+      <span>{props.label}</span>
+      <input type="text" value={text} onChange={(e) => { setText(e.target.value); props.onCommit(e.target.value); }} />
+    </label>
+  );
+}
+
 /** Labeled numeric field; commits only when the text parses to `min` or above. */
 export function NumberField(props: {
   label: string;

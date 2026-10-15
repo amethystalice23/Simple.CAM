@@ -8,13 +8,28 @@
 export interface Tool {
   id: string;
   name: string;
-  type: 'flat' | 'ball' | 'bull' | 'vbit' | 'drill';
+  type: 'flat' | 'ball' | 'bull' | 'vbit' | 'drill' | 'threadmill';
   /** cutting diameter, mm (for vbit: the large end) */
   diameter: number;
   /** included tip angle, degrees (vbit/engraver) */
   vAngle?: number;
   /** flat tip width, mm (vbit/engraver) */
   tipDiameter?: number;
+  /** corner radius, mm (bull) */
+  cornerRadius?: number;
+  /** shank diameter, mm */
+  shaftDiameter?: number;
+  /** flute length, mm */
+  fluteLength?: number;
+  /** overall length, mm */
+  overallLength?: number;
+  flutes?: number;
+  /** cutter material, e.g. 'carbide' */
+  material?: string;
+  /** drill point angle, degrees (drill) */
+  drillPointAngle?: number;
+  /** thread pitch, mm (threadmill) */
+  pitch?: number;
   spindleRpm: number;
 }
 

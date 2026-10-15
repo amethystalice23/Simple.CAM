@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MATERIALS, getMaterial } from '../materials';
 import type { Tool } from '../types';
 
-const toolTypes: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill'];
+const toolTypes: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill'];
 
 describe('material presets', () => {
   it('has unique ids', () => {
