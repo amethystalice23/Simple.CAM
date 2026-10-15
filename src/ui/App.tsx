@@ -2,19 +2,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BufferGeometry } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { faceCylinder } from '../cam/faceCylinder';
+import { drill } from '../cam/drill';
+import { pocket2d } from '../cam/pocket';
 import { axialExtentX, detectFeatures } from '../cam/features';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
 import { getMaterial } from '../core/materials';
 import { identityTransform, originSpan } from '../core/types';
 import type {
+  DrillOp,
   FaceCylinderOp,
   ModelTransform,
+  PocketOp,
   Primitive,
   Stock,
   Tool,
 } from '../core/types';
 import { MAKERA_TOOLS } from '../core/makeraTools.generated';
+import { NumberField } from './fields';
 import { ModelPanel } from './ModelPanel';
 import {
   boxFromPlane,
@@ -22,6 +27,7 @@ import {
   defaultBox,
   defaultCylinder,
 } from './primitives';
+import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
 import { Viewport, type ResolvedSelection } from './Viewport';
@@ -77,6 +83,8 @@ export function App() {
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState('model');
   const [modelName, setModelName] = useState('Loaded model');
+  const [pocketDepth, setPocketDepth] = useState(2);
+  const [drillDepth, setDrillDepth] = useState(5);
   const dropRef = useRef<HTMLDivElement>(null);
 
   // feature detection is model-space only: reruns on model load, not moves
@@ -137,6 +145,76 @@ export function App() {
     if (selectedObjectId === 'model') return;
     setPrimitives((prev) => prev.filter((p) => p.id !== selectedObjectId));
     setSelectedObjectId('model');
+  };
+
+  /** selection-derived operation inputs */
+  const pocketSource = useMemo(
+    () =>
+      geometry && features
+        ? pocketRegionsFromSelection(geometry, features, selection, transform)
+        : null,
+    [geometry, features, selection, transform],
+  );
+  const drillSource = useMemo(
+    () =>
+      features
+        ? drillTargetsFromSelection(features, selection, transform, drillDepth)
+        : null,
+    [features, selection, transform, drillDepth],
+  );
+
+  const generatePocket = () => {
+    if (!pocketSource) return;
+    try {
+      const material = getMaterial(stock.materialId);
+      const pop: PocketOp = {
+        kind: 'pocket',
+        id: 'op-pocket',
+        toolId: tool.id,
+        regions: pocketSource.regions,
+        topZ: pocketSource.topZ,
+        floorZ: pocketSource.topZ - pocketDepth,
+        stepDown: material.stepDownByTool[tool.type],
+        stepOver: tool.diameter * 0.5,
+        feed: material.feedByTool[tool.type],
+        plungeFeed: Math.round(material.feedByTool[tool.type] * material.plungeFraction),
+        safeClearance: 5,
+      };
+      const res = pocket2d(pop, tool);
+      const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'pocket' } });
+      setGcode(
+        `; pocket: ${res.passes} passes over ${res.levels} level(s), ` +
+          `~${res.estimatedMinutes.toFixed(1)} min\n` +
+          nc,
+      );
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const generateDrill = () => {
+    if (!drillSource) return;
+    try {
+      const material = getMaterial(stock.materialId);
+      const dop: DrillOp = {
+        kind: 'drill',
+        id: 'op-drill',
+        toolId: tool.id,
+        targets: drillSource,
+        peckDepth: material.stepDownByTool.drill,
+        plungeFeed: material.feedByTool.drill,
+        safeClearance: 5,
+      };
+      const res = drill(dop, tool);
+      const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'drill' } });
+      setGcode(
+        `; drill: ${res.holes} hole(s), ~${res.estimatedMinutes.toFixed(1)} min\n` + nc,
+      );
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   useEffect(() => {
@@ -311,6 +389,24 @@ export function App() {
                 )}
                 <button onClick={generate}>Generate G-code</button>
               </section>
+              {geometry && (
+                <section>
+                  <h2>Selection ops</h2>
+                  <p className="hint">
+                    select features on the Model tab, then generate below
+                  </p>
+                  <NumberField label="Pocket depth (mm)" value={pocketDepth} min={0.1} onCommit={setPocketDepth} />
+                  <NumberField label="Drill depth (mm)" value={drillDepth} min={0.1} onCommit={setDrillDepth} />
+                  <div className="buttons">
+                    <button onClick={generatePocket} disabled={!pocketSource}>
+                      Pocket selection
+                    </button>
+                    <button onClick={generateDrill} disabled={!drillSource}>
+                      Drill holes
+                    </button>
+                  </div>
+                </section>
+              )}
               {gcode && (
                 <section>
                   <h2>G-code</h2>

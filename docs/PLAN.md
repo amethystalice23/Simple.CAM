@@ -98,7 +98,10 @@ deps grow.
 
 Key deps: three.js (MIT), Kiri:Moto/grid-apps (MIT, donor), opencamlib
 (LGPL-2.1, WASM via npm @opencamlib/opencamlib), occt-import-js (LGPL-2.1,
-STEP), Clipper2 (BSL), manifold (Apache-2.0, later).
+STEP), clipper-lib (BSL — the pure-JS Clipper port, used synchronously
+behind the swappable wrapper src/cam/clipper.ts; a Clipper2 WASM can
+replace it there without touching generators), manifold (Apache-2.0,
+later).
 
 ## Phases
 

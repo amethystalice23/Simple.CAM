@@ -215,7 +215,50 @@ export type Primitive =
       transform: ModelTransform;
     };
 
-export type Operation = FaceCylinderOp;
+/**
+ * Clear a 2D region in stepped Z levels with contour-parallel passes
+ * (tool-center paths inset from the region by the tool radius, then by
+ * stepOver). Regions are machine-space XY contours, outer CCW / holes CW
+ * (the slicing convention).
+ */
+export interface PocketOp {
+  kind: 'pocket';
+  id: string;
+  toolId: string;
+  regions: Vec2[][];
+  /** machine Z the pocket starts from (surface) */
+  topZ: number;
+  /** machine Z of the pocket floor */
+  floorZ: number;
+  /** axial depth per level, mm */
+  stepDown: number;
+  /** radial step-over between clearing passes, mm */
+  stepOver: number;
+  /** XY cut feed, mm/min (G94) */
+  feed: number;
+  /** plunge feed, mm/min */
+  plungeFeed: number;
+  /** rapid clearance above topZ, mm */
+  safeClearance: number;
+}
+
+/** Peck-drill hole centers. Emitted as explicit G0/G1 moves (no cycles). */
+export interface DrillOp {
+  kind: 'drill';
+  id: string;
+  toolId: string;
+  targets: { x: number; y: number; topZ: number; depth: number }[];
+  /** peck increment, mm; 0 = single continuous plunge */
+  peckDepth: number;
+  /** plunge feed, mm/min */
+  plungeFeed: number;
+  /** rapid clearance above each hole, mm */
+  safeClearance: number;
+}
+
+export type Operation = FaceCylinderOp | PocketOp | DrillOp;
+// Phase 1 adds: profile2d | engrave | indexedPocket
+// Phase 2 adds: thread | wrappedGroove
 
 export interface Vec3 {
   x: number;
