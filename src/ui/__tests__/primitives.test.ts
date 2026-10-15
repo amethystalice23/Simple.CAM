@@ -71,6 +71,48 @@ describe('boxFromPlane', () => {
     const f = detectFeatures(geo);
     expect(boxFromPlane(geo, f, identityTransform(), 999)).toBeNull();
   });
+
+  it('sizes box local axes with machine axes — no X/Y swap (10×4 top face)', () => {
+    const geo = new THREE.BoxGeometry(10, 4, 2).toNonIndexed();
+    const f = detectFeatures(geo);
+    const topIdx = f.planes.findIndex(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 1) < 1e-6,
+    );
+    expect(topIdx).toBeGreaterThanOrEqual(0);
+    const box = boxFromPlane(geo, f, identityTransform(), topIdx);
+    expect(box).not.toBeNull();
+    if (!box || box.kind !== 'box') return;
+    expect(box.size.x).toBeCloseTo(10); // machine X extent
+    expect(box.size.y).toBeCloseTo(4); // machine Y extent
+    expect(box.size.z).toBeCloseTo(5);
+    expect(box.transform.position.z).toBeCloseTo(3.5); // top face + half thickness
+  });
+
+  it('aligns the box basis with machine axes on X-normal faces', () => {
+    const geo = new THREE.BoxGeometry(10, 4, 2).toNonIndexed();
+    const f = detectFeatures(geo);
+    const sideIdx = f.planes.findIndex(
+      (p) => Math.abs(p.normal.x - 1) < 1e-6 && Math.abs(p.point.x - 5) < 1e-6,
+    );
+    expect(sideIdx).toBeGreaterThanOrEqual(0);
+    const box = boxFromPlane(geo, f, identityTransform(), sideIdx);
+    expect(box).not.toBeNull();
+    if (!box || box.kind !== 'box') return;
+    // local X spans machine Y (4), local Y spans machine Z (2)
+    expect(box.size.x).toBeCloseTo(4);
+    expect(box.size.y).toBeCloseTo(2);
+    expect(box.transform.position.x).toBeCloseTo(5 + 2.5); // face + half thickness
+    // the rotation must map local X→+Y, Y→+Z, Z→+X exactly
+    const r = box.transform.rotationDeg;
+    const q = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler((r.x * Math.PI) / 180, (r.y * Math.PI) / 180, (r.z * Math.PI) / 180, 'XYZ'),
+    );
+    const lx = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    const lz = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+    expect(lx.x).toBeCloseTo(0, 5);
+    expect(lx.y).toBeCloseTo(1, 5);
+    expect(lz.x).toBeCloseTo(1, 5);
+  });
 });
 
 describe('defaults', () => {
