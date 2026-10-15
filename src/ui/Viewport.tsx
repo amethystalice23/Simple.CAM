@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { originSpan } from '../core/types';
 import type { ModelTransform, Stock } from '../core/types';
+import { NavCube } from './navcube';
 
 const D2R = Math.PI / 180;
 
@@ -37,9 +38,66 @@ export function Viewport({ geometry, stock, transform }: Props) {
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(el.clientWidth, el.clientHeight);
+    renderer.setClearColor(0x10141a); // navcube tile backdrop (main scene has its own bg)
     el.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+
+    // view-orientation cube: click a face to tween the camera to that view
+    const navCube = new NavCube();
+    let orient: {
+      axis: THREE.Vector3;
+      angle: number;
+      fromDir: THREE.Vector3;
+      t0: number;
+      radius: number;
+    } | null = null;
+    const startOrient = (normal: THREE.Vector3) => {
+      const offset = camera.position.clone().sub(controls.target);
+      const fromDir = offset.clone().normalize();
+      const toDir = normal.clone().normalize();
+      let axis = new THREE.Vector3().crossVectors(fromDir, toDir);
+      if (axis.lengthSq() < 1e-10) {
+        // 180° flip: any perpendicular axis works
+        axis = Math.abs(fromDir.z) < 0.9
+          ? new THREE.Vector3(0, 0, 1)
+          : new THREE.Vector3(0, 1, 0);
+      }
+      orient = {
+        axis: axis.normalize(),
+        angle: fromDir.angleTo(toDir),
+        fromDir,
+        t0: performance.now(),
+        radius: offset.length(),
+      };
+    };
+
+    let downX = 0;
+    let downY = 0;
+    const onPointerDown = (e: PointerEvent) => {
+      downX = e.clientX;
+      downY = e.clientY;
+    };
+    const hit = (e: PointerEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      return navCube.hitTest(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        rect.width,
+        rect.height,
+      );
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) return; // was a drag
+      const normal = hit(e);
+      if (normal) startOrient(normal);
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      renderer.domElement.style.cursor = hit(e) ? 'pointer' : '';
+    };
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerup', onPointerUp);
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
 
     const stockGroup = new THREE.Group();
     const stockMat = new THREE.MeshStandardMaterial({
@@ -114,8 +172,25 @@ export function Viewport({ geometry, stock, transform }: Props) {
 
     let raf = 0;
     const loop = () => {
+      if (orient) {
+        const t = Math.min((performance.now() - orient.t0) / 350, 1);
+        // ease-in-out cubic
+        const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        const dir = orient.fromDir.clone().applyAxisAngle(orient.axis, orient.angle * e);
+        camera.position.copy(controls.target).addScaledVector(dir, orient.radius);
+        camera.lookAt(controls.target);
+        if (t >= 1) orient = null;
+      }
       controls.update();
+      renderer.autoClear = true;
       renderer.render(scene, camera);
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w && h) {
+        navCube.sync(camera.position.clone().sub(controls.target), camera.up);
+        renderer.autoClear = false;
+        navCube.render(renderer, w, h);
+      }
       raf = requestAnimationFrame(loop);
     };
     loop();
@@ -123,6 +198,10 @@ export function Viewport({ geometry, stock, transform }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      navCube.dispose();
       controls.dispose();
       renderer.dispose();
       el.removeChild(renderer.domElement);
