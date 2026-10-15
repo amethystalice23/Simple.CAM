@@ -6,6 +6,7 @@ import {
   alignToStock,
   centerOnX,
   centerOnY,
+  centerOnZ,
   dropToSurface,
   rotatedBBox,
 } from '../placement';
@@ -88,11 +89,35 @@ describe('dropToSurface', () => {
   });
 });
 
+describe('centerOnZ', () => {
+  it('puts the model center on the cylinder rotation axis', () => {
+    const t = centerOnZ(box(), identityTransform(), cylinder);
+    expect(t.position.z).toBeCloseTo(-15); // crownZ 10 − radius 25
+  });
+
+  it('puts the model center at the box Z mid', () => {
+    const t = centerOnZ(box(), identityTransform(), boxStock);
+    expect(t.position.z).toBeCloseTo(-10); // stock spans −20…0
+  });
+});
+
 describe('alignToStock', () => {
-  it('centers X/Y and rests on the surface at once', () => {
+  it('centers the model on the stock center (all axes)', () => {
     const t = alignToStock(box(), identityTransform(), cylinder);
     expect(t.position.x).toBeCloseTo(50);
     expect(t.position.y).toBeCloseTo(0);
-    expect(t.position.z).toBeCloseTo(13);
+    expect(t.position.z).toBeCloseTo(-15); // on the rotation axis, 4th-axis ready
+  });
+
+  it('accounts for rotation when centering', () => {
+    const t = alignToStock(box(), rotate(identityTransform(), 'x', 90), cylinder);
+    expect(t.position.z).toBeCloseTo(-15); // rotated bbox center is still the model center
+  });
+
+  it('centers the model in a box blank', () => {
+    const t = alignToStock(box(), identityTransform(), boxStock);
+    expect(t.position.x).toBeCloseTo(40);
+    expect(t.position.y).toBeCloseTo(30);
+    expect(t.position.z).toBeCloseTo(-10);
   });
 });

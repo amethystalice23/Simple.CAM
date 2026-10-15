@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { identityTransform } from '../core/types';
 import type { ModelTransform, Stock } from '../core/types';
-import { alignToStock, centerOnX, centerOnY, dropToSurface } from './placement';
+import { alignToStock, centerOnX, centerOnY, centerOnZ, dropToSurface } from './placement';
 import { NumberField } from './fields';
 
 interface Props {
@@ -42,6 +42,9 @@ export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
         </button>
         <button type="button" onClick={() => onChange(centerOnY(geometry, transform, stock))}>
           Center Y
+        </button>
+        <button type="button" onClick={() => onChange(centerOnZ(geometry, transform, stock))}>
+          Center Z
         </button>
         <button type="button" onClick={() => onChange(dropToSurface(geometry, transform, stock))}>
           Drop to surface

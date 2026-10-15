@@ -65,6 +65,17 @@ export function stockCenterY(stock: Stock): number {
   return (y0 + y1) / 2;
 }
 
+/**
+ * Machine Z of the stock's center. For a cylinder this is the rotation-axis
+ * height (crownZ − radius): a model centered here is centered *on* the axis,
+ * so wrapped cuts go all the way around it.
+ */
+export function stockCenterZ(stock: Stock): number {
+  if (stock.kind === 'cylinder') return stock.calibration.crownZ - stock.calibration.effectiveRadius;
+  const [z0, z1] = originSpan(stock.origin.z, stock.sizeZ);
+  return (z0 + z1) / 2;
+}
+
 /** Center the model on the stock's axial (X) center, keeping Y/Z and rotation. */
 export function centerOnX(
   geometry: THREE.BufferGeometry,
@@ -106,11 +117,29 @@ export function dropToSurface(
   };
 }
 
-/** All three snaps at once. */
+/** Center the model on the stock's Z center (cylinder: on the rotation axis). */
+export function centerOnZ(
+  geometry: THREE.BufferGeometry,
+  transform: ModelTransform,
+  stock: Stock,
+): ModelTransform {
+  const bb = rotatedBBox(geometry, transform.rotationDeg);
+  const center = bb.getCenter(new THREE.Vector3());
+  return {
+    ...transform,
+    position: { ...transform.position, z: stockCenterZ(stock) - center.z },
+  };
+}
+
+/**
+ * Place the model's center on the stock's center, all axes. For 4th-axis
+ * (cylinder) work this puts the model centered on the rotation axis, ready
+ * for wrapped cuts; for box stock it centers the model in the blank.
+ */
 export function alignToStock(
   geometry: THREE.BufferGeometry,
   transform: ModelTransform,
   stock: Stock,
 ): ModelTransform {
-  return dropToSurface(geometry, centerOnY(geometry, centerOnX(geometry, transform, stock), stock), stock);
+  return centerOnZ(geometry, centerOnY(geometry, centerOnX(geometry, transform, stock), stock), stock);
 }
