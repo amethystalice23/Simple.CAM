@@ -14,7 +14,9 @@ const tool: Tool = {
 const stock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
   length: 100,
+  xOrigin: 'min',
   calibration: { aOriginDeg: 0, crownZ: 0, effectiveRadius: 25 }, // Ø50 stock
+  materialId: 'aluminum-6061',
 };
 
 const op: FaceCylinderOp = {

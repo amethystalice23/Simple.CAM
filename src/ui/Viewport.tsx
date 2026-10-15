@@ -1,19 +1,22 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { originSpan } from '../core/types';
+import type { Stock } from '../core/types';
 
 interface Props {
   geometry: THREE.BufferGeometry | null;
-  /** stock cylinder along X: radius/length in mm */
-  cylinder: { radius: number; length: number };
+  stock: Stock;
 }
 
 /**
- * Minimal three.js viewport: grid, stock cylinder (axis = X, matching the
- * machine's 4th-axis mounting), and the loaded model. Toolpath preview
- * (wrapped U,V,Z moves mapped back onto the cylinder) lands in Phase 1.
+ * Minimal three.js viewport: grid, stock, and the loaded model.
+ * Scene axes map to machine axes: three.js X = machine X, three.js Y =
+ * machine Z (up), three.js Z = machine Y. The origin triad marks machine
+ * (0,0,0). Toolpath preview (wrapped U,V,Z moves mapped back onto the
+ * cylinder) lands in Phase 1.
  */
-export function Viewport({ geometry, cylinder }: Props) {
+export function Viewport({ geometry, stock }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
 
@@ -31,26 +34,53 @@ export function Viewport({ geometry, cylinder }: Props) {
     el.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(cylinder.length / 2, 0, 0);
 
-    // stock cylinder, axis along machine X
     const stockGroup = new THREE.Group();
-    const cyl = new THREE.Mesh(
-      new THREE.CylinderGeometry(cylinder.radius, cylinder.radius, cylinder.length, 64),
-      new THREE.MeshStandardMaterial({ color: 0x8a6f4d, transparent: true, opacity: 0.45 }),
-    );
-    cyl.rotation.z = Math.PI / 2; // default Y-axis cylinder → X-axis
-    stockGroup.add(cyl);
-    const axisLine = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(cylinder.length, 0, 0),
-      ]),
-      new THREE.LineBasicMaterial({ color: 0x44aa44 }),
-    );
-    stockGroup.add(axisLine);
+    const stockMat = new THREE.MeshStandardMaterial({
+      color: 0x8a6f4d,
+      transparent: true,
+      opacity: 0.45,
+    });
+    // center of the stock in scene coords, for the orbit target
+    let center = new THREE.Vector3(0, 0, 0);
+
+    if (stock.kind === 'cylinder') {
+      const { effectiveRadius: r, crownZ } = stock.calibration;
+      const [x0, x1] = originSpan(stock.xOrigin, stock.length);
+      const cx = (x0 + x1) / 2;
+      // stock surface sits at machine Z = crownZ, so the axis is at crownZ - r
+      const axisY = crownZ - r;
+
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, stock.length, 64), stockMat);
+      cyl.rotation.z = Math.PI / 2; // default Y-axis cylinder → machine X
+      cyl.position.set(cx, axisY, 0);
+      stockGroup.add(cyl);
+      stockGroup.add(
+        new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(x0, axisY, 0),
+            new THREE.Vector3(x1, axisY, 0),
+          ]),
+          new THREE.LineBasicMaterial({ color: 0x44aa44 }),
+        ),
+      );
+      center.set(cx, axisY, 0);
+    } else {
+      const [x0, x1] = originSpan(stock.origin.x, stock.sizeX);
+      const [y0, y1] = originSpan(stock.origin.y, stock.sizeY);
+      const [z0, z1] = originSpan(stock.origin.z, stock.sizeZ);
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(stock.sizeX, stock.sizeZ, stock.sizeY),
+        stockMat,
+      );
+      box.position.set((x0 + x1) / 2, (z0 + z1) / 2, (y0 + y1) / 2);
+      stockGroup.add(new THREE.Box3Helper(new THREE.Box3().setFromObject(box), 0x6b5842));
+      stockGroup.add(box);
+      center.copy(box.position);
+    }
     scene.add(stockGroup);
     scene.add(new THREE.GridHelper(400, 40, 0x2b2f35, 0x22262a));
+    scene.add(new THREE.AxesHelper(14)); // machine origin (0,0,0)
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x333333, 1.2));
     const dir = new THREE.DirectionalLight(0xffffff, 1.5);
@@ -64,6 +94,8 @@ export function Viewport({ geometry, cylinder }: Props) {
     modelRef.current = model;
     scene.add(model);
     if (geometry) geometry.computeBoundingBox();
+
+    controls.target.copy(center);
 
     const onResize = () => {
       if (!el.clientWidth) return;
@@ -90,7 +122,7 @@ export function Viewport({ geometry, cylinder }: Props) {
       el.removeChild(renderer.domElement);
     };
     // model geometry swaps are handled by the component identity below
-  }, [cylinder.length, cylinder.radius]);
+  }, [stock]);
 
   useEffect(() => {
     const model = modelRef.current;

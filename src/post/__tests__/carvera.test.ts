@@ -9,7 +9,9 @@ const tool: Tool = { id: 't1', name: '6mm flat', type: 'flat', diameter: 6, spin
 const stock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
   length: 100,
+  xOrigin: 'min',
   calibration: { aOriginDeg: 0, crownZ: 0, effectiveRadius: 25 },
+  materialId: 'aluminum-6061',
 };
 const op: FaceCylinderOp = {
   kind: 'faceCylinder',

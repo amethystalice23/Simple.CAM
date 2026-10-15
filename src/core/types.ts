@@ -63,22 +63,47 @@ export interface RotaryCalibration {
   effectiveRadius: number;
 }
 
+/**
+ * Where the job origin (machine 0) sits along a stock dimension.
+ * 'min' = at the low end, 'mid' = centered, 'max' = at the high end.
+ */
+export type OriginEdge = 'min' | 'mid' | 'max';
+
+/**
+ * Machine-coordinate span [start, end] of a stock dimension of `size` mm,
+ * given where the job origin sits. E.g. a 100mm stock with origin 'max'
+ * spans X −100…0 (the far end is at −100, the origin at 0).
+ */
+export function originSpan(origin: OriginEdge, size: number): readonly [number, number] {
+  switch (origin) {
+    case 'min':
+      return [0, size];
+    case 'max':
+      return [-size, 0];
+    case 'mid':
+      return [-size / 2, size / 2];
+  }
+}
+
 export type Stock =
   | {
       kind: 'box';
       sizeX: number;
       sizeY: number;
       sizeZ: number;
-      originX: number;
-      originY: number;
-      originZ: number;
+      /** job origin (machine 0,0,0) location within the box, per axis */
+      origin: { x: OriginEdge; y: OriginEdge; z: OriginEdge };
+      materialId: string;
     }
   | {
       kind: 'cylinder';
       /** stock length along X, mm */
       length: number;
+      /** where machine X0 sits along the stock axis */
+      xOrigin: OriginEdge;
       /** rotation axis is machine X (4th axis parallel to X, verified) */
       calibration: RotaryCalibration;
+      materialId: string;
     };
 
 /** Face a cylinder down to a target diameter ("4D lathe" turning). */
