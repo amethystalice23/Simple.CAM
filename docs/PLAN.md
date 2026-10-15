@@ -1,0 +1,113 @@
+# simple.cam — Open-source CAM for the Carvera
+
+A free, open-source CAM application: load STL/STEP → trace/select features →
+build operations → export G-code → hand off to the Carvera Community
+Controller for machine comms, preview, and macros.
+
+**Not in scope** (ever): machine control, guided workflows, firmware
+functionality. The controller (GPL-2, Python/Kivy) is a separate program; we
+exchange files and conventions with it, never code.
+
+## Machine assumptions (verified)
+
+- 4th axis is parallel to X: cylinder axis = X, circumference = A, cutter in Z.
+- Community firmware: G93 inverse-time feed (modeled on LinuxCNC, intended for
+  simultaneous XYZ+A); **every G1 line must carry F while G93 is active**;
+  `G92.4 A0 S0` wraps A back to 0–360 for continuous rotation; A-axis is
+  rotation-rate limited (~6.6 RPM sustained on C1 harmonic drive, 12.5 at
+  operator's risk); G94 surface-speed compensation is radius-aware.
+- Probe-based 4th-axis calibration lives in the controller/firmware
+  (M465.1 stock leveling/twist, M469.4/.5/.6 center offsets). We *consume*
+  the outcome: a job's stock carries A-origin, crown Z, effective radius.
+- The controller's G-code viewer parses tool definitions from Makera Studio /
+  Fusion 360 / FreeCAD post comments — our post emits that comment format so
+  files preview correctly there.
+
+## Architecture
+
+Web app: TypeScript + React + three.js + WASM kernels, Vite build, vitest
+tests. Optionally wrapped in Tauri for a desktop build later.
+
+```
+Import (STL three.js loader; STEP via occt-import-js later)
+   → Mesh library (three.js render, decimation for viewport)
+   → Feature detection (edge/loop/hole picker — see docs/edge-tracing.md)
+   → Operations (ordered list: type + features + tool + params)
+   → Toolpath gen (parametric wrapped generators + Clipper2 2.5D + opencamlib WASM for 3-axis)
+   → Post-processor (Carvera dialect, pluggable)
+   → .nc handoff (community controller)
+```
+
+### The cylinder canvas (core 4-axis abstraction)
+
+Unwrap the stock surface: **U = θ·r** (mm along circumference), **V = axial
+position (machine X)**, cutting depth → Z. All wrapped operations are 2D path
+math in (U,V) plus one wrap transform:
+
+```
+A = U / r · 360°  (accumulated continuously, >360° allowed; G92.4 after op)
+X = V
+Z = crownZ − radialDepth
+```
+
+No dexel engine, no 3D-on-cylinder kernel in v1.
+
+## Operations (v1 spec)
+
+| Op | Type | Generator |
+|---|---|---|
+| Face cylinder to diameter ("4D lathe") | parametric | full-circumference passes: continuous A + X sweep, Z stepped to `stockRadius − D/2`; roughing stepdown + finishing pass; per-rev axial step-over ≤ 0.8·tool Ø; G93 with F = 1/pass-minutes; in-app time estimate (RPM-limited) |
+| Indexed pocket/profile/drill | 2.5D | A frozen at index angle → ordinary flat op in rotated frame (reuses flat engine) |
+| Thread (90° V-bit) | parametric helix | per pass: `G1 X… A…` constant Z, A advances `(length/pitch)·360°`; Z depth-steps between passes re-entering at identical absolute A phase; multi-start = angular offsets; spring pass; external threads only |
+| Wrapped groove / spiral pattern | parametric | same family as threads: helix/Archimedean/straight/cross-hatch path in (U,V), repeated at angular offsets |
+| Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection |
+
+Later (v2+): 3-axis custom roughing/finishing via opencamlib WASM
+(drop-cutter/push-cutter). Parked: dexel 3D relief on cylinder.
+
+### Stock calibration model
+
+Every 4-axis job carries: A-origin (probed angular zero), crown Z (top of
+stock at reference X), effective radius, optional center offsets. Source:
+controller probe routines. The post emits a (commented or active) prep header
+(M465.1 / establish A0 / verify crown) documenting what the job assumes.
+
+## License policy (hard rule)
+
+Project license: MIT. Code may be taken only from MIT/BSL/Apache/LGPL
+components kept as separate swappable modules. **Never paste code** from
+AGPL (PrusaSlicer/OrcaSlicer Measure.cpp — algorithm only) or GPL
+(jscut, Blender CAM, PyCAM, community controller). CI license scan once
+deps grow.
+
+Key deps: three.js (MIT), Kiri:Moto/grid-apps (MIT, donor), opencamlib
+(LGPL-2.1, WASM via npm @opencamlib/opencamlib), occt-import-js (LGPL-2.1,
+STEP), Clipper2 (BSL), manifold (Apache-2.0, later).
+
+## Phases
+
+| Phase | Deliverable | Acceptance | Est. (part-time) |
+|---|---|---|---|
+| 0 | Repo, viewer, post skeleton, facing generator | `npm test` green; drag an STL; face a virtual Ø50→Ø40 cylinder emits valid G93 gcode | done in scaffold |
+| 1 | Flat 2.5D ops + indexed 4-axis + edge/hole tracing | cut a sign job and an indexed pocket job on real hardware | ~2–3 months |
+| 2 | Cylinder canvas: facing, threads, wrapped grooves | cut a V-bit thread that mates with a nut; face a cylinder to ±0.05 mm | +4–6 weeks |
+| 3 | 3-axis custom (opencamlib) | 3D part roughed+finished | ~6–10 weeks, may slip to v2 |
+
+Golden-file tests pin the post-processor output for every op against the
+[community G-code reference](https://carvera-community.gitbook.io/docs/firmware/supported-commands/gcodes).
+
+## Risks (top 5)
+
+1. G93 correctness — every-line F, mode tracking, degrees-in-planner: golden
+   tests before any machine run.
+2. A RPM ceiling makes rotary ops slow — honest time estimates in UI.
+3. Thread fit is empirical (V-bit depth) — ship a test-coupon generator.
+4. Crown-Z / radius calibration accuracy drives everything — guided touch-off.
+5. Firmware dialect drift — thin post, golden files, track community docs.
+
+## Reference state retained in this repo
+
+`reference/` — binary analysis of MakeraStudio from the
+planning phase: evidence JSONs (xrefs, decompiles, string searches proving
+there is no plugin API), the local analysis tooling (`tools/ghidra`) and
+`env.sh` for running further queries. See `docs/analysis notes.md`.

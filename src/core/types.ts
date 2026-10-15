@@ -1,0 +1,106 @@
+/**
+ * Core job model. Generators consume these types and emit Move[] IR;
+ * only the post-processor (src/post) turns IR into G-code text.
+ *
+ * Units: mm, degrees, minutes. Z is negative below the stock crown.
+ */
+
+export interface Tool {
+  id: string;
+  name: string;
+  type: 'flat' | 'ball' | 'bull' | 'vbit' | 'drill';
+  /** cutting diameter, mm (for vbit: the large end) */
+  diameter: number;
+  /** included tip angle, degrees (vbit/engraver) */
+  vAngle?: number;
+  /** flat tip width, mm (vbit/engraver) */
+  tipDiameter?: number;
+  spindleRpm: number;
+}
+
+export interface AxisWords {
+  x?: number;
+  y?: number;
+  z?: number;
+  a?: number;
+}
+
+/**
+ * One machine move. `feed` is the F word to emit, ALWAYS explicit.
+ * Its unit is decided by the post-processor per move:
+ *  - a move coordinating A with any linear axis requires G93 (inverse time):
+ *    feed = 1/minutes for that move
+ *  - everything else runs in G94: feed = mm/min
+ * See docs/PLAN.md — community firmware halts on a G93 line without F.
+ */
+export interface Move {
+  words: AxisWords;
+  /** F word (unit per the G93/G94 rule above) */
+  feed: number;
+  /** G0 rapid (ignores feed) */
+  rapid?: boolean;
+  comment?: string;
+}
+
+/** True when a move coordinates A with a linear axis (needs G93). */
+export function isSimultaneous(m: Move): boolean {
+  const w = m.words;
+  return w.a !== undefined && (w.x !== undefined || w.y !== undefined || w.z !== undefined);
+}
+
+export type FeedMode = 'G93' | 'G94';
+
+/**
+ * Probe-derived rotary calibration (established by the controller:
+ * M465.1 leveling, M469.x center calibration — we only consume it).
+ */
+export interface RotaryCalibration {
+  /** probed angular zero of the stock, degrees */
+  aOriginDeg: number;
+  /** Z of the stock crown at the reference X, machine coords */
+  crownZ: number;
+  /** measured stock radius, mm (from probe or stock spec) */
+  effectiveRadius: number;
+}
+
+export type Stock =
+  | {
+      kind: 'box';
+      sizeX: number;
+      sizeY: number;
+      sizeZ: number;
+      originX: number;
+      originY: number;
+      originZ: number;
+    }
+  | {
+      kind: 'cylinder';
+      /** stock length along X, mm */
+      length: number;
+      /** rotation axis is machine X (4th axis parallel to X, verified) */
+      calibration: RotaryCalibration;
+    };
+
+/** Face a cylinder down to a target diameter ("4D lathe" turning). */
+export interface FaceCylinderOp {
+  kind: 'faceCylinder';
+  id: string;
+  toolId: string;
+  /** finished diameter, mm */
+  targetDiameter: number;
+  /** axial sweep, machine X, mm */
+  xStart: number;
+  xEnd: number;
+  /** radial depth per roughing pass, mm */
+  stepDown: number;
+  /** plunge feed for Z steps, mm/min (G94) */
+  plungeFeed: number;
+  /** radial material left for the finishing pass, mm */
+  finishAllowance: number;
+  /** direction of continuous A rotation */
+  rotation: 'cw' | 'ccw';
+}
+
+export type Operation = FaceCylinderOp;
+// Phase 1 adds: profile2d | pocket | drill | engrave | indexedPocket
+// Phase 2 adds: thread | wrappedGroove
