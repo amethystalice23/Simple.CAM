@@ -12,6 +12,32 @@ interface Props {
 
 const TOOL_TYPES: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill'];
 
+/** Nested grouping for the list: shank → subtype → tools by ascending diameter. */
+function groupTools(tools: Tool[]) {
+  const byShank = new Map<number | undefined, Map<string, Tool[]>>();
+  for (const t of tools) {
+    if (!byShank.has(t.shaftDiameter)) byShank.set(t.shaftDiameter, new Map());
+    const bySubtype = byShank.get(t.shaftDiameter)!;
+    const sub = t.subtype ?? 'General';
+    if (!bySubtype.has(sub)) bySubtype.set(sub, []);
+    bySubtype.get(sub)!.push(t);
+  }
+  const shanksAsc = [...byShank.keys()].sort((a, b) => {
+    if (a === undefined) return 1;
+    if (b === undefined) return -1;
+    return a - b;
+  });
+  return shanksAsc.map((shank) => ({
+    shank,
+    subgroups: [...byShank.get(shank)!.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([subtype, ts]) => ({
+        subtype,
+        tools: ts.sort((a, b) => a.diameter - b.diameter || a.name.localeCompare(b.name)),
+      })),
+  }));
+}
+
 /** Pick, edit, add, and delete tools in the library. */
 export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePresets }: Props) {
   const selected = tools.find((t) => t.id === selectedId) ?? tools[0];
@@ -94,29 +120,42 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
           </select>
         </label>
         <div className="tool-list">
-          {filtered.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`tool-row${t.id === selectedId ? ' active' : ''}`}
-              onClick={() => {
-                onSelect(t.id);
-                setDraft(null);
-                setIsNew(false);
-              }}
-            >
-              <span className="tool-name">{t.name}</span>
-              <span className="tool-meta">
-                {t.type} · Ø{t.diameter}
-                {t.shaftDiameter !== undefined ? ` · shank ${t.shaftDiameter}` : ''}
-              </span>
-            </button>
+          {groupTools(filtered).map((g) => (
+            <div key={g.shank ?? 'unknown'} className="tool-group">
+              <div className="group-header">
+                {g.shank !== undefined ? `${g.shank} mm shank` : 'unknown shank'}
+              </div>
+              {g.subgroups.map((sg) => (
+                <div key={sg.subtype} className="tool-subgroup">
+                  <div className="group-subheader">{sg.subtype}</div>
+                  {sg.tools.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`tool-row${t.id === selectedId ? ' active' : ''}`}
+                      onClick={() => {
+                        onSelect(t.id);
+                        setDraft(null);
+                        setIsNew(false);
+                      }}
+                    >
+                      <span className="tool-name">{t.name}</span>
+                      <span className="tool-meta">
+                        {t.type} · Ø{t.diameter}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
           ))}
+          {filtered.length === 0 && <p className="hint">no tools match the filters</p>}
         </div>
       </section>
       <section>
         <h2>{isNew ? 'New Tool' : 'Edit Tool'}</h2>
         <TextField label="Name" value={editing?.name ?? ''} onCommit={(v) => upd({ name: v })} />
+        <TextField label="Sub-type" value={editing?.subtype ?? ''} onCommit={(v) => upd({ subtype: v })} />
         <label className="field">
           <span>Type</span>
           <select value={editing?.type} onChange={(e) => upd({ type: e.target.value as Tool['type'] })}>

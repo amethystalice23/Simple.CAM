@@ -71,6 +71,21 @@ function slug(s) {
     .replace(/^-+|-+$/g, '');
 }
 
+/** Grouping family for listings, derived from Fusion's type + the product name. */
+function subtypeOf(fusionType, description) {
+  const d = description.toLowerCase();
+  const metal = d.includes('metal');
+  if (d.includes('drill') || fusionType.includes('drill')) return 'Drill';
+  if (d.includes('corn')) return 'Corn (TiN)';
+  if (d.includes('threadmill') || fusionType.includes('thread')) return 'Threadmill';
+  if (d.includes('chamfering')) return 'Chamfering';
+  if (d.includes('solder')) return 'Solder mask';
+  if (d.includes('engraving')) return metal ? 'Engraving · Metal' : 'Engraving';
+  if (fusionType.includes('ball') || d.includes('ball')) return metal ? 'Ball · Metal' : 'Ball';
+  if (d.includes('spiral o')) return metal ? 'Spiral O · Metal' : 'Spiral O';
+  return 'General';
+}
+
 function toTool(remoteName, type, t) {
   const g = t.geometry ?? {};
   if (typeof g.DC !== 'number' || !t.description) return null;
@@ -78,6 +93,7 @@ function toTool(remoteName, type, t) {
     id: slug(`${remoteName} ${t.description}`),
     name: t.description,
     type,
+    subtype: subtypeOf(String(t.type ?? ''), t.description),
     diameter: g.DC,
     spindleRpm: 18000, // Carvera spindle ceiling; per-op feeds/speeds come from material presets
   };

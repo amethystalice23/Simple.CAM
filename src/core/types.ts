@@ -26,6 +26,8 @@ export interface Tool {
   flutes?: number;
   /** cutter material, e.g. 'carbide' */
   material?: string;
+  /** grouping family for listings, e.g. 'Spiral O · Metal', 'Drill' */
+  subtype?: string;
   /** drill point angle, degrees (drill) */
   drillPointAngle?: number;
   /** thread pitch, mm (threadmill) */

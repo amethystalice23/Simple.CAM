@@ -47,4 +47,10 @@ describe('imported Makera tool library', () => {
       expect(tool).toBeDefined();
     }
   });
+
+  it('assigns every tool a listing sub-type', () => {
+    for (const t of MAKERA_TOOLS) {
+      expect(t.subtype?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
 });
