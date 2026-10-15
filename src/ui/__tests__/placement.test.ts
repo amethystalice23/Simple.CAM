@@ -22,7 +22,7 @@ const cylinder: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
   length: 100,
   xOrigin: 'min',
-  calibration: { aOriginDeg: 0, crownZ: 10, effectiveRadius: 25 },
+  calibration: { aOriginDeg: 0, axisZ: 10, effectiveRadius: 25 },
   materialId: 'aluminum-6061',
 };
 
@@ -75,14 +75,14 @@ describe('centerOnX / centerOnY', () => {
 });
 
 describe('dropToSurface', () => {
-  it('rests the model on the cylinder crown', () => {
+  it('rests the model on the cylinder surface (axisZ + radius)', () => {
     const t = dropToSurface(box(), identityTransform(), cylinder);
-    expect(t.position.z).toBeCloseTo(10 + 3); // crownZ + half height
+    expect(t.position.z).toBeCloseTo(35 + 3); // axisZ 10 + r 25 + half height
   });
 
   it('accounts for rotation', () => {
     const t = dropToSurface(box(), rotate(identityTransform(), 'x', 90), cylinder);
-    expect(t.position.z).toBeCloseTo(10 + 2); // rotated: ±2 is now the Z extent
+    expect(t.position.z).toBeCloseTo(35 + 2); // rotated: ±2 is now the Z extent
   });
 
   it('rests on the box top face (origin z=max → top at Z0)', () => {
@@ -94,7 +94,7 @@ describe('dropToSurface', () => {
 describe('centerOnZ', () => {
   it('puts the model center on the cylinder rotation axis', () => {
     const t = centerOnZ(box(), identityTransform(), cylinder);
-    expect(t.position.z).toBeCloseTo(-15); // crownZ 10 − radius 25
+    expect(t.position.z).toBeCloseTo(10); // axisZ
   });
 
   it('puts the model center at the box Z mid', () => {
@@ -104,8 +104,8 @@ describe('centerOnZ', () => {
 });
 
 describe('stockSpan', () => {
-  it('spans the cylinder from bottom to crown in Z, silhouette in Y', () => {
-    expect(stockSpan(cylinder, 'z')).toEqual([-40, 10]); // crownZ 10 − 2r
+  it('spans the cylinder axisZ ± r in Z, silhouette in Y', () => {
+    expect(stockSpan(cylinder, 'z')).toEqual([-15, 35]); // axisZ 10 ± r 25
     expect(stockSpan(cylinder, 'y')).toEqual([-25, 25]);
     expect(stockSpan(cylinder, 'x')).toEqual([0, 100]);
   });
@@ -127,14 +127,14 @@ describe('alignAxisToStock', () => {
     expect(t.position.x).toBeCloseTo(1); // model min = pos−1 → stock min 0
   });
 
-  it('puts the model top flush with the crown (Z max on cylinder)', () => {
+  it('puts the model top flush with the cylinder surface (Z max)', () => {
     const t = alignAxisToStock(box(), identityTransform(), cylinder, 'z', 'max');
-    expect(t.position.z).toBeCloseTo(7); // crownZ 10 − half height 3
+    expect(t.position.z).toBeCloseTo(32); // surface 35 − half height 3
   });
 
   it('puts the model bottom at the cylinder bottom (Z min)', () => {
     const t = alignAxisToStock(box(), identityTransform(), cylinder, 'z', 'min');
-    expect(t.position.z).toBeCloseTo(-37); // bottom −40 + half height 3
+    expect(t.position.z).toBeCloseTo(-12); // bottom −15 + half height 3
   });
 
   it('is rotation-aware', () => {
@@ -149,12 +149,12 @@ describe('alignToStock', () => {
     const t = alignToStock(box(), identityTransform(), cylinder);
     expect(t.position.x).toBeCloseTo(50);
     expect(t.position.y).toBeCloseTo(0);
-    expect(t.position.z).toBeCloseTo(-15); // on the rotation axis, 4th-axis ready
+    expect(t.position.z).toBeCloseTo(10); // on the rotation axis, 4th-axis ready
   });
 
   it('accounts for rotation when centering', () => {
     const t = alignToStock(box(), rotate(identityTransform(), 'x', 90), cylinder);
-    expect(t.position.z).toBeCloseTo(-15); // rotated bbox center is still the model center
+    expect(t.position.z).toBeCloseTo(10); // rotated bbox center is still the model center
   });
 
   it('centers the model in a box blank', () => {

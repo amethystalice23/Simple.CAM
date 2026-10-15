@@ -18,7 +18,7 @@ exchange files and conventions with it, never code.
   operator's risk); G94 surface-speed compensation is radius-aware.
 - Probe-based 4th-axis calibration lives in the controller/firmware
   (M465.1 stock leveling/twist, M469.4/.5/.6 center offsets). We *consume*
-  the outcome: a job's stock carries A-origin, crown Z, effective radius.
+  the outcome: a job's stock carries A-origin, axis Z, effective radius.
 - The controller's G-code viewer parses tool definitions from Makera Studio /
   Fusion 360 / FreeCAD post comments — our post emits that comment format so
   files preview correctly there.
@@ -48,7 +48,9 @@ math in (U,V) plus one wrap transform:
 ```
 A = U / r · 360°  (accumulated continuously, >360° allowed; G92.4 after op)
 X = V
-Z = crownZ − radialDepth
+Z = axisZ + stockRadius − radialDepth  (Z0 = stock center: the Z1-probed
+                                       4th-axis motor-block datum, where
+                                       Makera Studio places Z0)
 ```
 
 No dexel engine, no 3D-on-cylinder kernel in v1.
@@ -68,10 +70,12 @@ Later (v2+): 3-axis custom roughing/finishing via opencamlib WASM
 
 ### Stock calibration model
 
-Every 4-axis job carries: A-origin (probed angular zero), crown Z (top of
-stock at reference X), effective radius, optional center offsets. Source:
+Every 4-axis job carries: A-origin (probed angular zero), axis Z (machine Z
+of the stock center — the Z1 probe on the 4th-axis motor block with known
+offsets; the same origin Makera Studio places), effective radius, optional
+center offsets. The stock surface is at axisZ + effectiveRadius. Source:
 controller probe routines. The post emits a (commented or active) prep header
-(M465.1 / establish A0 / verify crown) documenting what the job assumes.
+(M465.1 / establish A0 / verify axis datum) documenting what the job assumes.
 
 ### Tool library (early Phase 1)
 
@@ -114,7 +118,7 @@ Golden-file tests pin the post-processor output for every op against the
    tests before any machine run.
 2. A RPM ceiling makes rotary ops slow — honest time estimates in UI.
 3. Thread fit is empirical (V-bit depth) — ship a test-coupon generator.
-4. Crown-Z / radius calibration accuracy drives everything — guided touch-off.
+4. Axis-Z / radius calibration accuracy drives everything — guided touch-off.
 5. Firmware dialect drift — thin post, golden files, track community docs.
 
 ## Reference state retained in this repo

@@ -43,16 +43,16 @@ export function rotatedBBox(geometry: THREE.BufferGeometry, rotationDeg: Vec3): 
   return out;
 }
 
-/** Machine Z of the surface a model rests on (cylinder crown, box top face). */
+/** Machine Z of the surface a model rests on (cylinder top, box top face). */
 export function stockTopZ(stock: Stock): number {
-  if (stock.kind === 'cylinder') return stock.calibration.crownZ;
+  if (stock.kind === 'cylinder') return stock.calibration.axisZ + stock.calibration.effectiveRadius;
   return originSpan(stock.origin.z, stock.sizeZ)[1];
 }
 
 /**
  * Machine-coordinate span of the stock along an axis. A cylinder's Y span is
- * its silhouette [−r, r] around the rotation axis; its Z span runs from the
- * cylinder bottom up to the crown.
+ * its silhouette [−r, r] around the rotation axis; its Z span is centered on
+ * the axis datum (axisZ ± r).
  */
 export function stockSpan(stock: Stock, axis: 'x' | 'y' | 'z'): readonly [number, number] {
   if (stock.kind === 'cylinder') {
@@ -63,7 +63,7 @@ export function stockSpan(stock: Stock, axis: 'x' | 'y' | 'z'): readonly [number
       case 'y':
         return [-r, r];
       case 'z':
-        return [stock.calibration.crownZ - 2 * r, stock.calibration.crownZ];
+        return [stock.calibration.axisZ - r, stock.calibration.axisZ + r];
     }
   }
   switch (axis) {

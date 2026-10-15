@@ -15,7 +15,7 @@ const stock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
   length: 100,
   xOrigin: 'min',
-  calibration: { aOriginDeg: 0, crownZ: 0, effectiveRadius: 25 }, // Ø50 stock
+  calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 }, // Ø50 stock, axis at Z0
   materialId: 'aluminum-6061',
 };
 
@@ -44,7 +44,8 @@ describe('faceCylinder', () => {
 
   it('plunges to the right Z per pass with helical (rotating) entry', () => {
     const plunges = res.moves.filter((m) => !m.rapid && m.words.z !== undefined && m.words.x === undefined);
-    expect(plunges.map((m) => m.words.z)).toEqual([-1, -2, -3, -4, -5]);
+    // surface at axisZ + r0 = 25; each pass steps 1mm radially below it
+    expect(plunges.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20]);
     // G93 inverse time, A capped at the rotary limit over the 90° entry
     const entryMinutes = (90 / 360) / MAX_ROTARY_RPM;
     for (const p of plunges) {
@@ -69,9 +70,9 @@ describe('faceCylinder', () => {
     expect(sweeps.map((s) => s.words.x)).toEqual([100, 0, 100, 0, 100]);
   });
 
-  it('retracts to a safe Z between passes', () => {
+  it('retracts to a safe Z above the surface between passes', () => {
     const retracts = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.x === undefined);
-    expect(retracts.every((m) => m.words.z === SAFE_CLEARANCE)).toBe(true);
+    expect(retracts.every((m) => m.words.z === 25 + SAFE_CLEARANCE)).toBe(true);
   });
 
   it('estimates rotation-rate-limited time honestly', () => {

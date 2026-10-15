@@ -151,12 +151,11 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
     let center = new THREE.Vector3();
 
     if (stock.kind === 'cylinder') {
-      const { effectiveRadius: r, crownZ } = stock.calibration;
+      const { effectiveRadius: r, axisZ } = stock.calibration;
       const [x0, x1] = originSpan(stock.xOrigin, stock.length);
       const cx = (x0 + x1) / 2;
-      // stock surface is at machine Z = crownZ, so the axis sits at crownZ - r
-      const axisZ = crownZ - r;
-
+      // Z0 for 4th-axis work is the stock center (the axis datum), so the
+      // cylinder is drawn centered on machine Z = axisZ
       const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, stock.length, 64), stockMat);
       cyl.rotation.z = Math.PI / 2; // default Y-axis cylinder → machine X
       cyl.position.set(cx, 0, axisZ);

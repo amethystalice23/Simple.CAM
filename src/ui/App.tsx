@@ -17,7 +17,7 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
   length: 100,
   xOrigin: 'min',
-  calibration: { aOriginDeg: 0, crownZ: 0, effectiveRadius: 25 },
+  calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
   materialId: 'aluminum-6061',
 };
 

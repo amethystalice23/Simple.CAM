@@ -45,7 +45,7 @@ export function faceCylinder(
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
   if (op.finishAllowance < 0) throw new Error('finishAllowance must be >= 0');
 
-  const { crownZ, effectiveRadius: r0 } = stock.calibration;
+  const { axisZ, effectiveRadius: r0 } = stock.calibration;
   const r1 = op.targetDiameter / 2;
   const totalDepth = r0 - r1;
   if (totalDepth <= 0) {
@@ -71,7 +71,9 @@ export function faceCylinder(
   const passMinutes = revs / MAX_ROTARY_RPM;
   const aSign = op.rotation === 'cw' ? 1 : -1;
 
-  const safeZ = crownZ + SAFE_CLEARANCE;
+  // Z0 is the stock center (axis datum); the surface sits at axisZ + r0
+  const surfaceZ = axisZ + r0;
+  const safeZ = surfaceZ + SAFE_CLEARANCE;
   const moves: Move[] = [];
   let a = 0; // accumulated A, machine degrees (post emits G92.4 A0 afterwards)
   let minutes = 0;
@@ -83,7 +85,7 @@ export function faceCylinder(
     // last one ended — no wasted rapids.
     const sweepStart = i % 2 === 0 ? op.xStart : op.xEnd;
     const sweepEnd = i % 2 === 0 ? op.xEnd : op.xStart;
-    const passZ = crownZ - depth;
+    const passZ = surfaceZ - depth;
 
     moves.push({
       words: { x: sweepStart, z: safeZ, a: a * aSign },

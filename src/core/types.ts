@@ -2,7 +2,9 @@
  * Core job model. Generators consume these types and emit Move[] IR;
  * only the post-processor (src/post) turns IR into G-code text.
  *
- * Units: mm, degrees, minutes. Z is negative below the stock crown.
+ * Units: mm, degrees, minutes. For 4-axis work Z0 is the stock center
+ * (the Z1-probed axis datum); cuts run below the surface, which sits at
+ * axisZ + stock radius.
  */
 
 export interface Tool {
@@ -74,8 +76,12 @@ export type FeedMode = 'G93' | 'G94';
 export interface RotaryCalibration {
   /** probed angular zero of the stock, degrees */
   aOriginDeg: number;
-  /** Z of the stock crown at the reference X, machine coords */
-  crownZ: number;
+  /**
+   * Machine Z of the stock center (the rotation axis). This is the 4th-axis
+   * Z datum: the Z1 probe on the motor block with known offsets — the same
+   * origin Makera Studio places. The stock surface is at axisZ + effectiveRadius.
+   */
+  axisZ: number;
   /** measured stock radius, mm (from probe or stock spec) */
   effectiveRadius: number;
 }

@@ -10,7 +10,7 @@ const stock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
   length: 100,
   xOrigin: 'min',
-  calibration: { aOriginDeg: 0, crownZ: 0, effectiveRadius: 25 },
+  calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
   materialId: 'aluminum-6061',
 };
 const op: FaceCylinderOp = {
@@ -60,8 +60,9 @@ describe('carvera post-processor', () => {
     expect(lines).toContain('G93');
     // sweep: A advances 7500°/pass + 90° helical entry per pass
     expect(gcode).toMatch(/G1 X100\.000 A7590\.000 F0\.3168/);
-    // helical entry on the finishing pass: Z-5 while A advances 90° at the rotary limit
-    expect(gcode).toMatch(/G1 Z-5\.000 A30450\.000 F26\.4000/);
+    // helical entry on the finishing pass: surface 25 − 5 depth = Z20 while A
+    // advances 90° at the rotary limit
+    expect(gcode).toMatch(/G1 Z20\.000 A30450\.000 F26\.4000/);
   });
 
   it('documents prep assumptions as comments by default', () => {

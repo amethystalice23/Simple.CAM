@@ -74,7 +74,7 @@ export function postCarvera(input: PostInput): string {
     lines.push('; ---- prep assumptions (run in controller before this job) ----');
     lines.push(active('M465.1            ; 4th-axis stock leveling/twist via probe'));
     lines.push(active('G10 L20 P0 A0      ; establish angular zero'));
-    lines.push(active('verify crown-Z touch-off matches the job stock calibration'));
+    lines.push(active('verify 4th-axis Z datum (stock-center, Z1-probed) matches the job stock calibration'));
   }
   lines.push('G21 G90 G94');
   lines.push('G92.4 A0 S0');

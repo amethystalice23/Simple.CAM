@@ -27,7 +27,7 @@ export function StockPanel({ stock, onChange }: Props) {
                 kind: 'cylinder',
                 length: 100,
                 xOrigin: 'min',
-                calibration: { aOriginDeg: 0, crownZ: 0, effectiveRadius: 25 },
+                calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
                 materialId: stock.materialId,
               },
             )
@@ -88,11 +88,12 @@ export function StockPanel({ stock, onChange }: Props) {
             }
           />
           <NumberField
-            label="Crown Z (mm, machine)"
-            value={stock.calibration.crownZ}
+            label="Axis Z (mm, machine)"
+            value={stock.calibration.axisZ}
             step={0.1}
-            onCommit={(v) => onChange(mergeStock(stock, { calibration: { ...stock.calibration, crownZ: v } }))}
+            onCommit={(v) => onChange(mergeStock(stock, { calibration: { ...stock.calibration, axisZ: v } }))}
           />
+          <p className="hint">Axis Z is the stock-center datum: the Z1-probed 4th-axis motor-block offset (where Makera Studio puts Z0).</p>
         </>
       ) : (
         <>
