@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import type { CircleFeature, ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 import { stockSpan } from './placement';
-import { transformFn } from './featureOverlays';
+import { planeExtent, transformFn } from './featureOverlays';
 
 let counter = 0;
 export function nextPrimitiveId(): string {
@@ -64,11 +64,13 @@ export function resizePrimitive(
   return { ...p, size: scaledDims(p.size, axis, value, uniform) };
 }
 
-/** Revert one primitive dimension to its creation value. */
-export function revertPrimitive(p: Primitive, axis: 'x' | 'y' | 'z'): Primitive {
+/** Revert a primitive dimension to its creation value; uniform reverts all. */
+export function revertPrimitive(p: Primitive, axis: 'x' | 'y' | 'z', uniform = false): Primitive {
   if (p.kind === 'cylinder') {
+    if (uniform) return { ...p, diameter: p.original.diameter, length: p.original.length };
     return axis === 'x' ? { ...p, diameter: p.original.diameter } : { ...p, length: p.original.length };
   }
+  if (uniform) return { ...p, size: { ...p.original } };
   return { ...p, size: { ...p.size, [axis]: p.original[axis] } };
 }
 
@@ -104,55 +106,16 @@ export function boxFromPlane(
   planeIndex: number,
   thickness = 5,
 ): Primitive | null {
-  const p = features.planes[planeIndex];
-  if (!p) return null;
-  const xf = transformFn(modelTransform);
-  const zero = xf({ x: 0, y: 0, z: 0 });
-  const n = xf(p.normal).sub(zero).normalize();
-  // local axes aligned with the machine axes where possible, so size.x/y
-  // read as machine extents (not swapped): project machine X into the plane,
-  // falling back to machine Y for planes normal to X
-  const ref = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-  const u = ref
-    .clone()
-    .sub(n.clone().multiplyScalar(n.dot(ref)))
-    .normalize();
-  const v = new THREE.Vector3().crossVectors(n, u).normalize();
-
-  const geo = geometry.index ? geometry.toNonIndexed() : geometry;
-  const attr = geo.getAttribute('position') as THREE.BufferAttribute;
-  const triCount = Math.floor(attr.count / 3);
-  let minA = Infinity;
-  let maxA = -Infinity;
-  let minB = Infinity;
-  let maxB = -Infinity;
-  for (let t = 0; t < triCount; t++) {
-    if (features.faceToPlane[t] !== planeIndex) continue;
-    for (let k = 0; k < 3; k++) {
-      const w = xf({ x: attr.getX(t * 3 + k), y: attr.getY(t * 3 + k), z: attr.getZ(t * 3 + k) });
-      const a = w.dot(u);
-      const b = w.dot(v);
-      minA = Math.min(minA, a);
-      maxA = Math.max(maxA, a);
-      minB = Math.min(minB, b);
-      maxB = Math.max(maxB, b);
-    }
-  }
-  if (minA > maxA) return null;
-
-  const ca = (minA + maxA) / 2;
-  const cb = (minB + maxB) / 2;
-  const h = n.dot(xf(p.point)) + thickness / 2; // box sits ON the face
-  const center = u
-    .clone()
-    .multiplyScalar(ca)
-    .add(v.clone().multiplyScalar(cb))
-    .add(n.clone().multiplyScalar(h));
+  const ext = planeExtent(geometry, features, modelTransform, planeIndex);
+  if (!ext) return null;
+  const { u, v, n, w, h } = ext;
+  // the box sits ON the face: half its thickness out along the normal
+  const center = ext.center.clone().add(n.clone().multiplyScalar(thickness / 2));
   // full basis rotation (local X→u, Y→v, Z→n): the shortest-arc quaternion
   // alone twists around n and misaligns the face for X-normal planes
   const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
   const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
-  const size = { x: maxA - minA, y: maxB - minB, z: thickness };
+  const size = { x: w, y: h, z: thickness };
   return {
     kind: 'box',
     id: nextPrimitiveId(),

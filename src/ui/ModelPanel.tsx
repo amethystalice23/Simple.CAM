@@ -159,7 +159,9 @@ export function ModelPanel(props: Props) {
                 onRevert={() =>
                   props.onTransformChange({
                     ...transform,
-                    scale: { ...transform.scale, [a]: 1 },
+                    scale: uniform
+                      ? { x: 1, y: 1, z: 1 } // uniform mode reverts all three
+                      : { ...transform.scale, [a]: 1 },
                   })
                 }
               />
@@ -178,7 +180,7 @@ export function ModelPanel(props: Props) {
                 props.onPrimitiveChange(resizePrimitive(selectedPrimitive, 'x', v, uniform))
               }
               onRevert={() =>
-                props.onPrimitiveChange(revertPrimitive(selectedPrimitive, 'x'))
+                props.onPrimitiveChange(revertPrimitive(selectedPrimitive, 'x', uniform))
               }
             />
             <SizeField
@@ -188,7 +190,7 @@ export function ModelPanel(props: Props) {
                 props.onPrimitiveChange(resizePrimitive(selectedPrimitive, 'y', v, uniform))
               }
               onRevert={() =>
-                props.onPrimitiveChange(revertPrimitive(selectedPrimitive, 'y'))
+                props.onPrimitiveChange(revertPrimitive(selectedPrimitive, 'y', uniform))
               }
             />
           </>
@@ -201,7 +203,9 @@ export function ModelPanel(props: Props) {
               onCommit={(v) =>
                 props.onPrimitiveChange(resizePrimitive(selectedPrimitive, a, v, uniform))
               }
-              onRevert={() => props.onPrimitiveChange(revertPrimitive(selectedPrimitive, a))}
+              onRevert={() =>
+                props.onPrimitiveChange(revertPrimitive(selectedPrimitive, a, uniform))
+              }
             />
           ))
         ) : null}

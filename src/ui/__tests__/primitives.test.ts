@@ -182,4 +182,13 @@ describe('size editing', () => {
     if (restored.kind !== 'cylinder') return;
     expect(restored.diameter).toBeCloseTo(50);
   });
+
+  it('uniform revert restores every dimension', () => {
+    const box = defaultBox(cylinderStock);
+    if (box.kind !== 'box') return;
+    const changed = resizePrimitive(resizePrimitive(box, 'x', 20, true), 'y', 8, false);
+    const reverted = revertPrimitive(changed, 'x', true);
+    if (reverted.kind !== 'box') return;
+    expect(reverted.size).toEqual({ x: 10, y: 10, z: 5 });
+  });
 });

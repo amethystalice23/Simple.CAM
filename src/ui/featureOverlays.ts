@@ -9,6 +9,75 @@ import * as THREE from 'three';
 import type { CircleFeature, ModelTransform, Vec3 } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 
+/** In-plane extent of a plane group's member-triangle footprint. */
+export interface PlaneExtent {
+  u: THREE.Vector3;
+  v: THREE.Vector3;
+  n: THREE.Vector3;
+  /** footprint size along u (machine-X aligned where possible) */
+  w: number;
+  /** footprint size along v */
+  h: number;
+  /** in-plane center of the footprint, machine space */
+  center: THREE.Vector3;
+  /** plane offset along n (the face's plane equation) */
+  planeOffset: number;
+}
+
+/**
+ * Footprint of a plane group in its own plane: the member triangles'
+ * extent along machine-axis-aligned in-plane axes (machine X projected
+ * into the plane, machine Y for X-normal planes).
+ */
+export function planeExtent(
+  geometry: THREE.BufferGeometry,
+  features: DetectedFeatures,
+  transform: ModelTransform,
+  planeIndex: number,
+): PlaneExtent | null {
+  const p = features.planes[planeIndex];
+  if (!p) return null;
+  const xf = transformFn(transform);
+  const zero = xf({ x: 0, y: 0, z: 0 });
+  const n = xf(p.normal).sub(zero).normalize();
+  const ref = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const u = ref
+    .clone()
+    .sub(n.clone().multiplyScalar(n.dot(ref)))
+    .normalize();
+  const v = new THREE.Vector3().crossVectors(n, u).normalize();
+
+  const geo = geometry.index ? geometry.toNonIndexed() : geometry;
+  const attr = geo.getAttribute('position') as THREE.BufferAttribute;
+  const triCount = Math.floor(attr.count / 3);
+  let minA = Infinity;
+  let maxA = -Infinity;
+  let minB = Infinity;
+  let maxB = -Infinity;
+  for (let t = 0; t < triCount; t++) {
+    if (features.faceToPlane[t] !== planeIndex) continue;
+    for (let k = 0; k < 3; k++) {
+      const w = xf({ x: attr.getX(t * 3 + k), y: attr.getY(t * 3 + k), z: attr.getZ(t * 3 + k) });
+      const a = w.dot(u);
+      const b = w.dot(v);
+      minA = Math.min(minA, a);
+      maxA = Math.max(maxA, a);
+      minB = Math.min(minB, b);
+      maxB = Math.max(maxB, b);
+    }
+  }
+  if (minA > maxA) return null;
+  const ca = (minA + maxA) / 2;
+  const cb = (minB + maxB) / 2;
+  const planeOffset = n.dot(xf(p.point));
+  const center = u
+    .clone()
+    .multiplyScalar(ca)
+    .add(v.clone().multiplyScalar(cb))
+    .add(n.clone().multiplyScalar(planeOffset));
+  return { u, v, n, w: maxA - minA, h: maxB - minB, center, planeOffset };
+}
+
 // ---------------------------------------------------------------- measuring
 
 /** One manually selected item in measure mode (right-click). */
@@ -45,8 +114,9 @@ export function pickFromNearest(data: FeatureOverlayData, nearest: NearestFeatur
   };
 }
 
-/** The plane group owning a right-clicked face. */
+/** The plane group owning a clicked face, labeled with its two dimensions. */
 export function planePick(
+  geometry: THREE.BufferGeometry,
   features: DetectedFeatures,
   transform: ModelTransform,
   planeIndex: number,
@@ -54,13 +124,14 @@ export function planePick(
   const p = features.planes[planeIndex];
   const xf = transformFn(transform);
   const zero = xf({ x: 0, y: 0, z: 0 });
+  const ext = planeExtent(geometry, features, transform, planeIndex);
   return {
     kind: 'plane',
     index: planeIndex,
     center: xf(p.point),
     normal: xf(p.normal).sub(zero).normalize(),
     color: PLANE_SELECT,
-    text: 'plane',
+    text: ext ? `${ext.w.toFixed(1)} × ${ext.h.toFixed(1)} mm` : 'plane',
   };
 }
 

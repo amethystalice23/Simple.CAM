@@ -14,6 +14,7 @@ import {
   pickFromNearest,
   planeHighlightMesh,
   planePick,
+  PLANE_SELECT,
   SELECT_COLOR,
   type FeatureOverlayData,
   type MeasurePick,
@@ -29,14 +30,15 @@ export interface ResolvedSelection {
 
 /** Measurement picks for the selected features (selection = measurement). */
 function picksFromSelection(
+  geometry: THREE.BufferGeometry | null,
   features: DetectedFeatures,
   data: FeatureOverlayData | null,
   transform: ModelTransform,
   sel: ResolvedSelection[],
 ): MeasurePick[] {
-  if (!data) return [];
+  if (!data || !geometry) return [];
   return sel.map((s): MeasurePick => {
-    if (s.kind === 'plane') return planePick(features, transform, s.index);
+    if (s.kind === 'plane') return planePick(geometry, features, transform, s.index);
     if (s.kind === 'circle') {
       return {
         kind: 'circle',
@@ -105,8 +107,11 @@ export function Viewport({
   opSelectionRef.current = opSelection;
   const featuresRef = useRef(features);
   featuresRef.current = features;
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
   const transformRef = useRef(transform);
   transformRef.current = transform;
+  const hoverPlaneRef = useRef<THREE.Mesh | null>(null);
   const [label, setLabel] = useState<{ text: string; x: number; y: number } | null>(null);
   /** labels for the selected features, one per pick */
   const selLabelsRef = useRef<(HTMLDivElement | null)[]>([]);
@@ -160,6 +165,7 @@ export function Viewport({
 
     let downX = 0;
     let downY = 0;
+    let hoverPlaneIdx = -1; // transiently hovered face (plane group), -1 none
     const raycaster = new THREE.Raycaster();
     const onPointerDown = (e: PointerEvent) => {
       downX = e.clientX;
@@ -229,7 +235,7 @@ export function Viewport({
           return fi >= 0 && fi < feats.faceToPlane.length && feats.faceToPlane[fi] >= 0;
         });
         if (found && found.faceIndex !== undefined && found.faceIndex !== null) {
-          return planePick(feats, transformRef.current, feats.faceToPlane[found.faceIndex]);
+          return planePick(geometryRef.current!, feats, transformRef.current, feats.faceToPlane[found.faceIndex]);
         }
       }
       return null;
@@ -239,9 +245,17 @@ export function Viewport({
       const overNav = hit(e);
       renderer.domElement.style.cursor = overNav ? 'pointer' : '';
       const hoverLine = hoverLineRef.current;
+      const hoverPlane = hoverPlaneRef.current;
       const overlay = overlayRef.current;
+
+      const hideHoverPlane = () => {
+        if (hoverPlane) hoverPlane.visible = false;
+        hoverPlaneIdx = -1;
+      };
+
       if (overNav || !measureRef.current || !hoverLine || !overlay) {
         if (hoverLine) hoverLine.visible = false;
+        hideHoverPlane();
         setLabel(null);
         return;
       }
@@ -258,11 +272,50 @@ export function Viewport({
         hoverLine.geometry = hoverLineGeometry(overlay, nearest.kind, nearest.index);
         (hoverLine.material as THREE.LineBasicMaterial).color.setHex(nearest.color);
         hoverLine.visible = true;
+        hideHoverPlane();
         setLabel({ text: nearest.text, x: nearest.anchor.x, y: nearest.anchor.y });
-      } else {
-        hoverLine.visible = false;
-        setLabel(null);
+        return;
       }
+      hoverLine.visible = false;
+      setLabel(null);
+
+      // no feature nearby: transiently wash the face under the cursor so
+      // faces are hoverable like edges and circles are
+      const feats = featuresRef.current;
+      const model = modelRef.current;
+      const geo = geometryRef.current;
+      if (!feats || !model || !model.visible || !geo || !hoverPlane) {
+        hideHoverPlane();
+        return;
+      }
+      raycaster.setFromCamera(
+        new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          -((e.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        camera,
+      );
+      const found = raycaster
+        .intersectObject(model, false)
+        .find((hh) => {
+          const fi = hh.faceIndex ?? -1;
+          return fi >= 0 && fi < feats.faceToPlane.length && feats.faceToPlane[fi] >= 0;
+        });
+      if (!found || found.faceIndex === undefined || found.faceIndex === null) {
+        hideHoverPlane();
+        return;
+      }
+      const idx = feats.faceToPlane[found.faceIndex];
+      if (idx !== hoverPlaneIdx) {
+        const built = planeHighlightMesh(geo, feats, transformRef.current, idx, PLANE_SELECT);
+        hoverPlane.geometry.dispose();
+        if (built) {
+          hoverPlane.geometry = built.geometry;
+          (built.material as THREE.Material).dispose(); // hoverPlane keeps its own
+        }
+      }
+      hoverPlaneIdx = idx;
+      hoverPlane.visible = true;
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
@@ -384,7 +437,13 @@ export function Viewport({
       };
       const feats = featuresRef.current;
       const picks = feats
-        ? picksFromSelection(feats, overlayRef.current, transformRef.current, opSelectionRef.current)
+        ? picksFromSelection(
+            geometryRef.current,
+            feats,
+            overlayRef.current,
+            transformRef.current,
+            opSelectionRef.current,
+          )
         : [];
       picks.forEach((p, i) => {
         const div = selLabelsRef.current[i];
@@ -416,6 +475,7 @@ export function Viewport({
       featureGroupRef.current = null;
       overlayRef.current = null;
       hoverLineRef.current = null;
+      hoverPlaneRef.current = null;
       controls.dispose();
       renderer.dispose();
       el.removeChild(renderer.domElement);
@@ -478,6 +538,22 @@ export function Viewport({
     hoverLine.visible = false;
     group.add(hoverLine);
 
+    // transient face hover wash (geometry swapped by pointermove)
+    const hoverPlane = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: PLANE_SELECT,
+        transparent: true,
+        opacity: 0.2,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    hoverPlane.renderOrder = 3;
+    hoverPlane.visible = false;
+    group.add(hoverPlane);
+    hoverPlaneRef.current = hoverPlane;
+
     // selection highlights (light blue, distinct from the hover tints) and
     // the center-to-center connector when exactly two features are selected
     const selObjects: THREE.Object3D[] = [];
@@ -500,7 +576,7 @@ export function Viewport({
         selObjects.push(line);
       }
     }
-    const picks = picksFromSelection(features, data, transform, opSelection);
+    const picks = picksFromSelection(geometry, features, data, transform, opSelection);
     if (picks.length === 2) {
       const conn = connectorLine(picks[0], picks[1]);
       group.add(conn);
@@ -519,6 +595,10 @@ export function Viewport({
       group.remove(hoverLine);
       hoverLine.geometry.dispose();
       (hoverLine.material as THREE.Material).dispose();
+      group.remove(hoverPlane);
+      hoverPlane.geometry.dispose();
+      (hoverPlane.material as THREE.Material).dispose();
+      hoverPlaneRef.current = null;
       for (const o of selObjects) {
         group.remove(o);
         const obj = o as THREE.Mesh;

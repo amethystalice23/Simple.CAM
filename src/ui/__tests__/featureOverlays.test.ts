@@ -133,17 +133,21 @@ describe('manual measuring', () => {
     expect(measureText(px, py)).toBe('Δ 2.00 mm · ∠ 90.0°');
   });
 
-  it('builds a plane pick in machine space and highlights its triangles', () => {
-    const geo = new THREE.BoxGeometry(2, 2, 2).toNonIndexed();
+  it('builds a plane pick in machine space, labeled with its dimensions', () => {
+    const geo = new THREE.BoxGeometry(10, 4, 2).toNonIndexed();
     const f = detectFeatures(geo);
+    const topIdx = f.planes.findIndex(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 1) < 1e-6,
+    );
     const t = { ...identityTransform(), position: { x: 10, y: 0, z: 0 } };
-    const pick = planePick(f, t, 0);
+    const pick = planePick(geo, f, t, topIdx);
     expect(pick.kind).toBe('plane');
-    expect(pick.center.x).toBeCloseTo(10 + f.planes[0].point.x, 5);
+    expect(pick.text).toBe('10.0 × 4.0 mm');
+    expect(pick.center.x).toBeCloseTo(10, 5);
 
-    const mesh = planeHighlightMesh(geo, f, t, 0);
+    const mesh = planeHighlightMesh(geo, f, t, topIdx);
     expect(mesh).not.toBeNull();
-    // one cube face = 2 triangles = 6 vertices
+    // one face = 2 triangles = 6 vertices
     expect((mesh!.geometry.getAttribute('position') as THREE.BufferAttribute).count).toBe(6);
   });
 });
