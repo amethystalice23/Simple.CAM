@@ -27,6 +27,35 @@ export interface ResolvedSelection {
   index: number;
 }
 
+/** Measurement picks for the selected features (selection = measurement). */
+function picksFromSelection(
+  features: DetectedFeatures,
+  data: FeatureOverlayData | null,
+  transform: ModelTransform,
+  sel: ResolvedSelection[],
+): MeasurePick[] {
+  if (!data) return [];
+  return sel.map((s): MeasurePick => {
+    if (s.kind === 'plane') return planePick(features, transform, s.index);
+    if (s.kind === 'circle') {
+      return {
+        kind: 'circle',
+        index: s.index,
+        center: data.circleCenter[s.index].clone(),
+        color: SELECT_COLOR,
+        text: data.circleText[s.index],
+      };
+    }
+    return {
+      kind: 'edge',
+      index: s.index,
+      center: data.edgeMid[s.index].clone(),
+      color: SELECT_COLOR,
+      text: data.edgeText[s.index],
+    };
+  });
+}
+
 interface Props {
   geometry: THREE.BufferGeometry | null;
   stock: Stock;
@@ -34,10 +63,10 @@ interface Props {
   features: DetectedFeatures | null;
   showFeatures: boolean;
   measureMode: boolean;
-  selectionMode: boolean;
   opSelection: ResolvedSelection[];
   primitives: Primitive[];
   onToggleSelect: (id: string) => void;
+  onClearSelection: () => void;
 }
 
 /**
@@ -56,10 +85,10 @@ export function Viewport({
   features,
   showFeatures,
   measureMode,
-  selectionMode,
   opSelection,
   primitives,
   onToggleSelect,
+  onClearSelection,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
@@ -68,24 +97,19 @@ export function Viewport({
   const hoverLineRef = useRef<THREE.LineSegments | null>(null);
   const measureRef = useRef(measureMode);
   measureRef.current = measureMode;
-  const selectModeRef = useRef(selectionMode);
-  selectModeRef.current = selectionMode;
   const onToggleSelectRef = useRef(onToggleSelect);
   onToggleSelectRef.current = onToggleSelect;
+  const onClearSelectionRef = useRef(onClearSelection);
+  onClearSelectionRef.current = onClearSelection;
+  const opSelectionRef = useRef(opSelection);
+  opSelectionRef.current = opSelection;
   const featuresRef = useRef(features);
   featuresRef.current = features;
   const transformRef = useRef(transform);
   transformRef.current = transform;
   const [label, setLabel] = useState<{ text: string; x: number; y: number } | null>(null);
-  /** right-click measurement picks: second slot replaced by later clicks */
-  const [selection, setSelection] = useState<{ a: MeasurePick | null; b: MeasurePick | null }>({
-    a: null,
-    b: null,
-  });
-  const selectionRef = useRef(selection);
-  selectionRef.current = selection;
-  const labelARef = useRef<HTMLDivElement | null>(null);
-  const labelBRef = useRef<HTMLDivElement | null>(null);
+  /** labels for the selected features, one per pick */
+  const selLabelsRef = useRef<(HTMLDivElement | null)[]>([]);
   const distLabelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -153,19 +177,8 @@ export function Viewport({
     const onPointerUp = (e: PointerEvent) => {
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) return; // was a drag
       if (e.button === 2) {
-        // measure mode: pick a feature, else the face's plane, else clear
-        const rect = renderer.domElement.getBoundingClientRect();
-        const pick = measurePickAt(
-          e.clientX - rect.left,
-          e.clientY - rect.top,
-          rect.width,
-          rect.height,
-        );
-        if (pick === null) setSelection({ a: null, b: null });
-        else
-          setSelection((prev) =>
-            prev.a ? { a: prev.a, b: pick } : { a: pick, b: null },
-          );
+        // right-click clears the selection (and any measurements)
+        onClearSelectionRef.current();
         return;
       }
       if (e.button !== 0) return;
@@ -174,7 +187,9 @@ export function Viewport({
         startOrient(normal);
         return;
       }
-      if (selectModeRef.current) {
+      // measure mode: left-click toggles the picked feature into the
+      // selection (measurements derive from the selection)
+      if (measureRef.current) {
         const rect = renderer.domElement.getBoundingClientRect();
         const pick = measurePickAt(
           e.clientX - rect.left,
@@ -194,7 +209,7 @@ export function Viewport({
         }
       }
     };
-    /** right-click target: nearest feature, else the plane under the face */
+    /** click target: nearest feature, else the plane under the face */
     const measurePickAt = (mx: number, my: number, w: number, h: number): MeasurePick | null => {
       const overlay = overlayRef.current;
       if (measureRef.current && overlay) {
@@ -352,8 +367,7 @@ export function Viewport({
       }
 
       // keep measurement labels glued to their 3D anchors as the view moves
-      const projectLabel = (ref: { current: HTMLDivElement | null }, anchor?: THREE.Vector3) => {
-        const div = ref.current;
+      const projectLabel = (div: HTMLDivElement | null, anchor?: THREE.Vector3) => {
         if (!div) return;
         if (!anchor) {
           div.style.display = 'none';
@@ -368,15 +382,25 @@ export function Viewport({
         div.style.left = `${((p.x + 1) / 2) * el.clientWidth + 12}px`;
         div.style.top = `${((1 - p.y) / 2) * el.clientHeight - 14}px`;
       };
-      const sel = selectionRef.current;
-      projectLabel(labelARef, sel.a?.center);
-      projectLabel(labelBRef, sel.b?.center);
-      projectLabel(
-        distLabelRef,
-        sel.a && sel.b
-          ? new THREE.Vector3().addVectors(sel.a.center, sel.b.center).multiplyScalar(0.5)
-          : undefined,
-      );
+      const feats = featuresRef.current;
+      const picks = feats
+        ? picksFromSelection(feats, overlayRef.current, transformRef.current, opSelectionRef.current)
+        : [];
+      picks.forEach((p, i) => {
+        const div = selLabelsRef.current[i];
+        if (div) div.textContent = p.text;
+        projectLabel(div, p.center);
+      });
+      if (picks.length === 2) {
+        const dist = distLabelRef.current;
+        if (dist) dist.textContent = measureText(picks[0], picks[1]);
+        projectLabel(
+          dist,
+          new THREE.Vector3().addVectors(picks[0].center, picks[1].center).multiplyScalar(0.5),
+        );
+      } else {
+        projectLabel(distLabelRef.current, undefined);
+      }
 
       raf = requestAnimationFrame(loop);
     };
@@ -454,35 +478,9 @@ export function Viewport({
     hoverLine.visible = false;
     group.add(hoverLine);
 
-    // persistent right-click selection highlights + center-to-center connector
+    // selection highlights (light blue, distinct from the hover tints) and
+    // the center-to-center connector when exactly two features are selected
     const selObjects: THREE.Object3D[] = [];
-    const addSelection = (pick: MeasurePick) => {
-      if (pick.kind === 'plane') {
-        const mesh = planeHighlightMesh(geometry, features, transform, pick.index);
-        if (mesh) {
-          mesh.renderOrder = 3;
-          group.add(mesh);
-          selObjects.push(mesh);
-        }
-        return;
-      }
-      const line = new THREE.LineSegments(
-        hoverLineGeometry(data, pick.kind, pick.index),
-        new THREE.LineBasicMaterial({ color: pick.color, transparent: true, depthTest: false }),
-      );
-      line.renderOrder = 4;
-      group.add(line);
-      selObjects.push(line);
-    };
-    if (selection.a) addSelection(selection.a);
-    if (selection.b) addSelection(selection.b);
-    if (selection.a && selection.b) {
-      const conn = connectorLine(selection.a, selection.b);
-      group.add(conn);
-      selObjects.push(conn);
-    }
-
-    // operation-selection highlights (light blue, above measure picks)
     for (const sel of opSelection) {
       if (sel.kind === 'plane') {
         const mesh = planeHighlightMesh(geometry, features, transform, sel.index, SELECT_COLOR);
@@ -501,6 +499,12 @@ export function Viewport({
         group.add(line);
         selObjects.push(line);
       }
+    }
+    const picks = picksFromSelection(features, data, transform, opSelection);
+    if (picks.length === 2) {
+      const conn = connectorLine(picks[0], picks[1]);
+      group.add(conn);
+      selObjects.push(conn);
     }
 
     overlayRef.current = data;
@@ -525,7 +529,7 @@ export function Viewport({
       overlayRef.current = null;
       hoverLineRef.current = null;
     };
-  }, [features, transform, stock, showFeatures, selection, opSelection, geometry]);
+  }, [features, transform, stock, showFeatures, opSelection, geometry]);
 
   // user primitives (roughing volumes, tabs): translucent orange volumes
   useEffect(() => {
@@ -588,21 +592,16 @@ export function Viewport({
           {label.text}
         </div>
       )}
-      {selection.a && (
-        <div ref={labelARef} className="measure-label selected">
-          {selection.a.text}
-        </div>
-      )}
-      {selection.b && (
-        <div ref={labelBRef} className="measure-label selected">
-          {selection.b.text}
-        </div>
-      )}
-      {selection.a && selection.b && (
-        <div ref={distLabelRef} className="measure-label dist">
-          {measureText(selection.a, selection.b)}
-        </div>
-      )}
+      {opSelection.map((s, i) => (
+        <div
+          key={`${s.kind}:${s.index}`}
+          ref={(el) => {
+            selLabelsRef.current[i] = el;
+          }}
+          className="measure-label selected"
+        />
+      ))}
+      {opSelection.length === 2 && <div ref={distLabelRef} className="measure-label dist" />}
     </>
   );
 }

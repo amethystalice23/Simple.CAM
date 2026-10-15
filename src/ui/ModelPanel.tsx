@@ -17,8 +17,6 @@ interface Props {
   onPrimitiveChange: (p: Primitive) => void;
   onDeleteObject: () => void;
   onAddPrimitive: (kind: 'cylinder' | 'box') => void;
-  selectionMode: boolean;
-  onSelectionModeChange: (v: boolean) => void;
   showFeatures: boolean;
   measureMode: boolean;
   onShowFeaturesChange: (v: boolean) => void;
@@ -270,17 +268,6 @@ export function ModelPanel(props: Props) {
         <label className="check">
           <input
             type="checkbox"
-            checked={props.selectionMode}
-            onChange={(e) => props.onSelectionModeChange(e.target.checked)}
-          />
-          <span>
-            Select features
-            <span className="legend">click features in the viewport for operations</span>
-          </span>
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
             checked={props.showFeatures}
             onChange={(e) => props.onShowFeaturesChange(e.target.checked)}
           />
@@ -297,7 +284,9 @@ export function ModelPanel(props: Props) {
           />
           <span>
             Measure mode
-            <span className="legend">hover to snap; right-click to measure</span>
+            <span className="legend">
+              hover highlights · click selects (two = distance) · right-click clears
+            </span>
           </span>
         </label>
       </section>

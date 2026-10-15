@@ -78,7 +78,6 @@ export function App() {
   const [toolId, setToolId] = useState<string>(() => defaultToolId(loadToolLibrary()));
   const [showFeatures, setShowFeatures] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState('model');
@@ -315,10 +314,10 @@ export function App() {
             features={features}
             showFeatures={showFeatures}
             measureMode={measureMode}
-            selectionMode={selectionMode}
             opSelection={resolvedSelection}
             primitives={primitives}
             onToggleSelect={toggleSelect}
+            onClearSelection={() => setSelection([])}
           />
           <div className="drop-hint">{geometry ? 'STL loaded' : 'drop an STL here (Phase 1: feature tracing)'}</div>
         </div>
@@ -352,11 +351,6 @@ export function App() {
               }
               onDeleteObject={deleteSelectedObject}
               onAddPrimitive={addPrimitive}
-              selectionMode={selectionMode}
-              onSelectionModeChange={(v) => {
-                setSelectionMode(v);
-                if (!v) setSelection([]); // leaving select mode clears the picks
-              }}
               showFeatures={showFeatures}
               measureMode={measureMode}
               onShowFeaturesChange={setShowFeatures}

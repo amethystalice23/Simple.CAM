@@ -138,24 +138,25 @@ Z = const and stitch closed contours for Clipper2.
 - **Hover**: raycast → face → resolve to the feature owning that face
   (plane, circle-on-plane, edge via nearest-edge distance within a
   ~0.5 mm snap). Highlight the whole feature, not the triangle.
-- **Click**: toggles the feature into the selection set; the feature id
-  is what operations store.
-- **Manual measuring (measure mode, right-click)**: picks the nearest
-  feature, or — when nothing is near — the plane group owning the face
-  under the cursor (highlighted over its member triangles). A second
-  pick reports the center-to-center distance between the two (circles:
-  center; edges: midpoint; planes: group centroid — the OrcaSlicer
-  convention), plus the angle between two plane normals when both picks
-  are planes. Subsequent picks replace the second item; right-clicking
-  empty space clears both. Selections are highlighted persistently with
-  a dashed center-to-center connector.
-- **Selection mode and objects share the Model tab** (no separate feature
-  list): an objects list at the top (loaded model + primitives) selects
-  which object the placement and size controls edit; a Size section with
-  per-dimension revert and a uniform-scale checkbox resizes the selected
-  object (the loaded model via ModelTransform.scale); Select features /
-  + Cylinder / + Box / Delete object sit at the bottom. Primitives carry
-  their creation-time dimensions for the revert buttons.
+- **Measure mode is the single interaction mode** (no separate select
+  mode): hover highlights transiently; a left click toggles the picked
+  feature — nearest feature, else the face's plane group — into the
+  selection, where it stays lit in light blue. Selected features carry
+  their labels (Ø / L / plane), and exactly two selections report the
+  center-to-center distance between them (circles: center; edges:
+  midpoint; planes: group centroid — the OrcaSlicer convention) plus
+  the angle when both are planes, with a dashed connector. Right-click
+  clears the selection and with it the measurements. The feature ids in
+  the selection are what operations store and what + Cylinder / + Box
+  size from (first selected circle → cylinder, first selected plane →
+  box).
+- **The Model tab is the object home**: an objects list at the top (loaded
+  model + primitives) selects which object the placement and size controls
+  edit; a Size section with per-dimension revert and a uniform-scale
+  checkbox resizes the selected object (the loaded model via
+  ModelTransform.scale); + Cylinder / + Box / Delete object and the
+  Show features / Measure mode checkboxes sit at the bottom. Primitives
+  carry their creation-time dimensions for the revert buttons.
 - Operation dialogs reference feature ids (Phase 1 step 4 builds this UI);
   a feature consumed by an op shows a badge in the list.
 
