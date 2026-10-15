@@ -20,6 +20,8 @@ export interface DetectedFeatures {
   planes: PlaneFeature[];
   circles: CircleFeature[];
   edges: EdgeFeature[];
+  /** raw-geometry triangle index → plane index (−1 for degenerate drops) */
+  faceToPlane: Int32Array;
 }
 
 /** Coplanar grouping tolerance, degrees. */
@@ -93,6 +95,8 @@ function featureId(kind: string, parts: (number | string)[]): string {
 interface Topo {
   verts: Vec3[];
   faces: [number, number, number][];
+  /** raw-geometry triangle index of each kept (non-degenerate) face */
+  rawIndexOf: number[];
   /** undirected edge key `a_b` (a<b) → adjacent face indices */
   edgeFaces: Map<string, number[]>;
   faceNormal: Vec3[];
@@ -104,6 +108,7 @@ function buildTopo(geometry: THREE.BufferGeometry): Topo {
   const verts: Vec3[] = [];
   const vmap = new Map<string, number>();
   const faces: [number, number, number][] = [];
+  const rawIndexOf: number[] = [];
 
   for (let f = 0; f + 2 < attr.count; f += 3) {
     const ids: number[] = [];
@@ -122,6 +127,7 @@ function buildTopo(geometry: THREE.BufferGeometry): Topo {
     }
     if (ids[0] !== ids[1] && ids[1] !== ids[2] && ids[0] !== ids[2]) {
       faces.push([ids[0], ids[1], ids[2]]);
+      rawIndexOf.push(f / 3);
     }
   }
 
@@ -144,7 +150,7 @@ function buildTopo(geometry: THREE.BufferGeometry): Topo {
     }
   });
 
-  return { verts, faces, edgeFaces, faceNormal };
+  return { verts, faces, rawIndexOf, edgeFaces, faceNormal };
 }
 
 /** Flood-fill faces into coplanar groups by normal angle. */
@@ -631,7 +637,14 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     if (!circles.some((c) => sameCircle(c, circle))) circles.push(circle);
   }
 
-  return { planes, circles, edges };
+  // raw-triangle → plane mapping for face picking and plane highlighting
+  const rawTriCount = Math.floor((geometry.index ? geometry.toNonIndexed() : geometry).getAttribute('position').count / 3);
+  const faceToPlane = new Int32Array(rawTriCount).fill(-1);
+  faces.forEach((_, i) => {
+    faceToPlane[topo.rawIndexOf[i]] = planeOf[i];
+  });
+
+  return { planes, circles, edges, faceToPlane };
 }
 
 // ------------------------------------------------- machine-space derivation

@@ -9,6 +9,128 @@ import * as THREE from 'three';
 import type { CircleFeature, ModelTransform, Vec3 } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 
+// ---------------------------------------------------------------- measuring
+
+/** One manually selected item in measure mode (right-click). */
+export interface MeasurePick {
+  kind: 'edge' | 'circle' | 'plane';
+  index: number;
+  /** machine-space center used for distance computation */
+  center: THREE.Vector3;
+  /** machine-space normal (planes only) */
+  normal?: THREE.Vector3;
+  /** highlight color */
+  color: number;
+  /** short description for the label */
+  text: string;
+}
+
+/** A hovered edge/circle promoted to a measurement pick. */
+export function pickFromNearest(data: FeatureOverlayData, nearest: NearestFeature): MeasurePick {
+  if (nearest.kind === 'edge') {
+    return {
+      kind: 'edge',
+      index: nearest.index,
+      center: data.edgeMid[nearest.index].clone(),
+      color: nearest.color,
+      text: data.edgeText[nearest.index],
+    };
+  }
+  return {
+    kind: 'circle',
+    index: nearest.index,
+    center: data.circleCenter[nearest.index].clone(),
+    color: nearest.color,
+    text: data.circleText[nearest.index],
+  };
+}
+
+/** The plane group owning a right-clicked face. */
+export function planePick(
+  features: DetectedFeatures,
+  transform: ModelTransform,
+  planeIndex: number,
+): MeasurePick {
+  const p = features.planes[planeIndex];
+  const xf = transformFn(transform);
+  const zero = xf({ x: 0, y: 0, z: 0 });
+  return {
+    kind: 'plane',
+    index: planeIndex,
+    center: xf(p.point),
+    normal: xf(p.normal).sub(zero).normalize(),
+    color: PLANE_SELECT,
+    text: 'plane',
+  };
+}
+
+/**
+ * Center-to-center distance between two picks (OrcaSlicer-style). Two planes
+ * also report the angle between their normals.
+ */
+export function measureText(a: MeasurePick, b: MeasurePick): string {
+  const d = a.center.distanceTo(b.center);
+  if (a.kind === 'plane' && b.kind === 'plane' && a.normal && b.normal) {
+    const ang =
+      (Math.acos(Math.min(1, Math.abs(a.normal.dot(b.normal)))) * 180) / Math.PI;
+    return `Δ ${d.toFixed(2)} mm · ∠ ${ang.toFixed(1)}°`;
+  }
+  return `Δ ${d.toFixed(2)} mm`;
+}
+
+/** Translucent highlight mesh over a plane's member triangles. */
+export function planeHighlightMesh(
+  geometry: THREE.BufferGeometry,
+  features: DetectedFeatures,
+  transform: ModelTransform,
+  planeIndex: number,
+): THREE.Mesh | null {
+  const geo = geometry.index ? geometry.toNonIndexed() : geometry;
+  const attr = geo.getAttribute('position') as THREE.BufferAttribute;
+  const xf = transformFn(transform);
+  const pos: number[] = [];
+  const triCount = Math.floor(attr.count / 3);
+  for (let t = 0; t < triCount; t++) {
+    if (features.faceToPlane[t] !== planeIndex) continue;
+    for (let k = 0; k < 3; k++) {
+      const v = xf({ x: attr.getX(t * 3 + k), y: attr.getY(t * 3 + k), z: attr.getZ(t * 3 + k) });
+      pos.push(v.x, v.y, v.z);
+    }
+  }
+  if (pos.length === 0) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return new THREE.Mesh(
+    g,
+    new THREE.MeshBasicMaterial({
+      color: PLANE_SELECT,
+      transparent: true,
+      opacity: 0.3,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+}
+
+/** Dashed center-to-center connector for a two-pick measurement. */
+export function connectorLine(a: MeasurePick, b: MeasurePick): THREE.Line {
+  const g = new THREE.BufferGeometry().setFromPoints([a.center.clone(), b.center.clone()]);
+  const line = new THREE.Line(
+    g,
+    new THREE.LineDashedMaterial({
+      color: 0xf2f6f9,
+      dashSize: 2,
+      gapSize: 1.5,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+    }),
+  );
+  line.computeLineDistances();
+  line.renderOrder = 4;
+  return line;
+}
+
 export const EDGE_COLOR = 0xff5555;
 export const CIRCLE_COLOR = 0x44cc66;
 export const HOLE_COLOR = 0x55ccee;
@@ -16,6 +138,8 @@ export const HOLE_COLOR = 0x55ccee;
 export const EDGE_HOVER = 0xff9999;
 export const CIRCLE_HOVER = 0x88ffbb;
 export const HOLE_HOVER = 0x99eeff;
+/** face/plane selection highlight */
+export const PLANE_SELECT = 0xf0c050;
 
 const RING_SEGMENTS = 72;
 const RING_SAMPLES = 24; // hover-snap sampling density

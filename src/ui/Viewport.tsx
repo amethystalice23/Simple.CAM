@@ -7,9 +7,15 @@ import type { DetectedFeatures } from '../cam/features';
 import { NavCube } from './navcube';
 import {
   buildFeatureOverlayData,
+  connectorLine,
   findNearestFeature,
   hoverLineGeometry,
+  measureText,
+  pickFromNearest,
+  planeHighlightMesh,
+  planePick,
   type FeatureOverlayData,
+  type MeasurePick,
 } from './featureOverlays';
 
 const D2R = Math.PI / 180;
@@ -40,7 +46,21 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
   const hoverLineRef = useRef<THREE.LineSegments | null>(null);
   const measureRef = useRef(measureMode);
   measureRef.current = measureMode;
+  const featuresRef = useRef(features);
+  featuresRef.current = features;
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
   const [label, setLabel] = useState<{ text: string; x: number; y: number } | null>(null);
+  /** right-click measurement picks: second slot replaced by later clicks */
+  const [selection, setSelection] = useState<{ a: MeasurePick | null; b: MeasurePick | null }>({
+    a: null,
+    b: null,
+  });
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const labelARef = useRef<HTMLDivElement | null>(null);
+  const labelBRef = useRef<HTMLDivElement | null>(null);
+  const distLabelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const el = host.current;
@@ -90,6 +110,7 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
 
     let downX = 0;
     let downY = 0;
+    const raycaster = new THREE.Raycaster();
     const onPointerDown = (e: PointerEvent) => {
       downX = e.clientX;
       downY = e.clientY;
@@ -105,8 +126,50 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
     };
     const onPointerUp = (e: PointerEvent) => {
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) return; // was a drag
+      if (e.button === 2) {
+        // measure mode: pick a feature, else the face's plane, else clear
+        const rect = renderer.domElement.getBoundingClientRect();
+        const pick = measurePickAt(
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+          rect.width,
+          rect.height,
+        );
+        if (pick === null) setSelection({ a: null, b: null });
+        else
+          setSelection((prev) =>
+            prev.a ? { a: prev.a, b: pick } : { a: pick, b: null },
+          );
+        return;
+      }
+      if (e.button !== 0) return;
       const normal = hit(e);
       if (normal) startOrient(normal);
+    };
+    /** right-click target: nearest feature, else the plane under the face */
+    const measurePickAt = (mx: number, my: number, w: number, h: number): MeasurePick | null => {
+      const overlay = overlayRef.current;
+      if (measureRef.current && overlay) {
+        const nearest = findNearestFeature(overlay, mx, my, camera, w, h);
+        if (nearest) return pickFromNearest(overlay, nearest);
+      }
+      const feats = featuresRef.current;
+      const model = modelRef.current;
+      if (feats && model && model.visible) {
+        raycaster.setFromCamera(
+          new THREE.Vector2((mx / w) * 2 - 1, -(my / h) * 2 + 1),
+          camera,
+        );
+        const hits = raycaster.intersectObject(model, false);
+        const found = hits.find((hh) => {
+          const fi = hh.faceIndex ?? -1;
+          return fi >= 0 && fi < feats.faceToPlane.length && feats.faceToPlane[fi] >= 0;
+        });
+        if (found && found.faceIndex !== undefined && found.faceIndex !== null) {
+          return planePick(feats, transformRef.current, feats.faceToPlane[found.faceIndex]);
+        }
+      }
+      return null;
     };
     const onPointerMove = (e: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -141,6 +204,7 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
     const stockGroup = new THREE.Group();
     const stockMat = new THREE.MeshStandardMaterial({
@@ -238,6 +302,34 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
         renderer.autoClear = false;
         navCube.render(renderer, w, h);
       }
+
+      // keep measurement labels glued to their 3D anchors as the view moves
+      const projectLabel = (ref: { current: HTMLDivElement | null }, anchor?: THREE.Vector3) => {
+        const div = ref.current;
+        if (!div) return;
+        if (!anchor) {
+          div.style.display = 'none';
+          return;
+        }
+        const p = anchor.clone().project(camera);
+        if (p.z > 1) {
+          div.style.display = 'none';
+          return;
+        }
+        div.style.display = '';
+        div.style.left = `${((p.x + 1) / 2) * el.clientWidth + 12}px`;
+        div.style.top = `${((1 - p.y) / 2) * el.clientHeight - 14}px`;
+      };
+      const sel = selectionRef.current;
+      projectLabel(labelARef, sel.a?.center);
+      projectLabel(labelBRef, sel.b?.center);
+      projectLabel(
+        distLabelRef,
+        sel.a && sel.b
+          ? new THREE.Vector3().addVectors(sel.a.center, sel.b.center).multiplyScalar(0.5)
+          : undefined,
+      );
+
       raf = requestAnimationFrame(loop);
     };
     loop();
@@ -292,7 +384,7 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
   useEffect(() => {
     const group = featureGroupRef.current;
     if (!group) return;
-    if (!features) {
+    if (!features || !geometry) {
       overlayRef.current = null;
       hoverLineRef.current = null;
       setLabel(null);
@@ -313,6 +405,34 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
     hoverLine.visible = false;
     group.add(hoverLine);
 
+    // persistent right-click selection highlights + center-to-center connector
+    const selObjects: THREE.Object3D[] = [];
+    const addSelection = (pick: MeasurePick) => {
+      if (pick.kind === 'plane') {
+        const mesh = planeHighlightMesh(geometry, features, transform, pick.index);
+        if (mesh) {
+          mesh.renderOrder = 3;
+          group.add(mesh);
+          selObjects.push(mesh);
+        }
+        return;
+      }
+      const line = new THREE.LineSegments(
+        hoverLineGeometry(data, pick.kind, pick.index),
+        new THREE.LineBasicMaterial({ color: pick.color, transparent: true, depthTest: false }),
+      );
+      line.renderOrder = 4;
+      group.add(line);
+      selObjects.push(line);
+    };
+    if (selection.a) addSelection(selection.a);
+    if (selection.b) addSelection(selection.b);
+    if (selection.a && selection.b) {
+      const conn = connectorLine(selection.a, selection.b);
+      group.add(conn);
+      selObjects.push(conn);
+    }
+
     overlayRef.current = data;
     hoverLineRef.current = hoverLine;
 
@@ -325,10 +445,17 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
       group.remove(hoverLine);
       hoverLine.geometry.dispose();
       (hoverLine.material as THREE.Material).dispose();
+      for (const o of selObjects) {
+        group.remove(o);
+        const obj = o as THREE.Mesh;
+        obj.geometry.dispose();
+        const mat = obj.material as THREE.Material;
+        mat.dispose();
+      }
       overlayRef.current = null;
       hoverLineRef.current = null;
     };
-  }, [features, transform, stock, showFeatures]);
+  }, [features, transform, stock, showFeatures, selection, geometry]);
 
   return (
     <>
@@ -336,6 +463,21 @@ export function Viewport({ geometry, stock, transform, features, showFeatures, m
       {label && (
         <div className="measure-label" style={{ left: label.x, top: label.y }}>
           {label.text}
+        </div>
+      )}
+      {selection.a && (
+        <div ref={labelARef} className="measure-label selected">
+          {selection.a.text}
+        </div>
+      )}
+      {selection.b && (
+        <div ref={labelBRef} className="measure-label selected">
+          {selection.b.text}
+        </div>
+      )}
+      {selection.a && selection.b && (
+        <div ref={distLabelRef} className="measure-label dist">
+          {measureText(selection.a, selection.b)}
         </div>
       )}
     </>

@@ -140,6 +140,15 @@ Z = const and stitch closed contours for Clipper2.
   ~0.5 mm snap). Highlight the whole feature, not the triangle.
 - **Click**: toggles the feature into the selection set; the feature id
   is what operations store.
+- **Manual measuring (measure mode, right-click)**: picks the nearest
+  feature, or — when nothing is near — the plane group owning the face
+  under the cursor (highlighted over its member triangles). A second
+  pick reports the center-to-center distance between the two (circles:
+  center; edges: midpoint; planes: group centroid — the OrcaSlicer
+  convention), plus the angle between two plane normals when both picks
+  are planes. Subsequent picks replace the second item; right-clicking
+  empty space clears both. Selections are highlighted persistently with
+  a dashed center-to-center connector.
 - **Features tab** (fifth sidebar tab): list of detected features grouped
   by kind (Planes / Circles & holes / Edges), search by dimension, the
   current selection, and measurements shown next to each feature (Ø for

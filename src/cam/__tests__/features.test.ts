@@ -30,6 +30,15 @@ describe('detectFeatures', () => {
     }
   });
 
+  it('maps raw triangles to plane groups (faceToPlane)', () => {
+    const geo = box();
+    const f = detectFeatures(geo);
+    const triCount = geo.getAttribute('position').count / 3;
+    expect(f.faceToPlane).toHaveLength(triCount);
+    expect(new Set(f.faceToPlane).size).toBe(6); // one plane per cube face
+    for (const p of f.faceToPlane) expect(p).toBeGreaterThanOrEqual(0);
+  });
+
   it('gives every feature a stable, unique id', () => {
     const f1 = detectFeatures(box());
     const f2 = detectFeatures(box(2)); // same geometry, fresh instance

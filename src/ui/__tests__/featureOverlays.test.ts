@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
-import { buildFeatureOverlayData, findNearestFeature } from '../featureOverlays';
+import {
+  buildFeatureOverlayData,
+  findNearestFeature,
+  measureText,
+  pickFromNearest,
+  planeHighlightMesh,
+  planePick,
+} from '../featureOverlays';
 
 function tubeAlongX(): THREE.BufferGeometry {
   const geo = new THREE.CylinderGeometry(3, 3, 10, 24).toNonIndexed();
@@ -92,5 +99,51 @@ describe('findNearestFeature (measure-mode snap)', () => {
       h,
     );
     expect(nearest?.kind).toBe('edge');
+  });
+});
+
+describe('manual measuring', () => {
+  it('picks features with their centers and text', () => {
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const nearest = { kind: 'circle' as const, index: capIdx, text: '', color: 0, anchor: { x: 0, y: 0 } };
+    const pick = pickFromNearest(data, nearest);
+    expect(pick.kind).toBe('circle');
+    expect(pick.center.x).toBeCloseTo(5);
+    expect(pick.text).toContain('Ø 6.00');
+  });
+
+  it('reports center-to-center distance, and angle between planes', () => {
+    const a = {
+      kind: 'circle' as const,
+      index: 0,
+      center: new THREE.Vector3(0, 0, 0),
+      color: 0,
+      text: 'Ø 6.00 mm',
+    };
+    const b = {
+      ...a,
+      center: new THREE.Vector3(3, 4, 0), // 3-4-5 triangle
+    };
+    expect(measureText(a, b)).toBe('Δ 5.00 mm');
+
+    const px = { kind: 'plane' as const, index: 0, center: new THREE.Vector3(0, 0, 0), color: 0, text: 'plane', normal: new THREE.Vector3(0, 0, 1) };
+    const py = { ...px, normal: new THREE.Vector3(0, 1, 0), center: new THREE.Vector3(0, 2, 0) };
+    expect(measureText(px, py)).toBe('Δ 2.00 mm · ∠ 90.0°');
+  });
+
+  it('builds a plane pick in machine space and highlights its triangles', () => {
+    const geo = new THREE.BoxGeometry(2, 2, 2).toNonIndexed();
+    const f = detectFeatures(geo);
+    const t = { ...identityTransform(), position: { x: 10, y: 0, z: 0 } };
+    const pick = planePick(f, t, 0);
+    expect(pick.kind).toBe('plane');
+    expect(pick.center.x).toBeCloseTo(10 + f.planes[0].point.x, 5);
+
+    const mesh = planeHighlightMesh(geo, f, t, 0);
+    expect(mesh).not.toBeNull();
+    // one cube face = 2 triangles = 6 vertices
+    expect((mesh!.geometry.getAttribute('position') as THREE.BufferAttribute).count).toBe(6);
   });
 });

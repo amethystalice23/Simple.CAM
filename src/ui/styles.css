@@ -160,6 +160,12 @@ button.secondary:disabled:hover { background: #31373e; }
   white-space: nowrap;
   z-index: 5;
 }
+.measure-label.selected { border-color: #2e6f9e; }
+.measure-label.dist {
+  font-weight: 600;
+  color: #ffd27f;
+  border-color: #6b5842;
+}
 
 .subhead {
   font-size: 11px;
