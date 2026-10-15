@@ -43,6 +43,32 @@ export function NumberField(props: {
   );
 }
 
+/** Bare numeric input (no label) for compact axis rows. */
+export function NumInput(props: {
+  value: number;
+  min?: number;
+  step?: number;
+  onCommit: (v: number) => void;
+}) {
+  const [text, setText] = useState(String(props.value));
+  // keep the field in sync when the value is changed elsewhere (e.g. a snap)
+  useEffect(() => setText(String(props.value)), [props.value]);
+  const commit = (s: string) => {
+    setText(s);
+    const v = parseFloat(s);
+    if (Number.isFinite(v) && (props.min === undefined || v >= props.min)) props.onCommit(v);
+  };
+  return (
+    <input
+      className="num-input"
+      type="number"
+      step={props.step ?? 1}
+      value={text}
+      onChange={(e) => commit(e.target.value)}
+    />
+  );
+}
+
 export function Segmented(props: {
   options: readonly OriginEdge[];
   value: OriginEdge;

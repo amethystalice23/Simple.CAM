@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { originSpan } from '../core/types';
-import type { ModelTransform, Stock, Vec3 } from '../core/types';
+import type { ModelTransform, OriginEdge, Stock, Vec3 } from '../core/types';
 
 const D2R = Math.PI / 180;
 
@@ -49,60 +49,73 @@ export function stockTopZ(stock: Stock): number {
   return originSpan(stock.origin.z, stock.sizeZ)[1];
 }
 
-/** Machine X of the stock's axial center. */
-export function stockCenterX(stock: Stock): number {
-  const [x0, x1] =
-    stock.kind === 'cylinder'
-      ? originSpan(stock.xOrigin, stock.length)
-      : originSpan(stock.origin.x, stock.sizeX);
-  return (x0 + x1) / 2;
-}
-
-/** Machine Y that centers the model over the stock (cylinder: the rotation axis). */
-export function stockCenterY(stock: Stock): number {
-  if (stock.kind === 'cylinder') return 0;
-  const [y0, y1] = originSpan(stock.origin.y, stock.sizeY);
-  return (y0 + y1) / 2;
+/**
+ * Machine-coordinate span of the stock along an axis. A cylinder's Y span is
+ * its silhouette [−r, r] around the rotation axis; its Z span runs from the
+ * cylinder bottom up to the crown.
+ */
+export function stockSpan(stock: Stock, axis: 'x' | 'y' | 'z'): readonly [number, number] {
+  if (stock.kind === 'cylinder') {
+    const r = stock.calibration.effectiveRadius;
+    switch (axis) {
+      case 'x':
+        return originSpan(stock.xOrigin, stock.length);
+      case 'y':
+        return [-r, r];
+      case 'z':
+        return [stock.calibration.crownZ - 2 * r, stock.calibration.crownZ];
+    }
+  }
+  switch (axis) {
+    case 'x':
+      return originSpan(stock.origin.x, stock.sizeX);
+    case 'y':
+      return originSpan(stock.origin.y, stock.sizeY);
+    case 'z':
+      return originSpan(stock.origin.z, stock.sizeZ);
+  }
 }
 
 /**
- * Machine Z of the stock's center. For a cylinder this is the rotation-axis
- * height (crownZ − radius): a model centered here is centered *on* the axis,
- * so wrapped cuts go all the way around it.
+ * Align the model's min/mid/max extent on one axis to the stock's min/mid/max
+ * — e.g. edge 'max' on X puts the model's far edge flush with the stock's.
+ * Rotation-aware: extents come from the rotated bounding box.
  */
-export function stockCenterZ(stock: Stock): number {
-  if (stock.kind === 'cylinder') return stock.calibration.crownZ - stock.calibration.effectiveRadius;
-  const [z0, z1] = originSpan(stock.origin.z, stock.sizeZ);
-  return (z0 + z1) / 2;
+export function alignAxisToStock(
+  geometry: THREE.BufferGeometry,
+  transform: ModelTransform,
+  stock: Stock,
+  axis: 'x' | 'y' | 'z',
+  edge: OriginEdge,
+): ModelTransform {
+  const bb = rotatedBBox(geometry, transform.rotationDeg);
+  const [s0, s1] = stockSpan(stock, axis);
+  const target = edge === 'min' ? s0 : edge === 'max' ? s1 : (s0 + s1) / 2;
+  const extent =
+    edge === 'min' ? bb.min[axis] : edge === 'max' ? bb.max[axis] : (bb.min[axis] + bb.max[axis]) / 2;
+  return { ...transform, position: { ...transform.position, [axis]: target - extent } };
 }
 
 /** Center the model on the stock's axial (X) center, keeping Y/Z and rotation. */
-export function centerOnX(
+export const centerOnX = (
   geometry: THREE.BufferGeometry,
   transform: ModelTransform,
   stock: Stock,
-): ModelTransform {
-  const bb = rotatedBBox(geometry, transform.rotationDeg);
-  const center = bb.getCenter(new THREE.Vector3());
-  return {
-    ...transform,
-    position: { ...transform.position, x: stockCenterX(stock) - center.x },
-  };
-}
+): ModelTransform => alignAxisToStock(geometry, transform, stock, 'x', 'mid');
 
 /** Center the model over the stock in Y (cylinder: over the rotation axis). */
-export function centerOnY(
+export const centerOnY = (
   geometry: THREE.BufferGeometry,
   transform: ModelTransform,
   stock: Stock,
-): ModelTransform {
-  const bb = rotatedBBox(geometry, transform.rotationDeg);
-  const center = bb.getCenter(new THREE.Vector3());
-  return {
-    ...transform,
-    position: { ...transform.position, y: stockCenterY(stock) - center.y },
-  };
-}
+): ModelTransform => alignAxisToStock(geometry, transform, stock, 'y', 'mid');
+
+/** Center the model on the stock's Z center (cylinder: on the rotation axis). */
+export const centerOnZ = (
+  geometry: THREE.BufferGeometry,
+  transform: ModelTransform,
+  stock: Stock,
+): ModelTransform => alignAxisToStock(geometry, transform, stock, 'z', 'mid');
 
 /** Rest the model on the stock surface (its lowest rotated point on top Z). */
 export function dropToSurface(
@@ -114,20 +127,6 @@ export function dropToSurface(
   return {
     ...transform,
     position: { ...transform.position, z: stockTopZ(stock) - bb.min.z },
-  };
-}
-
-/** Center the model on the stock's Z center (cylinder: on the rotation axis). */
-export function centerOnZ(
-  geometry: THREE.BufferGeometry,
-  transform: ModelTransform,
-  stock: Stock,
-): ModelTransform {
-  const bb = rotatedBBox(geometry, transform.rotationDeg);
-  const center = bb.getCenter(new THREE.Vector3());
-  return {
-    ...transform,
-    position: { ...transform.position, z: stockCenterZ(stock) - center.z },
   };
 }
 

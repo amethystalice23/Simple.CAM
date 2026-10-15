@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { identityTransform } from '../core/types';
-import type { ModelTransform, Stock } from '../core/types';
-import { alignToStock, centerOnX, centerOnY, centerOnZ, dropToSurface } from './placement';
-import { NumberField } from './fields';
+import type { ModelTransform, OriginEdge, Stock } from '../core/types';
+import { alignAxisToStock, alignToStock, dropToSurface } from './placement';
+import { NumInput } from './fields';
 
 interface Props {
   geometry: THREE.BufferGeometry;
@@ -10,6 +10,16 @@ interface Props {
   transform: ModelTransform;
   onChange: (t: ModelTransform) => void;
 }
+
+const AXES = ['x', 'y', 'z'] as const;
+type Axis = (typeof AXES)[number];
+
+/** Button labels for min/mid/max edge alignment, per axis. */
+const EDGE_LABELS: Record<Axis, Record<OriginEdge, string>> = {
+  x: { min: 'Left', mid: 'Center', max: 'Right' },
+  y: { min: 'Front', mid: 'Center', max: 'Back' },
+  z: { min: 'Bottom', mid: 'Center', max: 'Top' },
+};
 
 /** Move/rotate the loaded model relative to the stock. */
 export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
@@ -19,12 +29,12 @@ export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
 
   const pos = transform.position;
   const rot = transform.rotationDeg;
-  const setPosition = (axis: 'x' | 'y' | 'z', v: number) =>
+  const setPosition = (axis: Axis, v: number) =>
     onChange({ ...transform, position: { ...pos, [axis]: v } });
-  const setRotation = (axis: 'x' | 'y' | 'z', v: number) =>
+  const setRotation = (axis: Axis, v: number) =>
     onChange({ ...transform, rotationDeg: { ...rot, [axis]: v } });
   /** Nudge a rotation by ±90° and normalize into −180…180. */
-  const bumpRot = (axis: 'x' | 'y' | 'z', delta: number) => {
+  const bumpRot = (axis: Axis, delta: number) => {
     const n = (((rot[axis] + delta) % 360) + 360) % 360;
     setRotation(axis, n > 180 ? n - 360 : n);
   };
@@ -35,36 +45,42 @@ export function ModelPanel({ geometry, stock, transform, onChange }: Props) {
       <p>
         size {size.x.toFixed(1)} × {size.y.toFixed(1)} × {size.z.toFixed(1)} mm (model coords)
       </p>
-      <NumberField label="Position X (mm)" value={pos.x} step={0.5} onCommit={(v) => setPosition('x', v)} />
-      <NumberField label="Position Y (mm)" value={pos.y} step={0.5} onCommit={(v) => setPosition('y', v)} />
-      <NumberField label="Position Z (mm)" value={pos.z} step={0.5} onCommit={(v) => setPosition('z', v)} />
-      <NumberField label="Rotate X (°)" value={rot.x} step={15} onCommit={(v) => setRotation('x', v)} />
-      <NumberField label="Rotate Y (°)" value={rot.y} step={15} onCommit={(v) => setRotation('y', v)} />
-      <NumberField label="Rotate Z (°)" value={rot.z} step={15} onCommit={(v) => setRotation('z', v)} />
-      <div className="buttons">
-        {(['x', 'y', 'z'] as const).flatMap((a) =>
-          [-90, 90].map((d) => (
-            <button key={`${a}${d}`} type="button" onClick={() => bumpRot(a, d)}>
-              {`${a.toUpperCase()} ${d > 0 ? '+' : '−'}90°`}
+
+      <p className="subhead">Position (mm)</p>
+      {AXES.map((a) => (
+        <div className="axis-row" key={a}>
+          <span className="axis-label">{a.toUpperCase()}</span>
+          <NumInput value={pos[a]} step={0.5} onCommit={(v) => setPosition(a, v)} />
+          {(['min', 'mid', 'max'] as OriginEdge[]).map((e) => (
+            <button
+              key={e}
+              type="button"
+              onClick={() => onChange(alignAxisToStock(geometry, transform, stock, a, e))}
+            >
+              {EDGE_LABELS[a][e]}
             </button>
-          )),
-        )}
-      </div>
+          ))}
+        </div>
+      ))}
+
+      <p className="subhead">Rotation (°)</p>
+      {AXES.map((a) => (
+        <div className="axis-row" key={`rot-${a}`}>
+          <span className="axis-label">{a.toUpperCase()}</span>
+          <NumInput value={rot[a]} step={15} onCommit={(v) => setRotation(a, v)} />
+          <button type="button" onClick={() => bumpRot(a, -90)}>
+            −90°
+          </button>
+          <button type="button" onClick={() => bumpRot(a, 90)}>
+            +90°
+          </button>
+        </div>
+      ))}
+
       <div className="buttons">
-        <button type="button" onClick={() => onChange(centerOnX(geometry, transform, stock))}>
-          Center X
-        </button>
-        <button type="button" onClick={() => onChange(centerOnY(geometry, transform, stock))}>
-          Center Y
-        </button>
-        <button type="button" onClick={() => onChange(centerOnZ(geometry, transform, stock))}>
-          Center Z
-        </button>
         <button type="button" onClick={() => onChange(dropToSurface(geometry, transform, stock))}>
           Drop to surface
         </button>
-      </div>
-      <div className="buttons">
         <button type="button" onClick={() => onChange(alignToStock(geometry, transform, stock))}>
           Align to stock
         </button>

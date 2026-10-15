@@ -135,6 +135,29 @@ button.secondary:disabled:hover { background: #31373e; }
   padding: 5px 2px 1px;
 }
 .hint { font-size: 12px; color: #7d8891; }
+
+.subhead {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9aa4ad;
+  margin: 12px 0 4px;
+}
+.axis-row { display: flex; align-items: center; gap: 5px; margin: 5px 0; }
+.axis-row .axis-label { width: 16px; font-size: 12px; color: #9aa4ad; flex: none; }
+.axis-row button { padding: 4px 6px; font-size: 10px; flex: 1; }
+input.num-input {
+  width: 68px;
+  flex: none;
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 4px;
+  color: #d8dde2;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+input.num-input:focus { outline: 1px solid #2e6f9e; }
 .tool-row {
   display: flex;
   flex-direction: column;

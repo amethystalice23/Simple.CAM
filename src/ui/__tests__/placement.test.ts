@@ -3,12 +3,14 @@ import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
 import type { ModelTransform, Stock } from '../../core/types';
 import {
+  alignAxisToStock,
   alignToStock,
   centerOnX,
   centerOnY,
   centerOnZ,
   dropToSurface,
   rotatedBBox,
+  stockSpan,
 } from '../placement';
 
 /** 2×4×6 box centered on the model origin. */
@@ -98,6 +100,47 @@ describe('centerOnZ', () => {
   it('puts the model center at the box Z mid', () => {
     const t = centerOnZ(box(), identityTransform(), boxStock);
     expect(t.position.z).toBeCloseTo(-10); // stock spans −20…0
+  });
+});
+
+describe('stockSpan', () => {
+  it('spans the cylinder from bottom to crown in Z, silhouette in Y', () => {
+    expect(stockSpan(cylinder, 'z')).toEqual([-40, 10]); // crownZ 10 − 2r
+    expect(stockSpan(cylinder, 'y')).toEqual([-25, 25]);
+    expect(stockSpan(cylinder, 'x')).toEqual([0, 100]);
+  });
+
+  it('spans the box per its origin edges', () => {
+    expect(stockSpan(boxStock, 'x')).toEqual([0, 80]);
+    expect(stockSpan(boxStock, 'z')).toEqual([-20, 0]); // origin z='max'
+  });
+});
+
+describe('alignAxisToStock', () => {
+  it('flushes the model far edge with the stock far edge (X max)', () => {
+    const t = alignAxisToStock(box(), identityTransform(), cylinder, 'x', 'max');
+    expect(t.position.x).toBeCloseTo(99); // model max = pos+1 → stock max 100
+  });
+
+  it('flushes the model near edge with the stock near edge (X min)', () => {
+    const t = alignAxisToStock(box(), identityTransform(), cylinder, 'x', 'min');
+    expect(t.position.x).toBeCloseTo(1); // model min = pos−1 → stock min 0
+  });
+
+  it('puts the model top flush with the crown (Z max on cylinder)', () => {
+    const t = alignAxisToStock(box(), identityTransform(), cylinder, 'z', 'max');
+    expect(t.position.z).toBeCloseTo(7); // crownZ 10 − half height 3
+  });
+
+  it('puts the model bottom at the cylinder bottom (Z min)', () => {
+    const t = alignAxisToStock(box(), identityTransform(), cylinder, 'z', 'min');
+    expect(t.position.z).toBeCloseTo(-37); // bottom −40 + half height 3
+  });
+
+  it('is rotation-aware', () => {
+    const t = alignAxisToStock(box(), rotate(identityTransform(), 'y', 90), cylinder, 'x', 'max');
+    // 90° about Y swaps the 2×4×6 box's X and Z extents: X half-extent is now 3
+    expect(t.position.x).toBeCloseTo(97);
   });
 });
 
