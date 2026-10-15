@@ -20,6 +20,17 @@ export const HOLE_HOVER = 0x99eeff;
 const RING_SEGMENTS = 72;
 const RING_SAMPLES = 24; // hover-snap sampling density
 
+/** Measure-mode snap: screen-space floor (px) and mm floor at feature depth. */
+const SNAP_PX_FLOOR = 10;
+const SNAP_MM = 0.5;
+/**
+ * Key features (circles, holes) snap with this much extra generosity, and
+ * candidates compete on distance-normalized-by-tolerance — so a circle wins
+ * anywhere inside its boosted radius unless the pointer is genuinely closer
+ * (relative to tolerance) to an edge.
+ */
+const CIRCLE_PRIORITY = 2.5;
+
 export interface FeatureOverlayData {
   edgeLines: THREE.LineSegments;
   circleLines: THREE.LineSegments;
@@ -155,8 +166,10 @@ export interface NearestFeature {
 }
 
 /**
- * Nearest feature to the mouse in screen space. Tolerance: ~0.5 mm at the
- * feature's depth, with a screen-space floor of 10 px.
+ * Nearest feature to the mouse in screen space. Circles and holes are key
+ * dimensions and take precedence: they snap within 2.5× the tolerance
+ * (25 px / 1.25 mm floors) and win outright if anything is inside that
+ * radius. Edges are the fallback, snapping within ~0.5 mm (10 px floor).
  */
 export function findNearestFeature(
   data: FeatureOverlayData,
@@ -167,48 +180,67 @@ export function findNearestFeature(
   h: number,
 ): NearestFeature | null {
   const halfTanFov = Math.tan(((camera.fov / 2) * Math.PI) / 180);
-  let best: (NearestFeature & { d: number }) | null = null;
 
-  const consider = (
+  interface Candidate {
+    index: number;
+    samples: THREE.Vector3[];
+    text: string;
+    color: number;
+    rep: THREE.Vector3;
+  }
+
+  const scan = (
     kind: 'edge' | 'circle',
-    index: number,
-    samples: THREE.Vector3[],
-    text: string,
-    color: number,
-    rep: THREE.Vector3,
-  ) => {
-    const proj = rep.clone().project(camera);
-    if (proj.z > 1) return; // behind the camera
-    const px = ((proj.x + 1) / 2) * w;
-    const py = ((1 - proj.y) / 2) * h;
-    const depth = rep.distanceTo(camera.position);
-    const pxPerMm = h / (2 * halfTanFov * Math.max(depth, 0.01));
-    const tol = Math.max(10, 0.5 * pxPerMm);
-    let d = Infinity;
-    for (const s of samples) {
-      const sp = s.clone().project(camera);
-      if (sp.z > 1) continue;
-      d = Math.min(d, Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY));
+    items: Candidate[],
+    tolScale: number,
+  ): (NearestFeature & { d: number }) | null => {
+    let best: (NearestFeature & { d: number }) | null = null;
+    for (const it of items) {
+      const proj = it.rep.clone().project(camera);
+      if (proj.z > 1) continue; // behind the camera
+      const px = ((proj.x + 1) / 2) * w;
+      const py = ((1 - proj.y) / 2) * h;
+      const depth = it.rep.distanceTo(camera.position);
+      const pxPerMm = h / (2 * halfTanFov * Math.max(depth, 0.01));
+      const tol = Math.max(SNAP_PX_FLOOR * tolScale, SNAP_MM * tolScale * pxPerMm);
+      let d = Infinity;
+      for (const s of it.samples) {
+        const sp = s.clone().project(camera);
+        if (sp.z > 1) continue;
+        d = Math.min(d, Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY));
+      }
+      if (d <= tol && (best === null || d < best.d)) {
+        best = {
+          kind,
+          index: it.index,
+          text: it.text,
+          color: it.color,
+          anchor: { x: px + 12, y: py - 14 },
+          d,
+        };
+      }
     }
-    if (d <= tol && (best === null || d < best.d)) {
-      best = { kind, index, text, color, anchor: { x: px + 12, y: py - 14 }, d };
-    }
+    return best;
   };
 
-  data.edgeSamples.forEach((samples, i) =>
-    consider('edge', i, samples, data.edgeText[i], EDGE_HOVER, data.edgeMid[i]),
-  );
-  data.circleSamples.forEach((samples, i) =>
-    consider(
-      'circle',
-      i,
-      samples,
-      data.circleText[i],
-      data.circleInner[i] ? HOLE_HOVER : CIRCLE_HOVER,
-      data.circleCenter[i],
-    ),
-  );
-  return best;
+  const circles: Candidate[] = data.circleSamples.map((samples, i) => ({
+    index: i,
+    samples,
+    text: data.circleText[i],
+    color: data.circleInner[i] ? HOLE_HOVER : CIRCLE_HOVER,
+    rep: data.circleCenter[i],
+  }));
+  const circleHit = scan('circle', circles, CIRCLE_PRIORITY);
+  if (circleHit) return circleHit; // key dimensions take precedence
+
+  const edges: Candidate[] = data.edgeSamples.map((samples, i) => ({
+    index: i,
+    samples,
+    text: data.edgeText[i],
+    color: EDGE_HOVER,
+    rep: data.edgeMid[i],
+  }));
+  return scan('edge', edges, 1);
 }
 
 /** A crisp single-feature outline for the hovered feature. */
