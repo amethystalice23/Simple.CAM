@@ -37,6 +37,15 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
     pos.z = m.words.z ?? pos.z;
     pos.a = m.words.a ?? pos.a;
 
+    // a pure-A move (an Index op) rotates the stock, not the tool: it
+    // cuts nothing and moves nothing in XYZ — draw no segment for it,
+    // and don't let the wrap map the tool to a mirrored phantom position
+    const aOnly =
+      m.words.a !== undefined &&
+      m.words.x === undefined &&
+      m.words.y === undefined &&
+      m.words.z === undefined;
+
     let x = pos.x;
     let y = pos.y;
     let z = pos.z;
@@ -48,12 +57,12 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
       z = -pos.y * Math.sin(th) + zrel * Math.cos(th) + axisZ;
     }
 
-    if (prev) {
+    if (prev && !aOnly) {
       const target = m.rapid ? rapid : feed;
       emit(target, prev.x, prev.y, prev.z);
       emit(target, x, y, z);
     }
-    prev = { x, y, z };
+    if (!aOnly) prev = { x, y, z };
   }
 
   return { feed, rapid };

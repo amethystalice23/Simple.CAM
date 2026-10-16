@@ -198,6 +198,9 @@ function cutRange(
   allowance: number,
   crown: number,
 ): { topZ: number; floorZ: number } | null {
+  if (!Number.isFinite(startDepth) || !Number.isFinite(endDepth) || !Number.isFinite(allowance)) {
+    return null; // garbage params (corrupt job files) never emit NaN moves
+  }
   if (endDepth < startDepth - 1e-9) return null; // end above start: nothing to cut
   const topZ = crown - startDepth;
   const floorZ = crown - endDepth + allowance;
@@ -205,13 +208,18 @@ function cutRange(
   return { topZ, floorZ };
 }
 
+/**
+ * Resolve one op into moves. NEVER THROWS: every failure — including bad
+ * context (unknown material, missing tool) — comes back as a per-op error
+ * so one broken op can never silently kill a whole-job recalculation.
+ */
 export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
-  const tool = ctx.tools.find((t) => t.id === op.toolId);
-  if (!tool) return fail('tool missing from library');
-  const material = getMaterial(ctx.stock.materialId);
-  const { feed, plungeFeed } = feedsFor(tool, material);
-
   try {
+    const tool = ctx.tools.find((t) => t.id === op.toolId);
+    if (!tool) return fail('tool missing from library');
+    const material = getMaterial(ctx.stock.materialId);
+    const { feed, plungeFeed } = feedsFor(tool, material);
+
     switch (op.kind) {
       case 'index': {
         if (ctx.stock.kind !== 'cylinder') return fail('indexing needs cylinder stock');

@@ -277,6 +277,9 @@ export function App() {
       next[o.id] = generateJobOp(o, { ...genCtx, datumAngle: datum });
       if (o.kind === 'index') datum = o.angle;
     }
+    for (const o of ops) {
+      if (next[o.id].error) console.warn(`[simple.cam] op "${o.kind}" failed: ${next[o.id].error}`);
+    }
     setGenerated(next);
     updateJobOutput(next);
     setShowPreview(true); // recalculate turns the path display on
@@ -287,6 +290,7 @@ export function App() {
     const op = ops.find((o) => o.id === id);
     if (!op) return;
     const result = generateJobOp(op, { ...genCtx, datumAngle: datumAngleBefore(ops, id) });
+    if (result.error) console.warn(`[simple.cam] op "${op.kind}" failed: ${result.error}`);
     const next = { ...generated, [id]: result };
     setGenerated(next);
     updateJobOutput(next);

@@ -66,4 +66,22 @@ describe('movesToSegments', () => {
     expect(segs.feed).toEqual([1, 2, 0, 3, 2, 0]);
     expect(segs.rapid).toEqual([]);
   });
+
+  it('draws no segment for a pure-A index move (the stock rotates, not the tool)', () => {
+    const moves: Move[] = [
+      { words: { x: 5, y: 5, z: 30 }, feed: 0, rapid: true }, // position only
+      { words: { x: 5, y: 5, z: 0 }, feed: 500 }, // plunge to the surface
+      { words: { a: 180 }, feed: 0, rapid: true }, // Index op: draws nothing
+      { words: { x: 10, y: 5, z: 30 }, feed: 500 }, // retract after indexing
+    ];
+    const segs = movesToSegments(moves, cylinderStock);
+    // both feed segments start from real tool positions — the index move
+    // contributes none, and its wrapped phantom (5, −5, −30) never appears
+    expect(segs.feed.length / 6).toBe(2);
+    expect(segs.rapid).toEqual([]);
+    const zs = [segs.feed[2], segs.feed[5], segs.feed[8], segs.feed[11]];
+    expect(Math.min(...zs)).toBeGreaterThanOrEqual(-1); // nothing at z=−30
+    // the post-index move continues from the last real position (5, 5, 0)
+    expect(segs.feed.slice(6, 12)).toEqual([5, 5, 0, 10, 5, 30]);
+  });
 });

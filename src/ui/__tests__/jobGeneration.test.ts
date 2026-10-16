@@ -360,6 +360,16 @@ describe('generateJobOp', () => {
     expect(res.error).toContain('tool missing');
   });
 
+  it('NEVER throws — bad context comes back as a per-op error', () => {
+    const badCtx = { ...ctx, stock: { ...boxStock, materialId: 'unobtanium' } };
+    const res = generateJobOp(pocketOp, badCtx);
+    expect(res.moves).toEqual([]);
+    expect(res.error).toBeTruthy();
+    // and a garbage op object still cannot kill a whole-job recalc
+    const res2 = generateJobOp({ ...drillOp, kind: 'pocket' } as unknown as JobOp, ctx);
+    expect(res2.error).toBeTruthy();
+  });
+
   it('flags generation failures, e.g. an oversized pocket tool', () => {
     const fatCtx = { ...ctx, tools: [{ ...smallTool, diameter: 50 }] };
     const res = generateJobOp({ ...pocketOp, stepOver: 1 }, fatCtx);
