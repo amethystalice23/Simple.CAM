@@ -329,7 +329,14 @@ export type JobOp =
     })
   | (JobOpBase & {
       kind: 'pocket';
-      /** cut depth below the selected surface, mm */
+      /**
+       * What the selected features mean: 'floor' cuts from the stock
+       * crown down TO them (roughing to a surface / hole bottom);
+       * 'top' cuts down FROM them by `depth` (classic pocket at a rim).
+       * Geometry alone cannot tell a hole rim from a hole bottom.
+       */
+      selectionIs: 'floor' | 'top';
+      /** cut depth below the selection, mm (selectionIs = 'top' only) */
       depth: number;
       stepDown: number;
       stepOver: number;
@@ -341,6 +348,8 @@ export type JobOp =
     })
   | (JobOpBase & {
       kind: 'profile';
+      selectionIs: 'floor' | 'top';
+      /** cut depth below the selection, mm (selectionIs = 'top' only) */
       depth: number;
       stepDown: number;
       allowance: number;

@@ -49,8 +49,18 @@ function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
     case 'pocket':
       return (
         <>
+          <label className="field">
+            <span>Selection is the</span>
+            <select
+              value={op.selectionIs}
+              onChange={(e) => upd({ selectionIs: e.target.value as 'floor' | 'top' })}
+            >
+              <option value="floor">floor — cut down TO it from the crown</option>
+              <option value="top">top — cut down FROM it by depth</option>
+            </select>
+          </label>
           <NumberField
-            label="Depth below rim (holes)"
+            label="Depth (when top)"
             value={op.depth}
             min={0.1}
             onCommit={(v) => upd({ depth: v } as Partial<JobOp>)}
@@ -80,8 +90,18 @@ function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
               <option value="online">on line</option>
             </select>
           </label>
+          <label className="field">
+            <span>Selection is the</span>
+            <select
+              value={op.selectionIs}
+              onChange={(e) => upd({ selectionIs: e.target.value as 'floor' | 'top' })}
+            >
+              <option value="floor">floor — cut down TO it from the crown</option>
+              <option value="top">top — cut down FROM it by depth</option>
+            </select>
+          </label>
           <NumberField
-            label="Depth below rim (holes)"
+            label="Depth (when top)"
             value={op.depth}
             min={0.1}
             onCommit={(v) => upd({ depth: v } as Partial<JobOp>)}

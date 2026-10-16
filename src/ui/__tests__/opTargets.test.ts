@@ -1,18 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
-import type { Stock } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import { drillTargetsFromSelection, pocketRegionsFromSelection } from '../opTargets';
-
-const boxStock: Extract<Stock, { kind: 'box' }> = {
-  kind: 'box',
-  sizeX: 60,
-  sizeY: 40,
-  sizeZ: 10,
-  origin: { x: 'min', y: 'min', z: 'max' },
-  materialId: 'aluminum-6061',
-}; // top face at machine Z0 (crown)
 
 function plateWithHole(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -34,36 +24,33 @@ function loopArea(points: { x: number; y: number }[]): number {
 }
 
 describe('pocketRegionsFromSelection', () => {
-  it('turns a selected hole circle into its disc, floor from the depth param', () => {
+  it('returns a circle disc with the selection plane height (semantics-free)', () => {
     const geo = plateWithHole();
     const f = detectFeatures(geo);
     const holeCircle = f.circles.find(
       (c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z - 2) < 0.01,
     );
     expect(holeCircle).toBeDefined();
-    const src = pocketRegionsFromSelection(geo, f, [holeCircle!.id], identityTransform(), boxStock);
+    const src = pocketRegionsFromSelection(geo, f, [holeCircle!.id], identityTransform());
     expect(src).not.toBeNull();
     expect(src!.regions).toHaveLength(1);
     expect(loopArea(src!.regions[0])).toBeCloseTo(Math.PI * 4, 1); // Ø4 hole
-    expect(src!.topZ).toBeCloseTo(2, 5); // rim
-    expect(src!.floorZ).toBeNull(); // caller supplies depth below rim
+    expect(src!.selectionZ).toBeCloseTo(2, 5); // the circle's plane
   });
 
-  it('treats a selected face as the floor: cut from the stock crown down to it', () => {
-    // a 10×4 boss sunk 4mm below the stock crown (crown at z0, face at z-4)
+  it('returns a face footprint with the face height', () => {
     const geo = new THREE.BoxGeometry(10, 4, 2).toNonIndexed();
-    geo.translate(0, 0, -5); // spans z −6…−4, top face at z = −4
+    geo.translate(0, 0, -5); // top face at z = −4
     const f = detectFeatures(geo);
     const topPlane = f.planes.find(
       (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z + 4) < 1e-6,
     );
     expect(topPlane).toBeDefined();
-    const src = pocketRegionsFromSelection(geo, f, [topPlane!.id], identityTransform(), boxStock);
+    const src = pocketRegionsFromSelection(geo, f, [topPlane!.id], identityTransform());
     expect(src).not.toBeNull();
     expect(src!.regions).toHaveLength(1);
-    expect(loopArea(src!.regions[0])).toBeCloseTo(40, 5); // 10 × 4 face
-    expect(src!.topZ).toBeCloseTo(0, 5); // stock crown
-    expect(src!.floorZ).toBeCloseTo(-4, 5); // the selected face
+    expect(loopArea(src!.regions[0])).toBeCloseTo(40, 5);
+    expect(src!.selectionZ).toBeCloseTo(-4, 5);
   });
 
   it('rejects mixing faces and holes in one operation', () => {
@@ -75,13 +62,7 @@ describe('pocketRegionsFromSelection', () => {
     );
     expect(topPlane).toBeDefined();
     expect(() =>
-      pocketRegionsFromSelection(
-        geo,
-        f,
-        [holeCircle.id, topPlane!.id],
-        identityTransform(),
-        boxStock,
-      ),
+      pocketRegionsFromSelection(geo, f, [holeCircle.id, topPlane!.id], identityTransform()),
     ).toThrowError(/either faces or holes/);
   });
 
@@ -90,7 +71,7 @@ describe('pocketRegionsFromSelection', () => {
     const f = detectFeatures(geo);
     const sidePlane = f.planes.find((p) => Math.abs(p.normal.z) < 0.5);
     expect(sidePlane).toBeDefined();
-    expect(pocketRegionsFromSelection(geo, f, [sidePlane!.id], identityTransform(), boxStock)).toBeNull();
+    expect(pocketRegionsFromSelection(geo, f, [sidePlane!.id], identityTransform())).toBeNull();
   });
 });
 

@@ -60,6 +60,7 @@ const pocketOp: Extract<JobOp, { kind: 'pocket' }> = {
   toolId: 't3',
   featureIds: [holeCircleId],
   kind: 'pocket',
+  selectionIs: 'top',
   depth: 2,
   stepDown: 0.5,
   stepOver: 1,
@@ -77,6 +78,7 @@ const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   toolId: 't3',
   featureIds: [holeCircleId],
   kind: 'profile',
+  selectionIs: 'top',
   depth: 1,
   stepDown: 0.5,
   allowance: 0,
@@ -117,11 +119,45 @@ describe('newJobOp / defaults', () => {
 });
 
 describe('generateJobOp', () => {
-  it('pockets a selected hole from the rim down by depth', () => {
-    const res = generateJobOp(pocketOp, ctx);
+  it("pockets down FROM a selected circle when it's the top (depth below it)", () => {
+    const res = generateJobOp(pocketOp, ctx); // selectionIs: 'top', circle at z2
     expect(res.error).toBeNull();
     expect(res.moves.length).toBeGreaterThan(0);
-    expect(res.summary).toContain('below rim');
+    expect(res.summary).toContain('below selection');
+    const deepest = Math.min(
+      ...res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!),
+    );
+    expect(deepest).toBeCloseTo(0, 5); // z2 − depth 2
+  });
+
+  it("pockets down TO a selected circle when it's the floor (hole bottom)", () => {
+    // the user's scenario: a circle at the bottom of a hole, sunk below
+    // the stock crown — the cut must work from the crown DOWN TO it
+    const geo = plateWithHole();
+    geo.translate(0, 0, -6); // hole circles now at z −6 and −4
+    const f = detectFeatures(geo);
+    const bottomCircleId = f.circles.find(
+      (c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z + 4) < 0.01,
+    )!.id;
+    const op: Extract<JobOp, { kind: 'pocket' }> = {
+      ...pocketOp,
+      selectionIs: 'floor',
+      featureIds: [bottomCircleId],
+    };
+    const res = generateJobOp(op, { ...ctx, geometry: geo, features: f });
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(0);
+    expect(res.summary).toContain('z0.0 → z-4.0'); // crown → hole bottom
+    const deepest = Math.min(
+      ...res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!),
+    );
+    expect(deepest).toBeCloseTo(-4, 5);
+  });
+
+  it('rejects a floor selection at or above the crown', () => {
+    const res = generateJobOp({ ...pocketOp, selectionIs: 'floor' }, ctx); // circle at z2, crown z0
+    expect(res.moves).toEqual([]);
+    expect(res.error).toContain('at or above the stock crown');
   });
 
   it('pockets a selected face from the crown DOWN TO the face', () => {
@@ -134,6 +170,7 @@ describe('generateJobOp', () => {
     )!.id;
     const op: Extract<JobOp, { kind: 'pocket' }> = {
       ...pocketOp,
+      selectionIs: 'floor',
       id: 'face-pocket',
       featureIds: [faceId],
       stepDown: 1,

@@ -6,8 +6,7 @@
 
 import * as THREE from 'three';
 import type { DetectedFeatures } from '../cam/features';
-import type { DrillOp, ModelTransform, Stock, Vec2 } from '../core/types';
-import { stockTopZ } from './placement';
+import type { DrillOp, ModelTransform, Vec2 } from '../core/types';
 import { transformFn } from './featureOverlays';
 
 /** Tolerance for "parallel to the machine drill axis". */
@@ -19,16 +18,12 @@ export interface PocketSource {
   /** machine-space XY contours (outer CCW, holes CW) */
   regions: Vec2[][];
   /**
-   * Machine Z the cut starts from. For a selected FACE this is the stock
-   * crown — the op works its way down from the stock surface to the face.
-   * For a selected hole it is the rim.
+   * The selected features' plane height. What it MEANS (cut down to it
+   * from the crown, or down from it by the op's depth) is the op's
+   * `selectionIs` decision — geometry alone cannot tell a hole rim from
+   * a hole bottom, so this stays pure geometry.
    */
-  topZ: number;
-  /**
-   * Known floor from the selection: a selected face's own height. Null for
-   * hole selections, where the floor comes from the op's depth parameter.
-   */
-  floorZ: number | null;
+  selectionZ: number;
 }
 
 function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: number }) => THREE.Vector3): number {
@@ -37,19 +32,17 @@ function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: numbe
 }
 
 /**
- * Pocket regions from the selection. Selected flat faces are the FLOOR:
- * the cut starts at the stock crown and works down to the face (with
- * several faces at different heights, it clears down to the shallowest —
- * add another op for deeper faces). Selected circles are holes: the cut
- * starts at the rim and goes the op's depth below it. Mixing faces and
- * holes in one op is rejected.
+ * Pocket regions from the selection: circles aligned to the machine Z
+ * axis become their disc; Z-normal planes become their footprint
+ * rectangle. `selectionZ` is the highest selected plane (with several
+ * faces at different heights, the shallowest wins — add another op for
+ * deeper ones). Mixing faces and holes in one op is rejected.
  */
 export function pocketRegionsFromSelection(
   geometry: THREE.BufferGeometry,
   features: DetectedFeatures,
   selection: string[],
   transform: ModelTransform,
-  stock: Stock,
 ): PocketSource | null {
   const xf = transformFn(transform);
   const circleRegions: Vec2[][] = [];
@@ -107,10 +100,10 @@ export function pocketRegionsFromSelection(
     throw new Error('select either faces or holes for this operation, not both');
   }
   if (planeRegions.length > 0) {
-    return { regions: planeRegions, topZ: stockTopZ(stock), floorZ: faceZ };
+    return { regions: planeRegions, selectionZ: faceZ };
   }
   if (circleRegions.length > 0) {
-    return { regions: circleRegions, topZ: rimZ, floorZ: null };
+    return { regions: circleRegions, selectionZ: rimZ };
   }
   return null;
 }
