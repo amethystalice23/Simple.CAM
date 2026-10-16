@@ -166,6 +166,11 @@ export interface FaceCylinderOp {
   finishAllowance: number;
   /** direction of continuous A rotation */
   rotation: 'cw' | 'ccw';
+  /**
+   * 'zigzag' (default): retract to safe Z between passes.
+   * 'spiral': stay in the cut — helically step down at each sweep end.
+   */
+  pattern?: 'zigzag' | 'spiral';
 }
 
 export interface Vec2 {
@@ -323,9 +328,18 @@ export type JobOp =
   | (JobOpBase & {
       kind: 'faceCylinder';
       targetDiameter: number;
+      /** axial sweep, machine X, mm — not the whole stock by default so
+       * vice jaws / mounted fixtures can be avoided */
+      xStart: number;
+      xEnd: number;
+      /** optional cylinder primitive as the facing target: its axial extent
+       * and diameter override the fields above (kept in sync on select) */
+      primitiveId: string | null;
       stepDown: number;
       finishAllowance: number;
       rotation: 'cw' | 'ccw';
+      /** 'zigzag' retracts between passes; 'spiral' steps down in the cut */
+      pattern: 'zigzag' | 'spiral';
     })
   | (JobOpBase & {
       kind: 'index';

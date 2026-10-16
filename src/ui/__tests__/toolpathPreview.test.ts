@@ -47,13 +47,21 @@ describe('movesToSegments', () => {
     const segs = movesToSegments(res.moves, cylinderStock);
     expect(segs.feed.length).toBeGreaterThan(0);
 
-    // first helical entry: plunge to Z24 while A advances to 90° — on the
-    // un-rotated stock the cut lands on the cylinder side at (x, 24, 0)
-    const plungeSeg = segs.feed.slice(0, 6);
-    expect(plungeSeg[2]).toBeCloseTo(25 + 5, 1); // from safe Z (surface+5)
-    expect(plungeSeg[5]).toBeCloseTo(0, 1); // mapped onto the axis plane
-    // the segment's mapped end radius is 24 (surface 25 − 1 depth)
-    expect(Math.hypot(plungeSeg[4], plungeSeg[5])).toBeCloseTo(24, 1);
+    // the first helical entry (Δa=90°) is subdivided into 15° chords — 6
+    // sub-segments, 36 numbers — and its final mapped point lands on the
+    // cylinder side at radius 24 (surface 25 − 1 depth), angle 90°
+    const plungePts = segs.feed.slice(0, 36);
+    expect(plungePts[2]).toBeCloseTo(25 + 5, 1); // starts at safe Z (surface+5)
+    const lastX = plungePts[33];
+    const lastY = plungePts[34];
+    const lastZ = plungePts[35];
+    expect(Math.hypot(lastY, lastZ)).toBeCloseTo(24, 1); // mapped end radius
+    expect(lastY).toBeCloseTo(24, 0); // at the 3 o'clock position
+    expect(lastZ).toBeCloseTo(0, 0);
+    // the long sweep (7500°) is subdivided into many chords, not one line
+    const sweepCount = segs.feed.length / 6;
+    expect(sweepCount).toBeGreaterThan(500);
+    void lastX;
   });
 
   it('draws nothing from a phantom origin — the first move only positions', () => {

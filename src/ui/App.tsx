@@ -6,7 +6,7 @@ import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
-import { identityTransform } from '../core/types';
+import { identityTransform, originSpan } from '../core/types';
 import type {
   JobOp,
   ModelTransform,
@@ -246,8 +246,8 @@ export function App() {
 
   /** everything generation needs, in one memo (datumAngle varies per op) */
   const genCtx = useMemo(
-    () => ({ stock, geometry, features, transform, tools }),
-    [stock, geometry, features, transform, tools],
+    () => ({ stock, geometry, features, transform, tools, primitives }),
+    [stock, geometry, features, transform, tools, primitives],
   );
 
   /** combined preview + gcode for the whole job, from per-op results */
@@ -301,6 +301,12 @@ export function App() {
   const addOp = () => {
     const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
     const op = newJobOp('pocket', defaultTool, stock.materialId);
+    if (op.kind === 'faceCylinder') {
+      const [x0, x1] = originSpan(stock.kind === 'cylinder' ? stock.xOrigin : 'min',
+        stock.kind === 'cylinder' ? stock.length : 100);
+      op.xStart = x0;
+      op.xEnd = x1;
+    }
     setLastToolId(defaultTool.id);
     setOps((prev) => [...prev, op]);
     setExpandedOpId(op.id);
@@ -671,6 +677,7 @@ export function App() {
                 hasModel={!!geometry}
                 stockKind={stock.kind}
                 materialId={stock.materialId}
+                primitives={primitives}
                 featureLabels={featureLabels}
                 onAddOp={addOp}
                 onChangeOp={(op) => {

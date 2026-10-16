@@ -78,6 +78,8 @@ export function faceCylinder(
   let a = 0; // accumulated A, machine degrees (post emits G92.4 A0 afterwards)
   let minutes = 0;
 
+  const spiral = op.pattern === 'spiral';
+
   depths.forEach((depth, i) => {
     const isFinish = i === depths.length - 1;
     const prevDepth = i === 0 ? 0 : depths[i - 1];
@@ -87,13 +89,6 @@ export function faceCylinder(
     const sweepEnd = i % 2 === 0 ? op.xEnd : op.xStart;
     const passZ = surfaceZ - depth;
 
-    moves.push({
-      words: { x: sweepStart, z: safeZ, a: a * aSign },
-      feed: 0,
-      rapid: true,
-      comment: `pass ${i + 1}/${depths.length}${isFinish ? ' (finish)' : ''} depth ${depth.toFixed(3)}mm radial`,
-    });
-
     // Helical entry: plunge the radial increment while rotating, so the cut
     // engages progressively around the stock instead of chewing one spot.
     // Z rate is bounded by plungeFeed; the A rate by the rotary limit.
@@ -102,11 +97,26 @@ export function faceCylinder(
       increment / op.plungeFeed,
       (PLUNGE_SWEEP_DEG / 360) / MAX_ROTARY_RPM,
     );
+
+    if (i === 0 || !spiral) {
+      // zigzag re-enters from safe Z each pass; the spiral only does this
+      // once — afterwards it steps down at the sweep ends, in the cut
+      moves.push({
+        words: { x: sweepStart, z: safeZ, a: a * aSign },
+        feed: 0,
+        rapid: true,
+        comment: `pass ${i + 1}/${depths.length}${isFinish ? ' (finish)' : ''} depth ${depth.toFixed(3)}mm radial`,
+      });
+    }
+
     a += PLUNGE_SWEEP_DEG;
     moves.push({
       words: { z: passZ, a: a * aSign },
       feed: 1 / plungeMinutes, // G93 inverse time
-      comment: `helical entry ${increment.toFixed(3)}mm radial`,
+      comment:
+        i === 0 || !spiral
+          ? `helical entry ${increment.toFixed(3)}mm radial`
+          : `spiral step down ${increment.toFixed(3)}mm radial`,
     });
 
     moves.push({
@@ -114,8 +124,11 @@ export function faceCylinder(
       feed: 1 / passMinutes, // G93 inverse time
       comment: isFinish ? undefined : `rough to r=${(r0 - depth).toFixed(3)}`,
     });
-    moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
     a += aAdvance;
+
+    if (!spiral || isFinish) {
+      moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    }
     minutes += plungeMinutes + passMinutes;
   });
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { JobOp, Stock, Tool } from '../core/types';
+import type { JobOp, Primitive, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import { defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
@@ -16,6 +16,8 @@ interface Props {
   stockKind: Stock['kind'];
   /** stock material id, for tool-appropriate step defaults */
   materialId: string;
+  /** user-added primitives (face ops can target a cylinder) */
+  primitives: Primitive[];
   /** short feature description by id, for the title-bar snippet */
   featureLabels: Record<string, string>;
   onAddOp: () => void;
@@ -129,6 +131,7 @@ function IndexFields(props: {
 function ParamFields(props: {
   op: JobOp;
   stockKind: Stock['kind'];
+  primitives: Primitive[];
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   onIndexToSelection: (op: JobOp) => void;
@@ -148,9 +151,51 @@ function ParamFields(props: {
     case 'faceCylinder':
       return (
         <>
+          <label className="field">
+            <span>Target primitive</span>
+            <select
+              value={op.primitiveId ?? ''}
+              onChange={(e) => {
+                const id = e.target.value || null;
+                const prim = props.primitives.find(
+                    (p): p is Extract<Primitive, { kind: 'cylinder' }> => p.id === id && p.kind === 'cylinder',
+                  );
+                if (prim) {
+                  // the primitive drives extent and diameter; fields follow it
+                  props.onChange({
+                    ...op,
+                    primitiveId: id,
+                    xStart: prim.transform.position.x - prim.length / 2,
+                    xEnd: prim.transform.position.x + prim.length / 2,
+                    targetDiameter: prim.diameter,
+                  } as JobOp);
+                } else {
+                  props.onChange({ ...op, primitiveId: id } as JobOp);
+                }
+              }}
+            >
+              <option value="">none — use the X range below</option>
+              {props.primitives
+                .filter((p): p is Extract<Primitive, { kind: 'cylinder' }> => p.kind === 'cylinder')
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    cylinder Ø{p.diameter.toFixed(1)} × {p.length.toFixed(1)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <NumberField label="Start X (mm)" value={op.xStart} step={0.5} onCommit={(v) => upd({ xStart: v } as Partial<JobOp>)} />
+          <NumberField label="End X (mm)" value={op.xEnd} step={0.5} onCommit={(v) => upd({ xEnd: v } as Partial<JobOp>)} />
           <NumberField label="Target Ø (mm)" value={op.targetDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ targetDiameter: v } as Partial<JobOp>)} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Finish allowance (mm)" value={op.finishAllowance} min={0} step={0.05} onCommit={(v) => upd({ finishAllowance: v } as Partial<JobOp>)} />
+          <label className="field">
+            <span>Pattern</span>
+            <select value={op.pattern} onChange={(e) => upd({ pattern: e.target.value as 'zigzag' | 'spiral' })}>
+              <option value="zigzag">zigzag — retract between passes</option>
+              <option value="spiral">spiral — step down in the cut</option>
+            </select>
+          </label>
           <label className="field">
             <span>Rotation</span>
             <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
@@ -158,6 +203,7 @@ function ParamFields(props: {
               <option value="ccw">ccw</option>
             </select>
           </label>
+          <p className="hint">the X range defaults to the stock span — narrow it to avoid vice jaws</p>
         </>
       );
     case 'pocket':
@@ -328,6 +374,7 @@ export function OpsPanel(props: Props) {
                   <ParamFields
                     op={op}
                     stockKind={props.stockKind}
+                    primitives={props.primitives}
                     onChange={props.onChangeOp}
                     onSelectionIsChange={props.onSelectionIsChange}
                     onIndexToSelection={props.onIndexToSelection}

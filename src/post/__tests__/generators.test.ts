@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { postCarvera } from '../carvera';
 import { drill } from '../../cam/drill';
+import { faceCylinder } from '../../cam/faceCylinder';
 import { pocket2d } from '../../cam/pocket';
 import { profile2d } from '../../cam/profile';
 import type { DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
@@ -114,6 +115,36 @@ describe('generator post goldens', () => {
       moves: [indexMove, ...drill(drillOp, drillTool).moves],
       tools: [drillTool],
       options: { jobName: 'drill-indexed' },
+    }),
+  );
+
+  // spiral facing: step-downs in the cut, no safe-Z retracts between passes
+  const spiralFaceOp = {
+    kind: 'faceCylinder',
+    id: 'op4',
+    toolId: 't1',
+    targetDiameter: 40,
+    xStart: 0,
+    xEnd: 100,
+    stepDown: 1,
+    finishAllowance: 0.2,
+    plungeFeed: 300,
+    rotation: 'cw',
+    pattern: 'spiral',
+  } as const;
+  const faceStock = {
+    kind: 'cylinder',
+    length: 100,
+    xOrigin: 'min',
+    calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+    materialId: 'aluminum-6061',
+  } as const;
+  checkGolden(
+    'face-spiral.nc',
+    postCarvera({
+      moves: faceCylinder(spiralFaceOp, faceStock, tool).moves,
+      tools: [tool],
+      options: { jobName: 'face-spiral' },
     }),
   );
 });

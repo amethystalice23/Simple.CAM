@@ -56,6 +56,7 @@ const ctx: GenContext = {
   features,
   transform: identityTransform(),
   tools: [tool, drillTool, smallTool, tinyTool],
+  primitives: [],
   datumAngle: 0,
 };
 

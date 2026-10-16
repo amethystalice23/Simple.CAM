@@ -15,8 +15,7 @@ import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
-import type { JobOp, ModelTransform, Move, Stock, Tool, ToolPreset } from '../core/types';
-import { originSpan } from '../core/types';
+import type { JobOp, ModelTransform, Move, Primitive, Stock, Tool, ToolPreset } from '../core/types';
 import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { stockTopZ } from './placement';
 
@@ -36,6 +35,8 @@ export interface GenContext {
   features: DetectedFeatures | null;
   transform: ModelTransform;
   tools: Tool[];
+  /** user-added primitives (the face op can target a cylinder) */
+  primitives: Primitive[];
   /** the cutting datum for this op: the absolute A established by the
    * latest Index op preceding it in the job sequence (0 = flat) */
   datumAngle: number;
@@ -82,7 +83,18 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
   const stepDown = defaultStepDown(tool, materialId);
   switch (kind) {
     case 'faceCylinder':
-      return { ...base, kind, targetDiameter: 40, stepDown, finishAllowance: 0.2, rotation: 'cw' };
+      return {
+        ...base,
+        kind,
+        targetDiameter: 40,
+        xStart: 0,
+        xEnd: 100,
+        primitiveId: null,
+        stepDown,
+        finishAllowance: 0.2,
+        rotation: 'cw',
+        pattern: 'zigzag',
+      };
     case 'pocket':
       return {
         ...base,
@@ -239,19 +251,31 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
       }
       case 'faceCylinder': {
         if (ctx.stock.kind !== 'cylinder') return fail('needs cylinder stock');
-        const [xStart, xEnd] = originSpan(ctx.stock.xOrigin, ctx.stock.length);
+        // a target primitive overrides the X range and target diameter;
+        // otherwise the op's explicit fields (avoiding vice jaws etc.)
+        const prim =
+          op.primitiveId !== null
+            ? ctx.primitives.find(
+                (p): p is Extract<Primitive, { kind: 'cylinder' }> =>
+                  p.id === op.primitiveId && p.kind === 'cylinder',
+              )
+            : undefined;
+        if (op.primitiveId !== null && !prim) return fail('the target primitive no longer exists');
+        const xStart = prim ? prim.transform.position.x - prim.length / 2 : op.xStart;
+        const xEnd = prim ? prim.transform.position.x + prim.length / 2 : op.xEnd;
         const res = faceCylinder(
           {
             kind: 'faceCylinder',
             id: op.id,
             toolId: tool.id,
-            targetDiameter: op.targetDiameter,
+            targetDiameter: prim ? prim.diameter : op.targetDiameter,
             xStart,
             xEnd,
             stepDown: op.stepDown,
             finishAllowance: op.finishAllowance,
             plungeFeed: plungeFeed,
             rotation: op.rotation,
+            pattern: op.pattern,
           },
           ctx.stock,
           tool,
@@ -260,7 +284,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes → Ø${op.targetDiameter}mm, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} passes${op.pattern === 'spiral' ? ' (spiral)' : ''} → Ø${(prim ? prim.diameter : op.targetDiameter).toFixed(1)}mm, X ${xStart.toFixed(0)}…${xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 

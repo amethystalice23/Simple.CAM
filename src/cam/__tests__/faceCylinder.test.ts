@@ -92,4 +92,34 @@ describe('faceCylinder', () => {
     const sweeps = ccw.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
     expect(sweeps[0].words.a).toBeCloseTo(-(100 / 4.8) * 360 - 90, 3);
   });
+
+  it('spiral pattern steps down in the cut instead of retracting', () => {
+    const spiral = faceCylinder({ ...op, pattern: 'spiral' }, stock, tool);
+    // zigzag: 4 moves per pass (rapid, approach, entry, sweep, retract... 4
+    // cutting+rapid moves). spiral: 1 entry + per-pass (step-down + sweep),
+    // no safe-Z retracts between passes, one retract at the very end.
+    const safeRetracts = spiral.moves.filter(
+      (m) => m.rapid && m.words.z === 25 + SAFE_CLEARANCE && m.words.x === undefined,
+    );
+    expect(safeRetracts.length).toBe(1); // only the final retract
+    // no re-entry rapids after the first pass
+    const entryRapids = spiral.moves.filter((m) => m.rapid && m.words.x !== undefined);
+    expect(entryRapids.length).toBe(1); // the initial approach only
+    // step-downs happen at the sweep ends: each carries Z + A, no X
+    const stepDowns = spiral.moves.filter(
+      (m) => !m.rapid && m.words.z !== undefined && m.words.a !== undefined && m.words.x === undefined,
+    );
+    expect(stepDowns).toHaveLength(5); // one per pass, same as zigzag entries
+    // A accumulates continuously across the whole spiral
+    const sweeps = spiral.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
+    expect(sweeps[4].words.a).toBeCloseTo(5 * ((100 / 4.8) * 360 + 90), 3);
+    // same cutting time: identical material removal, fewer rapids
+    expect(spiral.estimatedMinutes).toBeCloseTo(res.estimatedMinutes, 6);
+  });
+
+  it('spiral respects the axial range', () => {
+    const spiral = faceCylinder({ ...op, pattern: 'spiral', xStart: 10, xEnd: 90 }, stock, tool);
+    const sweeps = spiral.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
+    expect(sweeps.map((s) => s.words.x)).toEqual([90, 10, 90, 10, 90]);
+  });
 });

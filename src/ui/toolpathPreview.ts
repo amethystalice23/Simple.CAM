@@ -36,13 +36,19 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
 
   // the first move only positions the tool — no segment into it (the
   // machine's true start position is unknown, and drawing from the origin
-  // invents a phantom plunge)
+  // invents a phantom plunge). prevM tracks machine space for subdividing
+  // long rotary moves; prev is the mapped display point.
   let prev: { x: number; y: number; z: number } | null = null;
+  let prevM: { x: number; y: number; z: number; a: number } | null = null;
 
   const toDisplay = (th: number, y: number, z: number): [number, number] => {
     const zrel = z - axisZ;
     return [y * Math.cos(th) + zrel * Math.sin(th), -y * Math.sin(th) + zrel * Math.cos(th) + axisZ];
   };
+
+  /** Max degrees of rotation per drawn chord — finer would only cost
+   * geometry for no visible gain on a 25mm-scale cylinder. */
+  const ROT_STEP_DEG = 15;
 
   for (const m of moves) {
     pos.x = m.words.x ?? pos.x;
@@ -59,26 +65,49 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
       m.words.z === undefined;
     if (aOnly) {
       datum = pos.a;
+      prevM = { ...pos };
       continue;
     }
 
-    let x = pos.x;
-    let y = pos.y;
-    let z = pos.z;
-    if (isCylinder && m.words.a !== undefined) {
-      // rotary move: un-rotate by its own accumulated A
-      [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
-    } else if (isCylinder && datum !== 0) {
-      // flat move under an index datum: un-rotate back over the feature
-      [y, z] = toDisplay((datum * Math.PI) / 180, pos.y, pos.z);
-    }
+    const target = m.rapid ? rapid : feed;
+    const rotary = isCylinder && m.words.a !== undefined;
+    const da = rotary && prevM ? pos.a - prevM.a : 0;
 
-    if (prev) {
-      const target = m.rapid ? rapid : feed;
-      emit(target, prev.x, prev.y, prev.z);
-      emit(target, x, y, z);
+    if (rotary && prev && prevM && Math.abs(da) > ROT_STEP_DEG) {
+      // a long rotary sweep (a facing pass is thousands of degrees in one
+      // move): interpolate in machine space and map each step, so the
+      // helix draws as a helix instead of one giant chord
+      const n = Math.ceil(Math.abs(da) / ROT_STEP_DEG);
+      const from = prevM;
+      for (let k = 1; k <= n; k++) {
+        const t = k / n;
+        const mx = from.x + (pos.x - from.x) * t;
+        const my = from.y + (pos.y - from.y) * t;
+        const mz = from.z + (pos.z - from.z) * t;
+        const ma = from.a + da * t;
+        const [dy, dz] = toDisplay((ma * Math.PI) / 180, my, mz);
+        emit(target, prev.x, prev.y, prev.z);
+        emit(target, mx, dy, dz);
+        prev = { x: mx, y: dy, z: dz };
+      }
+    } else {
+      let x = pos.x;
+      let y = pos.y;
+      let z = pos.z;
+      if (rotary) {
+        // rotary move: un-rotate by its own accumulated A
+        [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
+      } else if (isCylinder && datum !== 0) {
+        // flat move under an index datum: un-rotate back over the feature
+        [y, z] = toDisplay((datum * Math.PI) / 180, pos.y, pos.z);
+      }
+      if (prev) {
+        emit(target, prev.x, prev.y, prev.z);
+        emit(target, x, y, z);
+      }
+      prev = { x, y, z };
     }
-    prev = { x, y, z };
+    prevM = { ...pos };
   }
 
   return { feed, rapid };

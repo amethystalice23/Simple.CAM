@@ -47,6 +47,7 @@ describe('indexed job flow: top pocket, index 180, bottom pocket', () => {
     features,
     transform: identityTransform(),
     tools: [tool],
+    primitives: [],
     datumAngle: 0,
   };
 
