@@ -26,9 +26,10 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
     target.push(x, y, z);
   };
 
-  // the machine starts from its origin; each move closes a segment from the
-  // previous mapped point, so the initial approach is drawn too
-  let prev: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
+  // the first move only positions the tool — no segment into it (the
+  // machine's true start position is unknown, and drawing from the origin
+  // invents a phantom plunge)
+  let prev: { x: number; y: number; z: number } | null = null;
 
   for (const m of moves) {
     pos.x = m.words.x ?? pos.x;
@@ -47,9 +48,11 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
       z = -pos.y * Math.sin(th) + zrel * Math.cos(th) + axisZ;
     }
 
-    const target = m.rapid ? rapid : feed;
-    emit(target, prev.x, prev.y, prev.z);
-    emit(target, x, y, z);
+    if (prev) {
+      const target = m.rapid ? rapid : feed;
+      emit(target, prev.x, prev.y, prev.z);
+      emit(target, x, y, z);
+    }
     prev = { x, y, z };
   }
 

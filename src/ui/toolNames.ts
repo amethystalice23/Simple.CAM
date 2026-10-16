@@ -55,3 +55,12 @@ export function groupToolsBySubtype(tools: Tool[]): { label: string; tools: Tool
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 }
+
+/**
+ * Dropdown option label: the compact name plus the shank size — critical
+ * for picking tools that share a collet.
+ */
+export function toolOptionLabel(tool: Tool): string {
+  const base = shortToolName(tool);
+  return tool.shaftDiameter !== undefined ? `${base} · shank ${tool.shaftDiameter}` : base;
+}

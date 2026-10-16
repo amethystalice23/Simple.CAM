@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '../../core/types';
-import { groupToolsBySubtype, shortToolName } from '../toolNames';
+import { groupToolsBySubtype, shortToolName, toolOptionLabel } from '../toolNames';
 
 function tool(name: string, subtype: string | undefined, diameter: number): Tool {
   return { id: name, name, subtype, type: 'flat', diameter, spindleRpm: 18000 };
@@ -46,5 +46,24 @@ describe('groupToolsBySubtype', () => {
   it('parks tools without a subtype under Custom', () => {
     const groups = groupToolsBySubtype([tool('My custom shape', undefined, 5)]);
     expect(groups[0].label).toBe('Custom');
+  });
+});
+
+describe('toolOptionLabel', () => {
+  it('appends the shank size so collet-mates are visible', () => {
+    const spiral: Tool = {
+      ...tool('Spiral O Metal 6*25mm DLC', 'Spiral O · Metal', 6),
+      shaftDiameter: 6,
+    };
+    expect(toolOptionLabel(spiral)).toBe('6*25mm DLC · shank 6');
+    const thin: Tool = {
+      ...tool('Spiral O Metal 1*3mm', 'Spiral O · Metal', 1),
+      shaftDiameter: 3.175,
+    };
+    expect(toolOptionLabel(thin)).toBe('1*3mm · shank 3.175');
+  });
+
+  it('omits the suffix when the shank is unknown', () => {
+    expect(toolOptionLabel(tool('My custom shape', undefined, 5))).toBe('My custom shape');
   });
 });

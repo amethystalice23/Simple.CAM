@@ -20,11 +20,13 @@ describe('movesToSegments', () => {
       { words: { z: 5 }, feed: 0, rapid: true },
     ];
     const segs = movesToSegments(moves, null);
-    // 3 moves close segments (the first only sets the start point)
-    expect(segs.rapid.length / 6).toBe(2);
+    // 3 moves close segments — the first only positions the tool
+    expect(segs.rapid.length / 6).toBe(1);
     expect(segs.feed.length / 6).toBe(2);
     // the plunge segment ends at (0, 0, 0) — modal x/y carried over
     expect(segs.feed.slice(0, 6)).toEqual([0, 0, 5, 0, 0, 0]);
+    // the retract runs back up from the cut end
+    expect(segs.rapid.slice(0, 6)).toEqual([10, 0, 0, 10, 0, 5]);
   });
 
   it('wraps rotary moves back onto the cylinder for preview', () => {
@@ -54,9 +56,14 @@ describe('movesToSegments', () => {
     expect(Math.hypot(plungeSeg[4], plungeSeg[5])).toBeCloseTo(24, 1);
   });
 
-  it('handles pure-XY moves without a stock', () => {
-    const moves: Move[] = [{ words: { x: 1, y: 2 }, feed: 100 }];
+  it('draws nothing from a phantom origin — the first move only positions', () => {
+    const moves: Move[] = [
+      { words: { x: 1, y: 2, z: 0 }, feed: 100 },
+      { words: { x: 3, y: 2 }, feed: 100 },
+    ];
     const segs = movesToSegments(moves, null);
-    expect(segs.feed).toEqual([0, 0, 0, 1, 2, 0]);
+    // one segment between the two moves, none into the first position
+    expect(segs.feed).toEqual([1, 2, 0, 3, 2, 0]);
+    expect(segs.rapid).toEqual([]);
   });
 });

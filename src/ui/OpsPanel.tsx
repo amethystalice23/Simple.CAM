@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { JobOp, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import { defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
-import { groupToolsBySubtype, shortToolName } from './toolNames';
+import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
 import { NumberField } from './fields';
 
 interface Props {
@@ -246,7 +246,7 @@ export function OpsPanel(props: Props) {
                         <optgroup key={g.label} label={g.label}>
                           {g.tools.map((t) => (
                             <option key={t.id} value={t.id}>
-                              {shortToolName(t)}
+                              {toolOptionLabel(t)}
                             </option>
                           ))}
                         </optgroup>
