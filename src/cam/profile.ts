@@ -20,7 +20,8 @@ export interface ProfileResult {
 
 export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   if (op.contours.length === 0) throw new Error('profile needs at least one contour');
-  if (op.floorZ >= op.topZ) throw new Error('floorZ must be below topZ');
+  // top == floor is legal: a single level at the floor (finishing pass)
+  if (op.floorZ > op.topZ) throw new Error('floorZ must not be above topZ');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
   if (op.allowance < 0) throw new Error('allowance must be >= 0');
   const toolR = tool.diameter / 2;

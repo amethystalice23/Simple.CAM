@@ -25,9 +25,12 @@ import {
 import {
   generateJobOp,
   newJobOp,
+  prefillDepths,
   type GeneratedOp,
   type GenContext,
 } from './jobGeneration';
+import { stockTopZ } from './placement';
+import { transformFn } from './featureOverlays';
 import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -141,21 +144,36 @@ export function App() {
     return out;
   }, [activeFeatureIds, features]);
 
+  /** machine-space height of a feature by id, for depth prefills */
+  const featureMachineZ = (id: string): number | null => {
+    if (!features) return null;
+    const xf = transformFn(transform);
+    const c = features.circles.find((x) => x.id === id);
+    if (c) return xf(c.center).z;
+    const p = features.planes.find((x) => x.id === id);
+    if (p) return xf(p.point).z;
+    return null;
+  };
+
   /** viewport feature clicks: edit the active op's selection, or the global
-   * one (primitives / measuring) when no op is being edited */
+   * one (primitives / measuring) when no op is being edited. The first
+   * feature into an op prefills its depth boxes. */
   const toggleSelect = (id: string) => {
     if (editingOpId) {
+      const z = featureMachineZ(id);
+      const crown = stockTopZ(stock);
       setOps((prev) =>
-        prev.map((o) =>
-          o.id === editingOpId
-            ? {
-                ...o,
-                featureIds: o.featureIds.includes(id)
-                  ? o.featureIds.filter((x) => x !== id)
-                  : [...o.featureIds, id],
-              }
-            : o,
-        ),
+        prev.map((o) => {
+          if (o.id !== editingOpId) return o;
+          const featureIds = o.featureIds.includes(id)
+            ? o.featureIds.filter((x) => x !== id)
+            : [...o.featureIds, id];
+          let next = { ...o, featureIds } as JobOp;
+          if (o.featureIds.length === 0 && z !== null) {
+            next = prefillDepths(next, z, crown);
+          }
+          return next;
+        }),
       );
       return;
     }
@@ -275,6 +293,14 @@ export function App() {
   const toggleOpFeatures = (id: string | null) => {
     setEditingOpId(id);
     if (id !== null) setMeasureMode(true);
+  };
+
+  /** floor/rim switch re-prefills the depth boxes from the first feature */
+  const changeSelectionIs = (op: JobOp, value: 'floor' | 'rim') => {
+    let next: JobOp = { ...op, selectionIs: value } as JobOp;
+    const z = op.featureIds.length > 0 ? featureMachineZ(op.featureIds[0]) : null;
+    if (z !== null) next = prefillDepths(next, z, stockTopZ(stock));
+    setOps((prev) => prev.map((o) => (o.id === op.id ? next : o)));
   };
 
   useEffect(() => {
@@ -421,6 +447,7 @@ export function App() {
                   const before = ops.find((o) => o.id === op.id);
                   if (before && before.toolId !== op.toolId) setLastToolId(op.toolId);
                 }}
+                onSelectionIsChange={changeSelectionIs}
                 onDeleteOp={(id) => {
                   setOps((prev) => prev.filter((o) => o.id !== id));
                   setGenerated((prev) => {

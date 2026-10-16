@@ -20,6 +20,8 @@ interface Props {
   featureLabels: Record<string, string>;
   onAddOp: () => void;
   onChangeOp: (op: JobOp) => void;
+  /** floor/rim switch — re-prefills the depth boxes from the selection */
+  onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   onDeleteOp: (id: string) => void;
   onReorder: (dragId: string, targetId: string) => void;
   onSelectFeatures: (id: string | null) => void;
@@ -37,8 +39,60 @@ function selectionSnippet(op: JobOp, labels: Record<string, string>): string {
   return texts.length > 2 ? `${shown} +${texts.length - 2} more` : shown;
 }
 
+/** The floor/rim selector with the depth boxes it prefiles. */
+function DepthFields(props: {
+  op: Extract<JobOp, { kind: 'pocket' | 'profile' }>;
+  onChange: (op: JobOp) => void;
+  onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
+}) {
+  const { op } = props;
+  const upd = (patch: Partial<typeof op>) =>
+    props.onChange({ ...op, ...patch } as JobOp);
+  return (
+    <>
+      <label className="field">
+        <span>Selection is the</span>
+        <select
+          value={op.selectionIs}
+          onChange={(e) => props.onSelectionIsChange(op, e.target.value as 'floor' | 'rim')}
+        >
+          <option value="floor">floor — end depth from the feature</option>
+          <option value="rim">rim — start depth from the feature</option>
+        </select>
+      </label>
+      <NumberField
+        label="Start depth (mm)"
+        value={op.startDepth}
+        min={0}
+        onCommit={(v) => upd({ startDepth: v })}
+      />
+      <NumberField
+        label="End depth (mm)"
+        value={op.endDepth}
+        min={0.1}
+        onCommit={(v) => upd({ endDepth: v })}
+      />
+      <NumberField
+        label="Allowance (mm)"
+        value={op.allowance}
+        min={0}
+        step={0.05}
+        onCommit={(v) => upd({ allowance: v })}
+      />
+      <p className="hint">
+        depths are below the stock top · start = end → single finishing pass · allowance = stock
+        left for finishing
+      </p>
+    </>
+  );
+}
+
 /** The per-type parameter fields for an open op panel. */
-function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
+function ParamFields(props: {
+  op: JobOp;
+  onChange: (op: JobOp) => void;
+  onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
+}) {
   const { op, onChange } = props;
   const upd = (patch: Partial<JobOp>) => onChange({ ...op, ...patch } as JobOp);
   switch (op.kind) {
@@ -60,22 +114,7 @@ function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
     case 'pocket':
       return (
         <>
-          <label className="field">
-            <span>Selection is the</span>
-            <select
-              value={op.selectionIs}
-              onChange={(e) => upd({ selectionIs: e.target.value as 'floor' | 'top' })}
-            >
-              <option value="floor">floor — cut down TO it from the crown</option>
-              <option value="top">top — cut down FROM it by depth</option>
-            </select>
-          </label>
-          <NumberField
-            label="Depth (when top)"
-            value={op.depth}
-            min={0.1}
-            onCommit={(v) => upd({ depth: v } as Partial<JobOp>)}
-          />
+          <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
@@ -101,24 +140,8 @@ function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
               <option value="online">on line</option>
             </select>
           </label>
-          <label className="field">
-            <span>Selection is the</span>
-            <select
-              value={op.selectionIs}
-              onChange={(e) => upd({ selectionIs: e.target.value as 'floor' | 'top' })}
-            >
-              <option value="floor">floor — cut down TO it from the crown</option>
-              <option value="top">top — cut down FROM it by depth</option>
-            </select>
-          </label>
-          <NumberField
-            label="Depth (when top)"
-            value={op.depth}
-            min={0.1}
-            onCommit={(v) => upd({ depth: v } as Partial<JobOp>)}
-          />
+          <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
-          <NumberField label="Allowance (mm)" value={op.allowance} min={0} step={0.05} onCommit={(v) => upd({ allowance: v } as Partial<JobOp>)} />
         </>
       );
   }
@@ -253,7 +276,11 @@ export function OpsPanel(props: Props) {
                       ))}
                     </select>
                   </label>
-                  <ParamFields op={op} onChange={props.onChangeOp} />
+                  <ParamFields
+                    op={op}
+                    onChange={props.onChangeOp}
+                    onSelectionIsChange={props.onSelectionIsChange}
+                  />
                   {gen?.error && <p className="error">{gen.error}</p>}
                   {gen?.summary && <p className="hint">{gen.summary}</p>}
                   {!gen && <p className="hint">not calculated yet</p>}

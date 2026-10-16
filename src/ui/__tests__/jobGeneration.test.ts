@@ -8,6 +8,7 @@ import {
   defaultStepOver,
   generateJobOp,
   newJobOp,
+  prefillDepths,
   type GenContext,
 } from '../jobGeneration';
 
@@ -41,10 +42,11 @@ function plateWithHole(): THREE.BufferGeometry {
 }
 
 const geometry = plateWithHole();
+geometry.translate(0, 0, -6); // caps at z −6…−4, crown at z0
 const features = detectFeatures(geometry);
 const holeCircleId = features.circles.find(
-  (c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z - 2) < 0.01,
-)!.id;
+  (c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z + 4) < 0.01,
+)!.id; // hole rim at z = −4
 
 const ctx: GenContext = {
   stock: boxStock,
@@ -60,8 +62,10 @@ const pocketOp: Extract<JobOp, { kind: 'pocket' }> = {
   toolId: 't3',
   featureIds: [holeCircleId],
   kind: 'pocket',
-  selectionIs: 'top',
-  depth: 2,
+  selectionIs: 'rim',
+  startDepth: 4, // the rim, 4mm below the crown
+  endDepth: 6,
+  allowance: 0,
   stepDown: 0.5,
   stepOver: 1,
 };
@@ -78,10 +82,11 @@ const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   toolId: 't3',
   featureIds: [holeCircleId],
   kind: 'profile',
-  selectionIs: 'top',
-  depth: 1,
-  stepDown: 0.5,
+  selectionIs: 'rim',
+  startDepth: 4,
+  endDepth: 5,
   allowance: 0,
+  stepDown: 0.5,
   side: 'online',
 };
 
@@ -118,46 +123,86 @@ describe('newJobOp / defaults', () => {
   });
 });
 
+describe('prefillDepths', () => {
+  it('floor selection sets end depth to the crown-to-feature distance', () => {
+    const op = newJobOp('pocket', smallTool, 'aluminum-6061');
+    const filled = prefillDepths({ ...op, kind: 'pocket' } as Extract<JobOp, { kind: 'pocket' }>, -3.5, 0);
+    if (filled.kind !== 'pocket') return;
+    expect(filled.startDepth).toBe(0);
+    expect(filled.endDepth).toBeCloseTo(3.5, 5);
+  });
+
+  it('rim selection sets start depth at the feature and end 2mm deeper', () => {
+    const op = newJobOp('pocket', smallTool, 'aluminum-6061');
+    const filled = prefillDepths(
+      { ...op, kind: 'pocket', selectionIs: 'rim' } as Extract<JobOp, { kind: 'pocket' }>,
+      -3.5,
+      0,
+    );
+    if (filled.kind !== 'pocket') return;
+    expect(filled.startDepth).toBeCloseTo(3.5, 5);
+    expect(filled.endDepth).toBeCloseTo(5.5, 5);
+  });
+});
+
 describe('generateJobOp', () => {
-  it("pockets down FROM a selected circle when it's the top (depth below it)", () => {
-    const res = generateJobOp(pocketOp, ctx); // selectionIs: 'top', circle at z2
+  it('pockets a rim-selected hole down FROM the rim depth', () => {
+    const res = generateJobOp(pocketOp, ctx); // rim at 4mm depth, floor at 6mm
     expect(res.error).toBeNull();
     expect(res.moves.length).toBeGreaterThan(0);
-    expect(res.summary).toContain('below selection');
     const deepest = Math.min(
       ...res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!),
     );
-    expect(deepest).toBeCloseTo(0, 5); // z2 − depth 2
+    expect(deepest).toBeCloseTo(-6, 5); // crown 0 − endDepth 6
   });
 
-  it("pockets down TO a selected circle when it's the floor (hole bottom)", () => {
-    // the user's scenario: a circle at the bottom of a hole, sunk below
-    // the stock crown — the cut must work from the crown DOWN TO it
-    const geo = plateWithHole();
-    geo.translate(0, 0, -6); // hole circles now at z −6 and −4
-    const f = detectFeatures(geo);
-    const bottomCircleId = f.circles.find(
-      (c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z + 4) < 0.01,
-    )!.id;
-    const op: Extract<JobOp, { kind: 'pocket' }> = {
-      ...pocketOp,
-      selectionIs: 'floor',
-      featureIds: [bottomCircleId],
-    };
-    const res = generateJobOp(op, { ...ctx, geometry: geo, features: f });
+  it('single-level finishing pass when start depth equals end depth', () => {
+    const res = generateJobOp(
+      { ...pocketOp, startDepth: 6, endDepth: 6, stepDown: 0.5 },
+      ctx,
+    );
     expect(res.error).toBeNull();
-    expect(res.moves.length).toBeGreaterThan(0);
-    expect(res.summary).toContain('z0.0 → z-4.0'); // crown → hole bottom
+    const plunges = res.moves
+      .filter((m) => !m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z!);
+    expect(new Set(plunges.map((z) => z.toFixed(3))).size).toBe(1); // one level only
+    expect(plunges[0]).toBeCloseTo(-6, 5);
+  });
+
+  it('roughing allowance leaves floor and wall stock', () => {
+    const res = generateJobOp(
+      { ...pocketOp, startDepth: 0, endDepth: 6, allowance: 0.3 },
+      ctx,
+    );
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('allowance');
+    // floor: roughing stops 0.3mm above the true floor
     const deepest = Math.min(
       ...res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!),
     );
-    expect(deepest).toBeCloseTo(-4, 5);
+    expect(deepest).toBeCloseTo(-5.7, 5);
+    // wall: the first clearing loop is inset by toolR + allowance
+    const firstPassXs = res.moves
+      .filter((m) => !m.rapid && m.words.x !== undefined)
+      .map((m) => Math.hypot(m.words.x!, m.words.y!));
+    const finish = generateJobOp({ ...pocketOp, startDepth: 0, endDepth: 6 }, ctx);
+    const finishXs = finish.moves
+      .filter((m) => !m.rapid && m.words.x !== undefined)
+      .map((m) => Math.hypot(m.words.x!, m.words.y!));
+    expect(Math.max(...firstPassXs)).toBeCloseTo(2 - 1 - 0.3, 1); // hole r2 − toolR1 − allowance
+    expect(Math.max(...finishXs)).toBeCloseTo(1, 1); // r2 − toolR1
   });
 
-  it('rejects a floor selection at or above the crown', () => {
-    const res = generateJobOp({ ...pocketOp, selectionIs: 'floor' }, ctx); // circle at z2, crown z0
+  it('rejects an allowance that swallows the cut range', () => {
+    const res = generateJobOp({ ...pocketOp, startDepth: 0, endDepth: 2, allowance: 2.5 }, ctx);
     expect(res.moves).toEqual([]);
-    expect(res.error).toContain('at or above the stock crown');
+    expect(res.error).toContain('allowance');
+  });
+
+  it('rejects an end depth above the start depth', () => {
+    const res = generateJobOp({ ...pocketOp, startDepth: 5, endDepth: 3 }, ctx);
+    expect(res.moves).toEqual([]);
+    expect(res.error).toContain('end depth');
   });
 
   it('pockets a selected face from the crown DOWN TO the face', () => {
@@ -170,17 +215,16 @@ describe('generateJobOp', () => {
     )!.id;
     const op: Extract<JobOp, { kind: 'pocket' }> = {
       ...pocketOp,
-      selectionIs: 'floor',
       id: 'face-pocket',
       featureIds: [faceId],
       stepDown: 1,
     };
+    // prefill semantics: selecting that face as its floor sets endDepth 4
     const faceCtx = { ...ctx, geometry: geo, features: f };
-    const res = generateJobOp(op, faceCtx);
+    const res = generateJobOp({ ...op, startDepth: 0, endDepth: 4 }, faceCtx);
     expect(res.error).toBeNull();
     expect(res.moves.length).toBeGreaterThan(0);
     expect(res.summary).toContain('z0.0 → z-4.0');
-    // deepest plunge reaches the face
     const deepest = Math.min(
       ...res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!),
     );

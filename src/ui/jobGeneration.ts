@@ -10,12 +10,13 @@ import { faceCylinder } from '../cam/faceCylinder';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
+import { offsetInward } from '../cam/clipper';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
 import type { JobOp, ModelTransform, Move, Stock, Tool, ToolPreset } from '../core/types';
 import { originSpan } from '../core/types';
-import { drillTargetsFromSelection, pocketRegionsFromSelection, type PocketSource } from './opTargets';
+import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { stockTopZ } from './placement';
 
 export interface GeneratedOp {
@@ -60,14 +61,25 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
         ...base,
         kind,
         selectionIs: 'floor',
-        depth: 2,
+        startDepth: 0,
+        endDepth: 2,
+        allowance: 0,
         stepDown,
         stepOver: defaultStepOver(tool),
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
     case 'profile':
-      return { ...base, kind, selectionIs: 'floor', depth: 2, stepDown, allowance: 0, side: 'outside' };
+      return {
+        ...base,
+        kind,
+        selectionIs: 'floor',
+        startDepth: 0,
+        endDepth: 2,
+        allowance: 0,
+        stepDown,
+        side: 'outside',
+      };
   }
 }
 
@@ -114,24 +126,37 @@ export function defaultStepDown(tool: Tool, materialId: string): number {
 }
 
 /**
- * Cut range from the selection and the op's toggle: 'floor' cuts from the
- * stock crown down TO the selected plane; 'top' cuts down FROM it by the
- * op's depth. Geometry alone can't tell a hole rim from a hole bottom.
+ * Prefill an op's depth boxes from a selected feature's machine height:
+ * 'floor' sets the end depth to the crown-to-feature distance (cut down
+ * TO it); 'rim' sets the start depth (cut down FROM it). The boxes stay
+ * user-editable — this is a convenience, not a constraint.
+ */
+export function prefillDepths(op: JobOp, selectionZ: number, crownZ: number): JobOp {
+  if (op.kind !== 'pocket' && op.kind !== 'profile') return op;
+  if (op.selectionIs === 'floor') {
+    return { ...op, startDepth: 0, endDepth: Math.max(crownZ - selectionZ, 0.3) } as JobOp;
+  }
+  const start = Math.max(crownZ - selectionZ, 0);
+  return { ...op, startDepth: start, endDepth: start + 2 } as JobOp;
+}
+
+/**
+ * Machine-Z cut range from the explicit depth boxes: startZ/endZ are mm
+ * below the stock crown. Roughing allowance raises the actual cut floor
+ * and insets the region (walls), so a finishing pass (allowance 0, start
+ * = end) later takes the surface to size.
  */
 function cutRange(
-  src: PocketSource,
-  selectionIs: 'floor' | 'top',
-  depth: number,
-  stock: Stock,
+  startDepth: number,
+  endDepth: number,
+  allowance: number,
+  crown: number,
 ): { topZ: number; floorZ: number } | null {
-  if (selectionIs === 'top') {
-    return { topZ: src.selectionZ, floorZ: src.selectionZ - depth };
-  }
-  const crown = stockTopZ(stock);
-  if (src.selectionZ >= crown) {
-    return null; // nothing above the selection to cut through
-  }
-  return { topZ: crown, floorZ: src.selectionZ };
+  if (endDepth < startDepth - 1e-9) return null; // end above start: nothing to cut
+  const topZ = crown - startDepth;
+  const floorZ = crown - endDepth + allowance;
+  if (floorZ > topZ + 1e-9) return null; // allowance swallows the whole range
+  return { topZ, floorZ };
 }
 
 export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
@@ -173,16 +198,25 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
         const src = pocketRegionsFromSelection(ctx.geometry, ctx.features, op.featureIds, ctx.transform);
         if (!src) return fail('select features (circles or flat faces)');
-        const range = cutRange(src, op.selectionIs, op.depth, ctx.stock);
+        const crown = stockTopZ(ctx.stock);
+        const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
         if (!range) {
-          return fail('the selected feature is at or above the stock crown — nothing to cut down to it');
+          return fail(
+            'end depth must be at or below start depth, and the allowance must leave something to cut',
+          );
+        }
+        // roughing wall stock: clear a region inset by the allowance
+        const regions =
+          op.allowance > 0 ? offsetInward(src.regions, op.allowance) : src.regions;
+        if (regions.length === 0) {
+          return fail('the side allowance exceeds the selected region — nothing left to cut');
         }
         const res = pocket2d(
           {
             kind: 'pocket',
             id: op.id,
             toolId: tool.id,
-            regions: src.regions,
+            regions,
             topZ: range.topZ,
             floorZ: range.floorZ,
             stepDown: op.stepDown,
@@ -193,15 +227,11 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           },
           tool,
         );
-        const rangeText =
-          op.selectionIs === 'floor'
-            ? `z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}`
-            : `${op.depth.toFixed(1)}mm below selection`;
         return {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes / ${res.levels} level(s), ${rangeText}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
@@ -233,9 +263,12 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
         const src = pocketRegionsFromSelection(ctx.geometry, ctx.features, op.featureIds, ctx.transform);
         if (!src) return fail('select features (circles or flat faces)');
-        const range = cutRange(src, op.selectionIs, op.depth, ctx.stock);
+        const crown = stockTopZ(ctx.stock);
+        const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
         if (!range) {
-          return fail('the selected feature is at or above the stock crown — nothing to cut down to it');
+          return fail(
+            'end depth must be at or below start depth, and the allowance must leave something to cut',
+          );
         }
         const res = profile2d(
           {
@@ -244,9 +277,9 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             toolId: tool.id,
             contours: src.regions,
             side: op.side,
-            allowance: op.allowance,
+            allowance: op.allowance, // wall stock (path offset from the line)
             topZ: range.topZ,
-            floorZ: range.floorZ,
+            floorZ: range.floorZ, // floor raised by the same allowance
             stepDown: op.stepDown,
             feed,
             plungeFeed,
@@ -254,15 +287,11 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           },
           tool,
         );
-        const rangeText =
-          op.selectionIs === 'floor'
-            ? `z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}`
-            : `${op.depth.toFixed(1)}mm below selection`;
         return {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), ${rangeText}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

@@ -330,14 +330,18 @@ export type JobOp =
   | (JobOpBase & {
       kind: 'pocket';
       /**
-       * What the selected features mean: 'floor' cuts from the stock
-       * crown down TO them (roughing to a surface / hole bottom);
-       * 'top' cuts down FROM them by `depth` (classic pocket at a rim).
-       * Geometry alone cannot tell a hole rim from a hole bottom.
+       * What the selected features prefill: 'floor' sets the END depth from
+       * the crown-to-feature distance (cut down TO it); 'rim' sets the
+       * START depth (cut down FROM it). Geometry alone cannot tell a hole
+       * rim from a hole bottom — the boxes stay user-editable either way.
        */
-      selectionIs: 'floor' | 'top';
-      /** cut depth below the selection, mm (selectionIs = 'top' only) */
-      depth: number;
+      selectionIs: 'floor' | 'rim';
+      /** cut start, mm below the stock crown */
+      startDepth: number;
+      /** cut floor, mm below the stock crown (start = end → single pass) */
+      endDepth: number;
+      /** roughing stock left on the floor and walls, mm; 0 = finish to size */
+      allowance: number;
       stepDown: number;
       stepOver: number;
     })
@@ -348,11 +352,14 @@ export type JobOp =
     })
   | (JobOpBase & {
       kind: 'profile';
-      selectionIs: 'floor' | 'top';
-      /** cut depth below the selection, mm (selectionIs = 'top' only) */
-      depth: number;
-      stepDown: number;
+      selectionIs: 'floor' | 'rim';
+      /** cut start, mm below the stock crown */
+      startDepth: number;
+      /** cut floor, mm below the stock crown (start = end → single pass) */
+      endDepth: number;
+      /** roughing stock left on the floor and walls, mm; 0 = finish to size */
       allowance: number;
+      stepDown: number;
       side: 'outside' | 'inside' | 'online';
     });
 

@@ -21,7 +21,9 @@ export interface PocketResult {
 
 export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
   if (op.regions.length === 0) throw new Error('pocket needs at least one region contour');
-  if (op.floorZ >= op.topZ) throw new Error('floorZ must be below topZ');
+  // top == floor is legal: a single level at the floor (finishing pass,
+  // where roughing already removed everything above)
+  if (op.floorZ > op.topZ) throw new Error('floorZ must not be above topZ');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
   if (op.stepOver <= 0) throw new Error('stepOver must be positive');
   const toolR = tool.diameter / 2;

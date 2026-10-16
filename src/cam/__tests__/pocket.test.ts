@@ -116,8 +116,17 @@ describe('pocket2d', () => {
     );
   });
 
+  it('cuts a single level when top equals floor (finishing pass)', () => {
+    const res = pocket2d(op({ topZ: -2, floorZ: -2 }), tool);
+    expect(res.levels).toBe(1);
+    const plunges = res.moves
+      .filter((m) => !m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z!);
+    expect(plunges.every((z) => z === -2)).toBe(true);
+  });
+
   it('rejects invalid parameters', () => {
-    expect(() => pocket2d(op({ floorZ: 0 }), tool)).toThrowError(/below topZ/);
+    expect(() => pocket2d(op({ floorZ: 1 }), tool)).toThrowError(/above topZ/);
     expect(() => pocket2d(op({ stepDown: 0 }), tool)).toThrowError(/stepDown/);
     expect(() => pocket2d(op({ regions: [] }), tool)).toThrowError(/region/);
   });

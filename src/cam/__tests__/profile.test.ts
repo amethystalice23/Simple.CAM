@@ -102,8 +102,14 @@ describe('profile2d', () => {
     );
   });
 
+  it('cuts a single level when top equals floor (finishing pass)', () => {
+    const res = profile2d(op({ topZ: -2, floorZ: -2 }), tool);
+    expect(res.levels).toBe(1);
+    expect(res.passes).toBe(1);
+  });
+
   it('rejects invalid parameters', () => {
-    expect(() => profile2d(op({ floorZ: 0 }), tool)).toThrowError(/below topZ/);
+    expect(() => profile2d(op({ floorZ: 1 }), tool)).toThrowError(/above topZ/);
     expect(() => profile2d(op({ contours: [] }), tool)).toThrowError(/contour/);
     expect(() => profile2d(op({ allowance: -1 }), tool)).toThrowError(/allowance/);
   });
