@@ -45,14 +45,17 @@ Import (STL three.js loader; STEP via occt-import-js later)
 Verify paths on screen before they go near the machine. Rendered directly
 from the **Move[] IR** (before the post — never by re-parsing emitted G-code):
 modal axis accumulation over the move list, feed moves and rapids as
-distinctly colored polylines in the machine-coordinate scene, with the
-stock and placed model visible under them. A-axis words map back onto the
-cylinder (rotation about the stock axis) so wrapped moves preview on the
-real surface; pure XYZ moves draw as-is. Optional later: an animated cutter
-marker scrubbing the path, and feed-rate/depth shading. No external
-library — three.js GCodeLoader and Kiri:Moto's viewer exist as prior art,
-but the IR is a strictly better input and the wrapped-rotary mapping is
-our own transform.
+distinctly colored polylines, with the stock and placed model visible under
+them. The preview draws in the **display frame** (the stock/model as shown
+at A=0), so paths appear over the features they cut: rotary moves (A-word)
+map back about the stock axis, and flat moves following an Index op
+un-rotate by that op's datum — the G-code itself is untouched machine
+coordinates. Pure-A Index moves draw nothing (the stock rotates, not the
+tool) and only establish the datum for what follows. Optional later: an
+animated cutter marker scrubbing the path, and feed-rate/depth shading.
+No external library — three.js GCodeLoader and Kiri:Moto's viewer exist as
+prior art, but the IR is a strictly better input and the wrapped-rotary
+mapping is our own transform.
 
 ### The cylinder canvas (core 4-axis abstraction)
 

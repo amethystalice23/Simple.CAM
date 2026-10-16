@@ -67,7 +67,7 @@ describe('movesToSegments', () => {
     expect(segs.rapid).toEqual([]);
   });
 
-  it('draws no segment for a pure-A index move (the stock rotates, not the tool)', () => {
+  it('index moves draw nothing; flat paths under a datum un-rotate over the feature', () => {
     const moves: Move[] = [
       { words: { x: 5, y: 5, z: 30 }, feed: 0, rapid: true }, // position only
       { words: { x: 5, y: 5, z: 0 }, feed: 500 }, // plunge to the surface
@@ -75,13 +75,14 @@ describe('movesToSegments', () => {
       { words: { x: 10, y: 5, z: 30 }, feed: 500 }, // retract after indexing
     ];
     const segs = movesToSegments(moves, cylinderStock);
-    // both feed segments start from real tool positions — the index move
-    // contributes none, and its wrapped phantom (5, −5, −30) never appears
+    // the index move contributes no segment (no phantom line into it), and
+    // the post-index move un-rotates by the datum: (10, 5, 30) machine →
+    // (10, −5, −30) in the display frame — over the mirrored feature
     expect(segs.feed.length / 6).toBe(2);
     expect(segs.rapid).toEqual([]);
-    const zs = [segs.feed[2], segs.feed[5], segs.feed[8], segs.feed[11]];
-    expect(Math.min(...zs)).toBeGreaterThanOrEqual(-1); // nothing at z=−30
-    // the post-index move continues from the last real position (5, 5, 0)
-    expect(segs.feed.slice(6, 12)).toEqual([5, 5, 0, 10, 5, 30]);
+    const tail = segs.feed.slice(6, 12);
+    expect(tail.slice(0, 4)).toEqual([5, 5, 0, 10]);
+    expect(tail[4]).toBeCloseTo(-5, 9); // cos(π) is not exactly −1
+    expect(tail[5]).toBeCloseTo(-30, 9);
   });
 });

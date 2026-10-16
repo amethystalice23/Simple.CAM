@@ -107,13 +107,18 @@ describe('indexed job flow: top pocket, index 180, bottom pocket', () => {
       .map((m) => m.words.z!);
     expect(Math.min(...plunges)).toBeCloseTo(23, 5); // 25 − endDepth 2
 
-    // combined job → preview segments: feed moves exist beyond the index
+    // combined job → preview segments in the DISPLAY frame: the bottom
+    // pocket's paths un-rotate by the datum and draw over the bottom boss
+    // (z −25…−23), not over its mirrored machine position up top
     const allMoves = ops.flatMap((o) => results[o.id].moves);
     const segs = movesToSegments(allMoves, cylStock);
     expect(segs.feed.length).toBeGreaterThan(0);
-    // rotated-frame cutting: feed points at the rotated boss (z between 23 and 25)
-    const zs: number[] = [];
-    for (let i = 2; i < segs.feed.length; i += 3) zs.push(segs.feed[i]);
-    expect(Math.max(...zs)).toBeGreaterThan(20); // up near the crown, not buried below the axis
+    const bottomZs: number[] = [];
+    for (let i = 2; i < segs.feed.length; i += 3) {
+      if (segs.feed[i] < -20) bottomZs.push(segs.feed[i]);
+    }
+    expect(bottomZs.length).toBeGreaterThan(0);
+    expect(Math.max(...bottomZs)).toBeLessThanOrEqual(-23); // over the boss face
+    expect(Math.min(...bottomZs)).toBeGreaterThanOrEqual(-25); // above its floor
   });
 });
