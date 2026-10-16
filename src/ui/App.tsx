@@ -1,28 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BufferGeometry } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { faceCylinder } from '../cam/faceCylinder';
-import { drill } from '../cam/drill';
-import { pocket2d } from '../cam/pocket';
-import { profile2d } from '../cam/profile';
 import { axialExtentX, detectFeatures } from '../cam/features';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
-import { getMaterial } from '../core/materials';
-import { identityTransform, originSpan } from '../core/types';
+import { identityTransform } from '../core/types';
 import type {
-  DrillOp,
-  FaceCylinderOp,
+  JobOp,
   ModelTransform,
   Move,
-  PocketOp,
   Primitive,
-  ProfileOp,
   Stock,
   Tool,
 } from '../core/types';
 import { MAKERA_TOOLS } from '../core/makeraTools.generated';
-import { NumberField } from './fields';
 import { ModelPanel } from './ModelPanel';
 import {
   boxFromPlane,
@@ -30,7 +21,13 @@ import {
   defaultBox,
   defaultCylinder,
 } from './primitives';
-import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
+import {
+  generateJobOp,
+  newJobOp,
+  type GeneratedOp,
+  type GenContext,
+} from './jobGeneration';
+import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
 import { Viewport, type ResolvedSelection } from './Viewport';
@@ -85,21 +82,27 @@ export function App() {
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState('model');
   const [modelName, setModelName] = useState('Loaded model');
-  const [pocketDepth, setPocketDepth] = useState(2);
-  const [drillDepth, setDrillDepth] = useState(5);
-  const [profileSide, setProfileSide] = useState<ProfileOp['side']>('outside');
   const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
   const [showPreview, setShowPreview] = useState(true);
+  /** the job: ordered operations, each with its own selection and params */
+  const [ops, setOps] = useState<JobOp[]>([]);
+  const [generated, setGenerated] = useState<Record<string, GeneratedOp>>({});
+  const [editingOpId, setEditingOpId] = useState<string | null>(null);
+  const [expandedOpId, setExpandedOpId] = useState<string | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
 
   // feature detection is model-space only: reruns on model load, not moves
   const features = useMemo(() => (geometry ? detectFeatures(geometry) : null), [geometry]);
 
-  /** selection ids resolved to kind+index for viewport highlighting */
+  /** the feature set the viewport highlights/measures: the op being edited,
+   * or the global selection when no op is active */
+  const activeFeatureIds = editingOpId
+    ? (ops.find((o) => o.id === editingOpId)?.featureIds ?? [])
+    : selection;
   const resolvedSelection: ResolvedSelection[] = useMemo(() => {
     if (!features) return [];
     const out: ResolvedSelection[] = [];
-    for (const id of selection) {
+    for (const id of activeFeatureIds) {
       const ci = features.circles.findIndex((c) => c.id === id);
       if (ci >= 0) {
         out.push({ kind: 'circle', index: ci });
@@ -114,10 +117,36 @@ export function App() {
       if (pi >= 0) out.push({ kind: 'plane', index: pi });
     }
     return out;
-  }, [selection, features]);
+  }, [activeFeatureIds, features]);
 
-  const toggleSelect = (id: string) =>
+  /** viewport feature clicks: edit the active op's selection, or the global
+   * one (primitives / measuring) when no op is being edited */
+  const toggleSelect = (id: string) => {
+    if (editingOpId) {
+      setOps((prev) =>
+        prev.map((o) =>
+          o.id === editingOpId
+            ? {
+                ...o,
+                featureIds: o.featureIds.includes(id)
+                  ? o.featureIds.filter((x) => x !== id)
+                  : [...o.featureIds, id],
+              }
+            : o,
+        ),
+      );
+      return;
+    }
     setSelection((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const clearSelection = () => {
+    if (editingOpId) {
+      setOps((prev) => prev.map((o) => (o.id === editingOpId ? { ...o, featureIds: [] } : o)));
+      return;
+    }
+    setSelection([]);
+  };
 
   /** Create a primitive, sized from the selection when it matches the kind. */
   const addPrimitive = (kind: 'cylinder' | 'box') => {
@@ -152,108 +181,76 @@ export function App() {
     setSelectedObjectId('model');
   };
 
-  /** selection-derived operation inputs */
-  const pocketSource = useMemo(
-    () =>
-      geometry && features
-        ? pocketRegionsFromSelection(geometry, features, selection, transform)
-        : null,
-    [geometry, features, selection, transform],
-  );
-  const drillSource = useMemo(
-    () =>
-      features
-        ? drillTargetsFromSelection(features, selection, transform, drillDepth)
-        : null,
-    [features, selection, transform, drillDepth],
+  /** everything generation needs, in one memo */
+  const genCtx: GenContext = useMemo(
+    () => ({ stock, geometry, features, transform, tools }),
+    [stock, geometry, features, transform, tools],
   );
 
-  const generatePocket = () => {
-    if (!pocketSource) return;
-    try {
-      const material = getMaterial(stock.materialId);
-      const pop: PocketOp = {
-        kind: 'pocket',
-        id: 'op-pocket',
-        toolId: tool.id,
-        regions: pocketSource.regions,
-        topZ: pocketSource.topZ,
-        floorZ: pocketSource.topZ - pocketDepth,
-        stepDown: material.stepDownByTool[tool.type],
-        stepOver: tool.diameter * 0.5,
-        feed: material.feedByTool[tool.type],
-        plungeFeed: Math.round(material.feedByTool[tool.type] * material.plungeFraction),
-        safeClearance: 5,
-      };
-      const res = pocket2d(pop, tool);
-      const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'pocket' } });
-      setPreviewMoves(res.moves);
-      setGcode(
-        `; pocket: ${res.passes} passes over ${res.levels} level(s), ` +
-          `~${res.estimatedMinutes.toFixed(1)} min\n` +
-          nc,
-      );
-      setError(null);
-    } catch (e) {
-      setError(String(e));
+  /** combined preview + gcode for the whole job, from per-op results */
+  const updateJobOutput = (results: Record<string, GeneratedOp>) => {
+    const allMoves = ops.flatMap((o) => results[o.id]?.moves ?? []);
+    setPreviewMoves(allMoves.length > 0 ? allMoves : null);
+    if (allMoves.length === 0) {
+      setGcode(null);
+      return;
     }
+    const usedTools = [
+      ...new Set(ops.filter((o) => (results[o.id]?.moves.length ?? 0) > 0).map((o) => o.toolId)),
+    ]
+      .map((id) => tools.find((t) => t.id === id))
+      .filter((t): t is Tool => t !== undefined);
+    const minutes = ops.reduce((sum, o) => sum + (results[o.id]?.minutes ?? 0), 0);
+    const nc = postCarvera({ moves: allMoves, tools: usedTools, options: { jobName: 'job' } });
+    setGcode(
+      `; job: ${ops.length} op(s), ~${minutes.toFixed(1)} min cut time\n` + nc,
+    );
   };
 
-  const generateDrill = () => {
-    if (!drillSource) return;
-    try {
-      const material = getMaterial(stock.materialId);
-      const dop: DrillOp = {
-        kind: 'drill',
-        id: 'op-drill',
-        toolId: tool.id,
-        targets: drillSource,
-        peckDepth: material.stepDownByTool.drill,
-        plungeFeed: material.feedByTool.drill,
-        safeClearance: 5,
-      };
-      const res = drill(dop, tool);
-      const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'drill' } });
-      setPreviewMoves(res.moves);
-      setGcode(
-        `; drill: ${res.holes} hole(s), ~${res.estimatedMinutes.toFixed(1)} min\n` + nc,
-      );
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
+  const recalcAll = () => {
+    const next: Record<string, GeneratedOp> = {};
+    for (const o of ops) next[o.id] = generateJobOp(o, genCtx);
+    setGenerated(next);
+    updateJobOutput(next);
+    setShowPreview(true); // recalculate turns the path display on
+    setError(null);
   };
 
-  const generateProfile = () => {
-    if (!pocketSource) return;
-    try {
-      const material = getMaterial(stock.materialId);
-      const pop: ProfileOp = {
-        kind: 'profile',
-        id: 'op-profile',
-        toolId: tool.id,
-        contours: pocketSource.regions,
-        side: profileSide,
-        allowance: 0,
-        topZ: pocketSource.topZ,
-        floorZ: pocketSource.topZ - pocketDepth,
-        stepDown: material.stepDownByTool[tool.type],
-        feed: material.feedByTool[tool.type],
-        plungeFeed: Math.round(material.feedByTool[tool.type] * material.plungeFraction),
-        safeClearance: 5,
-      };
-      const res = profile2d(pop, tool);
-      const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'profile' } });
-      setPreviewMoves(res.moves);
-      setGcode(
-        `; profile (${profileSide}): ${res.passes} wall pass(es) over ${res.levels} level(s), ` +
-          `~${res.estimatedMinutes.toFixed(1)} min\n` +
-          nc,
+  const recalcOne = (id: string) => {
+    const op = ops.find((o) => o.id === id);
+    if (!op) return;
+    const result = generateJobOp(op, genCtx);
+    const next = { ...generated, [id]: result };
+    setGenerated(next);
+    updateJobOutput(next);
+    setShowPreview(true);
+    setError(null);
+  };
+
+  const addOp = () => {
+    const op = newJobOp('pocket', tool.id);
+    setOps((prev) => [...prev, op]);
+    setExpandedOpId(op.id);
+  };
+
+  const reorderOps = (dragId: string, targetId: string) => {
+    setOps((prev) => {
+      const drag = prev.find((o) => o.id === dragId);
+      if (!drag) return prev;
+      const rest = prev.filter((o) => o.id !== dragId);
+      rest.splice(
+        rest.findIndex((o) => o.id === targetId),
+        0,
+        drag,
       );
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
+      return rest;
+    });
+  };
+
+  /** start/stop editing an op's feature selection (enables measure mode) */
+  const toggleOpFeatures = (id: string | null) => {
+    setEditingOpId(id);
+    if (id !== null) setMeasureMode(true);
   };
 
   useEffect(() => {
@@ -266,26 +263,6 @@ export function App() {
 
   const tool = tools.find((t) => t.id === toolId) ?? tools[0];
 
-  // Demo job: face the stock cylinder 5mm down on the diameter. Parameters
-  // follow the stock (axial extent), material (feeds/DOC), and selected tool.
-  const op: FaceCylinderOp = useMemo(() => {
-    const cyl = stock.kind === 'cylinder' ? stock : null;
-    const material = getMaterial(stock.materialId);
-    const [x0, x1] = cyl ? originSpan(cyl.xOrigin, cyl.length) : originSpan('min', 100);
-    return {
-      kind: 'faceCylinder',
-      id: 'op1',
-      toolId: tool.id,
-      targetDiameter: cyl ? Math.max(cyl.calibration.effectiveRadius * 2 - 5, 1) : 10,
-      xStart: x0,
-      xEnd: x1,
-      stepDown: material.stepDownByTool[tool.type] / 2,
-      finishAllowance: 0.2,
-      plungeFeed: Math.round(material.feedByTool[tool.type] * material.plungeFraction),
-      rotation: 'cw',
-    };
-  }, [stock, tool]);
-
   const loadStl = async (file: File) => {
     try {
       const buf = await file.arrayBuffer();
@@ -294,31 +271,16 @@ export function App() {
       setModelName(file.name);
       setTransform(identityTransform()); // each model starts at its own origin
       setSelection([]); // ids belong to the old model
+      setOps((prev) => prev.map((o) => ({ ...o, featureIds: [] })));
+      setGenerated({});
+      setEditingOpId(null);
       setSelectedObjectId('model');
       setPreviewMoves(null);
+      setGcode(null);
       setTab('model');
       setError(null);
     } catch (e) {
       setError(`could not parse STL: ${String(e)}`);
-    }
-  };
-
-  const generate = () => {
-    try {
-      if (stock.kind !== 'cylinder') {
-        throw new Error('the demo job faces a cylinder — switch the stock kind back');
-      }
-      const res = faceCylinder(op, stock, tool);
-      const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'face-test' } });
-      setPreviewMoves(res.moves);
-      setGcode(
-        `; ${res.passes} passes, ${res.radialDepth.toFixed(2)}mm radial, ` +
-          `~${res.estimatedMinutes.toFixed(1)} min (A limited to 6.6 RPM)\n` +
-          nc,
-      );
-      setError(null);
-    } catch (e) {
-      setError(String(e));
     }
   };
 
@@ -327,7 +289,7 @@ export function App() {
     const url = URL.createObjectURL(new Blob([gcode], { type: 'text/plain' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'face-test.nc';
+    a.download = 'job.nc';
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -361,7 +323,7 @@ export function App() {
             previewMoves={previewMoves}
             showPreview={showPreview}
             onToggleSelect={toggleSelect}
-            onClearSelection={() => setSelection([])}
+            onClearSelection={clearSelection}
           />
           <div className="drop-hint">{geometry ? 'STL loaded' : 'drop an STL here (Phase 1: feature tracing)'}</div>
         </div>
@@ -398,7 +360,10 @@ export function App() {
               showFeatures={showFeatures}
               measureMode={measureMode}
               onShowFeaturesChange={setShowFeatures}
-              onMeasureModeChange={setMeasureMode}
+              onMeasureModeChange={(v) => {
+                setMeasureMode(v);
+                if (!v) setEditingOpId(null); // leaving measure mode stops op editing
+              }}
             />
           )}
           {tab === 'tools' && (
@@ -415,58 +380,34 @@ export function App() {
           )}
           {tab === 'ops' && (
             <>
-              <section>
-                <h2>Operations</h2>
-                <p>
-                  tool: {tool.name} ({tool.type} Ø{tool.diameter})
-                </p>
-                {stock.kind === 'cylinder' ? (
-                  <p>faceCylinder → Ø{op.targetDiameter.toFixed(1)}, X {op.xStart}…{op.xEnd}</p>
-                ) : (
-                  <p>box stock selected — cylinder demo op unavailable</p>
-                )}
-                <button onClick={generate}>Generate G-code</button>
-              </section>
-              {geometry && (
-                <section>
-                  <h2>Selection ops</h2>
-                  <p className="hint">
-                    select features on the Model tab, then generate below
-                  </p>
-                  <NumberField label="Pocket depth (mm)" value={pocketDepth} min={0.1} onCommit={setPocketDepth} />
-                  <NumberField label="Drill depth (mm)" value={drillDepth} min={0.1} onCommit={setDrillDepth} />
-                  <div className="buttons">
-                    <button onClick={generatePocket} disabled={!pocketSource}>
-                      Pocket selection
-                    </button>
-                    <button onClick={generateDrill} disabled={!drillSource}>
-                      Drill holes
-                    </button>
-                    <button onClick={generateProfile} disabled={!pocketSource}>
-                      Profile selection
-                    </button>
-                  </div>
-                  <label className="field">
-                    <span>Profile side</span>
-                    <select
-                      value={profileSide}
-                      onChange={(e) => setProfileSide(e.target.value as ProfileOp['side'])}
-                    >
-                      <option value="outside">Outside (around the shape)</option>
-                      <option value="inside">Inside (along the wall)</option>
-                      <option value="online">On the line</option>
-                    </select>
-                  </label>
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={showPreview}
-                      onChange={(e) => setShowPreview(e.target.checked)}
-                    />
-                    <span>Show toolpath preview</span>
-                  </label>
-                </section>
-              )}
+              <OpsPanel
+                ops={ops}
+                tools={tools}
+                generated={generated}
+                editingOpId={editingOpId}
+                expandedOpId={expandedOpId}
+                showPreview={showPreview}
+                hasModel={!!geometry}
+                stockKind={stock.kind}
+                onAddOp={addOp}
+                onChangeOp={(op) => setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)))}
+                onDeleteOp={(id) => {
+                  setOps((prev) => prev.filter((o) => o.id !== id));
+                  setGenerated((prev) => {
+                    const next = { ...prev };
+                    delete next[id];
+                    return next;
+                  });
+                  if (editingOpId === id) setEditingOpId(null);
+                  if (expandedOpId === id) setExpandedOpId(null);
+                }}
+                onReorder={reorderOps}
+                onSelectFeatures={toggleOpFeatures}
+                onRecalcOne={recalcOne}
+                onRecalcAll={recalcAll}
+                onToggleExpanded={(id) => setExpandedOpId(expandedOpId === id ? null : id)}
+                onTogglePreview={setShowPreview}
+              />
               {gcode && (
                 <section>
                   <h2>G-code</h2>

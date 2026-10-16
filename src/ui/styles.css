@@ -167,6 +167,39 @@ button.secondary:disabled:hover { background: #31373e; }
   border-color: #6b5842;
 }
 
+.op-panel { border: 1px solid #31373e; border-radius: 6px; margin: 6px 0; overflow: hidden; }
+.op-panel.dragging { opacity: 0.45; }
+.op-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #1b1f24;
+  cursor: pointer;
+  user-select: none;
+}
+.op-title .grip { color: #7d8891; cursor: grab; font-size: 14px; line-height: 1; }
+.op-title select.op-kind {
+  background: transparent;
+  border: none;
+  color: #d8dde2;
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+}
+.op-status { font-size: 11px; color: #7d8891; }
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: #9aa4ad;
+  padding: 2px 6px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.icon-btn:hover { background: #31373e; color: #fff; }
+.op-body { padding: 6px 8px 10px; border-top: 1px solid #262b30; }
+
 .subhead {
   font-size: 11px;
   font-weight: 600;

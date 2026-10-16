@@ -287,6 +287,47 @@ export type Operation = FaceCylinderOp | PocketOp | DrillOp | ProfileOp;
 // Phase 1 adds: engrave | indexedPocket
 // Phase 2 adds: thread | wrappedGroove
 
+/**
+ * An operation in the job sequence: user-editable state that generation
+ * resolves against the selection, stock, and tool (src/ui/jobGeneration.ts).
+ * Feeds/step-downs come from material presets × tool type at generation
+ * time; these fields are only the per-type parameters worth exposing.
+ */
+export interface JobOpBase {
+  id: string;
+  toolId: string;
+  /** selected feature ids feeding this op */
+  featureIds: string[];
+}
+
+export type JobOp =
+  | (JobOpBase & {
+      kind: 'faceCylinder';
+      targetDiameter: number;
+      stepDown: number;
+      finishAllowance: number;
+      rotation: 'cw' | 'ccw';
+    })
+  | (JobOpBase & {
+      kind: 'pocket';
+      /** cut depth below the selected surface, mm */
+      depth: number;
+      stepDown: number;
+      stepOver: number;
+    })
+  | (JobOpBase & {
+      kind: 'drill';
+      depth: number;
+      peckDepth: number;
+    })
+  | (JobOpBase & {
+      kind: 'profile';
+      depth: number;
+      stepDown: number;
+      allowance: number;
+      side: 'outside' | 'inside' | 'online';
+    });
+
 export interface Vec3 {
   x: number;
   y: number;
