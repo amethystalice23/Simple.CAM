@@ -35,8 +35,14 @@ header {
   display: flex;
   gap: 8px;
   align-self: center;
+  align-items: center;
 }
 .header-actions button { padding: 5px 12px; font-size: 12px; }
+.unsaved {
+  color: #ffd27f;
+  font-size: 11px;
+  white-space: nowrap;
+}
 
 main { display: flex; flex: 1; min-height: 0; }
 .viewport { position: relative; flex: 1; min-width: 0; }

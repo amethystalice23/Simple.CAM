@@ -95,3 +95,18 @@ export function downloadJobFile(file: JobFile, baseName: string): void {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Cheap identity digest for dirty tracking. The tool list is deliberately
+ * excluded: merging a loaded job's tools into the library reorders them
+ * without changing the job; the model is compared by name + encoded size.
+ */
+export function jobFingerprint(file: JobFile): string {
+  return JSON.stringify({
+    stock: file.stock,
+    transform: file.transform,
+    primitives: file.primitives,
+    ops: file.ops,
+    model: file.model ? { name: file.model.name, size: file.model.stlBase64.length } : null,
+  });
+}

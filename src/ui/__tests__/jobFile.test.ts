@@ -4,6 +4,7 @@ import { identityTransform } from '../../core/types';
 import {
   decodeStl,
   encodeStl,
+  jobFingerprint,
   JOB_FORMAT,
   JOB_VERSION,
   parseJobFile,
@@ -109,5 +110,34 @@ describe('parseJobFile', () => {
     expect(() => parseJobFile(newer)).toThrowError(/newer/);
     const gutted = JSON.stringify({ format: JOB_FORMAT, version: JOB_VERSION, ops: [] });
     expect(() => parseJobFile(gutted)).toThrowError(/missing required sections/);
+  });
+});
+
+describe('jobFingerprint', () => {
+  const base = {
+    stock: boxStock,
+    transform: identityTransform(),
+    primitives: [],
+    ops,
+    tools,
+    modelName: 'part.stl',
+    modelBytes: new Uint8Array([1, 2, 3]),
+  };
+
+  it('is stable across identical saves and ignores tool-list order', () => {
+    const a = saveJobFile(base);
+    const b = saveJobFile({ ...base, tools: [...tools].reverse() });
+    expect(jobFingerprint(a)).toBe(jobFingerprint(b));
+    expect(jobFingerprint(a)).toBe(jobFingerprint(saveJobFile(base)));
+  });
+
+  it('changes when the job content changes', () => {
+    const a = saveJobFile(base);
+    const b = saveJobFile({ ...base, ops: [...ops, { ...ops[0], id: 'jobop-2' }] });
+    expect(jobFingerprint(a)).not.toBe(jobFingerprint(b));
+    const c = saveJobFile({ ...base, modelBytes: new Uint8Array([1, 2, 3, 4]) });
+    expect(jobFingerprint(a)).not.toBe(jobFingerprint(c));
+    const d = saveJobFile({ ...base, modelName: 'other.stl' });
+    expect(jobFingerprint(a)).not.toBe(jobFingerprint(d));
   });
 });

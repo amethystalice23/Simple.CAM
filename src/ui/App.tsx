@@ -30,7 +30,8 @@ import {
   type GeneratedOp,
   type GenContext,
 } from './jobGeneration';
-import { decodeStl, downloadJobFile, parseJobFile, saveJobFile } from './jobFile';
+import { decodeStl, downloadJobFile, jobFingerprint, parseJobFile, saveJobFile } from './jobFile';
+import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
 import { transformFn } from './featureOverlays';
 import { OpsPanel } from './OpsPanel';
@@ -91,6 +92,10 @@ export function App() {
   /** raw STL bytes of the loaded model, kept for job save (embedded in the file) */
   const [modelBytes, setModelBytes] = useState<Uint8Array | null>(null);
   const openJobInputRef = useRef<HTMLInputElement>(null);
+  /** changes since the last save/new/restore — gates the New Job confirm */
+  const [dirty, setDirty] = useState(false);
+  const lastSavedRef = useRef<string | null>(null); // fingerprint baseline
+  const restoredRef = useRef(false); // autosave waits for the mount restore
   const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
   const [showPreview, setShowPreview] = useState(true);
   /** the job: ordered operations, each with its own selection and params */
@@ -364,45 +369,54 @@ export function App() {
       });
       const base = modelBytes ? modelName.replace(/\.stl$/i, '') : 'job';
       downloadJobFile(file, base || 'job');
+      lastSavedRef.current = jobFingerprint(file);
+      setDirty(false);
       setError(null);
     } catch (e) {
       setError(`could not save job: ${String(e)}`);
     }
   };
 
-  /** Open a saved job: stock, model, placement, primitives, ops, tools. */
+  /** Apply a parsed job: stock, model, placement, primitives, ops, tools.
+   * The applied job becomes the "saved" baseline for dirty tracking. */
+  const applyJob = (job: ReturnType<typeof parseJobFile>) => {
+    setStock(job.stock);
+    setPrimitives(job.primitives);
+    setOps(job.ops);
+    seedJobOpIds(job.ops);
+    setGenerated({});
+    setEditingOpId(null);
+    setExpandedOpId(null);
+    setSelection([]);
+    setSelectedObjectId('model');
+    setGcode(null);
+    setPreviewMoves(null);
+    if (job.model) {
+      const bytes = decodeStl(job.model.stlBase64);
+      setModelBytes(bytes);
+      setGeometry(new STLLoader().parse(bytes.buffer as ArrayBuffer));
+      setModelName(job.model.name);
+    } else {
+      setModelBytes(null);
+      setGeometry(null);
+      setModelName('Loaded model');
+    }
+    setTransform(job.transform ?? identityTransform());
+    // merge tool records the library doesn't have yet, so ops stay valid
+    if (job.tools.length > 0) {
+      setTools((prev) => {
+        const ids = new Set(prev.map((t) => t.id));
+        return [...prev, ...job.tools.filter((t) => !ids.has(t.id))];
+      });
+    }
+    lastSavedRef.current = jobFingerprint(job);
+    setDirty(false);
+  };
+
+  /** Open a saved job file. */
   const openJob = async (file: File) => {
     try {
-      const job = parseJobFile(await file.text());
-      setStock(job.stock);
-      setPrimitives(job.primitives);
-      setOps(job.ops);
-      seedJobOpIds(job.ops);
-      setGenerated({});
-      setEditingOpId(null);
-      setExpandedOpId(null);
-      setSelection([]);
-      setSelectedObjectId('model');
-      setGcode(null);
-      setPreviewMoves(null);
-      if (job.model) {
-        const bytes = decodeStl(job.model.stlBase64);
-        setModelBytes(bytes);
-        setGeometry(new STLLoader().parse(bytes.buffer as ArrayBuffer));
-        setModelName(job.model.name);
-      } else {
-        setModelBytes(null);
-        setGeometry(null);
-        setModelName('Loaded model');
-      }
-      setTransform(job.transform ?? identityTransform());
-      // merge tool records the library doesn't have yet, so ops stay valid
-      if (job.tools.length > 0) {
-        setTools((prev) => {
-          const ids = new Set(prev.map((t) => t.id));
-          return [...prev, ...job.tools.filter((t) => !ids.has(t.id))];
-        });
-      }
+      applyJob(parseJobFile(await file.text()));
       setTab('ops');
       setError(null);
     } catch (e) {
@@ -410,12 +424,99 @@ export function App() {
     }
   };
 
+  /** Start over, confirming when changes would be lost. */
+  const newJob = () => {
+    if (
+      dirty &&
+      !window.confirm('There are unsaved changes since the last save — start a new job anyway?')
+    ) {
+      return;
+    }
+    setStock(initialStock);
+    setModelBytes(null);
+    setGeometry(null);
+    setModelName('Loaded model');
+    setTransform(identityTransform());
+    setPrimitives([]);
+    setOps([]);
+    setGenerated({});
+    setEditingOpId(null);
+    setExpandedOpId(null);
+    setSelection([]);
+    setSelectedObjectId('model');
+    setGcode(null);
+    setPreviewMoves(null);
+    lastSavedRef.current = jobFingerprint(
+      saveJobFile({
+        stock: initialStock,
+        transform: identityTransform(),
+        primitives: [],
+        ops: [],
+        tools: [],
+        modelName: 'Loaded model',
+        modelBytes: null,
+      }),
+    );
+    setDirty(false);
+    setError(null);
+  };
+
+  /** Restore the autosaved job once on mount (reload / browse away + back). */
+  useEffect(() => {
+    void (async () => {
+      const job = await loadAutosave();
+      if (job) {
+        try {
+          applyJob(job);
+        } catch {
+          // corrupt autosave — start fresh
+        }
+      }
+      restoredRef.current = true;
+      setDirty(false); // triggers the autosave effect now that restore is done
+    })();
+    // mount-only by design: restore runs once before any autosave
+  }, []);
+
+  /** Debounced autosave: persist every change, and mark the job dirty
+   * when it drifts from the last saved baseline. */
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    const t = setTimeout(() => {
+      const file = saveJobFile({
+        stock,
+        transform,
+        primitives,
+        ops,
+        tools,
+        modelName,
+        modelBytes,
+      });
+      const fp = jobFingerprint(file);
+      if (lastSavedRef.current === null) {
+        lastSavedRef.current = fp; // first run establishes the baseline
+      } else if (fp !== lastSavedRef.current) {
+        setDirty(true);
+      }
+      void saveAutosave(file);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [stock, transform, primitives, ops, tools, modelName, modelBytes]);
+
   return (
     <div className="app">
       <header>
         <h1>simple.cam</h1>
         <span className="tag">Carvera · open CAM</span>
         <div className="header-actions">
+          {dirty && (
+            <span className="unsaved" title="Unsaved changes">
+              ● unsaved
+            </span>
+          )}
+          <button type="button" onClick={newJob}>
+            New job
+          </button>
           <button type="button" onClick={saveJob} disabled={!geometry && ops.length === 0}>
             Save job
           </button>
