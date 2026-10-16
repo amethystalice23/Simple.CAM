@@ -149,7 +149,10 @@ Z = const and stitch closed contours for Clipper2.
   clears the selection and with it the measurements. The feature ids in
   the selection are what operations store and what + Cylinder / + Box
   size from (first selected circle → cylinder, first selected plane →
-  box).
+  box). While an op's feature selection is active, straight lines are
+  not pickable (they are not operation targets) — circles and faces
+  only; lines stay selectable for measuring/primitives and return for
+  the later line-following engrave op.
 - **The Model tab is the object home**: an objects list at the top (loaded
   model + primitives) selects which object the placement and size controls
   edit; a Size section with per-dimension revert and a uniform-scale

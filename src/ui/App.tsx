@@ -368,6 +368,7 @@ export function App() {
             features={features}
             showFeatures={showFeatures}
             measureMode={measureMode}
+            edgePickingEnabled={editingOpId === null}
             opSelection={resolvedSelection}
             primitives={primitives}
             previewMoves={previewMoves}

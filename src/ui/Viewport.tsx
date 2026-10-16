@@ -66,6 +66,9 @@ interface Props {
   features: DetectedFeatures | null;
   showFeatures: boolean;
   measureMode: boolean;
+  /** false while an op's feature selection is active: straight lines are
+   * not operation targets (reserved for the later line-follow engrave) */
+  edgePickingEnabled: boolean;
   opSelection: ResolvedSelection[];
   primitives: Primitive[];
   /** generated moves to draw (PLAN.md "Toolpath preview") */
@@ -91,6 +94,7 @@ export function Viewport({
   features,
   showFeatures,
   measureMode,
+  edgePickingEnabled,
   opSelection,
   primitives,
   previewMoves,
@@ -105,6 +109,8 @@ export function Viewport({
   const hoverLineRef = useRef<THREE.LineSegments | null>(null);
   const measureRef = useRef(measureMode);
   measureRef.current = measureMode;
+  const edgePickingRef = useRef(edgePickingEnabled);
+  edgePickingRef.current = edgePickingEnabled;
   const onToggleSelectRef = useRef(onToggleSelect);
   onToggleSelectRef.current = onToggleSelect;
   const onClearSelectionRef = useRef(onClearSelection);
@@ -226,7 +232,9 @@ export function Viewport({
       const overlay = overlayRef.current;
       if (measureRef.current && overlay) {
         const nearest = findNearestFeature(overlay, mx, my, camera, w, h);
-        if (nearest) return pickFromNearest(overlay, nearest);
+        if (nearest && (edgePickingRef.current || nearest.kind !== 'edge')) {
+          return pickFromNearest(overlay, nearest);
+        }
       }
       const feats = featuresRef.current;
       const model = modelRef.current;
@@ -273,13 +281,16 @@ export function Viewport({
         rect.width,
         rect.height,
       );
-      if (nearest) {
+      // while editing an op, lines are not targets — don't hover them, so
+      // the pointer falls through to the face behind
+      const usable = nearest && (edgePickingRef.current || nearest.kind !== 'edge') ? nearest : null;
+      if (usable) {
         hoverLine.geometry.dispose();
-        hoverLine.geometry = hoverLineGeometry(overlay, nearest.kind, nearest.index);
-        (hoverLine.material as THREE.LineBasicMaterial).color.setHex(nearest.color);
+        hoverLine.geometry = hoverLineGeometry(overlay, usable.kind, usable.index);
+        (hoverLine.material as THREE.LineBasicMaterial).color.setHex(usable.color);
         hoverLine.visible = true;
         hideHoverPlane();
-        setLabel({ text: nearest.text, x: nearest.anchor.x, y: nearest.anchor.y });
+        setLabel({ text: usable.text, x: usable.anchor.x, y: usable.anchor.y });
         return;
       }
       hoverLine.visible = false;
