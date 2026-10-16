@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { originSpan } from '../core/types';
-import type { ModelTransform, Primitive, Stock } from '../core/types';
+import type { ModelTransform, Move, Primitive, Stock } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
+import { movesToSegments } from './toolpathPreview';
 import { NavCube } from './navcube';
 import {
   buildFeatureOverlayData,
@@ -67,6 +68,9 @@ interface Props {
   measureMode: boolean;
   opSelection: ResolvedSelection[];
   primitives: Primitive[];
+  /** generated moves to draw (PLAN.md "Toolpath preview") */
+  previewMoves: Move[] | null;
+  showPreview: boolean;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
 }
@@ -89,6 +93,8 @@ export function Viewport({
   measureMode,
   opSelection,
   primitives,
+  previewMoves,
+  showPreview,
   onToggleSelect,
   onClearSelection,
 }: Props) {
@@ -610,6 +616,34 @@ export function Viewport({
       hoverLineRef.current = null;
     };
   }, [features, transform, stock, showFeatures, opSelection, geometry]);
+
+  // toolpath preview: feed/rapid polylines straight from the Move[] IR
+  useEffect(() => {
+    const group = featureGroupRef.current;
+    if (!group || !previewMoves || !showPreview) return;
+    const segs = movesToSegments(previewMoves, stock);
+    const mk = (pts: number[], color: number, opacity: number, order: number) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      const line = new THREE.LineSegments(
+        g,
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false }),
+      );
+      line.renderOrder = order;
+      group.add(line);
+      return line;
+    };
+    const objects: THREE.LineSegments[] = [];
+    if (segs.feed.length > 0) objects.push(mk(segs.feed, 0xffd27f, 0.95, 8));
+    if (segs.rapid.length > 0) objects.push(mk(segs.rapid, 0x5a86a8, 0.5, 8));
+    return () => {
+      for (const l of objects) {
+        group.remove(l);
+        l.geometry.dispose();
+        (l.material as THREE.Material).dispose();
+      }
+    };
+  }, [previewMoves, showPreview, stock]);
 
   // user primitives (roughing volumes, tabs): translucent orange volumes
   useEffect(() => {

@@ -4,6 +4,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { faceCylinder } from '../cam/faceCylinder';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
+import { profile2d } from '../cam/profile';
 import { axialExtentX, detectFeatures } from '../cam/features';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
@@ -13,8 +14,10 @@ import type {
   DrillOp,
   FaceCylinderOp,
   ModelTransform,
+  Move,
   PocketOp,
   Primitive,
+  ProfileOp,
   Stock,
   Tool,
 } from '../core/types';
@@ -84,6 +87,9 @@ export function App() {
   const [modelName, setModelName] = useState('Loaded model');
   const [pocketDepth, setPocketDepth] = useState(2);
   const [drillDepth, setDrillDepth] = useState(5);
+  const [profileSide, setProfileSide] = useState<ProfileOp['side']>('outside');
+  const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
+  const [showPreview, setShowPreview] = useState(true);
   const dropRef = useRef<HTMLDivElement>(null);
 
   // feature detection is model-space only: reruns on model load, not moves
@@ -181,6 +187,7 @@ export function App() {
       };
       const res = pocket2d(pop, tool);
       const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'pocket' } });
+      setPreviewMoves(res.moves);
       setGcode(
         `; pocket: ${res.passes} passes over ${res.levels} level(s), ` +
           `~${res.estimatedMinutes.toFixed(1)} min\n` +
@@ -207,8 +214,41 @@ export function App() {
       };
       const res = drill(dop, tool);
       const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'drill' } });
+      setPreviewMoves(res.moves);
       setGcode(
         `; drill: ${res.holes} hole(s), ~${res.estimatedMinutes.toFixed(1)} min\n` + nc,
+      );
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const generateProfile = () => {
+    if (!pocketSource) return;
+    try {
+      const material = getMaterial(stock.materialId);
+      const pop: ProfileOp = {
+        kind: 'profile',
+        id: 'op-profile',
+        toolId: tool.id,
+        contours: pocketSource.regions,
+        side: profileSide,
+        allowance: 0,
+        topZ: pocketSource.topZ,
+        floorZ: pocketSource.topZ - pocketDepth,
+        stepDown: material.stepDownByTool[tool.type],
+        feed: material.feedByTool[tool.type],
+        plungeFeed: Math.round(material.feedByTool[tool.type] * material.plungeFraction),
+        safeClearance: 5,
+      };
+      const res = profile2d(pop, tool);
+      const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'profile' } });
+      setPreviewMoves(res.moves);
+      setGcode(
+        `; profile (${profileSide}): ${res.passes} wall pass(es) over ${res.levels} level(s), ` +
+          `~${res.estimatedMinutes.toFixed(1)} min\n` +
+          nc,
       );
       setError(null);
     } catch (e) {
@@ -255,6 +295,7 @@ export function App() {
       setTransform(identityTransform()); // each model starts at its own origin
       setSelection([]); // ids belong to the old model
       setSelectedObjectId('model');
+      setPreviewMoves(null);
       setTab('model');
       setError(null);
     } catch (e) {
@@ -269,6 +310,7 @@ export function App() {
       }
       const res = faceCylinder(op, stock, tool);
       const nc = postCarvera({ moves: res.moves, tools: [tool], options: { jobName: 'face-test' } });
+      setPreviewMoves(res.moves);
       setGcode(
         `; ${res.passes} passes, ${res.radialDepth.toFixed(2)}mm radial, ` +
           `~${res.estimatedMinutes.toFixed(1)} min (A limited to 6.6 RPM)\n` +
@@ -316,6 +358,8 @@ export function App() {
             measureMode={measureMode}
             opSelection={resolvedSelection}
             primitives={primitives}
+            previewMoves={previewMoves}
+            showPreview={showPreview}
             onToggleSelect={toggleSelect}
             onClearSelection={() => setSelection([])}
           />
@@ -398,7 +442,29 @@ export function App() {
                     <button onClick={generateDrill} disabled={!drillSource}>
                       Drill holes
                     </button>
+                    <button onClick={generateProfile} disabled={!pocketSource}>
+                      Profile selection
+                    </button>
                   </div>
+                  <label className="field">
+                    <span>Profile side</span>
+                    <select
+                      value={profileSide}
+                      onChange={(e) => setProfileSide(e.target.value as ProfileOp['side'])}
+                    >
+                      <option value="outside">Outside (around the shape)</option>
+                      <option value="inside">Inside (along the wall)</option>
+                      <option value="online">On the line</option>
+                    </select>
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={showPreview}
+                      onChange={(e) => setShowPreview(e.target.checked)}
+                    />
+                    <span>Show toolpath preview</span>
+                  </label>
                 </section>
               )}
               {gcode && (

@@ -7,9 +7,7 @@
 
 import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
 import { offsetInward } from './clipper';
-
-/** Rapid approach above material before a feed plunge, mm. */
-export const APPROACH_CLEARANCE = 0.5;
+import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
 export interface PocketResult {
   moves: Move[];
@@ -21,21 +19,6 @@ export interface PocketResult {
   estimatedMinutes: number;
 }
 
-/** Rotate a closed loop so it starts at the vertex nearest `from`. */
-function rotateToNearest(loop: Vec2[], from: Vec2 | null): Vec2[] {
-  if (!from || loop.length === 0) return loop;
-  let best = 0;
-  let bestD = Infinity;
-  for (let i = 0; i < loop.length; i++) {
-    const d = (loop[i].x - from.x) ** 2 + (loop[i].y - from.y) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  }
-  return [...loop.slice(best), ...loop.slice(0, best)];
-}
-
 export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
   if (op.regions.length === 0) throw new Error('pocket needs at least one region contour');
   if (op.floorZ >= op.topZ) throw new Error('floorZ must be below topZ');
@@ -43,12 +26,7 @@ export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
   if (op.stepOver <= 0) throw new Error('stepOver must be positive');
   const toolR = tool.diameter / 2;
 
-  // Z ladder from the surface, clamped to the floor
-  const levels: number[] = [];
-  for (let z = op.topZ - op.stepDown; z > op.floorZ + 1e-9; z -= op.stepDown) {
-    levels.push(z);
-  }
-  levels.push(op.floorZ);
+  const levels = zLadder(op.topZ, op.floorZ, op.stepDown);
 
   // sanity: the tool must fit in the region at all
   if (offsetInward(op.regions, toolR).length === 0) {

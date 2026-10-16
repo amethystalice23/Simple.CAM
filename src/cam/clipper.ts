@@ -46,3 +46,23 @@ export function offsetInward(contours: Vec2[][], deltaMm: number): Vec2[][] {
   co.Execute(sol, -deltaMm * SCALE);
   return fromSolution(sol);
 }
+
+/**
+ * Offset closed polygons outward by `delta` mm (positive-delta Clipper
+ * offset). Grown regions that overlap are unioned. For profile work the
+ * input is typically a single contour, so a CW hole loop shrinks — callers
+ * pass the boundary they mean to follow.
+ */
+export function offsetOutward(contours: Vec2[][], deltaMm: number): Vec2[][] {
+  if (contours.length === 0) return [];
+  if (deltaMm <= 0) return contours;
+  const co = new ClipperOffset(MITER_LIMIT, ARC_TOL);
+  co.AddPaths(
+    contours.map(toPath),
+    JoinType.jtRound,
+    EndType.etClosedPolygon,
+  );
+  const sol: ClipperPath[] = [];
+  co.Execute(sol, deltaMm * SCALE);
+  return fromSolution(sol);
+}

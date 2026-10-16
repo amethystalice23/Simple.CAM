@@ -256,8 +256,35 @@ export interface DrillOp {
   safeClearance: number;
 }
 
-export type Operation = FaceCylinderOp | PocketOp | DrillOp;
-// Phase 1 adds: profile2d | engrave | indexedPocket
+/**
+ * Follow a contour as a wall pass: tool center offset to one side of the
+ * line (outside grows the contour, inside shrinks it, online follows it
+ * exactly). Contours are machine-space XY, closed (outer CCW / holes CW).
+ */
+export interface ProfileOp {
+  kind: 'profile';
+  id: string;
+  toolId: string;
+  contours: Vec2[][];
+  side: 'outside' | 'inside' | 'online';
+  /** wall allowance left outside the tool path, mm */
+  allowance: number;
+  /** machine Z the pass starts from (surface) */
+  topZ: number;
+  /** machine Z of the profile floor */
+  floorZ: number;
+  /** axial depth per level, mm */
+  stepDown: number;
+  /** XY cut feed, mm/min (G94) */
+  feed: number;
+  /** plunge feed, mm/min */
+  plungeFeed: number;
+  /** rapid clearance above topZ, mm */
+  safeClearance: number;
+}
+
+export type Operation = FaceCylinderOp | PocketOp | DrillOp | ProfileOp;
+// Phase 1 adds: engrave | indexedPocket
 // Phase 2 adds: thread | wrappedGroove
 
 export interface Vec3 {

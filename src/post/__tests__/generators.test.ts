@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { postCarvera } from '../carvera';
 import { drill } from '../../cam/drill';
 import { pocket2d } from '../../cam/pocket';
-import type { DrillOp, PocketOp, Tool, Vec2 } from '../../core/types';
+import { profile2d } from '../../cam/profile';
+import type { DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
 
 const tool: Tool = { id: 't1', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
 const drillTool: Tool = { id: 't2', name: '3mm drill', type: 'drill', diameter: 3, spindleRpm: 18000 };
@@ -43,6 +44,21 @@ const drillOp: DrillOp = {
   safeClearance: 5,
 };
 
+const profileOp: ProfileOp = {
+  kind: 'profile',
+  id: 'op3',
+  toolId: 't1',
+  contours: [square],
+  side: 'outside',
+  allowance: 0,
+  topZ: 0,
+  floorZ: -2,
+  stepDown: 1,
+  feed: 500,
+  plungeFeed: 200,
+  safeClearance: 5,
+};
+
 const stripDate = (s: string) => s.split('\n').filter((l) => !l.startsWith('; generated')).join('\n');
 
 function checkGolden(name: string, gcode: string) {
@@ -73,6 +89,15 @@ describe('generator post goldens', () => {
       moves: drill(drillOp, drillTool).moves,
       tools: [drillTool],
       options: { jobName: 'drill-holes' },
+    }),
+  );
+
+  checkGolden(
+    'profile-square.nc',
+    postCarvera({
+      moves: profile2d(profileOp, tool).moves,
+      tools: [tool],
+      options: { jobName: 'profile-square' },
     }),
   );
 });

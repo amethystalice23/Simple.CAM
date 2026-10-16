@@ -1,0 +1,57 @@
+; simple.cam v0.0.1 — job "profile-square"
+; TOOL: T1 name="2mm flat" type=flat diameter=2.000 spindle=18000rpm
+; ---- prep assumptions (run in controller before this job) ----
+; M465.1            ; 4th-axis stock leveling/twist via probe
+; G10 L20 P0 A0      ; establish angular zero
+; verify 4th-axis Z datum (stock-center, Z1-probed) matches the job stock calibration
+G21 G90 G94
+G92.4 A0 S0
+G0 X10.433 Y-0.901 Z5.000 ; level z-1.00
+G0 Z-0.500
+G1 Z-1.000 F200.0000 ; plunge 1.00mm below surface
+G1 X10.781 Y-0.625 F500.0000
+G1 X10.974 Y-0.224
+G1 X11.000 Y0.000
+G1 X11.000 Y10.000
+G1 X10.901 Y10.433
+G1 X10.625 Y10.781
+G1 X10.224 Y10.974
+G1 X10.000 Y11.000
+G1 X0.000 Y11.000
+G1 X-0.433 Y10.901
+G1 X-0.781 Y10.625
+G1 X-0.974 Y10.224
+G1 X-1.000 Y10.000
+G1 X-1.000 Y0.000
+G1 X-0.901 Y-0.433
+G1 X-0.625 Y-0.781
+G1 X-0.224 Y-0.974
+G1 X0.000 Y-1.000
+G1 X10.000 Y-1.000
+G1 X10.433 Y-0.901
+G0 Z5.000
+G0 X10.433 Y-0.901 Z5.000 ; level z-2.00
+G0 Z-1.500
+G1 Z-2.000 F200.0000 ; plunge 2.00mm below surface
+G1 X10.781 Y-0.625 F500.0000
+G1 X10.974 Y-0.224
+G1 X11.000 Y0.000
+G1 X11.000 Y10.000
+G1 X10.901 Y10.433
+G1 X10.625 Y10.781
+G1 X10.224 Y10.974
+G1 X10.000 Y11.000
+G1 X0.000 Y11.000
+G1 X-0.433 Y10.901
+G1 X-0.781 Y10.625
+G1 X-0.974 Y10.224
+G1 X-1.000 Y10.000
+G1 X-1.000 Y0.000
+G1 X-0.901 Y-0.433
+G1 X-0.625 Y-0.781
+G1 X-0.224 Y-0.974
+G1 X0.000 Y-1.000
+G1 X10.000 Y-1.000
+G1 X10.433 Y-0.901
+G0 Z5.000
+M30
