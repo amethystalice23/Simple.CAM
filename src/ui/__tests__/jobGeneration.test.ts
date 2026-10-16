@@ -9,6 +9,7 @@ import {
   generateJobOp,
   newJobOp,
   prefillDepths,
+  seedJobOpIds,
   type GenContext,
 } from '../jobGeneration';
 
@@ -120,6 +121,14 @@ describe('newJobOp / defaults', () => {
     if (p.kind === 'profile') expect(p.side).toBe('outside');
     const d = newJobOp('drill', drillTool, boxStock.materialId);
     if (d.kind === 'drill') expect(d.peckDepth).toBeGreaterThan(0);
+  });
+
+  it('seeds ids above loaded jobs so new ops never collide', () => {
+    seedJobOpIds([
+      { ...(pocketOp as unknown as JobOp), id: 'jobop-500' },
+    ]);
+    const next = newJobOp('pocket', tool, boxStock.materialId);
+    expect(Number(next.id.replace(/^jobop-/, ''))).toBeGreaterThan(500);
   });
 });
 

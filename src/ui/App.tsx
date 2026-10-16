@@ -26,9 +26,11 @@ import {
   generateJobOp,
   newJobOp,
   prefillDepths,
+  seedJobOpIds,
   type GeneratedOp,
   type GenContext,
 } from './jobGeneration';
+import { decodeStl, downloadJobFile, parseJobFile, saveJobFile } from './jobFile';
 import { stockTopZ } from './placement';
 import { transformFn } from './featureOverlays';
 import { OpsPanel } from './OpsPanel';
@@ -86,6 +88,9 @@ export function App() {
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState('model');
   const [modelName, setModelName] = useState('Loaded model');
+  /** raw STL bytes of the loaded model, kept for job save (embedded in the file) */
+  const [modelBytes, setModelBytes] = useState<Uint8Array | null>(null);
+  const openJobInputRef = useRef<HTMLInputElement>(null);
   const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
   const [showPreview, setShowPreview] = useState(true);
   /** the job: ordered operations, each with its own selection and params */
@@ -317,6 +322,7 @@ export function App() {
     try {
       const buf = await file.arrayBuffer();
       const geo = new STLLoader().parse(buf);
+      setModelBytes(new Uint8Array(buf));
       setGeometry(geo);
       setModelName(file.name);
       setTransform(identityTransform()); // each model starts at its own origin
@@ -344,11 +350,90 @@ export function App() {
     URL.revokeObjectURL(url);
   };
 
+  /** Save the whole working state as one self-contained .cam.json file. */
+  const saveJob = () => {
+    try {
+      const file = saveJobFile({
+        stock,
+        transform,
+        primitives,
+        ops,
+        tools,
+        modelName,
+        modelBytes,
+      });
+      const base = modelBytes ? modelName.replace(/\.stl$/i, '') : 'job';
+      downloadJobFile(file, base || 'job');
+      setError(null);
+    } catch (e) {
+      setError(`could not save job: ${String(e)}`);
+    }
+  };
+
+  /** Open a saved job: stock, model, placement, primitives, ops, tools. */
+  const openJob = async (file: File) => {
+    try {
+      const job = parseJobFile(await file.text());
+      setStock(job.stock);
+      setPrimitives(job.primitives);
+      setOps(job.ops);
+      seedJobOpIds(job.ops);
+      setGenerated({});
+      setEditingOpId(null);
+      setExpandedOpId(null);
+      setSelection([]);
+      setSelectedObjectId('model');
+      setGcode(null);
+      setPreviewMoves(null);
+      if (job.model) {
+        const bytes = decodeStl(job.model.stlBase64);
+        setModelBytes(bytes);
+        setGeometry(new STLLoader().parse(bytes.buffer as ArrayBuffer));
+        setModelName(job.model.name);
+      } else {
+        setModelBytes(null);
+        setGeometry(null);
+        setModelName('Loaded model');
+      }
+      setTransform(job.transform ?? identityTransform());
+      // merge tool records the library doesn't have yet, so ops stay valid
+      if (job.tools.length > 0) {
+        setTools((prev) => {
+          const ids = new Set(prev.map((t) => t.id));
+          return [...prev, ...job.tools.filter((t) => !ids.has(t.id))];
+        });
+      }
+      setTab('ops');
+      setError(null);
+    } catch (e) {
+      setError(`could not open job: ${String(e)}`);
+    }
+  };
+
   return (
     <div className="app">
       <header>
         <h1>simple.cam</h1>
-        <span className="tag">Carvera · demo job: face cylinder</span>
+        <span className="tag">Carvera · open CAM</span>
+        <div className="header-actions">
+          <button type="button" onClick={saveJob} disabled={!geometry && ops.length === 0}>
+            Save job
+          </button>
+          <button type="button" onClick={() => openJobInputRef.current?.click()}>
+            Open job…
+          </button>
+          <input
+            ref={openJobInputRef}
+            type="file"
+            accept="application/json"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = ''; // allow re-opening the same file
+              if (f) void openJob(f);
+            }}
+          />
+        </div>
       </header>
       <main>
         <div

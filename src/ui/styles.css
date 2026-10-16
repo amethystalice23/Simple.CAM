@@ -30,6 +30,13 @@ header {
   border-bottom: 1px solid #262b30;
 }
 .tag { color: #7d8891; font-size: 12px; }
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-self: center;
+}
+.header-actions button { padding: 5px 12px; font-size: 12px; }
 
 main { display: flex; flex: 1; min-height: 0; }
 .viewport { position: relative; flex: 1; min-width: 0; }

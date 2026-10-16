@@ -45,6 +45,14 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string }[] = [
 ];
 
 let opCount = 0;
+/** Loaded jobs carry their own op ids — seed the counter above them so a
+ * later "+ Add toolpath" can never collide. */
+export function seedJobOpIds(ops: JobOp[]): void {
+  for (const o of ops) {
+    const n = Number(o.id.replace(/^jobop-/, ''));
+    if (Number.isFinite(n) && n > opCount) opCount = n;
+  }
+}
 /**
  * New op of the given kind with defaults derived from the tool and stock
  * material (preset step-downs and a diameter-fraction step-over — never a
