@@ -67,12 +67,26 @@ describe('pocketRegionsFromSelection', () => {
     ).toThrowError(/either faces or holes/);
   });
 
-  it('ignores features that are not drill-axis aligned', () => {
+  it('rejects a selection with no usable floor in the frame, with a diagnosis', () => {
     const geo = plateWithHole();
     const f = detectFeatures(geo);
     const sidePlane = f.planes.find((p) => Math.abs(p.normal.z) < 0.5);
     expect(sidePlane).toBeDefined();
-    expect(pocketRegionsFromSelection(geo, f, [sidePlane!.id], identityTransform())).toBeNull();
+    expect(() =>
+      pocketRegionsFromSelection(geo, f, [sidePlane!.id], identityTransform()),
+    ).toThrowError(/cannot be pocketed in the cutting frame/);
+  });
+
+  it('accepts floors within ~10° of horizontal in the cutting frame', () => {
+    // a 5°-tilted top face: cos(5°) ≈ 0.996 — inside the loosened gate
+    const tilted = new THREE.BoxGeometry(10, 10, 4).toNonIndexed();
+    tilted.rotateX((5 * Math.PI) / 180);
+    const ft = detectFeatures(tilted);
+    const tiltedTop = ft.planes.find((p) => p.normal.z > 0.98 && p.normal.z < 0.999)!;
+    expect(tiltedTop.normal.z).toBeGreaterThan(0.985);
+    const src = pocketRegionsFromSelection(tilted, ft, [tiltedTop.id], identityTransform());
+    expect(src).not.toBeNull();
+    expect(src!.regions).toHaveLength(1);
   });
 });
 

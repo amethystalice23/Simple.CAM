@@ -9,8 +9,14 @@ import type { DetectedFeatures } from '../cam/features';
 import type { DrillOp, ModelTransform, Vec2 } from '../core/types';
 import { transformFn } from './featureOverlays';
 
+/**
+ * Tolerance for "a usable pocket/profile floor" — a face or hole rim
+ * within ~10° of horizontal in the cutting frame (a slightly tilted floor
+ * still cuts fine). Drilling stays stricter (see drillTargetsFromSelection).
+ */
+const Z_TOL = 0.985;
 /** Tolerance for "parallel to the machine drill axis". */
-const Z_TOL = 0.999;
+const DRILL_Z_TOL = 0.999;
 /** Sampling density for circle regions. */
 const CIRCLE_SEGMENTS = 64;
 
@@ -111,6 +117,16 @@ export function pocketRegionsFromSelection(
   if (circleRegions.length > 0) {
     return { regions: circleRegions, selectionZ: rimZ };
   }
+  // features are selected but none survived the frame gate: say so —
+  // "select features…" here reads as if the click never registered
+  if (selection.length > 0) {
+    throw new Error(
+      'the selected features cannot be pocketed in the cutting frame — ' +
+        'they are not within ~10° of horizontal (a thread circle or side face ' +
+        'may have snapped instead of the intended floor; zoom in and re-click, ' +
+        'or check the datum angle)',
+    );
+  }
   return null;
 }
 
@@ -133,7 +149,7 @@ export function drillTargetsFromSelection(
   const targets: DrillOp['targets'] = [];
   for (const c of features.circles) {
     if (!c.inner || !selection.includes(c.id)) continue;
-    if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < Z_TOL) continue;
+    if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < DRILL_Z_TOL) continue;
     const center = xf(c.center);
     targets.push({ x: center.x, y: center.y, topZ: center.z, depth });
   }
