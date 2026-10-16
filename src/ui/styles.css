@@ -179,13 +179,24 @@ button.secondary:disabled:hover { background: #31373e; }
   user-select: none;
 }
 .op-title .grip { color: #7d8891; cursor: grab; font-size: 14px; line-height: 1; }
+.op-title .op-seq { color: #d8dde2; font-size: 12px; font-weight: 600; min-width: 24px; }
 .op-title select.op-kind {
   background: transparent;
   border: none;
   color: #d8dde2;
   font-size: 12px;
   font-weight: 600;
+  flex: none;
+  max-width: 110px;
+}
+.op-snippet {
   flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  color: #7d8891;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .op-status { font-size: 11px; color: #7d8891; }
 .icon-btn {

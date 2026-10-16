@@ -14,6 +14,7 @@ import type {
   Tool,
 } from '../core/types';
 import { MAKERA_TOOLS } from '../core/makeraTools.generated';
+import { planeExtent } from './featureOverlays';
 import { ModelPanel } from './ModelPanel';
 import {
   boxFromPlane,
@@ -89,10 +90,31 @@ export function App() {
   const [generated, setGenerated] = useState<Record<string, GeneratedOp>>({});
   const [editingOpId, setEditingOpId] = useState<string | null>(null);
   const [expandedOpId, setExpandedOpId] = useState<string | null>(null);
+  /** the last tool selected in any op — default for new operations */
+  const [lastToolId, setLastToolId] = useState<string | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
 
   // feature detection is model-space only: reruns on model load, not moves
   const features = useMemo(() => (geometry ? detectFeatures(geometry) : null), [geometry]);
+
+  /** short descriptions by feature id, for op title snippets */
+  const featureLabels = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (!features) return map;
+    for (const c of features.circles) {
+      map[c.id] = `Ø${(c.radius * 2).toFixed(1)}${c.inner ? ' hole' : ''}`;
+    }
+    for (const e of features.edges) {
+      map[e.id] = `L${Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z).toFixed(1)}`;
+    }
+    if (geometry) {
+      for (let i = 0; i < features.planes.length; i++) {
+        const ext = planeExtent(geometry, features, transform, i);
+        map[features.planes[i].id] = ext ? `${ext.w.toFixed(1)}×${ext.h.toFixed(1)}` : 'face';
+      }
+    }
+    return map;
+  }, [features, geometry, transform]);
 
   /** the feature set the viewport highlights/measures: the op being edited,
    * or the global selection when no op is active */
@@ -228,7 +250,9 @@ export function App() {
   };
 
   const addOp = () => {
-    const op = newJobOp('pocket', tool, stock.materialId);
+    const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
+    const op = newJobOp('pocket', defaultTool, stock.materialId);
+    setLastToolId(defaultTool.id);
     setOps((prev) => [...prev, op]);
     setExpandedOpId(op.id);
   };
@@ -390,8 +414,13 @@ export function App() {
                 hasModel={!!geometry}
                 stockKind={stock.kind}
                 materialId={stock.materialId}
+                featureLabels={featureLabels}
                 onAddOp={addOp}
-                onChangeOp={(op) => setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)))}
+                onChangeOp={(op) => {
+                  setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)));
+                  const before = ops.find((o) => o.id === op.id);
+                  if (before && before.toolId !== op.toolId) setLastToolId(op.toolId);
+                }}
                 onDeleteOp={(id) => {
                   setOps((prev) => prev.filter((o) => o.id !== id));
                   setGenerated((prev) => {

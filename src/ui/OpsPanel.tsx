@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { JobOp, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import { defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
+import { groupToolsBySubtype, shortToolName } from './toolNames';
 import { NumberField } from './fields';
 
 interface Props {
@@ -15,6 +16,8 @@ interface Props {
   stockKind: Stock['kind'];
   /** stock material id, for tool-appropriate step defaults */
   materialId: string;
+  /** short feature description by id, for the title-bar snippet */
+  featureLabels: Record<string, string>;
   onAddOp: () => void;
   onChangeOp: (op: JobOp) => void;
   onDeleteOp: (id: string) => void;
@@ -24,6 +27,14 @@ interface Props {
   onRecalcAll: () => void;
   onToggleExpanded: (id: string) => void;
   onTogglePreview: (v: boolean) => void;
+}
+
+/** "Ø4.0 hole · 10×4 +2 more" style snippet of an op's selected features. */
+function selectionSnippet(op: JobOp, labels: Record<string, string>): string {
+  const texts = op.featureIds.map((id) => labels[id]).filter((t): t is string => !!t);
+  if (texts.length === 0) return op.kind === 'faceCylinder' ? 'stock facing' : 'no features';
+  const shown = texts.slice(0, 2).join(' · ');
+  return texts.length > 2 ? `${shown} +${texts.length - 2} more` : shown;
 }
 
 /** The per-type parameter fields for an open op panel. */
@@ -142,7 +153,7 @@ export function OpsPanel(props: Props) {
         <p className="hint">add a toolpath, then select features on the Model tab</p>
       )}
       <div>
-        {props.ops.map((op) => {
+        {props.ops.map((op, index) => {
           const gen = props.generated[op.id];
           const expanded = props.expandedOpId === op.id;
           const editing = props.editingOpId === op.id;
@@ -165,6 +176,7 @@ export function OpsPanel(props: Props) {
                 <span className="grip" title="Drag to reorder">
                   ⠿
                 </span>
+                <span className="op-seq">#{index + 1}</span>
                 <select
                   className="op-kind"
                   value={op.kind}
@@ -183,6 +195,9 @@ export function OpsPanel(props: Props) {
                     </option>
                   ))}
                 </select>
+                <span className="op-snippet" title={selectionSnippet(op, props.featureLabels)}>
+                  {selectionSnippet(op, props.featureLabels)}
+                </span>
                 <span className="op-status">
                   {gen?.error ? '⚠' : gen ? '✓' : ''}
                 </span>
@@ -227,10 +242,14 @@ export function OpsPanel(props: Props) {
                   <label className="field">
                     <span>Tool</span>
                     <select value={op.toolId} onChange={(e) => changeTool(op, e.target.value)}>
-                      {props.tools.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} ({t.type} Ø{t.diameter})
-                        </option>
+                      {groupToolsBySubtype(props.tools).map((g) => (
+                        <optgroup key={g.label} label={g.label}>
+                          {g.tools.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {shortToolName(t)}
+                            </option>
+                          ))}
+                        </optgroup>
                       ))}
                     </select>
                   </label>
