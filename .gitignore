@@ -1,4 +1,5 @@
 node_modules/
 dist/
 *.local
-.DS_Storellmfit.json
+.DS_Store
+llmfit.json
