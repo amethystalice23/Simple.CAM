@@ -100,4 +100,20 @@ describe('generator post goldens', () => {
       options: { jobName: 'profile-square' },
     }),
   );
+
+  // indexed drill: one rapid A positioning move, then flat drilling
+  const indexMove = {
+    words: { a: 90 },
+    feed: 0,
+    rapid: true,
+    comment: 'index stock to A90°',
+  };
+  checkGolden(
+    'drill-indexed.nc',
+    postCarvera({
+      moves: [indexMove, ...drill(drillOp, drillTool).moves],
+      tools: [drillTool],
+      options: { jobName: 'drill-indexed' },
+    }),
+  );
 });

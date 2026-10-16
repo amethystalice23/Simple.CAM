@@ -342,6 +342,12 @@ export type JobOp =
       endDepth: number;
       /** roughing stock left on the floor and walls, mm; 0 = finish to size */
       allowance: number;
+      /**
+       * 4th-axis index angle, degrees: the stock frozen at A while the flat
+       * engine runs in the rotated frame. 0 = no indexing. Cylinder stock
+       * only.
+       */
+      indexAngle: number;
       stepDown: number;
       stepOver: number;
     })
@@ -349,6 +355,8 @@ export type JobOp =
       kind: 'drill';
       depth: number;
       peckDepth: number;
+      /** 4th-axis index angle, degrees; 0 = no indexing (cylinder stock only) */
+      indexAngle: number;
     })
   | (JobOpBase & {
       kind: 'profile';
@@ -359,6 +367,8 @@ export type JobOp =
       endDepth: number;
       /** roughing stock left on the floor and walls, mm; 0 = finish to size */
       allowance: number;
+      /** 4th-axis index angle, degrees; 0 = no indexing (cylinder stock only) */
+      indexAngle: number;
       stepDown: number;
       side: 'outside' | 'inside' | 'online';
     });

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { BufferGeometry } from 'three';
+import type { BufferGeometry, Vector3 } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { axialExtentX, detectFeatures } from '../cam/features';
+import { indexedPointRotation, indexToFaceTop } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
 import { identityTransform } from '../core/types';
@@ -154,15 +155,25 @@ export function App() {
     return out;
   }, [activeFeatureIds, features]);
 
-  /** machine-space height of a feature by id, for depth prefills */
-  const featureMachineZ = (id: string): number | null => {
+  /** machine-space position of a feature by id (A=0 frame), for depth
+   * prefills and index-angle computation */
+  const featureMachinePoint = (id: string): Vector3 | null => {
     if (!features) return null;
     const xf = transformFn(transform);
     const c = features.circles.find((x) => x.id === id);
-    if (c) return xf(c.center).z;
+    if (c) return xf(c.center);
     const p = features.planes.find((x) => x.id === id);
-    if (p) return xf(p.point).z;
+    if (p) return xf(p.point);
     return null;
+  };
+
+  /** a feature's height in an op's cutting frame (indexed rotation applied) */
+  const featureDepthInFrame = (op: JobOp, p: Vector3): number => {
+    const angle = op.kind === 'faceCylinder' ? 0 : (op.indexAngle ?? 0);
+    if (stock.kind === 'cylinder' && angle !== 0) {
+      return indexedPointRotation(angle, stock.calibration.axisZ)(p).z;
+    }
+    return p.z;
   };
 
   /** viewport feature clicks: edit the active op's selection, or the global
@@ -170,7 +181,7 @@ export function App() {
    * feature into an op prefills its depth boxes. */
   const toggleSelect = (id: string) => {
     if (editingOpId) {
-      const z = featureMachineZ(id);
+      const p = featureMachinePoint(id);
       const crown = stockTopZ(stock);
       setOps((prev) =>
         prev.map((o) => {
@@ -179,8 +190,8 @@ export function App() {
             ? o.featureIds.filter((x) => x !== id)
             : [...o.featureIds, id];
           let next = { ...o, featureIds } as JobOp;
-          if (o.featureIds.length === 0 && z !== null) {
-            next = prefillDepths(next, z, crown);
+          if (o.featureIds.length === 0 && p) {
+            next = prefillDepths(next, featureDepthInFrame(o, p), crown);
           }
           return next;
         }),
@@ -308,9 +319,18 @@ export function App() {
   /** floor/rim switch re-prefills the depth boxes from the first feature */
   const changeSelectionIs = (op: JobOp, value: 'floor' | 'rim') => {
     let next: JobOp = { ...op, selectionIs: value } as JobOp;
-    const z = op.featureIds.length > 0 ? featureMachineZ(op.featureIds[0]) : null;
-    if (z !== null) next = prefillDepths(next, z, stockTopZ(stock));
+    const p = op.featureIds.length > 0 ? featureMachinePoint(op.featureIds[0]) : null;
+    if (p) next = prefillDepths(next, featureDepthInFrame(op, p), stockTopZ(stock));
     setOps((prev) => prev.map((o) => (o.id === op.id ? next : o)));
+  };
+
+  /** index the stock so the op's first selected feature faces the cutter */
+  const indexToSelection = (op: JobOp) => {
+    if (stock.kind !== 'cylinder' || op.kind === 'faceCylinder') return;
+    const p = op.featureIds.length > 0 ? featureMachinePoint(op.featureIds[0]) : null;
+    if (!p) return;
+    const angle = indexToFaceTop(p, stock.calibration.axisZ);
+    setOps((prev) => prev.map((o) => (o.id === op.id ? ({ ...o, indexAngle: angle } as JobOp) : o)));
   };
 
   useEffect(() => {
@@ -635,6 +655,7 @@ export function App() {
                   if (before && before.toolId !== op.toolId) setLastToolId(op.toolId);
                 }}
                 onSelectionIsChange={changeSelectionIs}
+                onIndexToSelection={indexToSelection}
                 onDeleteOp={(id) => {
                   setOps((prev) => prev.filter((o) => o.id !== id));
                   setGenerated((prev) => {

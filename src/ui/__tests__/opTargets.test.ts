@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
+import { indexedPointRotation } from '../../cam/indexing';
 import { drillTargetsFromSelection, pocketRegionsFromSelection } from '../opTargets';
 
 function plateWithHole(): THREE.BufferGeometry {
@@ -99,5 +100,29 @@ describe('drillTargetsFromSelection', () => {
     const f = detectFeatures(geo);
     const outer = f.circles.find((c) => !c.inner);
     expect(drillTargetsFromSelection(f, [outer!.id], identityTransform(), 5)).toBeNull();
+  });
+
+  it('drills a radial hole when indexed to face the cutter', () => {
+    // a plate whose hole faces machine +Y: drillable only after indexing.
+    // rotateX turns the plate thickness into radial distance, so the two
+    // hole circles sit at radii 6 and 8 — take the far one (y = 8)
+    const geo = plateWithHole();
+    geo.rotateX(-Math.PI / 2); // hole axis +Z → +Y
+    geo.translate(0, 6, 0); // lift off the axis datum plane (axisZ = 0)
+    const f = detectFeatures(geo);
+    const radialHole = f.circles.find(
+      (c) => c.inner && Math.abs(c.axis.y) > 0.99 && c.center.y > 7.9,
+    );
+    expect(radialHole).toBeDefined();
+    // flat: the hole axis is not Z — no target
+    expect(drillTargetsFromSelection(f, [radialHole!.id], identityTransform(), 5)).toBeNull();
+    // indexed at 90°: the hole rotates to face up at its radial distance
+    const rot = indexedPointRotation(90, 0);
+    const targets = drillTargetsFromSelection(f, [radialHole!.id], identityTransform(), 5, rot);
+    expect(targets).not.toBeNull();
+    expect(targets).toHaveLength(1);
+    expect(targets![0].x).toBeCloseTo(0, 5);
+    expect(targets![0].y).toBeCloseTo(0, 5);
+    expect(targets![0].topZ).toBeCloseTo(8, 5); // rim now faces up
   });
 });

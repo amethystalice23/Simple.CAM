@@ -22,6 +22,8 @@ interface Props {
   onChangeOp: (op: JobOp) => void;
   /** floor/rim switch — re-prefills the depth boxes from the selection */
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
+  /** compute the index angle that brings the op's selection to face the cutter */
+  onIndexToSelection: (op: JobOp) => void;
   onDeleteOp: (id: string) => void;
   onReorder: (dragId: string, targetId: string) => void;
   onSelectFeatures: (id: string | null) => void;
@@ -87,11 +89,46 @@ function DepthFields(props: {
   );
 }
 
+/** Index-angle controls for pocket/profile/drill on cylinder stock. */
+function IndexedFields(props: {
+  op: Extract<JobOp, { kind: 'pocket' | 'profile' | 'drill' }>;
+  stockKind: Stock['kind'];
+  onIndexToSelection: (op: JobOp) => void;
+  onChange: (op: JobOp) => void;
+}) {
+  const { op } = props;
+  if (props.stockKind !== 'cylinder') return null;
+  return (
+    <>
+      <NumberField
+        label="Index angle (°)"
+        value={op.indexAngle ?? 0}
+        step={15}
+        onCommit={(v) => props.onChange({ ...op, indexAngle: v } as JobOp)}
+      />
+      <div className="buttons">
+        <button
+          type="button"
+          className="secondary"
+          disabled={op.featureIds.length === 0}
+          onClick={() => props.onIndexToSelection(op)}
+          title="Index the stock so the selected feature faces the cutter"
+        >
+          Index to selection
+        </button>
+      </div>
+      <p className="hint">0 = flat (no indexing) · the stock freezes at A while this op cuts</p>
+    </>
+  );
+}
+
 /** The per-type parameter fields for an open op panel. */
 function ParamFields(props: {
   op: JobOp;
+  stockKind: Stock['kind'];
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
+  onIndexToSelection: (op: JobOp) => void;
 }) {
   const { op, onChange } = props;
   const upd = (patch: Partial<JobOp>) => onChange({ ...op, ...patch } as JobOp);
@@ -115,6 +152,7 @@ function ParamFields(props: {
       return (
         <>
           <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
+          <IndexedFields op={op} stockKind={props.stockKind} onIndexToSelection={props.onIndexToSelection} onChange={props.onChange} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
@@ -124,6 +162,7 @@ function ParamFields(props: {
         <>
           <NumberField label="Depth (mm)" value={op.depth} min={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
           <NumberField label="Peck (mm)" value={op.peckDepth} min={0} onCommit={(v) => upd({ peckDepth: v } as Partial<JobOp>)} />
+          <IndexedFields op={op} stockKind={props.stockKind} onIndexToSelection={props.onIndexToSelection} onChange={props.onChange} />
         </>
       );
     case 'profile':
@@ -141,6 +180,7 @@ function ParamFields(props: {
             </select>
           </label>
           <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
+          <IndexedFields op={op} stockKind={props.stockKind} onIndexToSelection={props.onIndexToSelection} onChange={props.onChange} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
         </>
       );
@@ -278,8 +318,10 @@ export function OpsPanel(props: Props) {
                   </label>
                   <ParamFields
                     op={op}
+                    stockKind={props.stockKind}
                     onChange={props.onChangeOp}
                     onSelectionIsChange={props.onSelectionIsChange}
+                    onIndexToSelection={props.onIndexToSelection}
                   />
                   {gen?.error && <p className="error">{gen.error}</p>}
                   {gen?.summary && <p className="hint">{gen.summary}</p>}

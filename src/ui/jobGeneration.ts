@@ -11,6 +11,7 @@ import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
 import { offsetInward } from '../cam/clipper';
+import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
@@ -72,11 +73,12 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
         startDepth: 0,
         endDepth: 2,
         allowance: 0,
+        indexAngle: 0,
         stepDown,
         stepOver: defaultStepOver(tool),
       };
     case 'drill':
-      return { ...base, kind, depth: 5, peckDepth: 2 };
+      return { ...base, kind, depth: 5, peckDepth: 2, indexAngle: 0 };
     case 'profile':
       return {
         ...base,
@@ -85,6 +87,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
         startDepth: 0,
         endDepth: 2,
         allowance: 0,
+        indexAngle: 0,
         stepDown,
         side: 'outside',
       };
@@ -92,6 +95,31 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
 }
 
 const fail = (error: string): GeneratedOp => ({ moves: [], minutes: 0, error, summary: null });
+
+/**
+ * The indexed cutting frame for an op: null for flat work (angle 0 or box
+ * stock), else a rotation about the stock axis. When non-null the op also
+ * emits one rapid A positioning move before its flat moves.
+ */
+function indexFrame(
+  op: { indexAngle?: number },
+  stock: Stock,
+): { rotate?: (p: { x: number; y: number; z: number }) => import('three').Vector3; aMove?: Move } {
+  const angle = op.indexAngle ?? 0;
+  if (angle === 0) return {};
+  if (stock.kind !== 'cylinder') {
+    throw new Error('indexing needs cylinder stock');
+  }
+  return {
+    rotate: indexedPointRotation(angle, stock.calibration.axisZ),
+    aMove: {
+      words: { a: angle },
+      feed: 0,
+      rapid: true,
+      comment: `index stock to A${angle}°`,
+    },
+  };
+}
 
 /** The tool's own Makera preset for the stock material, if one matches
  * ('aluminum-6061' matches preset 'Aluminum'; unmatched falls back). */
@@ -204,7 +232,14 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
 
       case 'pocket': {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
-        const src = pocketRegionsFromSelection(ctx.geometry, ctx.features, op.featureIds, ctx.transform);
+        const { rotate, aMove } = indexFrame(op, ctx.stock);
+        const src = pocketRegionsFromSelection(
+          ctx.geometry,
+          ctx.features,
+          op.featureIds,
+          ctx.transform,
+          rotate,
+        );
         if (!src) return fail('select features (circles or flat faces)');
         const crown = stockTopZ(ctx.stock);
         const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
@@ -236,16 +271,23 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           tool,
         );
         return {
-          moves: res.moves,
+          moves: aMove ? [aMove, ...res.moves] : res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}${aMove ? `, indexed A${op.indexAngle ?? 0}°` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
       case 'drill': {
         if (!ctx.features) return fail('load a model first');
-        const targets = drillTargetsFromSelection(ctx.features, op.featureIds, ctx.transform, op.depth);
+        const { rotate, aMove } = indexFrame(op, ctx.stock);
+        const targets = drillTargetsFromSelection(
+          ctx.features,
+          op.featureIds,
+          ctx.transform,
+          op.depth,
+          rotate,
+        );
         if (!targets) return fail('select holes (interior circles)');
         const res = drill(
           {
@@ -260,16 +302,23 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           tool,
         );
         return {
-          moves: res.moves,
+          moves: aMove ? [aMove, ...res.moves] : res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.holes} hole(s), ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.holes} hole(s)${aMove ? ` at A${op.indexAngle ?? 0}°` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
       case 'profile': {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
-        const src = pocketRegionsFromSelection(ctx.geometry, ctx.features, op.featureIds, ctx.transform);
+        const { rotate, aMove } = indexFrame(op, ctx.stock);
+        const src = pocketRegionsFromSelection(
+          ctx.geometry,
+          ctx.features,
+          op.featureIds,
+          ctx.transform,
+          rotate,
+        );
         if (!src) return fail('select features (circles or flat faces)');
         const crown = stockTopZ(ctx.stock);
         const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
@@ -296,10 +345,10 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           tool,
         );
         return {
-          moves: res.moves,
+          moves: aMove ? [aMove, ...res.moves] : res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}${aMove ? `, indexed A${op.indexAngle ?? 0}°` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

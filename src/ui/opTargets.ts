@@ -37,14 +37,20 @@ function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: numbe
  * rectangle. `selectionZ` is the highest selected plane (with several
  * faces at different heights, the shallowest wins — add another op for
  * deeper ones). Mixing faces and holes in one op is rejected.
+ * `indexRotation` maps points into the indexed cutting frame (see
+ * src/cam/indexing.ts) so radial features face the cutter.
  */
 export function pocketRegionsFromSelection(
   geometry: THREE.BufferGeometry,
   features: DetectedFeatures,
   selection: string[],
   transform: ModelTransform,
+  indexRotation?: (p: { x: number; y: number; z: number }) => THREE.Vector3,
 ): PocketSource | null {
-  const xf = transformFn(transform);
+  const xf0 = transformFn(transform);
+  const xf = indexRotation
+    ? (p: { x: number; y: number; z: number }) => indexRotation(xf0(p))
+    : xf0;
   const circleRegions: Vec2[][] = [];
   let rimZ = -Infinity;
 
@@ -111,14 +117,19 @@ export function pocketRegionsFromSelection(
 /**
  * Drill targets from the selection: interior-loop (hole) circles aligned
  * with the machine Z axis, drilled to `depth` below the rim.
+ * `indexRotation` maps points into the indexed cutting frame.
  */
 export function drillTargetsFromSelection(
   features: DetectedFeatures,
   selection: string[],
   transform: ModelTransform,
   depth: number,
+  indexRotation?: (p: { x: number; y: number; z: number }) => THREE.Vector3,
 ): DrillOp['targets'] | null {
-  const xf = transformFn(transform);
+  const xf0 = transformFn(transform);
+  const xf = indexRotation
+    ? (p: { x: number; y: number; z: number }) => indexRotation(xf0(p))
+    : xf0;
   const targets: DrillOp['targets'] = [];
   for (const c of features.circles) {
     if (!c.inner || !selection.includes(c.id)) continue;

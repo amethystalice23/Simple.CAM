@@ -67,6 +67,7 @@ const pocketOp: Extract<JobOp, { kind: 'pocket' }> = {
   startDepth: 4, // the rim, 4mm below the crown
   endDepth: 6,
   allowance: 0,
+  indexAngle: 0,
   stepDown: 0.5,
   stepOver: 1,
 };
@@ -77,6 +78,7 @@ const drillOp: Extract<JobOp, { kind: 'drill' }> = {
   kind: 'drill',
   depth: 5,
   peckDepth: 2,
+  indexAngle: 0,
 };
 const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   id: 'op3',
@@ -87,6 +89,7 @@ const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   startDepth: 4,
   endDepth: 5,
   allowance: 0,
+  indexAngle: 0,
   stepDown: 0.5,
   side: 'online',
 };
@@ -244,6 +247,42 @@ describe('generateJobOp', () => {
     const res = generateJobOp({ ...pocketOp, featureIds: [] }, ctx);
     expect(res.moves).toEqual([]);
     expect(res.error).toContain('select features');
+  });
+
+  it('drills a radial hole via an index angle (A positioning move first)', () => {
+    // radial hole plate on cylinder stock: holes face +Y, 6mm off the axis
+    const geo = plateWithHole();
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, 6, 0);
+    const f = detectFeatures(geo);
+    const radialHoleId = f.circles.find(
+      (c) => c.inner && Math.abs(c.axis.y) > 0.99 && c.center.y > 6 - 1e-9,
+    )!.id;
+    const op: Extract<JobOp, { kind: 'drill' }> = {
+      ...drillOp,
+      featureIds: [radialHoleId],
+      indexAngle: 90,
+    };
+    const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
+      kind: 'cylinder',
+      length: 100,
+      xOrigin: 'min',
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+      materialId: 'aluminum-6061',
+    };
+    const res = generateJobOp(op, { ...ctx, stock: cylStock, geometry: geo, features: f });
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(1);
+    expect(res.moves[0].rapid).toBe(true);
+    expect(res.moves[0].words.a).toBeCloseTo(90, 9); // index first, then drill
+    expect(res.moves[0].words.z).toBeUndefined(); // pure A positioning move
+    expect(res.summary).toContain('A90');
+  });
+
+  it('rejects indexing on box stock', () => {
+    const res = generateJobOp({ ...pocketOp, indexAngle: 90 }, ctx);
+    expect(res.moves).toEqual([]);
+    expect(res.error).toContain('indexing needs cylinder stock');
   });
 
   it('drills selected interior circles', () => {
