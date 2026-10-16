@@ -89,35 +89,38 @@ function DepthFields(props: {
   );
 }
 
-/** Index-angle controls for pocket/profile/drill on cylinder stock. */
-function IndexedFields(props: {
-  op: Extract<JobOp, { kind: 'pocket' | 'profile' | 'drill' }>;
+/** The index op: absolute A, plus align-the-selection convenience. */
+function IndexFields(props: {
+  op: Extract<JobOp, { kind: 'index' }>;
   stockKind: Stock['kind'];
   onIndexToSelection: (op: JobOp) => void;
   onChange: (op: JobOp) => void;
 }) {
   const { op } = props;
-  if (props.stockKind !== 'cylinder') return null;
+  if (props.stockKind !== 'cylinder') {
+    return <p className="hint">indexing needs cylinder stock</p>;
+  }
   return (
     <>
       <NumberField
-        label="Index angle (°)"
-        value={op.indexAngle ?? 0}
+        label="Index angle (°, absolute A)"
+        value={op.angle}
         step={15}
-        onCommit={(v) => props.onChange({ ...op, indexAngle: v } as JobOp)}
+        onCommit={(v) => props.onChange({ ...op, angle: v })}
       />
       <div className="buttons">
         <button
           type="button"
-          className="secondary"
           disabled={op.featureIds.length === 0}
           onClick={() => props.onIndexToSelection(op)}
-          title="Index the stock so the selected feature faces the cutter"
+          title="Index so the selected face's normal (or hole's axis) aligns with Z"
         >
           Index to selection
         </button>
       </div>
-      <p className="hint">0 = flat (no indexing) · the stock freezes at A while this op cuts</p>
+      <p className="hint">
+        the stock freezes at this A — every op below runs in the rotated frame
+      </p>
     </>
   );
 }
@@ -133,6 +136,15 @@ function ParamFields(props: {
   const { op, onChange } = props;
   const upd = (patch: Partial<JobOp>) => onChange({ ...op, ...patch } as JobOp);
   switch (op.kind) {
+    case 'index':
+      return (
+        <IndexFields
+          op={op}
+          stockKind={props.stockKind}
+          onIndexToSelection={props.onIndexToSelection}
+          onChange={props.onChange}
+        />
+      );
     case 'faceCylinder':
       return (
         <>
@@ -152,7 +164,6 @@ function ParamFields(props: {
       return (
         <>
           <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
-          <IndexedFields op={op} stockKind={props.stockKind} onIndexToSelection={props.onIndexToSelection} onChange={props.onChange} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
@@ -162,7 +173,6 @@ function ParamFields(props: {
         <>
           <NumberField label="Depth (mm)" value={op.depth} min={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
           <NumberField label="Peck (mm)" value={op.peckDepth} min={0} onCommit={(v) => upd({ peckDepth: v } as Partial<JobOp>)} />
-          <IndexedFields op={op} stockKind={props.stockKind} onIndexToSelection={props.onIndexToSelection} onChange={props.onChange} />
         </>
       );
     case 'profile':
@@ -180,7 +190,6 @@ function ParamFields(props: {
             </select>
           </label>
           <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
-          <IndexedFields op={op} stockKind={props.stockKind} onIndexToSelection={props.onIndexToSelection} onChange={props.onChange} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
         </>
       );

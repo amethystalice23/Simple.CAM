@@ -36,14 +36,32 @@ export interface GenContext {
   features: DetectedFeatures | null;
   transform: ModelTransform;
   tools: Tool[];
+  /** the cutting datum for this op: the absolute A established by the
+   * latest Index op preceding it in the job sequence (0 = flat) */
+  datumAngle: number;
 }
 
 export const OP_KINDS: { kind: JobOp['kind']; label: string }[] = [
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
   { kind: 'drill', label: 'Drill' },
+  { kind: 'index', label: 'Index (4th axis)' },
   { kind: 'faceCylinder', label: 'Face cylinder' },
 ];
+
+/**
+ * The absolute A active when `opId` starts: the angle of the latest Index
+ * op preceding it (0 before any indexing). Index ops themselves establish
+ * the datum for everything after them.
+ */
+export function datumAngleBefore(ops: JobOp[], opId: string): number {
+  let angle = 0;
+  for (const op of ops) {
+    if (op.id === opId) break;
+    if (op.kind === 'index') angle = op.angle;
+  }
+  return angle;
+}
 
 let opCount = 0;
 /** Loaded jobs carry their own op ids — seed the counter above them so a
@@ -73,12 +91,13 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
         startDepth: 0,
         endDepth: 2,
         allowance: 0,
-        indexAngle: 0,
         stepDown,
         stepOver: defaultStepOver(tool),
       };
     case 'drill':
-      return { ...base, kind, depth: 5, peckDepth: 2, indexAngle: 0 };
+      return { ...base, kind, depth: 5, peckDepth: 2 };
+    case 'index':
+      return { ...base, kind, angle: 90 };
     case 'profile':
       return {
         ...base,
@@ -87,7 +106,6 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
         startDepth: 0,
         endDepth: 2,
         allowance: 0,
-        indexAngle: 0,
         stepDown,
         side: 'outside',
       };
@@ -97,28 +115,20 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): J
 const fail = (error: string): GeneratedOp => ({ moves: [], minutes: 0, error, summary: null });
 
 /**
- * The indexed cutting frame for an op: null for flat work (angle 0 or box
- * stock), else a rotation about the stock axis. When non-null the op also
- * emits one rapid A positioning move before its flat moves.
+ * The indexed cutting frame for an op: null for flat work (datum 0 or box
+ * stock), else a rotation about the stock axis mapping the A=0 features
+ * into the frame the stock sits in at the datum angle. The A positioning
+ * move is emitted by the Index op itself — these ops run after it.
  */
 function indexFrame(
-  op: { indexAngle?: number },
+  datumAngle: number,
   stock: Stock,
-): { rotate?: (p: { x: number; y: number; z: number }) => import('three').Vector3; aMove?: Move } {
-  const angle = op.indexAngle ?? 0;
-  if (angle === 0) return {};
+): { rotate?: (p: { x: number; y: number; z: number }) => import('three').Vector3 } {
+  if (datumAngle === 0) return {};
   if (stock.kind !== 'cylinder') {
-    throw new Error('indexing needs cylinder stock');
+    throw new Error('indexing needs cylinder stock — the job has an index datum on box stock');
   }
-  return {
-    rotate: indexedPointRotation(angle, stock.calibration.axisZ),
-    aMove: {
-      words: { a: angle },
-      feed: 0,
-      rapid: true,
-      comment: `index stock to A${angle}°`,
-    },
-  };
+  return { rotate: indexedPointRotation(datumAngle, stock.calibration.axisZ) };
 }
 
 /** The tool's own Makera preset for the stock material, if one matches
@@ -203,6 +213,22 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
 
   try {
     switch (op.kind) {
+      case 'index': {
+        if (ctx.stock.kind !== 'cylinder') return fail('indexing needs cylinder stock');
+        return {
+          moves: [
+            {
+              words: { a: op.angle },
+              feed: 0,
+              rapid: true,
+              comment: `index stock to A${op.angle}° — datum for following ops`,
+            },
+          ],
+          minutes: 0,
+          error: null,
+          summary: `index A${op.angle}° (datum for the ops below)`,
+        };
+      }
       case 'faceCylinder': {
         if (ctx.stock.kind !== 'cylinder') return fail('needs cylinder stock');
         const [xStart, xEnd] = originSpan(ctx.stock.xOrigin, ctx.stock.length);
@@ -232,7 +258,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
 
       case 'pocket': {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
-        const { rotate, aMove } = indexFrame(op, ctx.stock);
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const src = pocketRegionsFromSelection(
           ctx.geometry,
           ctx.features,
@@ -271,16 +297,16 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           tool,
         );
         return {
-          moves: aMove ? [aMove, ...res.moves] : res.moves,
+          moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}${aMove ? `, indexed A${op.indexAngle ?? 0}°` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
       case 'drill': {
         if (!ctx.features) return fail('load a model first');
-        const { rotate, aMove } = indexFrame(op, ctx.stock);
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const targets = drillTargetsFromSelection(
           ctx.features,
           op.featureIds,
@@ -302,16 +328,16 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           tool,
         );
         return {
-          moves: aMove ? [aMove, ...res.moves] : res.moves,
+          moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.holes} hole(s)${aMove ? ` at A${op.indexAngle ?? 0}°` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.holes} hole(s), ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
       case 'profile': {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
-        const { rotate, aMove } = indexFrame(op, ctx.stock);
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const src = pocketRegionsFromSelection(
           ctx.geometry,
           ctx.features,
@@ -345,10 +371,10 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           tool,
         );
         return {
-          moves: aMove ? [aMove, ...res.moves] : res.moves,
+          moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}${aMove ? `, indexed A${op.indexAngle ?? 0}°` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

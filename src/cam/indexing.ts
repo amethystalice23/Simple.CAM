@@ -33,3 +33,17 @@ export function indexToFaceTop(p: { x: number; y: number; z: number }, axisZ: nu
   const deg = (Math.atan2(p.y, p.z - axisZ) * 180) / Math.PI;
   return ((deg % 360) + 360) % 360;
 }
+
+/**
+ * The index angle that aligns a DIRECTION with machine +Z — the general
+ * rule for "Index to selection": a face's normal (or a hole's axis)
+ * rotated to point straight up. Rotation about X cannot remove an X
+ * component, so directions tilted in X are best-effort (their YZ
+ * projection is aligned).
+ */
+export function indexToAlignDirection(dir: { x: number; y: number; z: number }): number {
+  const len = Math.hypot(dir.x, dir.y, dir.z);
+  if (len < 1e-9) return 0;
+  const deg = (Math.atan2(dir.y / len, dir.z / len) * 180) / Math.PI;
+  return ((deg % 360) + 360) % 360;
+}

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { BufferGeometry, Vector3 } from 'three';
+import type { BufferGeometry } from 'three';
+import { Vector3 } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { axialExtentX, detectFeatures } from '../cam/features';
-import { indexedPointRotation, indexToFaceTop } from '../cam/indexing';
+import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
 import { identityTransform } from '../core/types';
@@ -24,12 +25,12 @@ import {
   defaultCylinder,
 } from './primitives';
 import {
+  datumAngleBefore,
   generateJobOp,
   newJobOp,
   prefillDepths,
   seedJobOpIds,
   type GeneratedOp,
-  type GenContext,
 } from './jobGeneration';
 import { decodeStl, downloadJobFile, jobFingerprint, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
@@ -167,9 +168,10 @@ export function App() {
     return null;
   };
 
-  /** a feature's height in an op's cutting frame (indexed rotation applied) */
+  /** a feature's height in an op's cutting frame: the datum established by
+   * the latest Index op preceding it in the sequence */
   const featureDepthInFrame = (op: JobOp, p: Vector3): number => {
-    const angle = op.kind === 'faceCylinder' ? 0 : (op.indexAngle ?? 0);
+    const angle = datumAngleBefore(ops, op.id);
     if (stock.kind === 'cylinder' && angle !== 0) {
       return indexedPointRotation(angle, stock.calibration.axisZ)(p).z;
     }
@@ -242,8 +244,8 @@ export function App() {
     setSelectedObjectId('model');
   };
 
-  /** everything generation needs, in one memo */
-  const genCtx: GenContext = useMemo(
+  /** everything generation needs, in one memo (datumAngle varies per op) */
+  const genCtx = useMemo(
     () => ({ stock, geometry, features, transform, tools }),
     [stock, geometry, features, transform, tools],
   );
@@ -270,7 +272,11 @@ export function App() {
 
   const recalcAll = () => {
     const next: Record<string, GeneratedOp> = {};
-    for (const o of ops) next[o.id] = generateJobOp(o, genCtx);
+    let datum = 0; // Index ops establish the datum for the ops after them
+    for (const o of ops) {
+      next[o.id] = generateJobOp(o, { ...genCtx, datumAngle: datum });
+      if (o.kind === 'index') datum = o.angle;
+    }
     setGenerated(next);
     updateJobOutput(next);
     setShowPreview(true); // recalculate turns the path display on
@@ -280,7 +286,7 @@ export function App() {
   const recalcOne = (id: string) => {
     const op = ops.find((o) => o.id === id);
     if (!op) return;
-    const result = generateJobOp(op, genCtx);
+    const result = generateJobOp(op, { ...genCtx, datumAngle: datumAngleBefore(ops, id) });
     const next = { ...generated, [id]: result };
     setGenerated(next);
     updateJobOutput(next);
@@ -324,13 +330,27 @@ export function App() {
     setOps((prev) => prev.map((o) => (o.id === op.id ? next : o)));
   };
 
-  /** index the stock so the op's first selected feature faces the cutter */
+  /** index the stock so the op's first selected feature faces the cutter:
+   * a face's normal (or hole's axis) aligned with machine +Z */
   const indexToSelection = (op: JobOp) => {
-    if (stock.kind !== 'cylinder' || op.kind === 'faceCylinder') return;
-    const p = op.featureIds.length > 0 ? featureMachinePoint(op.featureIds[0]) : null;
-    if (!p) return;
-    const angle = indexToFaceTop(p, stock.calibration.axisZ);
-    setOps((prev) => prev.map((o) => (o.id === op.id ? ({ ...o, indexAngle: angle } as JobOp) : o)));
+    if (stock.kind !== 'cylinder' || op.kind !== 'index') return;
+    const id = op.featureIds[0];
+    if (!id || !features) return;
+    const xf = transformFn(transform);
+    let dir: Vector3 | null = null;
+    const c = features.circles.find((x) => x.id === id);
+    if (c) dir = xf(c.axis).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
+    const pl = features.planes.find((x) => x.id === id);
+    if (pl) dir = xf(pl.normal).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
+    const e = features.edges.find((x) => x.id === id);
+    if (!dir && e) {
+      // edges have no facing direction: fall back to their midpoint's radial
+      const mid = xf(e.a).add(xf(e.b)).multiplyScalar(0.5);
+      dir = mid.sub(new Vector3(0, 0, stock.calibration.axisZ)).normalize();
+    }
+    if (!dir) return;
+    const angle = indexToAlignDirection(dir);
+    setOps((prev) => prev.map((o) => (o.id === op.id ? { ...o, angle } : o)));
   };
 
   useEffect(() => {

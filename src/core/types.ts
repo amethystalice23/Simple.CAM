@@ -328,6 +328,17 @@ export type JobOp =
       rotation: 'cw' | 'ccw';
     })
   | (JobOpBase & {
+      kind: 'index';
+      /**
+       * Absolute machine A, degrees: freeze the stock at this angle. This
+       * op establishes the cutting datum for every op after it in the
+       * sequence — subsequent pocket/profile/drill ops run in the rotated
+       * frame (their selected features mapped through the rotation, the
+       * indexed face "vertically up"). Cylinder stock only.
+       */
+      angle: number;
+    })
+  | (JobOpBase & {
       kind: 'pocket';
       /**
        * What the selected features prefill: 'floor' sets the END depth from
@@ -342,12 +353,6 @@ export type JobOp =
       endDepth: number;
       /** roughing stock left on the floor and walls, mm; 0 = finish to size */
       allowance: number;
-      /**
-       * 4th-axis index angle, degrees: the stock frozen at A while the flat
-       * engine runs in the rotated frame. 0 = no indexing. Cylinder stock
-       * only.
-       */
-      indexAngle: number;
       stepDown: number;
       stepOver: number;
     })
@@ -355,8 +360,6 @@ export type JobOp =
       kind: 'drill';
       depth: number;
       peckDepth: number;
-      /** 4th-axis index angle, degrees; 0 = no indexing (cylinder stock only) */
-      indexAngle: number;
     })
   | (JobOpBase & {
       kind: 'profile';
@@ -367,8 +370,6 @@ export type JobOp =
       endDepth: number;
       /** roughing stock left on the floor and walls, mm; 0 = finish to size */
       allowance: number;
-      /** 4th-axis index angle, degrees; 0 = no indexing (cylinder stock only) */
-      indexAngle: number;
       stepDown: number;
       side: 'outside' | 'inside' | 'online';
     });

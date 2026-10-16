@@ -35,7 +35,6 @@ const ops: JobOp[] = [
     startDepth: 0,
     endDepth: 2,
     allowance: 0,
-    indexAngle: 0,
     stepDown: 0.5,
     stepOver: 3,
   },
