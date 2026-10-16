@@ -12,7 +12,8 @@ import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
-import type { JobOp, ModelTransform, Move, Stock, Tool } from '../core/types';
+import type { MaterialPreset } from '../core/materials';
+import type { JobOp, ModelTransform, Move, Stock, Tool, ToolPreset } from '../core/types';
 import { originSpan } from '../core/types';
 import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 
@@ -42,29 +43,73 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string }[] = [
 ];
 
 let opCount = 0;
-/** New op of the given kind with sensible default parameters. */
-export function newJobOp(kind: JobOp['kind'], toolId: string): JobOp {
-  const base = { id: `jobop-${++opCount}`, toolId, featureIds: [] };
+/**
+ * New op of the given kind with defaults derived from the tool and stock
+ * material (preset step-downs and a diameter-fraction step-over — never a
+ * fixed guess that ignores the cutter size).
+ */
+export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): JobOp {
+  const base = { id: `jobop-${++opCount}`, toolId: tool.id, featureIds: [] };
+  const stepDown = defaultStepDown(tool, materialId);
   switch (kind) {
     case 'faceCylinder':
-      return { ...base, kind, targetDiameter: 40, stepDown: 1, finishAllowance: 0.2, rotation: 'cw' };
+      return { ...base, kind, targetDiameter: 40, stepDown, finishAllowance: 0.2, rotation: 'cw' };
     case 'pocket':
-      return { ...base, kind, depth: 2, stepDown: 1, stepOver: 3 };
+      return { ...base, kind, depth: 2, stepDown, stepOver: defaultStepOver(tool) };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
     case 'profile':
-      return { ...base, kind, depth: 2, stepDown: 1, allowance: 0, side: 'outside' };
+      return { ...base, kind, depth: 2, stepDown, allowance: 0, side: 'outside' };
   }
 }
 
 const fail = (error: string): GeneratedOp => ({ moves: [], minutes: 0, error, summary: null });
 
+/** The tool's own Makera preset for the stock material, if one matches
+ * ('aluminum-6061' matches preset 'Aluminum'; unmatched falls back). */
+export function toolPresetFor(tool: Tool, materialId: string): ToolPreset | null {
+  const key = materialId.split('-')[0].toLowerCase();
+  return tool.presets?.find((p) => p.material.toLowerCase().includes(key)) ?? null;
+}
+
+/** Feeds for an op: the tool's own preset for the stock material wins,
+ * else the material-preset tables. */
+function feedsFor(tool: Tool, material: MaterialPreset) {
+  const preset = toolPresetFor(tool, material.id);
+  const feed = preset?.feed ?? material.feedByTool[tool.type];
+  const plungeFeed =
+    preset?.plungeFeed ?? Math.round(material.feedByTool[tool.type] * material.plungeFraction);
+  return { feed, plungeFeed };
+}
+
+/**
+ * Default radial step-over: a fraction of the cutter diameter — no tool
+ * library carries step-over, it is a strategy parameter.
+ */
+export function defaultStepOver(tool: Tool): number {
+  return Math.max(0.1, Math.round(tool.diameter * 0.5 * 10) / 10);
+}
+
+/**
+ * Default axial step-down: the tool's own Makera preset value for the
+ * stock material when available, capped at half the cutter diameter (small
+ * tools must not bury themselves) and by the material tables otherwise.
+ */
+export function defaultStepDown(tool: Tool, materialId: string): number {
+  const material = getMaterial(materialId);
+  const preset = toolPresetFor(tool, materialId);
+  const raw =
+    preset?.stepDown && preset.stepDown > 0
+      ? preset.stepDown
+      : material.stepDownByTool[tool.type];
+  return Math.max(0.05, Math.min(raw, tool.diameter * 0.5));
+}
+
 export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
   const tool = ctx.tools.find((t) => t.id === op.toolId);
   if (!tool) return fail('tool missing from library');
   const material = getMaterial(ctx.stock.materialId);
-  const feed = material.feedByTool[tool.type];
-  const plungeFeed = Math.round(feed * material.plungeFraction);
+  const { feed, plungeFeed } = feedsFor(tool, material);
 
   try {
     switch (op.kind) {
@@ -97,8 +142,16 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
 
       case 'pocket': {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
-        const src = pocketRegionsFromSelection(ctx.geometry, ctx.features, op.featureIds, ctx.transform);
+        const src = pocketRegionsFromSelection(
+          ctx.geometry,
+          ctx.features,
+          op.featureIds,
+          ctx.transform,
+          ctx.stock,
+        );
         if (!src) return fail('select features (circles or flat faces)');
+        // selected faces are the floor; holes use the depth below the rim
+        const floorZ = src.floorZ ?? src.topZ - op.depth;
         const res = pocket2d(
           {
             kind: 'pocket',
@@ -106,7 +159,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             toolId: tool.id,
             regions: src.regions,
             topZ: src.topZ,
-            floorZ: src.topZ - op.depth,
+            floorZ,
             stepDown: op.stepDown,
             stepOver: op.stepOver,
             feed,
@@ -115,11 +168,15 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           },
           tool,
         );
+        const range =
+          src.floorZ !== null
+            ? `z${src.topZ.toFixed(1)} → z${floorZ.toFixed(1)}`
+            : `${op.depth.toFixed(1)}mm below rim`;
         return {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes / ${res.levels} level(s), ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} passes / ${res.levels} level(s), ${range}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
@@ -134,7 +191,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             toolId: tool.id,
             targets,
             peckDepth: op.peckDepth,
-            plungeFeed: material.feedByTool.drill, // drill preset feed IS the plunge feed
+            plungeFeed: toolPresetFor(tool, material.id)?.plungeFeed ?? material.feedByTool.drill,
             safeClearance: 5,
           },
           tool,
@@ -149,8 +206,15 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
 
       case 'profile': {
         if (!ctx.geometry || !ctx.features) return fail('load a model first');
-        const src = pocketRegionsFromSelection(ctx.geometry, ctx.features, op.featureIds, ctx.transform);
+        const src = pocketRegionsFromSelection(
+          ctx.geometry,
+          ctx.features,
+          op.featureIds,
+          ctx.transform,
+          ctx.stock,
+        );
         if (!src) return fail('select features (circles or flat faces)');
+        const floorZ = src.floorZ ?? src.topZ - op.depth;
         const res = profile2d(
           {
             kind: 'profile',
@@ -160,7 +224,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             side: op.side,
             allowance: op.allowance,
             topZ: src.topZ,
-            floorZ: src.topZ - op.depth,
+            floorZ,
             stepDown: op.stepDown,
             feed,
             plungeFeed,
@@ -168,11 +232,15 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           },
           tool,
         );
+        const range =
+          src.floorZ !== null
+            ? `z${src.topZ.toFixed(1)} → z${floorZ.toFixed(1)}`
+            : `${op.depth.toFixed(1)}mm below rim`;
         return {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} wall pass(es) / ${res.levels} level(s), ${range}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

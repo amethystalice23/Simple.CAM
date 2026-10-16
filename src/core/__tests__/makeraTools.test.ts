@@ -54,4 +54,16 @@ describe('imported Makera tool library', () => {
       expect(t.subtype?.length ?? 0).toBeGreaterThan(0);
     }
   });
+
+  it('imports Makera per-material cutting presets where present', () => {
+    const withPresets = MAKERA_TOOLS.filter((t) => t.presets);
+    expect(withPresets.length).toBeGreaterThan(50);
+    for (const t of withPresets) {
+      for (const p of t.presets!) {
+        expect(p.feed).toBeGreaterThan(0);
+        expect(p.plungeFeed).toBeGreaterThan(0);
+        expect(p.stepDown).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
 });

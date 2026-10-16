@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { JobOp, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
-import { newJobOp, OP_KINDS } from './jobGeneration';
+import { defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
 import { NumberField } from './fields';
 
 interface Props {
@@ -13,6 +13,8 @@ interface Props {
   showPreview: boolean;
   hasModel: boolean;
   stockKind: Stock['kind'];
+  /** stock material id, for tool-appropriate step defaults */
+  materialId: string;
   onAddOp: () => void;
   onChangeOp: (op: JobOp) => void;
   onDeleteOp: (id: string) => void;
@@ -47,7 +49,12 @@ function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
     case 'pocket':
       return (
         <>
-          <NumberField label="Depth (mm)" value={op.depth} min={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
+          <NumberField
+            label="Depth below rim (holes)"
+            value={op.depth}
+            min={0.1}
+            onCommit={(v) => upd({ depth: v } as Partial<JobOp>)}
+          />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
@@ -73,7 +80,12 @@ function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
               <option value="online">on line</option>
             </select>
           </label>
-          <NumberField label="Depth (mm)" value={op.depth} min={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
+          <NumberField
+            label="Depth below rim (holes)"
+            value={op.depth}
+            min={0.1}
+            onCommit={(v) => upd({ depth: v } as Partial<JobOp>)}
+          />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Allowance (mm)" value={op.allowance} min={0} step={0.05} onCommit={(v) => upd({ allowance: v } as Partial<JobOp>)} />
         </>
@@ -83,6 +95,21 @@ function ParamFields(props: { op: JobOp; onChange: (op: JobOp) => void }) {
 
 export function OpsPanel(props: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
+
+  /** tool change re-derives the step defaults for the new cutter */
+  const changeTool = (op: JobOp, toolId: string) => {
+    const t = props.tools.find((x) => x.id === toolId);
+    let next: JobOp = { ...op, toolId };
+    if (t) {
+      const stepDown = defaultStepDown(t, props.materialId);
+      if (op.kind === 'pocket') {
+        next = { ...next, stepDown, stepOver: defaultStepOver(t) } as JobOp;
+      } else if (op.kind === 'profile' || op.kind === 'faceCylinder') {
+        next = { ...next, stepDown } as JobOp;
+      }
+    }
+    props.onChangeOp(next);
+  };
 
   return (
     <section>
@@ -123,8 +150,11 @@ export function OpsPanel(props: Props) {
                   value={op.kind}
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => {
-                    const next = newJobOp(e.target.value as JobOp['kind'], op.toolId);
-                    props.onChangeOp({ ...next, id: op.id, featureIds: op.featureIds });
+                    const t = props.tools.find((x) => x.id === op.toolId);
+                    const next = t
+                      ? newJobOp(e.target.value as JobOp['kind'], t, props.materialId)
+                      : null;
+                    if (next) props.onChangeOp({ ...next, id: op.id, featureIds: op.featureIds });
                   }}
                 >
                   {OP_KINDS.map((k) => (
@@ -176,10 +206,7 @@ export function OpsPanel(props: Props) {
                   )}
                   <label className="field">
                     <span>Tool</span>
-                    <select
-                      value={op.toolId}
-                      onChange={(e) => props.onChangeOp({ ...op, toolId: e.target.value })}
-                    >
+                    <select value={op.toolId} onChange={(e) => changeTool(op, e.target.value)}>
                       {props.tools.map((t) => (
                         <option key={t.id} value={t.id}>
                           {t.name} ({t.type} Ø{t.diameter})

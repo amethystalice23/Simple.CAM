@@ -99,6 +99,18 @@ function toTool(remoteName, type, t) {
     diameter: g.DC,
     spindleRpm: 18000, // Carvera spindle ceiling; per-op feeds/speeds come from material presets
   };
+  // Fusion start-values: Makera's per-tool, per-material cutting presets
+  const presets = (t['start-values']?.presets ?? [])
+    .filter((p) => typeof p.name === 'string' && p.name && Number.isFinite(p.v_f) && p.v_f > 0)
+    .map((p) => ({
+      material: p.name,
+      spindleRpm: Math.round(p.n ?? 18000),
+      feed: Math.round(p.v_f),
+      plungeFeed: Math.round(p.v_f_plunge ?? p.v_f * 0.4),
+      stepDown: Number(p.stepdown?.toFixed(3)) ?? 0,
+      rampFeed: Math.round(p.v_f_ramp ?? p.v_f * 0.6),
+    }));
+  if (presets.length > 0) tool.presets = presets;
   if (typeof g.SFDM === 'number') tool.shaftDiameter = g.SFDM;
   if (typeof g.LCF === 'number') tool.fluteLength = g.LCF;
   if (typeof g.OAL === 'number') tool.overallLength = g.OAL;

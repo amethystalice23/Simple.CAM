@@ -34,7 +34,26 @@ export interface Tool {
   drillPointAngle?: number;
   /** thread pitch, mm (threadmill) */
   pitch?: number;
+  /**
+   * Makera's per-tool, per-material cutting presets (imported from the
+   * Fusion start-values; see scripts/import-makera-tools.mjs). Generation
+   * prefers the preset matching the stock material, falling back to the
+   * material-preset tables.
+   */
+  presets?: ToolPreset[];
   spindleRpm: number;
+}
+
+export interface ToolPreset {
+  /** preset material name, e.g. 'Aluminum' */
+  material: string;
+  spindleRpm: number;
+  /** XY feed, mm/min */
+  feed: number;
+  plungeFeed: number;
+  /** Makera's recommended axial DOC for this tool+material, mm */
+  stepDown: number;
+  rampFeed: number;
 }
 
 export interface AxisWords {

@@ -228,7 +228,7 @@ export function App() {
   };
 
   const addOp = () => {
-    const op = newJobOp('pocket', tool.id);
+    const op = newJobOp('pocket', tool, stock.materialId);
     setOps((prev) => [...prev, op]);
     setExpandedOpId(op.id);
   };
@@ -389,6 +389,7 @@ export function App() {
                 showPreview={showPreview}
                 hasModel={!!geometry}
                 stockKind={stock.kind}
+                materialId={stock.materialId}
                 onAddOp={addOp}
                 onChangeOp={(op) => setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)))}
                 onDeleteOp={(id) => {

@@ -3,10 +3,23 @@ import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
 import type { JobOp, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
-import { generateJobOp, newJobOp, type GenContext } from '../jobGeneration';
+import {
+  defaultStepDown,
+  defaultStepOver,
+  generateJobOp,
+  newJobOp,
+  type GenContext,
+} from '../jobGeneration';
 
 const tool: Tool = { id: 't1', name: '6mm flat', type: 'flat', diameter: 6, spindleRpm: 18000 };
 const smallTool: Tool = { id: 't3', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
+const tinyTool: Tool = {
+  id: 't4',
+  name: '2.175mm corn',
+  type: 'corn',
+  diameter: 2.175,
+  spindleRpm: 18000,
+};
 const drillTool: Tool = { id: 't2', name: '3mm drill', type: 'drill', diameter: 3, spindleRpm: 18000 };
 
 const boxStock: Extract<Stock, { kind: 'box' }> = {
@@ -16,7 +29,7 @@ const boxStock: Extract<Stock, { kind: 'box' }> = {
   sizeZ: 10,
   origin: { x: 'min', y: 'min', z: 'max' },
   materialId: 'aluminum-6061',
-};
+}; // crown at machine Z0
 
 function plateWithHole(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -38,7 +51,7 @@ const ctx: GenContext = {
   geometry,
   features,
   transform: identityTransform(),
-  tools: [tool, drillTool, smallTool],
+  tools: [tool, drillTool, smallTool, tinyTool],
 };
 
 /** literal fixtures with narrowed branch types */
@@ -48,8 +61,8 @@ const pocketOp: Extract<JobOp, { kind: 'pocket' }> = {
   featureIds: [holeCircleId],
   kind: 'pocket',
   depth: 2,
-  stepDown: 1,
-  stepOver: 3,
+  stepDown: 0.5,
+  stepOver: 1,
 };
 const drillOp: Extract<JobOp, { kind: 'drill' }> = {
   id: 'op2',
@@ -65,34 +78,76 @@ const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   featureIds: [holeCircleId],
   kind: 'profile',
   depth: 1,
-  stepDown: 1,
+  stepDown: 0.5,
   allowance: 0,
   side: 'online',
 };
 
-describe('newJobOp', () => {
-  it('creates ops with unique ids and default params', () => {
-    const a = newJobOp('pocket', 't1');
-    const b = newJobOp('pocket', 't1');
+describe('newJobOp / defaults', () => {
+  it('derives step parameters from the tool diameter, never fixed guesses', () => {
+    expect(defaultStepOver(tinyTool)).toBeCloseTo(1.1, 5); // 0.5 × 2.175
+    expect(defaultStepOver(smallTool)).toBeCloseTo(1, 5);
+    const op = newJobOp('pocket', tinyTool, boxStock.materialId);
+    if (op.kind !== 'pocket') throw new Error('kind');
+    expect(op.stepOver).toBeCloseTo(1.1, 5);
+    // aluminum preset DOC 0.8, capped at half the cutter: 1.09
+    expect(op.stepDown).toBeGreaterThan(0);
+    expect(op.stepDown).toBeLessThanOrEqual(tinyTool.diameter * 0.5 + 1e-9);
+  });
+
+  it('prefers the tool library preset step-down when it matches the material', () => {
+    const presetTool: Tool = {
+      ...smallTool,
+      presets: [{ material: 'Aluminum', spindleRpm: 12000, feed: 500, plungeFeed: 200, stepDown: 0.3, rampFeed: 333 }],
+    };
+    expect(defaultStepDown(presetTool, 'aluminum-6061')).toBeCloseTo(0.3, 5);
+    // no matching preset falls back to the material table, capped by D/2
+    expect(defaultStepDown(presetTool, 'hardwood')).toBeCloseTo(1, 5);
+  });
+
+  it('creates ops with unique ids', () => {
+    const a = newJobOp('pocket', tool, boxStock.materialId);
+    const b = newJobOp('pocket', tool, boxStock.materialId);
     expect(a.id).not.toBe(b.id);
-    expect(a.kind).toBe('pocket');
-    if (a.kind === 'pocket') {
-      expect(a.depth).toBeGreaterThan(0);
-      expect(a.stepOver).toBeGreaterThan(0);
-    }
-    const p = newJobOp('profile', 't1');
+    const p = newJobOp('profile', tool, boxStock.materialId);
     if (p.kind === 'profile') expect(p.side).toBe('outside');
-    const d = newJobOp('drill', 't2');
+    const d = newJobOp('drill', drillTool, boxStock.materialId);
     if (d.kind === 'drill') expect(d.peckDepth).toBeGreaterThan(0);
   });
 });
 
 describe('generateJobOp', () => {
-  it('pockets a selected hole', () => {
+  it('pockets a selected hole from the rim down by depth', () => {
     const res = generateJobOp(pocketOp, ctx);
     expect(res.error).toBeNull();
     expect(res.moves.length).toBeGreaterThan(0);
-    expect(res.summary).toContain('passes');
+    expect(res.summary).toContain('below rim');
+  });
+
+  it('pockets a selected face from the crown DOWN TO the face', () => {
+    // a boss sunk 4mm below the stock crown
+    const geo = new THREE.BoxGeometry(10, 4, 2).toNonIndexed();
+    geo.translate(0, 0, -5);
+    const f = detectFeatures(geo);
+    const faceId = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z + 4) < 1e-6,
+    )!.id;
+    const op: Extract<JobOp, { kind: 'pocket' }> = {
+      ...pocketOp,
+      id: 'face-pocket',
+      featureIds: [faceId],
+      stepDown: 1,
+    };
+    const faceCtx = { ...ctx, geometry: geo, features: f };
+    const res = generateJobOp(op, faceCtx);
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(0);
+    expect(res.summary).toContain('z0.0 → z-4.0');
+    // deepest plunge reaches the face
+    const deepest = Math.min(
+      ...res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!),
+    );
+    expect(deepest).toBeCloseTo(-4, 5);
   });
 
   it('captures selection errors instead of throwing', () => {
@@ -115,7 +170,7 @@ describe('generateJobOp', () => {
   });
 
   it('rejects facing on box stock', () => {
-    const res = generateJobOp(newJobOp('faceCylinder', 't1'), ctx);
+    const res = generateJobOp(newJobOp('faceCylinder', tool, boxStock.materialId), ctx);
     expect(res.error).toContain('cylinder stock');
   });
 

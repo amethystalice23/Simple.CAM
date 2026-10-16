@@ -6,7 +6,8 @@
 
 import * as THREE from 'three';
 import type { DetectedFeatures } from '../cam/features';
-import type { DrillOp, ModelTransform, Vec2 } from '../core/types';
+import type { DrillOp, ModelTransform, Stock, Vec2 } from '../core/types';
+import { stockTopZ } from './placement';
 import { transformFn } from './featureOverlays';
 
 /** Tolerance for "parallel to the machine drill axis". */
@@ -17,8 +18,17 @@ const CIRCLE_SEGMENTS = 64;
 export interface PocketSource {
   /** machine-space XY contours (outer CCW, holes CW) */
   regions: Vec2[][];
-  /** machine Z of the highest selected surface (pocket top) */
+  /**
+   * Machine Z the cut starts from. For a selected FACE this is the stock
+   * crown — the op works its way down from the stock surface to the face.
+   * For a selected hole it is the rim.
+   */
   topZ: number;
+  /**
+   * Known floor from the selection: a selected face's own height. Null for
+   * hole selections, where the floor comes from the op's depth parameter.
+   */
+  floorZ: number | null;
 }
 
 function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: number }) => THREE.Vector3): number {
@@ -27,19 +37,23 @@ function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: numbe
 }
 
 /**
- * Pocket regions from the selection: circles aligned to the machine Z axis
- * become their disc; Z-normal planes become their XY footprint rectangle.
- * Returns null when nothing selected is pocketable.
+ * Pocket regions from the selection. Selected flat faces are the FLOOR:
+ * the cut starts at the stock crown and works down to the face (with
+ * several faces at different heights, it clears down to the shallowest —
+ * add another op for deeper faces). Selected circles are holes: the cut
+ * starts at the rim and goes the op's depth below it. Mixing faces and
+ * holes in one op is rejected.
  */
 export function pocketRegionsFromSelection(
   geometry: THREE.BufferGeometry,
   features: DetectedFeatures,
   selection: string[],
   transform: ModelTransform,
+  stock: Stock,
 ): PocketSource | null {
   const xf = transformFn(transform);
-  const regions: Vec2[][] = [];
-  let topZ = -Infinity;
+  const circleRegions: Vec2[][] = [];
+  let rimZ = -Infinity;
 
   for (const c of features.circles) {
     if (!selection.includes(c.id)) continue;
@@ -50,9 +64,12 @@ export function pocketRegionsFromSelection(
       const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
       contour.push({ x: center.x + Math.cos(a) * c.radius, y: center.y + Math.sin(a) * c.radius });
     }
-    regions.push(contour);
-    topZ = Math.max(topZ, center.z);
+    circleRegions.push(contour);
+    rimZ = Math.max(rimZ, center.z);
   }
+
+  const planeRegions: Vec2[][] = [];
+  let faceZ = -Infinity;
 
   for (let pi = 0; pi < features.planes.length; pi++) {
     const p = features.planes[pi];
@@ -77,17 +94,25 @@ export function pocketRegionsFromSelection(
       }
     }
     if (minX > maxX) continue;
-    regions.push([
+    planeRegions.push([
       { x: minX, y: minY },
       { x: maxX, y: minY },
       { x: maxX, y: maxY },
       { x: minX, y: maxY },
     ]);
-    topZ = Math.max(topZ, xf(p.point).z);
+    faceZ = Math.max(faceZ, xf(p.point).z);
   }
 
-  if (regions.length === 0) return null;
-  return { regions, topZ };
+  if (circleRegions.length > 0 && planeRegions.length > 0) {
+    throw new Error('select either faces or holes for this operation, not both');
+  }
+  if (planeRegions.length > 0) {
+    return { regions: planeRegions, topZ: stockTopZ(stock), floorZ: faceZ };
+  }
+  if (circleRegions.length > 0) {
+    return { regions: circleRegions, topZ: rimZ, floorZ: null };
+  }
+  return null;
 }
 
 /**
