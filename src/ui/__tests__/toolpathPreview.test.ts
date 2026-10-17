@@ -38,7 +38,7 @@ describe('movesToSegments', () => {
       xStart: 0,
       xEnd: 100,
       stepDown: 1,
-      stepOver: 4.8, // the derived default for a 6mm cutter (0.8·Ø)
+      stepOver: 4.8, // explicit — was the pre-setting derived default for a 6mm cutter
       finishAllowance: 0.2,
       plungeFeed: 300,
       feed: 500,

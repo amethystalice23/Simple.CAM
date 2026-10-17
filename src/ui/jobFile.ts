@@ -31,7 +31,7 @@ type FacePattern = (typeof FACE_PATTERNS)[number];
  * the three-pattern facing rework carry `pattern: 'zigzag'` (or none at all)
  * — both map to 'spiral', the closest of the new patterns (a per-pass
  * helical sweep; it stepped down in the cut). Pre-step-over files carry no
- * `stepOver` — it becomes null (derive 0.8·tool Ø at generation). Runtime
+ * `stepOver` — it becomes null (derive 0.5·tool Ø at generation). Runtime
  * data, not a type error: parsed JSON is cast to JobOp[] without validation.
  */
 export function normalizeJobOps(ops: JobOp[]): JobOp[] {

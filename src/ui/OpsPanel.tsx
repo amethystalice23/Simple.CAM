@@ -194,9 +194,9 @@ function ParamFields(props: {
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField
             label="Step over (mm)"
-            // null = derived; show the 0.8·tool Ø default (a 6mm flat's 4.8
+            // null = derived; show the 0.5·tool Ø default (a 6mm flat's 3.0
             // when the tool id dangles) so the box is never empty
-            value={op.stepOver ?? (props.tool ? defaultFaceStepOver(props.tool) : 4.8)}
+            value={op.stepOver ?? (props.tool ? defaultFaceStepOver(props.tool) : 3.0)}
             min={0.1}
             step={0.1}
             onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)}
@@ -220,7 +220,8 @@ function ParamFields(props: {
           <p className="hint">
             X range and target Ø default from the stock — narrow the X range to avoid vice jaws;
             target Ø starts at a 0.5mm skim, set it to your finished size. Step over defaults to
-            0.8·tool Ø (shown until you set it) and spaces rings, passes, or per-rev advance
+            0.5·tool Ø — the radius, a conservative radial engagement (shown until you set it) —
+            and spaces rings, passes, or per-rev advance
           </p>
         </>
       );

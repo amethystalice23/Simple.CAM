@@ -151,7 +151,7 @@ describe('newJobOp / defaults', () => {
     // effective Ø 50 minus a 0.5mm radial skim
     expect(op.targetDiameter).toBeCloseTo(49, 9);
     expect(op.pattern).toBe('spiral');
-    // step-over stays derived (0.8·tool Ø at generation) until the user sets it
+    // step-over stays derived (0.5·tool Ø at generation) until the user sets it
     expect(op.stepOver).toBeNull();
     // the skim must actually face: strictly below the probed surface
     expect(op.targetDiameter).toBeLessThan(cylStock.calibration.effectiveRadius * 2);
@@ -165,10 +165,9 @@ describe('newJobOp / defaults', () => {
     expect(op.targetDiameter).toBe(40);
   });
 
-  it('facing step-over derives from the tool: 0.8·Ø, rounded to 0.1mm', () => {
-    expect(defaultFaceStepOver(tool)).toBeCloseTo(4.8, 9); // 0.8 × 6mm
-    // rounding, never more than the raw factor would give
-    expect(defaultFaceStepOver(tinyTool)).toBeCloseTo(1.7, 9); // 0.8 × 2.175 = 1.74
+  it('facing step-over derives from the tool: 0.5·Ø (radius), rounded to 0.1mm', () => {
+    expect(defaultFaceStepOver(tool)).toBeCloseTo(3.0, 9); // 0.5 × 6mm
+    expect(defaultFaceStepOver(tinyTool)).toBeCloseTo(1.1, 9); // 0.5 × 2.175 = 1.0875
     expect(defaultFaceStepOver({ ...tool, diameter: 0.05 })).toBeCloseTo(0.1, 9); // floored
   });
 

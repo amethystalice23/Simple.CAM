@@ -98,7 +98,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         xEnd,
         primitiveId: null,
         stepDown,
-        /** null = derive 0.8·tool Ø at generation (job files stay tool-agnostic) */
+        /** null = derive 0.5·tool Ø at generation (job files stay tool-agnostic) */
         stepOver: null,
         finishAllowance: 0.2,
         rotation: 'cw',

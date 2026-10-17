@@ -32,8 +32,11 @@ export const MAX_ROTARY_RPM = 6.6;
 export const ROTARY_FEED_DEG_MIN = MAX_ROTARY_RPM * 360;
 
 /** Default step-over as a fraction of tool diameter — the UI derives its
- * field default from this; the generator only reads op.stepOver. */
-export const DEFAULT_STEP_OVER_FACTOR = 0.8;
+ * field default from this; the generator only reads op.stepOver. Half the
+ * cutter (the radius): past 50% radial engagement the fresh-material chip
+ * load rises steeply toward slotting, and on this machine the rotary axis
+ * carries the cutting torque directly (harmonic drive). */
+export const DEFAULT_STEP_OVER_FACTOR = 0.5;
 
 /** Z clearance above the crown for rapids, mm. */
 export const SAFE_CLEARANCE = 5;

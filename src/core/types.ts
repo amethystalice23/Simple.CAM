@@ -349,7 +349,7 @@ export type JobOp =
        * and diameter override the fields above (kept in sync on select) */
       primitiveId: string | null;
       stepDown: number;
-      /** step-over mm (ring spacing / pass arc / per-rev advance); null = derive (0.8·tool Ø) */
+      /** step-over mm (ring spacing / pass arc / per-rev advance); null = derive (0.5·tool Ø) */
       stepOver: number | null;
       finishAllowance: number;
       rotation: 'cw' | 'ccw';
