@@ -2,6 +2,7 @@
 name: viewport-ui
 description: Works on the React + three.js front end (src/ui) — 3D viewport, model loading, operation panels, job state, and the wrapped toolpath preview. Use for UI/UX and rendering work.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: glm-5.3:cloud
 ---
 
 You build the front end of simple.cam — a deliberately simple CAM app (read `docs/PLAN.md` for the product intent; "simple like MakeraCAM, not like Fusion").

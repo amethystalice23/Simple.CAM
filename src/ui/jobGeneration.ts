@@ -6,7 +6,7 @@
  */
 
 import type * as THREE from 'three';
-import { faceCylinder } from '../cam/faceCylinder';
+import { DEFAULT_STEP_OVER_FACTOR, faceCylinder } from '../cam/faceCylinder';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
@@ -16,6 +16,7 @@ import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
 import type { JobOp, ModelTransform, Move, Primitive, Stock, Tool, ToolPreset } from '../core/types';
+import { originSpan } from '../core/types';
 import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { stockTopZ } from './placement';
 
@@ -74,27 +75,36 @@ export function seedJobOpIds(ops: JobOp[]): void {
   }
 }
 /**
- * New op of the given kind with defaults derived from the tool and stock
+ * New op of the given kind with defaults derived from the tool, the stock
  * material (preset step-downs and a diameter-fraction step-over — never a
- * fixed guess that ignores the cutter size).
+ * fixed guess that ignores the cutter size), and — for facing — the stock
+ * geometry itself: the X range spans the stock and the target Ø starts one
+ * skim (0.5mm radial) below its probed surface.
  */
-export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string): JobOp {
+export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, stock: Stock): JobOp {
   const base = { id: `jobop-${++opCount}`, toolId: tool.id, featureIds: [] };
   const stepDown = defaultStepDown(tool, materialId);
   switch (kind) {
-    case 'faceCylinder':
+    case 'faceCylinder': {
+      // face defaults follow the stock; non-cylinder stock keeps the last
+      // -resort constants until the user picks real values (the panel warns)
+      const cyl = stock.kind === 'cylinder' ? stock : null;
+      const [xStart, xEnd] = cyl ? originSpan(cyl.xOrigin, cyl.length) : [0, 100];
       return {
         ...base,
         kind,
-        targetDiameter: 40,
-        xStart: 0,
-        xEnd: 100,
+        targetDiameter: cyl ? Math.max(1, cyl.calibration.effectiveRadius * 2 - 1) : 40,
+        xStart,
+        xEnd,
         primitiveId: null,
         stepDown,
+        /** null = derive 0.8·tool Ø at generation (job files stay tool-agnostic) */
+        stepOver: null,
         finishAllowance: 0.2,
         rotation: 'cw',
-        pattern: 'zigzag',
+        pattern: 'spiral',
       };
+    }
     case 'pocket':
       return {
         ...base,
@@ -166,6 +176,15 @@ function feedsFor(tool: Tool, material: MaterialPreset) {
  */
 export function defaultStepOver(tool: Tool): number {
   return Math.max(0.1, Math.round(tool.diameter * 0.5 * 10) / 10);
+}
+
+/**
+ * Facing step-over default: the generator's DEFAULT_STEP_OVER_FACTOR × the
+ * cutter diameter, rounded to 0.1mm — the shared pass spacing for vertical
+ * rings, horizontal pass arcs, and spiral per-rev advance.
+ */
+export function defaultFaceStepOver(tool: Tool): number {
+  return Math.max(0.1, Math.round(DEFAULT_STEP_OVER_FACTOR * tool.diameter * 10) / 10);
 }
 
 /**
@@ -272,8 +291,10 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             xStart,
             xEnd,
             stepDown: op.stepDown,
+            stepOver: op.stepOver ?? defaultFaceStepOver(tool),
             finishAllowance: op.finishAllowance,
             plungeFeed: plungeFeed,
+            feed,
             rotation: op.rotation,
             pattern: op.pattern,
           },
@@ -284,7 +305,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes${op.pattern === 'spiral' ? ' (spiral)' : ''} → Ø${(prim ? prim.diameter : op.targetDiameter).toFixed(1)}mm, X ${xStart.toFixed(0)}…${xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} passes (${op.pattern}) → Ø${(prim ? prim.diameter : op.targetDiameter).toFixed(1)}mm, X ${xStart.toFixed(0)}…${xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 

@@ -38,9 +38,12 @@ describe('movesToSegments', () => {
       xStart: 0,
       xEnd: 100,
       stepDown: 1,
+      stepOver: 4.8, // the derived default for a 6mm cutter (0.8·Ø)
       finishAllowance: 0.2,
       plungeFeed: 300,
+      feed: 500,
       rotation: 'cw',
+      pattern: 'spiral',
     } as const;
     const tool = { id: 't1', name: '6mm flat', type: 'flat', diameter: 6, spindleRpm: 18000 } as const;
     const res = faceCylinder(op, cylinderStock, tool);
@@ -92,5 +95,55 @@ describe('movesToSegments', () => {
     expect(tail.slice(0, 4)).toEqual([5, 5, 0, 10]);
     expect(tail[4]).toBeCloseTo(-5, 9); // cos(π) is not exactly −1
     expect(tail[5]).toBeCloseTo(-30, 9);
+  });
+
+  it('A-only feed moves draw (vertical rings); A-only rapids stay invisible', () => {
+    const moves: Move[] = [
+      { words: { x: 10, z: 30, a: 0 }, feed: 0, rapid: true }, // approach at safe Z
+      { words: { z: 24 }, feed: 300 }, // plunge to depth 1 (surface 25)
+      { words: { a: 360 }, feed: 2376 }, // full-revolution ring: A-only CUT
+      { words: { a: 540 }, feed: 0, rapid: true }, // index-style rapid: invisible
+      { words: { x: 15 }, feed: 500 }, // flat move at A=540 (≡180°)
+    ];
+    const segs = movesToSegments(moves, cylinderStock);
+    // plunge + ring (24 chords of 15°) + the post-index sweep; no rapids
+    // (the approach only positions, the index rapid draws nothing)
+    expect(segs.rapid).toEqual([]);
+    expect(segs.feed.length / 6).toBe(26);
+    // the plunge is vertical at the tool position, not a diagonal to top-center
+    expect(segs.feed.slice(0, 6)).toEqual([10, 0, 30, 10, 0, 24]);
+    // the ring sweeps a full circle at the cut radius: chord 6 of the
+    // subdivision (75°→90°) ends at the 3 o'clock point of radius 24
+    const mid = segs.feed.slice(6 * 6, 6 * 7);
+    expect(mid[4]).toBeCloseTo(24, 1); // mapped Y
+    expect(mid[5]).toBeCloseTo(0, 1); // mapped Z (axis at 0)
+    // the flat move un-rotates by the accumulated A=540 (≡180°): it ends at
+    // the bottom of the display cylinder, not back on top
+    const tail = segs.feed.slice(6 * 25);
+    expect(tail[3]).toBeCloseTo(15, 9); // x
+    expect(tail[4]).toBeCloseTo(0, 1);
+    expect(tail[5]).toBeCloseTo(-24, 1);
+  });
+
+  it('a facing plunge draws at the angle the stock sits at, not top-center', () => {
+    const moves: Move[] = [
+      { words: { x: 0, z: 30, a: 0 }, feed: 0, rapid: true }, // approach
+      { words: { x: 0, z: 30, a: 90 }, feed: 0, rapid: true }, // rotate to pass angle
+      { words: { z: 24 }, feed: 300 }, // plunge with the stock at A=90
+      { words: { x: 50 }, feed: 500 }, // sweep the pass
+    ];
+    const segs = movesToSegments(moves, cylinderStock);
+    // the plunge is vertical IN THE DISPLAY FRAME — from the A=90 safe point
+    // down to the A=90 cut point, both mapped to the 3 o'clock side
+    const plunge = segs.feed.slice(0, 6);
+    expect(plunge[1]).toBeCloseTo(30, 1); // mapped Y at safe Z
+    expect(plunge[4]).toBeCloseTo(24, 1); // mapped Y at depth: radius 24
+    expect(plunge[3]).toBeCloseTo(plunge[0], 9); // same x — vertical, not diagonal
+    expect(plunge[5]).toBeCloseTo(0, 1); // z stays at the axis height
+    // the sweep runs along x at that same mapped angle
+    const sweep = segs.feed.slice(6, 12);
+    expect(sweep[1]).toBeCloseTo(24, 1); // start Y
+    expect(sweep[4]).toBeCloseTo(24, 1); // end Y — constant angle, not a diagonal
+    expect(sweep[3]).toBeCloseTo(50, 9); // x advance
   });
 });

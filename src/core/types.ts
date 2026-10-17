@@ -160,6 +160,12 @@ export interface FaceCylinderOp {
   xEnd: number;
   /** radial depth per roughing pass, mm */
   stepDown: number;
+  /**
+   * Step-over, mm — the shared pass spacing for all patterns: axial ring
+   * spacing ('vertical'), indexed-pass arc length at the cut radius
+   * ('horizontal'), axial advance per revolution ('spiral').
+   */
+  stepOver: number;
   /** plunge feed for Z steps, mm/min (G94) */
   plungeFeed: number;
   /** radial material left for the finishing pass, mm */
@@ -167,10 +173,17 @@ export interface FaceCylinderOp {
   /** direction of continuous A rotation */
   rotation: 'cw' | 'ccw';
   /**
-   * 'zigzag' (default): retract to safe Z between passes.
-   * 'spiral': stay in the cut — helically step down at each sweep end.
+   * Cut pattern for each depth level (see docs/PLAN.md):
+   * - 'vertical': rings — a full A revolution at each X; X steps by the
+   *   step-over between rings
+   * - 'horizontal': indexed passes — a full X sweep at each A; A steps by
+   *   the step-over arc between passes
+   * - 'spiral': one continuous helix — A advances with the X sweep, depth
+   *   steps happen in the cut at the sweep ends
    */
-  pattern?: 'zigzag' | 'spiral';
+  pattern: 'vertical' | 'horizontal' | 'spiral';
+  /** cut feed for pure-linear cutting moves (G94 mm/min): horizontal X sweeps */
+  feed: number;
 }
 
 export interface Vec2 {
@@ -328,18 +341,20 @@ export type JobOp =
   | (JobOpBase & {
       kind: 'faceCylinder';
       targetDiameter: number;
-      /** axial sweep, machine X, mm — not the whole stock by default so
-       * vice jaws / mounted fixtures can be avoided */
+      /** axial sweep, machine X, mm — prefilled with the stock span; narrow
+       * it to avoid vice jaws / mounted fixtures */
       xStart: number;
       xEnd: number;
       /** optional cylinder primitive as the facing target: its axial extent
        * and diameter override the fields above (kept in sync on select) */
       primitiveId: string | null;
       stepDown: number;
+      /** step-over mm (ring spacing / pass arc / per-rev advance); null = derive (0.8·tool Ø) */
+      stepOver: number | null;
       finishAllowance: number;
       rotation: 'cw' | 'ccw';
-      /** 'zigzag' retracts between passes; 'spiral' steps down in the cut */
-      pattern: 'zigzag' | 'spiral';
+      /** ring / indexed-pass / continuous-helix — same semantics as FaceCylinderOp.pattern */
+      pattern: 'vertical' | 'horizontal' | 'spiral';
     })
   | (JobOpBase & {
       kind: 'index';

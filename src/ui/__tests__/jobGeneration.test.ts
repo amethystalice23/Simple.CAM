@@ -5,6 +5,7 @@ import type { JobOp, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import {
   datumAngleBefore,
+  defaultFaceStepOver,
   defaultStepDown,
   defaultStepOver,
   generateJobOp,
@@ -33,6 +34,14 @@ const boxStock: Extract<Stock, { kind: 'box' }> = {
   origin: { x: 'min', y: 'min', z: 'max' },
   materialId: 'aluminum-6061',
 }; // crown at machine Z0
+
+const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
+  kind: 'cylinder',
+  length: 80,
+  xOrigin: 'mid',
+  calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+  materialId: 'aluminum-6061',
+}; // spans machine X −40…40
 
 function plateWithHole(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -98,7 +107,7 @@ describe('newJobOp / defaults', () => {
   it('derives step parameters from the tool diameter, never fixed guesses', () => {
     expect(defaultStepOver(tinyTool)).toBeCloseTo(1.1, 5); // 0.5 × 2.175
     expect(defaultStepOver(smallTool)).toBeCloseTo(1, 5);
-    const op = newJobOp('pocket', tinyTool, boxStock.materialId);
+    const op = newJobOp('pocket', tinyTool, boxStock.materialId, boxStock);
     if (op.kind !== 'pocket') throw new Error('kind');
     expect(op.stepOver).toBeCloseTo(1.1, 5);
     // aluminum preset DOC 0.8, capped at half the cutter: 1.09
@@ -117,12 +126,12 @@ describe('newJobOp / defaults', () => {
   });
 
   it('creates ops with unique ids', () => {
-    const a = newJobOp('pocket', tool, boxStock.materialId);
-    const b = newJobOp('pocket', tool, boxStock.materialId);
+    const a = newJobOp('pocket', tool, boxStock.materialId, boxStock);
+    const b = newJobOp('pocket', tool, boxStock.materialId, boxStock);
     expect(a.id).not.toBe(b.id);
-    const p = newJobOp('profile', tool, boxStock.materialId);
+    const p = newJobOp('profile', tool, boxStock.materialId, boxStock);
     if (p.kind === 'profile') expect(p.side).toBe('outside');
-    const d = newJobOp('drill', drillTool, boxStock.materialId);
+    const d = newJobOp('drill', drillTool, boxStock.materialId, boxStock);
     if (d.kind === 'drill') expect(d.peckDepth).toBeGreaterThan(0);
   });
 
@@ -130,14 +139,72 @@ describe('newJobOp / defaults', () => {
     seedJobOpIds([
       { ...(pocketOp as unknown as JobOp), id: 'jobop-500' },
     ]);
-    const next = newJobOp('pocket', tool, boxStock.materialId);
+    const next = newJobOp('pocket', tool, boxStock.materialId, boxStock);
     expect(Number(next.id.replace(/^jobop-/, ''))).toBeGreaterThan(500);
+  });
+
+  it('face defaults follow the stock: X spans it, target Ø is a 0.5mm skim', () => {
+    const op = newJobOp('faceCylinder', tool, cylStock.materialId, cylStock);
+    if (op.kind !== 'faceCylinder') throw new Error('kind');
+    expect(op.xStart).toBeCloseTo(-40, 9); // originSpan('mid', 80)
+    expect(op.xEnd).toBeCloseTo(40, 9);
+    // effective Ø 50 minus a 0.5mm radial skim
+    expect(op.targetDiameter).toBeCloseTo(49, 9);
+    expect(op.pattern).toBe('spiral');
+    // step-over stays derived (0.8·tool Ø at generation) until the user sets it
+    expect(op.stepOver).toBeNull();
+    // the skim must actually face: strictly below the probed surface
+    expect(op.targetDiameter).toBeLessThan(cylStock.calibration.effectiveRadius * 2);
+  });
+
+  it('face defaults keep last-resort constants on non-cylinder stock', () => {
+    const op = newJobOp('faceCylinder', tool, boxStock.materialId, boxStock);
+    if (op.kind !== 'faceCylinder') throw new Error('kind');
+    expect(op.xStart).toBe(0);
+    expect(op.xEnd).toBe(100);
+    expect(op.targetDiameter).toBe(40);
+  });
+
+  it('facing step-over derives from the tool: 0.8·Ø, rounded to 0.1mm', () => {
+    expect(defaultFaceStepOver(tool)).toBeCloseTo(4.8, 9); // 0.8 × 6mm
+    // rounding, never more than the raw factor would give
+    expect(defaultFaceStepOver(tinyTool)).toBeCloseTo(1.7, 9); // 0.8 × 2.175 = 1.74
+    expect(defaultFaceStepOver({ ...tool, diameter: 0.05 })).toBeCloseTo(0.1, 9); // floored
+  });
+
+  it('facing generation derives the step-over when null and honors explicit values', () => {
+    const faceRingsOp = (stepOver: number | null): Extract<JobOp, { kind: 'faceCylinder' }> => ({
+      id: 'face',
+      toolId: 't1',
+      featureIds: [],
+      kind: 'faceCylinder',
+      targetDiameter: 40,
+      xStart: -40,
+      xEnd: 40, // the cylStock span
+      stepDown: 1,
+      stepOver,
+      finishAllowance: 0.2,
+      rotation: 'cw',
+      pattern: 'vertical',
+      primitiveId: null,
+    });
+    // ring cuts are the A-only feed moves — their count is what stepOver drives
+    const rings = (res: ReturnType<typeof generateJobOp>) =>
+      res.moves.filter(
+        (m) => m.words.a !== undefined && m.words.x === undefined && m.words.z === undefined && !m.rapid,
+      ).length;
+    const derived = generateJobOp(faceRingsOp(null), { ...ctx, stock: cylStock });
+    expect(derived.error).toBeNull();
+    const coarse = generateJobOp(faceRingsOp(10), { ...ctx, stock: cylStock });
+    expect(coarse.error).toBeNull();
+    // derived 4.8mm packs more rings into the 80mm span than an explicit 10mm
+    expect(rings(derived)).toBeGreaterThan(rings(coarse));
   });
 });
 
 describe('prefillDepths', () => {
   it('floor selection sets end depth to the crown-to-feature distance', () => {
-    const op = newJobOp('pocket', smallTool, 'aluminum-6061');
+    const op = newJobOp('pocket', smallTool, 'aluminum-6061', boxStock);
     const filled = prefillDepths({ ...op, kind: 'pocket' } as Extract<JobOp, { kind: 'pocket' }>, -3.5, 0);
     if (filled.kind !== 'pocket') return;
     expect(filled.startDepth).toBe(0);
@@ -145,7 +212,7 @@ describe('prefillDepths', () => {
   });
 
   it('rim selection sets start depth at the feature and end 2mm deeper', () => {
-    const op = newJobOp('pocket', smallTool, 'aluminum-6061');
+    const op = newJobOp('pocket', smallTool, 'aluminum-6061', boxStock);
     const filled = prefillDepths(
       { ...op, kind: 'pocket', selectionIs: 'rim' } as Extract<JobOp, { kind: 'pocket' }>,
       -3.5,
@@ -352,7 +419,7 @@ describe('generateJobOp', () => {
   });
 
   it('rejects facing on box stock', () => {
-    const res = generateJobOp(newJobOp('faceCylinder', tool, boxStock.materialId), ctx);
+    const res = generateJobOp(newJobOp('faceCylinder', tool, boxStock.materialId, boxStock), ctx);
     expect(res.error).toContain('cylinder stock');
   });
 

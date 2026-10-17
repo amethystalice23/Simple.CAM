@@ -94,7 +94,13 @@ export function postCarvera(input: PostInput): string {
 
   for (const m of input.moves) {
     const simultaneous = isSimultaneous(m);
-    if (simultaneous) usedA = true;
+    // The wrap must fire for anything that leaves A unwrapped: feed moves
+    // that turn A (coordinated XYZ+A or the A-only rings of vertical
+    // facing) and A-advancing positioning rapids (horizontal passes) — but
+    // NOT the pure-A rapid of an Index op, which sets the datum on purpose.
+    const pureARapid =
+      m.rapid && m.words.x === undefined && m.words.y === undefined && m.words.z === undefined;
+    if (m.words.a !== undefined && !pureARapid) usedA = true;
 
     if (m.rapid) {
       lines.push(`G0 ${wordsLine(m, false)}${m.comment ? ` ; ${m.comment}` : ''}`);

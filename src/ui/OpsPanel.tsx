@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { JobOp, Primitive, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
-import { defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
+import { defaultFaceStepOver, defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
 import { NumberField } from './fields';
 
@@ -14,6 +14,8 @@ interface Props {
   showPreview: boolean;
   hasModel: boolean;
   stockKind: Stock['kind'];
+  /** the stock object — new ops derive their defaults from it */
+  stock: Stock;
   /** stock material id, for tool-appropriate step defaults */
   materialId: string;
   /** user-added primitives (face ops can target a cylinder) */
@@ -132,6 +134,8 @@ function ParamFields(props: {
   op: JobOp;
   stockKind: Stock['kind'];
   primitives: Primitive[];
+  /** the op's own tool (undefined if its id dangles after a library edit) */
+  tool?: Tool;
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   onIndexToSelection: (op: JobOp) => void;
@@ -188,12 +192,22 @@ function ParamFields(props: {
           <NumberField label="End X (mm)" value={op.xEnd} step={0.5} onCommit={(v) => upd({ xEnd: v } as Partial<JobOp>)} />
           <NumberField label="Target Ø (mm)" value={op.targetDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ targetDiameter: v } as Partial<JobOp>)} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField
+            label="Step over (mm)"
+            // null = derived; show the 0.8·tool Ø default (a 6mm flat's 4.8
+            // when the tool id dangles) so the box is never empty
+            value={op.stepOver ?? (props.tool ? defaultFaceStepOver(props.tool) : 4.8)}
+            min={0.1}
+            step={0.1}
+            onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)}
+          />
           <NumberField label="Finish allowance (mm)" value={op.finishAllowance} min={0} step={0.05} onCommit={(v) => upd({ finishAllowance: v } as Partial<JobOp>)} />
           <label className="field">
             <span>Pattern</span>
-            <select value={op.pattern} onChange={(e) => upd({ pattern: e.target.value as 'zigzag' | 'spiral' })}>
-              <option value="zigzag">zigzag — retract between passes</option>
-              <option value="spiral">spiral — step down in the cut</option>
+            <select value={op.pattern} onChange={(e) => upd({ pattern: e.target.value as 'vertical' | 'horizontal' | 'spiral' })}>
+              <option value="vertical">vertical — full A rotation, then step X</option>
+              <option value="horizontal">horizontal — full X pass, then step A</option>
+              <option value="spiral">spiral — continuous helical cut</option>
             </select>
           </label>
           <label className="field">
@@ -203,7 +217,11 @@ function ParamFields(props: {
               <option value="ccw">ccw</option>
             </select>
           </label>
-          <p className="hint">the X range defaults to the stock span — narrow it to avoid vice jaws</p>
+          <p className="hint">
+            X range and target Ø default from the stock — narrow the X range to avoid vice jaws;
+            target Ø starts at a 0.5mm skim, set it to your finished size. Step over defaults to
+            0.8·tool Ø (shown until you set it) and spaces rings, passes, or per-rev advance
+          </p>
         </>
       );
     case 'pocket':
@@ -302,7 +320,7 @@ export function OpsPanel(props: Props) {
                   onChange={(e) => {
                     const t = props.tools.find((x) => x.id === op.toolId);
                     const next = t
-                      ? newJobOp(e.target.value as JobOp['kind'], t, props.materialId)
+                      ? newJobOp(e.target.value as JobOp['kind'], t, props.materialId, props.stock)
                       : null;
                     if (next) props.onChangeOp({ ...next, id: op.id, featureIds: op.featureIds });
                   }}
@@ -375,6 +393,7 @@ export function OpsPanel(props: Props) {
                     op={op}
                     stockKind={props.stockKind}
                     primitives={props.primitives}
+                    tool={props.tools.find((t) => t.id === op.toolId)}
                     onChange={props.onChangeOp}
                     onSelectionIsChange={props.onSelectionIsChange}
                     onIndexToSelection={props.onIndexToSelection}

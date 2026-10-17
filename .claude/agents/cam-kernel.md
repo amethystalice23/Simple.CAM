@@ -2,6 +2,7 @@
 name: cam-kernel
 description: Implements CAM math and toolpath generators (parametric wrapped generators, 2.5D ops, the cylinder-canvas transform) plus their vitest tests. Use for any work in src/cam or src/core.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: glm-5.3:cloud
 ---
 
 You implement toolpath generation for simple.cam, an open-source CAM app for the Carvera CNC.

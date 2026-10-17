@@ -127,10 +127,12 @@ describe('generator post goldens', () => {
     xStart: 0,
     xEnd: 100,
     stepDown: 1,
+    stepOver: 1.6, // 0.8·Ø — pins the pre-setting behavior of face-spiral.nc
     finishAllowance: 0.2,
     plungeFeed: 300,
     rotation: 'cw',
     pattern: 'spiral',
+    feed: 600,
   } as const;
   const faceStock = {
     kind: 'cylinder',
@@ -145,6 +147,33 @@ describe('generator post goldens', () => {
       moves: faceCylinder(spiralFaceOp, faceStock, tool).moves,
       tools: [tool],
       options: { jobName: 'face-spiral' },
+    }),
+  );
+
+  // vertical facing: one straight plunge per level plus full-revolution
+  // A-only cuts, which the post classifies G94 and runs at deg/min, with
+  // in-cut X steps between rings
+  const ringFaceOp = {
+    kind: 'faceCylinder',
+    id: 'op5',
+    toolId: 't1',
+    targetDiameter: 40,
+    xStart: 0,
+    xEnd: 12,
+    stepDown: 2,
+    stepOver: 1.6, // 0.8·Ø
+    finishAllowance: 0.2,
+    plungeFeed: 300,
+    rotation: 'cw',
+    pattern: 'vertical',
+    feed: 600,
+  } as const;
+  checkGolden(
+    'face-vertical.nc',
+    postCarvera({
+      moves: faceCylinder(ringFaceOp, faceStock, tool).moves,
+      tools: [tool],
+      options: { jobName: 'face-cylinder' },
     }),
   );
 });

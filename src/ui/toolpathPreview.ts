@@ -6,12 +6,14 @@
  *  - rotary moves (A-word, cylinder stock): the tool's YZ position rotates
  *    back about the stock axis by −A — wrapped cuts draw on the cylinder
  *    surface where they happen;
- *  - pure-A Index moves draw nothing (the stock rotates, not the tool) but
- *    establish the datum for what follows;
- *  - flat moves under an index datum are un-rotated by that datum, so an
- *    indexed pocket draws over its feature as currently displayed, not
- *    over the mirrored machine position. The emitted G-code is untouched
- *    machine coordinates — only the drawing is display-frame.
+ *  - pure-A RAPID moves (an Index op) draw nothing (the stock rotates, not
+ *    the tool) but establish the datum for what follows. A-only FEED moves
+ *    are cuts (vertical facing's full-revolution rings) and draw;
+ *  - flat moves on cylinder stock are un-rotated by the running accumulated
+ *    A, so an indexed pocket draws over its feature as currently displayed
+ *    and a facing plunge draws at the angle the stock is actually at. The
+ *    emitted G-code is untouched machine coordinates — only the drawing is
+ *    display-frame.
  */
 
 import type { Move, Stock } from '../core/types';
@@ -26,7 +28,6 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
   const isCylinder = stock?.kind === 'cylinder';
   const axisZ = isCylinder ? stock.calibration.axisZ : 0;
   const pos = { x: 0, y: 0, z: 0, a: 0 };
-  let datum = 0; // absolute A established by the latest Index op
   const feed: number[] = [];
   const rapid: number[] = [];
 
@@ -56,15 +57,16 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
     pos.z = m.words.z ?? pos.z;
     pos.a = m.words.a ?? pos.a;
 
-    // a pure-A move (an Index op) rotates the stock, not the tool: it
-    // cuts nothing, moves nothing in XYZ, and only establishes the datum
+    // a pure-A RAPID move (an Index op) rotates the stock, not the tool:
+    // it cuts nothing, moves nothing in XYZ, and only sets the A the flat
+    // moves after it un-rotate by. An A-only FEED move is a cut (a vertical
+    // facing ring) and must draw, so it falls through to the rotary path.
     const aOnly =
       m.words.a !== undefined &&
       m.words.x === undefined &&
       m.words.y === undefined &&
       m.words.z === undefined;
-    if (aOnly) {
-      datum = pos.a;
+    if (aOnly && m.rapid) {
       prevM = { ...pos };
       continue;
     }
@@ -97,9 +99,11 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
       if (rotary) {
         // rotary move: un-rotate by its own accumulated A
         [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
-      } else if (isCylinder && datum !== 0) {
-        // flat move under an index datum: un-rotate back over the feature
-        [y, z] = toDisplay((datum * Math.PI) / 180, pos.y, pos.z);
+      } else if (isCylinder) {
+        // flat move: un-rotate by the stock's current A (the index op's
+        // angle for indexed jobs, the pass angle mid-facing) so it draws
+        // where the material actually is. A=0 (or flat stock) is identity.
+        [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
       }
       if (prev) {
         emit(target, prev.x, prev.y, prev.z);

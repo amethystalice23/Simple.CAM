@@ -21,9 +21,12 @@ const op: FaceCylinderOp = {
   xStart: 0,
   xEnd: 100,
   stepDown: 1,
+  stepOver: 4.8, // 0.8·Ø — pins the pre-setting behavior of face-cylinder.nc
   finishAllowance: 0.2,
   plungeFeed: 300,
   rotation: 'cw',
+  pattern: 'spiral',
+  feed: 600,
 };
 
 const gcode = postCarvera({
@@ -40,6 +43,22 @@ describe('carvera post-processor', () => {
     expect(gcode).toContain('G21 G90 G94');
     expect(gcode.trimEnd().endsWith('G92.4 A0 S0\nM30')).toBe(true);
     expect(gcode).toContain('G92.4 A0 S0\nG0'); // initial wrap after setup
+  });
+
+  it('wraps A after A-only ring cuts (vertical facing) but not after a pure-A index rapid', () => {
+    const ring = postCarvera({
+      moves: [{ words: { a: 360 }, feed: 2376 }],
+      tools: [tool],
+      options: { jobName: 'ring-test' },
+    });
+    expect(ring.includes('G92.4 A0 S0\nM30')).toBe(true);
+
+    const index = postCarvera({
+      moves: [{ words: { a: 90 }, feed: 0, rapid: true }],
+      tools: [tool],
+      options: { jobName: 'index-test' },
+    });
+    expect(index.includes('G92.4 A0 S0\nM30')).toBe(false);
   });
 
   it('never emits a G93 feed line without F (firmware halts otherwise)', () => {

@@ -6,7 +6,7 @@ import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
-import { identityTransform, originSpan } from '../core/types';
+import { identityTransform } from '../core/types';
 import type {
   JobOp,
   ModelTransform,
@@ -32,7 +32,7 @@ import {
   seedJobOpIds,
   type GeneratedOp,
 } from './jobGeneration';
-import { decodeStl, downloadJobFile, jobFingerprint, parseJobFile, saveJobFile } from './jobFile';
+import { decodeStl, downloadJobFile, jobFingerprint, normalizeJobOps, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
 import { transformFn } from './featureOverlays';
@@ -300,13 +300,7 @@ export function App() {
 
   const addOp = () => {
     const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
-    const op = newJobOp('pocket', defaultTool, stock.materialId);
-    if (op.kind === 'faceCylinder') {
-      const [x0, x1] = originSpan(stock.kind === 'cylinder' ? stock.xOrigin : 'min',
-        stock.kind === 'cylinder' ? stock.length : 100);
-      op.xStart = x0;
-      op.xEnd = x1;
-    }
+    const op = newJobOp('pocket', defaultTool, stock.materialId, stock);
     setLastToolId(defaultTool.id);
     setOps((prev) => [...prev, op]);
     setExpandedOpId(op.id);
@@ -430,10 +424,13 @@ export function App() {
   /** Apply a parsed job: stock, model, placement, primitives, ops, tools.
    * The applied job becomes the "saved" baseline for dirty tracking. */
   const applyJob = (job: ReturnType<typeof parseJobFile>) => {
+    // imported files normalize inside parseJobFile; the autosave restore
+    // skips it, so normalize here — the one gate both load paths pass
+    const ops = normalizeJobOps(job.ops);
     setStock(job.stock);
     setPrimitives(job.primitives);
-    setOps(job.ops);
-    seedJobOpIds(job.ops);
+    setOps(ops);
+    seedJobOpIds(ops);
     setGenerated({});
     setEditingOpId(null);
     setExpandedOpId(null);
@@ -676,6 +673,7 @@ export function App() {
                 showPreview={showPreview}
                 hasModel={!!geometry}
                 stockKind={stock.kind}
+                stock={stock}
                 materialId={stock.materialId}
                 primitives={primitives}
                 featureLabels={featureLabels}

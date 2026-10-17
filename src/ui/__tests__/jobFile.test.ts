@@ -111,6 +111,109 @@ describe('parseJobFile', () => {
     const gutted = JSON.stringify({ format: JOB_FORMAT, version: JOB_VERSION, ops: [] });
     expect(() => parseJobFile(gutted)).toThrowError(/missing required sections/);
   });
+
+  it('normalizes legacy face patterns: zigzag and missing both map to spiral', () => {
+    const legacyFace = {
+      id: 'jobop-9',
+      toolId: 't-used',
+      featureIds: [],
+      kind: 'faceCylinder',
+      targetDiameter: 40,
+      xStart: 0,
+      xEnd: 100,
+      primitiveId: null,
+      stepDown: 1,
+      finishAllowance: 0.2,
+      rotation: 'cw',
+      pattern: 'zigzag',
+    };
+    const file = {
+      format: JOB_FORMAT,
+      version: JOB_VERSION,
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops: [legacyFace, { ...legacyFace, id: 'jobop-10', pattern: undefined }],
+      tools,
+      model: null,
+    };
+    const parsed = parseJobFile(JSON.stringify(file));
+    for (const op of parsed.ops) {
+      if (op.kind !== 'faceCylinder') throw new Error('kind');
+      expect(op.pattern).toBe('spiral');
+    }
+  });
+
+  it('keeps current face patterns and non-face ops untouched', () => {
+    const file = {
+      format: JOB_FORMAT,
+      version: JOB_VERSION,
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops: [
+        {
+          id: 'jobop-9',
+          toolId: 't-used',
+          featureIds: [],
+          kind: 'faceCylinder',
+          targetDiameter: 40,
+          xStart: 0,
+          xEnd: 100,
+          primitiveId: null,
+          stepDown: 1,
+          finishAllowance: 0.2,
+          rotation: 'cw',
+          pattern: 'vertical',
+        },
+      ],
+      tools,
+      model: null,
+    };
+    const parsed = parseJobFile(JSON.stringify(file));
+    const op = parsed.ops[0];
+    if (op.kind !== 'faceCylinder') throw new Error('kind');
+    expect(op.pattern).toBe('vertical');
+  });
+
+  it('normalizes facing step-over: absent or invalid → null (derived), valid kept', () => {
+    const face = {
+      id: 'jobop-9',
+      toolId: 't-used',
+      featureIds: [],
+      kind: 'faceCylinder',
+      targetDiameter: 40,
+      xStart: 0,
+      xEnd: 100,
+      primitiveId: null,
+      stepDown: 1,
+      finishAllowance: 0.2,
+      rotation: 'cw',
+      pattern: 'vertical',
+    };
+    const file = (stepOver: unknown) => ({
+      format: JOB_FORMAT,
+      version: JOB_VERSION,
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      tools,
+      model: null,
+      ops: [{ ...face, stepOver }],
+    });
+    const norm = (stepOver: unknown) => {
+      const parsed = parseJobFile(JSON.stringify(file(stepOver)));
+      const op = parsed.ops[0];
+      if (op.kind !== 'faceCylinder') throw new Error('kind');
+      return op.stepOver;
+    };
+    expect(norm(undefined)).toBeNull(); // pre-step-over job files
+    expect(norm(null)).toBeNull();
+    expect(norm(0)).toBeNull(); // invalid values must not reach the generator
+    expect(norm(-3)).toBeNull();
+    expect(norm('wide')).toBeNull();
+    expect(norm(3)).toBeCloseTo(3, 9); // an explicit setting survives round-trips
+  });
 });
 
 describe('jobFingerprint', () => {

@@ -23,6 +23,30 @@ export interface JobFile {
   model: { name: string; stlBase64: string } | null;
 }
 
+const FACE_PATTERNS = ['vertical', 'horizontal', 'spiral'] as const;
+type FacePattern = (typeof FACE_PATTERNS)[number];
+
+/**
+ * Normalize ops from a stored job to the current shapes. Job files predating
+ * the three-pattern facing rework carry `pattern: 'zigzag'` (or none at all)
+ * — both map to 'spiral', the closest of the new patterns (a per-pass
+ * helical sweep; it stepped down in the cut). Pre-step-over files carry no
+ * `stepOver` — it becomes null (derive 0.8·tool Ø at generation). Runtime
+ * data, not a type error: parsed JSON is cast to JobOp[] without validation.
+ */
+export function normalizeJobOps(ops: JobOp[]): JobOp[] {
+  return ops.map((op) => {
+    if (op.kind !== 'faceCylinder') return op;
+    const raw = (op as { pattern?: unknown }).pattern;
+    const pattern: FacePattern =
+      raw === 'vertical' || raw === 'horizontal' || raw === 'spiral' ? raw : 'spiral';
+    const rawStepOver = (op as { stepOver?: unknown }).stepOver;
+    const stepOver = typeof rawStepOver === 'number' && rawStepOver > 0 ? rawStepOver : null;
+    const changed = pattern !== op.pattern || stepOver !== op.stepOver;
+    return changed ? { ...op, pattern, stepOver } : op;
+  });
+}
+
 export interface SaveableState {
   stock: Stock;
   transform: ModelTransform;
@@ -81,7 +105,7 @@ export function parseJobFile(text: string): JobFile {
   if (!parsed.stock || !parsed.transform || !Array.isArray(parsed.ops) || !Array.isArray(parsed.primitives)) {
     throw new Error('job file is missing required sections');
   }
-  return parsed;
+  return { ...parsed, ops: normalizeJobOps(parsed.ops) };
 }
 
 /** Serialize + download (kept apart from the pure save/parse for testing). */
