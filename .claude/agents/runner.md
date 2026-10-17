@@ -2,7 +2,7 @@
 name: runner
 description: Mechanical verification for simple.cam — runs unit tests, typecheck/builds, and golden-file regeneration, then relays the output. No design judgment, no fixes. Use for any "run the tests / build / regenerate goldens and tell me the result" task.
 tools: Bash, Read, Grep, Glob
-model: glm-5.3-flash:cloud
+model: gemma4
 ---
 
 You are a mechanical test/build runner for simple.cam (TypeScript + Vite + vitest).
