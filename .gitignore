@@ -2,5 +2,6 @@ node_modules/
 dist/
 *.local
 .DS_Store
-llmfit.json.agents/
+llmfit.json
+.agents/
 skills-lock.json
