@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { identityTransform } from '../../core/types';
+import { identityTransform, rotaryCalibrationOf } from '../../core/types';
 import type { JobOp, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import {
@@ -32,6 +32,7 @@ const boxStock: Extract<Stock, { kind: 'box' }> = {
   sizeY: 40,
   sizeZ: 10,
   origin: { x: 'min', y: 'min', z: 'max' },
+  axisMode: '3-axis',
   materialId: 'aluminum-6061',
 }; // crown at machine Z0
 
@@ -40,8 +41,16 @@ const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
   length: 80,
   xOrigin: 'mid',
   calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 }; // spans machine X −40…40
+
+/** the same blank box, but riding the rotary axis */
+const boxStock4: Extract<Stock, { kind: 'box' }> = {
+  ...boxStock,
+  origin: { x: 'min', y: 'mid', z: 'min' },
+  axisMode: '4-axis',
+}; // spans machine X 0…60, Y −20…20, Z 0…10
 
 function plateWithHole(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -157,12 +166,29 @@ describe('newJobOp / defaults', () => {
     expect(op.targetDiameter).toBeLessThan(cylStock.calibration.effectiveRadius * 2);
   });
 
-  it('face defaults keep last-resort constants on non-cylinder stock', () => {
+  it('face defaults keep last-resort constants in 3-axis mode', () => {
     const op = newJobOp('faceCylinder', tool, boxStock.materialId, boxStock);
     if (op.kind !== 'faceCylinder') throw new Error('kind');
     expect(op.xStart).toBe(0);
     expect(op.xEnd).toBe(100);
     expect(op.targetDiameter).toBe(40);
+    // even a cylinder in 3-axis mode: facing needs the rotary axis
+    const flat3 = newJobOp('faceCylinder', tool, cylStock.materialId, {
+      ...cylStock,
+      axisMode: '3-axis',
+    });
+    if (flat3.kind !== 'faceCylinder') throw new Error('kind');
+    expect(flat3.xStart).toBe(0);
+    expect(flat3.targetDiameter).toBe(40);
+  });
+
+  it('face defaults follow a 4-axis box: X spans it, Ø is the Y-Z diagonal skim', () => {
+    const op = newJobOp('faceCylinder', tool, boxStock4.materialId, boxStock4);
+    if (op.kind !== 'faceCylinder') throw new Error('kind');
+    expect(op.xStart).toBeCloseTo(0, 9); // originSpan('min', 60)
+    expect(op.xEnd).toBeCloseTo(60, 9);
+    // hypot(40, 10) ≈ 41.231 diagonal Ø, minus a 0.5mm radial skim
+    expect(op.targetDiameter).toBeCloseTo(Math.hypot(40, 10) - 1, 9);
   });
 
   it('facing step-over derives from the tool: 0.5·Ø (radius), rounded to 0.1mm', () => {
@@ -198,6 +224,26 @@ describe('newJobOp / defaults', () => {
     expect(coarse.error).toBeNull();
     // derived 4.8mm packs more rings into the 80mm span than an explicit 10mm
     expect(rings(derived)).toBeGreaterThan(rings(coarse));
+  });
+});
+
+describe('rotaryCalibrationOf (derived rotary geometry)', () => {
+  it('passes the cylinder stored calibration through untouched', () => {
+    expect(rotaryCalibrationOf(cylStock)).toBe(cylStock.calibration);
+  });
+
+  it('derives a 4-axis box: axis at the Z-span center, radius half the Y-Z diagonal', () => {
+    const cal = rotaryCalibrationOf(boxStock4); // Z 0…10, Y −20…20
+    expect(cal.axisZ).toBeCloseTo(5, 9);
+    expect(cal.effectiveRadius).toBeCloseTo(Math.hypot(40, 10) / 2, 9);
+    expect(cal.aOriginDeg).toBe(0);
+    // the origin choice moves the derived axis: z origin 'max' spans −10…0
+    const flipped = rotaryCalibrationOf({
+      ...boxStock4,
+      origin: { x: 'min', y: 'mid', z: 'max' },
+    });
+    expect(flipped.axisZ).toBeCloseTo(-5, 9);
+    expect(flipped.effectiveRadius).toBeCloseTo(Math.hypot(40, 10) / 2, 9);
   });
 });
 
@@ -333,6 +379,7 @@ describe('generateJobOp', () => {
       length: 100,
       xOrigin: 'min',
       calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+      axisMode: '4-axis',
       materialId: 'aluminum-6061',
     };
     // the Index op before it emitted the A positioning move; this op runs
@@ -347,10 +394,10 @@ describe('generateJobOp', () => {
     expect(Math.max(...plunges)).toBeCloseTo(6, 5);
   });
 
-  it('rejects an index datum on box stock', () => {
+  it('rejects an index datum without 4-axis mode', () => {
     const res = generateJobOp(pocketOp, { ...ctx, datumAngle: 90 });
     expect(res.moves).toEqual([]);
-    expect(res.error).toContain('indexing needs cylinder stock');
+    expect(res.error).toContain('indexing needs 4-axis mode');
   });
 
   it('emits the Index op as a single absolute-A positioning move', () => {
@@ -366,6 +413,7 @@ describe('generateJobOp', () => {
       length: 100,
       xOrigin: 'min',
       calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+      axisMode: '4-axis',
       materialId: 'aluminum-6061',
     };
     const res = generateJobOp(op, { ...ctx, stock: cylStock });
@@ -373,9 +421,13 @@ describe('generateJobOp', () => {
     expect(res.moves).toHaveLength(1);
     expect(res.moves[0].words.a).toBeCloseTo(90, 9);
     expect(res.moves[0].rapid).toBe(true);
-    // box stock rejects the index op itself
+    // 3-axis mode (even with cylinder stock) rejects the index op itself
     const bad = generateJobOp(op, ctx);
-    expect(bad.error).toContain('indexing needs cylinder stock');
+    expect(bad.error).toContain('indexing needs 4-axis mode');
+    // and a 4-axis box indexes fine — rotation is a mode, not a shape
+    const boxed = generateJobOp(op, { ...ctx, stock: boxStock4 });
+    expect(boxed.error).toBeNull();
+    expect(boxed.moves[0].words.a).toBeCloseTo(90, 9);
   });
 
   it('datumAngleBefore tracks the latest Index op in sequence order', () => {
@@ -417,9 +469,23 @@ describe('generateJobOp', () => {
     expect(res.moves.length).toBeGreaterThan(0);
   });
 
-  it('rejects facing on box stock', () => {
+  it('rejects facing in 3-axis mode and generates it on a 4-axis box', () => {
     const res = generateJobOp(newJobOp('faceCylinder', tool, boxStock.materialId, boxStock), ctx);
-    expect(res.error).toContain('cylinder stock');
+    expect(res.error).toContain('4-axis mode');
+    // cylinder stock is not exempt either — facing needs the rotary axis
+    const faceDefaults = newJobOp('faceCylinder', tool, cylStock.materialId, cylStock);
+    if (faceDefaults.kind !== 'faceCylinder') throw new Error('kind');
+    const cyl3 = generateJobOp(faceDefaults, { ...ctx, stock: { ...cylStock, axisMode: '3-axis' } });
+    expect(cyl3.error).toContain('4-axis mode');
+    // a 4-axis box faces: the surface sits at axisZ + half the Y-Z diagonal
+    const face = newJobOp('faceCylinder', tool, boxStock4.materialId, boxStock4);
+    const boxed = generateJobOp(face, { ...ctx, stock: boxStock4 });
+    expect(boxed.error).toBeNull();
+    expect(boxed.moves.length).toBeGreaterThan(0);
+    // derived axisZ = 5 (Z-span center), r0 = hypot(40,10)/2 ≈ 20.616
+    const surfaceZ = 5 + Math.hypot(40, 10) / 2;
+    const approach = boxed.moves.find((m) => m.rapid && m.words.z !== undefined);
+    expect(approach?.words.z).toBeCloseTo(surfaceZ + 5, 5); // safe clearance above
   });
 
   it('flags a missing tool', () => {

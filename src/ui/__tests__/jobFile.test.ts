@@ -7,6 +7,7 @@ import {
   jobFingerprint,
   JOB_FORMAT,
   JOB_VERSION,
+  normalizeStock,
   parseJobFile,
   saveJobFile,
 } from '../jobFile';
@@ -17,6 +18,7 @@ const boxStock: Extract<Stock, { kind: 'box' }> = {
   sizeY: 40,
   sizeZ: 10,
   origin: { x: 'min', y: 'min', z: 'max' },
+  axisMode: '3-axis',
   materialId: 'aluminum-6061',
 };
 
@@ -213,6 +215,31 @@ describe('parseJobFile', () => {
     expect(norm(-3)).toBeNull();
     expect(norm('wide')).toBeNull();
     expect(norm(3)).toBeCloseTo(3, 9); // an explicit setting survives round-trips
+  });
+
+  it('normalizes the stock axis mode: absent falls back by shape, explicit survives', () => {
+    // a file predating the mode toggle carries no axisMode at all (the type
+    // lies about parsed JSON — that is exactly what normalizeStock repairs)
+    const legacyCyl = {
+      kind: 'cylinder',
+      length: 80,
+      xOrigin: 'mid',
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+      materialId: 'aluminum-6061',
+    };
+    const legacyBox = { ...boxStock, axisMode: undefined };
+    // shape implied the mode then: cylinder = 4th axis, box = flat
+    expect(normalizeStock(legacyCyl as unknown as Stock).axisMode).toBe('4-axis');
+    expect(normalizeStock(legacyBox as unknown as Stock).axisMode).toBe('3-axis');
+    // explicit values survive round-trips untouched...
+    expect(normalizeStock({ ...boxStock, axisMode: '4-axis' }).axisMode).toBe('4-axis');
+    // ...and invalid values fall back by shape rather than reaching the app
+    const junk = normalizeStock({ ...boxStock, axisMode: 'spin' } as unknown as Stock);
+    expect(junk.axisMode).toBe('3-axis');
+    // normalization runs on the parse path too
+    const file = { format: JOB_FORMAT, version: JOB_VERSION, stock: legacyCyl as unknown as Stock, transform: identityTransform(), primitives: [], ops, tools, model: null };
+    const parsed = parseJobFile(JSON.stringify(file));
+    expect(parsed.stock.axisMode).toBe('4-axis');
   });
 });
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { originSpan } from '../core/types';
+import { originSpan, rotaryCalibrationOf } from '../core/types';
 import type { ModelTransform, Move, Primitive, Stock } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 import { movesToSegments } from './toolpathPreview';
@@ -351,7 +351,7 @@ export function Viewport({
       const { effectiveRadius: r, axisZ } = stock.calibration;
       const [x0, x1] = originSpan(stock.xOrigin, stock.length);
       const cx = (x0 + x1) / 2;
-      // Z0 for 4th-axis work is the stock center (the axis datum), so the
+      // Z0 for 4-axis work is the stock center (the axis datum), so the
       // cylinder is drawn centered on machine Z = axisZ
       const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, stock.length, 64), stockMat);
       cyl.rotation.z = Math.PI / 2; // default Y-axis cylinder → machine X
@@ -375,6 +375,20 @@ export function Viewport({
       box.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
       stockGroup.add(new THREE.Box3Helper(new THREE.Box3().setFromObject(box), 0x6b5842));
       stockGroup.add(box);
+      if (stock.axisMode === '4-axis') {
+        // the rotation axis the derived calibration assumes: Y=0 through
+        // the box's Z center
+        const axisZ = rotaryCalibrationOf(stock).axisZ;
+        stockGroup.add(
+          new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(x0, 0, axisZ),
+              new THREE.Vector3(x1, 0, axisZ),
+            ]),
+            new THREE.LineBasicMaterial({ color: 0x44aa44 }),
+          ),
+        );
+      }
       center.copy(box.position);
     }
     scene.add(stockGroup);

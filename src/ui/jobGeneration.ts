@@ -16,9 +16,9 @@ import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
 import type { JobOp, ModelTransform, Move, Primitive, Stock, Tool, ToolPreset } from '../core/types';
-import { originSpan } from '../core/types';
+import { rotaryCalibrationOf } from '../core/types';
 import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
-import { stockTopZ } from './placement';
+import { stockSpan, stockTopZ } from './placement';
 
 export interface GeneratedOp {
   moves: Move[];
@@ -47,7 +47,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string }[] = [
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
   { kind: 'drill', label: 'Drill' },
-  { kind: 'index', label: 'Index (4th axis)' },
+  { kind: 'index', label: 'Index (4-axis)' },
   { kind: 'faceCylinder', label: 'Face cylinder' },
 ];
 
@@ -86,14 +86,18 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
   const stepDown = defaultStepDown(tool, materialId);
   switch (kind) {
     case 'faceCylinder': {
-      // face defaults follow the stock; non-cylinder stock keeps the last
-      // -resort constants until the user picks real values (the panel warns)
-      const cyl = stock.kind === 'cylinder' ? stock : null;
-      const [xStart, xEnd] = cyl ? originSpan(cyl.xOrigin, cyl.length) : [0, 100];
+      // face defaults follow the stock in 4-axis mode — any shape: a box
+      // rides the rotary axis too, its Ø being the Y-Z diagonal. 3-axis
+      // keeps the last-resort constants until the user picks real values
+      // (the panel warns).
+      const rotary = stock.axisMode === '4-axis';
+      const [xStart, xEnd] = rotary ? stockSpan(stock, 'x') : [0, 100];
       return {
         ...base,
         kind,
-        targetDiameter: cyl ? Math.max(1, cyl.calibration.effectiveRadius * 2 - 1) : 40,
+        targetDiameter: rotary
+          ? Math.max(1, rotaryCalibrationOf(stock).effectiveRadius * 2 - 1)
+          : 40,
         xStart,
         xEnd,
         primitiveId: null,
@@ -137,20 +141,20 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
 const fail = (error: string): GeneratedOp => ({ moves: [], minutes: 0, error, summary: null });
 
 /**
- * The indexed cutting frame for an op: null for flat work (datum 0 or box
- * stock), else a rotation about the stock axis mapping the A=0 features
- * into the frame the stock sits in at the datum angle. The A positioning
- * move is emitted by the Index op itself — these ops run after it.
+ * The indexed cutting frame for an op: null for flat work (datum 0 or 3-axis
+ * mode), else a rotation about the stock axis mapping the A=0 features into
+ * the frame the stock sits in at the datum angle. The A positioning move is
+ * emitted by the Index op itself — these ops run after it.
  */
 function indexFrame(
   datumAngle: number,
   stock: Stock,
 ): { rotate?: (p: { x: number; y: number; z: number }) => import('three').Vector3 } {
   if (datumAngle === 0) return {};
-  if (stock.kind !== 'cylinder') {
-    throw new Error('indexing needs cylinder stock — the job has an index datum on box stock');
+  if (stock.axisMode !== '4-axis') {
+    throw new Error('indexing needs 4-axis mode — the job has an index datum without it');
   }
-  return { rotate: indexedPointRotation(datumAngle, stock.calibration.axisZ) };
+  return { rotate: indexedPointRotation(datumAngle, rotaryCalibrationOf(stock).axisZ) };
 }
 
 /** The tool's own Makera preset for the stock material, if one matches
@@ -253,7 +257,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
 
     switch (op.kind) {
       case 'index': {
-        if (ctx.stock.kind !== 'cylinder') return fail('indexing needs cylinder stock');
+        if (ctx.stock.axisMode !== '4-axis') return fail('indexing needs 4-axis mode (Stock tab)');
         return {
           moves: [
             {
@@ -269,7 +273,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
         };
       }
       case 'faceCylinder': {
-        if (ctx.stock.kind !== 'cylinder') return fail('needs cylinder stock');
+        if (ctx.stock.axisMode !== '4-axis') return fail('face cylinder needs 4-axis mode (Stock tab)');
         // a target primitive overrides the X range and target diameter;
         // otherwise the op's explicit fields (avoiding vice jaws etc.)
         const prim =
@@ -298,7 +302,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             rotation: op.rotation,
             pattern: op.pattern,
           },
-          ctx.stock,
+          rotaryCalibrationOf(ctx.stock),
           tool,
         );
         return {

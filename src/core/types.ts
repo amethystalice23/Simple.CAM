@@ -127,6 +127,29 @@ export function originSpan(origin: OriginEdge, size: number): readonly [number, 
   }
 }
 
+/**
+ * Machine capability of the job — orthogonal to stock shape: a cylinder can
+ * sit in a vise (3-axis), a box can ride the rotary axis (4-axis).
+ */
+export type AxisMode = '3-axis' | '4-axis';
+
+/**
+ * Rotary geometry of the stock for 4-axis work. Cylinders carry their
+ * probed calibration; a box's geometry is derived — it behaves as a
+ * cylinder whose radius is half the Y-Z diagonal (the corners are the
+ * max radius; flats sit inside that circle, so facing cuts air over the
+ * flats before engaging corners — conservative, never gouges).
+ */
+export function rotaryCalibrationOf(stock: Stock): RotaryCalibration {
+  if (stock.kind === 'cylinder') return stock.calibration;
+  const [z0, z1] = originSpan(stock.origin.z, stock.sizeZ);
+  return {
+    aOriginDeg: 0,
+    axisZ: (z0 + z1) / 2,
+    effectiveRadius: Math.hypot(stock.sizeY, stock.sizeZ) / 2,
+  };
+}
+
 export type Stock =
   | {
       kind: 'box';
@@ -135,6 +158,8 @@ export type Stock =
       sizeZ: number;
       /** job origin (machine 0,0,0) location within the box, per axis */
       origin: { x: OriginEdge; y: OriginEdge; z: OriginEdge };
+      /** box has no stored calibration — rotaryCalibrationOf derives it */
+      axisMode: AxisMode;
       materialId: string;
     }
   | {
@@ -145,6 +170,7 @@ export type Stock =
       xOrigin: OriginEdge;
       /** rotation axis is machine X (4th axis parallel to X, verified) */
       calibration: RotaryCalibration;
+      axisMode: AxisMode;
       materialId: string;
     };
 
@@ -363,7 +389,7 @@ export type JobOp =
        * op establishes the cutting datum for every op after it in the
        * sequence — subsequent pocket/profile/drill ops run in the rotated
        * frame (their selected features mapped through the rotation, the
-       * indexed face "vertically up"). Cylinder stock only.
+       * indexed face "vertically up"). 4-axis mode only.
        */
       angle: number;
     })

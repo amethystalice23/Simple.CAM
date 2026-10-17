@@ -86,14 +86,31 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 Later (v2+): 3-axis custom roughing/finishing via opencamlib WASM
 (drop-cutter/push-cutter). Parked: dexel 3D relief on cylinder.
 
-### Stock calibration model
+### Stock: shape vs mode
 
-Every 4-axis job carries: A-origin (probed angular zero), axis Z (machine Z
+Stock has two orthogonal properties: **shape** (cylinder or box — pure
+geometry: placement spans, mesh, crown) and **mode** ('3-axis' or '4-axis' —
+machine capability). A cylinder can sit in a vise (3-axis); a box can ride
+the rotary axis (4-axis). The rotary ops (index, face cylinder) gate on mode,
+never on shape.
+
+### Stock calibration model (4-axis)
+
+Every 4-axis stock carries: A-origin (probed angular zero), axis Z (machine Z
 of the stock center — the Z1 probe on the 4th-axis motor block with known
 offsets; the same origin Makera Studio places), effective radius, optional
-center offsets. The stock surface is at axisZ + effectiveRadius. Source:
+center offsets. Cylinders store their probed calibration; a **box derives
+its rotary geometry instead** (never stored, so it cannot desync with size
+edits): axis Z = the Z-span center, effective radius = half the Y-Z
+diagonal (`hypot(sizeY, sizeZ)/2`). The box-on-rotary rule: treat it as a
+cylinder of Ø = hypot(Y, Z) — the corners are the max radius, the flats sit
+inside, so facing turns the corners off first and early-depth passes cut air
+over the flats (conservative, never gouges). Rotations throughout the app are
+about machine Y=0, so a 4-axis box is mounted Y-centered on the axis. The
+stock surface is at axisZ + effectiveRadius. Source:
 controller probe routines. The post emits a (commented or active) prep header
-(M465.1 / establish A0 / verify axis datum) documenting what the job assumes.
+(M465.1 / establish A0 / verify axis datum) documenting what the job assumes,
+gated on the job actually using A.
 
 ### Tool library (early Phase 1)
 

@@ -27,6 +27,20 @@ const FACE_PATTERNS = ['vertical', 'horizontal', 'spiral'] as const;
 type FacePattern = (typeof FACE_PATTERNS)[number];
 
 /**
+ * Normalize the stock from a stored job to the current shape. Files
+ * predating the axis-mode toggle carry no `axisMode`: shape implied it then
+ * (cylinder = 4th axis, box = flat), so that is the fallback — an explicit
+ * mode always wins. Runtime data, not a type error: parsed JSON is cast
+ * to Stock without validation.
+ */
+export function normalizeStock(stock: Stock): Stock {
+  const raw = (stock as { axisMode?: unknown }).axisMode;
+  const axisMode = raw === '3-axis' || raw === '4-axis' ? raw : null;
+  if (axisMode === stock.axisMode) return stock;
+  return { ...stock, axisMode: axisMode ?? (stock.kind === 'cylinder' ? '4-axis' : '3-axis') };
+}
+
+/**
  * Normalize ops from a stored job to the current shapes. Job files predating
  * the three-pattern facing rework carry `pattern: 'zigzag'` (or none at all)
  * — both map to 'spiral', the closest of the new patterns (a per-pass
@@ -105,7 +119,7 @@ export function parseJobFile(text: string): JobFile {
   if (!parsed.stock || !parsed.transform || !Array.isArray(parsed.ops) || !Array.isArray(parsed.primitives)) {
     throw new Error('job file is missing required sections');
   }
-  return { ...parsed, ops: normalizeJobOps(parsed.ops) };
+  return { ...parsed, stock: normalizeStock(parsed.stock), ops: normalizeJobOps(parsed.ops) };
 }
 
 /** Serialize + download (kept apart from the pure save/parse for testing). */

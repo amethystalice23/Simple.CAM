@@ -16,6 +16,7 @@ const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
   length: 100,
   xOrigin: 'min',
   calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 };
 const tool: Tool = { id: 't3', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };

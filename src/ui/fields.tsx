@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import type { OriginEdge } from '../core/types';
 
 /** Labeled text field; commits on change. */
 export function TextField(props: { label: string; value: string; onCommit: (v: string) => void }) {
@@ -69,10 +68,10 @@ export function NumInput(props: {
   );
 }
 
-export function Segmented(props: {
-  options: readonly OriginEdge[];
-  value: OriginEdge;
-  onChange: (v: OriginEdge) => void;
+export function Segmented<T extends string>(props: {
+  options: readonly T[];
+  value: T;
+  onChange: (v: T) => void;
 }) {
   return (
     <div className="segmented">

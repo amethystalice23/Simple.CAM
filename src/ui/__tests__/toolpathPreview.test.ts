@@ -8,6 +8,19 @@ const cylinderStock: Extract<Stock, { kind: 'cylinder' }> = {
   length: 100,
   xOrigin: 'min',
   calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+  axisMode: '4-axis',
+  materialId: 'aluminum-6061',
+};
+
+/** a box riding the rotary axis: derived axisZ at the Z-span center
+ * (z origin 'min', sizeZ 10 → axisZ 5), effective radius hypot(40,10)/2 */
+const boxStock4: Extract<Stock, { kind: 'box' }> = {
+  kind: 'box',
+  sizeX: 100,
+  sizeY: 40,
+  sizeZ: 10,
+  origin: { x: 'min', y: 'mid', z: 'min' },
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 };
 
@@ -46,7 +59,7 @@ describe('movesToSegments', () => {
       pattern: 'spiral',
     } as const;
     const tool = { id: 't1', name: '6mm flat', type: 'flat', diameter: 6, spindleRpm: 18000 } as const;
-    const res = faceCylinder(op, cylinderStock, tool);
+    const res = faceCylinder(op, cylinderStock.calibration, tool);
     const segs = movesToSegments(res.moves, cylinderStock);
     expect(segs.feed.length).toBeGreaterThan(0);
 
@@ -145,5 +158,26 @@ describe('movesToSegments', () => {
     expect(sweep[1]).toBeCloseTo(24, 1); // start Y
     expect(sweep[4]).toBeCloseTo(24, 1); // end Y — constant angle, not a diagonal
     expect(sweep[3]).toBeCloseTo(50, 9); // x advance
+  });
+
+  it('maps rotary moves under a 4-axis box via the derived axisZ', () => {
+    // index-style A-only rapid (invisible) turns the box 90°; the flat sweep
+    // after it un-rotates about the DERIVED axis (Z-span center, here z=5):
+    // machine (50, 0, 25) at A=90 draws at (50, 20, 5) — radius 20 about z=5
+    const moves: Move[] = [
+      { words: { x: 0, y: 0, z: 25 }, feed: 0, rapid: true }, // position only
+      { words: { a: 90 }, feed: 0, rapid: true }, // rotate the box (invisible)
+      { words: { x: 50 }, feed: 500 }, // sweep with the stock at A=90
+    ];
+    const segs = movesToSegments(moves, boxStock4);
+    expect(segs.rapid).toEqual([]); // position + index rapid draw nothing
+    expect(segs.feed.length / 6).toBe(1);
+    const end = segs.feed.slice(3, 6);
+    expect(end[0]).toBeCloseTo(50, 9); // x unchanged
+    expect(end[1]).toBeCloseTo(20, 9); // mapped Y: radius 20 at 3 o'clock
+    expect(end[2]).toBeCloseTo(5, 9); // mapped Z: the derived axis height
+    // 3-axis mode: the same moves draw raw — no rotary mapping at all
+    const flat = movesToSegments(moves, { ...boxStock4, axisMode: '3-axis' });
+    expect(flat.feed.slice(3, 6)).toEqual([50, 0, 25]);
   });
 });

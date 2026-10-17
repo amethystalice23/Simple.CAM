@@ -11,6 +11,7 @@ const stock: Extract<Stock, { kind: 'cylinder' }> = {
   length: 100,
   xOrigin: 'min',
   calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 };
 const op: FaceCylinderOp = {
@@ -30,7 +31,7 @@ const op: FaceCylinderOp = {
 };
 
 const gcode = postCarvera({
-  moves: faceCylinder(op, stock, tool).moves,
+  moves: faceCylinder(op, stock.calibration, tool).moves,
   tools: [tool],
   options: { jobName: 'face-test' },
 });
@@ -59,6 +60,32 @@ describe('carvera post-processor', () => {
       options: { jobName: 'index-test' },
     });
     expect(index.includes('G92.4 A0 S0\nM30')).toBe(false);
+  });
+
+  it('emits the 4th-axis prep header only for jobs that use A at all', () => {
+    // a pure 3-axis job: no A word anywhere — no prep assumptions needed
+    const flat = postCarvera({
+      moves: [
+        { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true },
+        { words: { z: -1 }, feed: 200 },
+        { words: { x: 10 }, feed: 500 },
+      ],
+      tools: [tool],
+      options: { jobName: 'flat-test' },
+    });
+    expect(flat).not.toContain('M465.1');
+    expect(flat).not.toContain('G10 L20 P0 A0');
+    expect(flat).not.toContain('prep assumptions');
+
+    // an index-only job still rides the 4th axis: the angular zero and axis
+    // datum are exactly what it depends on, so it KEEPS the header
+    const indexOnly = postCarvera({
+      moves: [{ words: { a: 90 }, feed: 0, rapid: true, comment: 'index stock to A90°' }],
+      tools: [tool],
+      options: { jobName: 'index-only-test' },
+    });
+    expect(indexOnly).toContain('M465.1');
+    expect(indexOnly).toContain('G10 L20 P0 A0');
   });
 
   it('never emits a G93 feed line without F (firmware halts otherwise)', () => {

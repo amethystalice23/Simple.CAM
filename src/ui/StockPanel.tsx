@@ -1,4 +1,5 @@
-import type { Stock } from '../core/types';
+import type { AxisMode, Stock } from '../core/types';
+import { rotaryCalibrationOf } from '../core/types';
 import { MATERIALS } from '../core/materials';
 import { NumberField, Segmented } from './fields';
 
@@ -12,11 +13,23 @@ function mergeStock<S extends Stock>(base: S, next: Partial<S>): S {
   return { ...base, ...next };
 }
 
+/** Mode (machine capability) is orthogonal to shape: a cylinder can sit in a
+ * vise, a box can ride the rotary axis. */
+const AXIS_MODES: readonly AxisMode[] = ['3-axis', '4-axis'];
+
 export function StockPanel({ stock, onChange }: Props) {
 
   return (
     <section>
       <h2>Stock</h2>
+      <div className="field">
+        <span>Mode</span>
+        <Segmented
+          options={AXIS_MODES}
+          value={stock.axisMode}
+          onChange={(v) => onChange(mergeStock(stock, { axisMode: v }))}
+        />
+      </div>
       <div className="segmented wide">
         <button
           type="button"
@@ -28,12 +41,13 @@ export function StockPanel({ stock, onChange }: Props) {
                 length: 100,
                 xOrigin: 'min',
                 calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+                axisMode: stock.axisMode,
                 materialId: stock.materialId,
               },
             )
           }
         >
-          Cylinder (4th axis)
+          Cylinder
         </button>
         <button
           type="button"
@@ -46,6 +60,7 @@ export function StockPanel({ stock, onChange }: Props) {
                 sizeY: 100,
                 sizeZ: 20,
                 origin: { x: 'min', y: 'min', z: 'max' },
+                axisMode: stock.axisMode,
                 materialId: stock.materialId,
               },
             )
@@ -80,20 +95,26 @@ export function StockPanel({ stock, onChange }: Props) {
               onChange={(v) => onChange(mergeStock(stock, { xOrigin: v }))}
             />
           </div>
-          <NumberField
-            label="A origin (deg, probed)"
-            value={stock.calibration.aOriginDeg}
-            onCommit={(v) =>
-              onChange(mergeStock(stock, { calibration: { ...stock.calibration, aOriginDeg: v } }))
-            }
-          />
+          {stock.axisMode === '4-axis' && (
+            <NumberField
+              label="A origin (deg, probed)"
+              value={stock.calibration.aOriginDeg}
+              onCommit={(v) =>
+                onChange(mergeStock(stock, { calibration: { ...stock.calibration, aOriginDeg: v } }))
+              }
+            />
+          )}
           <NumberField
             label="Axis Z (mm, machine)"
             value={stock.calibration.axisZ}
             step={0.1}
             onCommit={(v) => onChange(mergeStock(stock, { calibration: { ...stock.calibration, axisZ: v } }))}
           />
-          <p className="hint">Axis Z is the stock-center datum: the Z1-probed 4th-axis motor-block offset (where Makera Studio puts Z0).</p>
+          <p className="hint">
+            {stock.axisMode === '4-axis'
+              ? 'Axis Z is the stock-center datum: the Z1-probed 4th-axis motor-block offset (where Makera Studio puts Z0).'
+              : 'Axis Z is the stock-center height — it defines the crown (top of the cylinder) the depth boxes measure from.'}
+          </p>
         </>
       ) : (
         <>
@@ -115,6 +136,13 @@ export function StockPanel({ stock, onChange }: Props) {
               ))}
             </div>
           </div>
+          {stock.axisMode === '4-axis' && (
+            <p className="hint">
+              4-axis: the box rotates about Y=0 through its Z center — treated as
+              Ø{(rotaryCalibrationOf(stock).effectiveRadius * 2).toFixed(1)} (the Y-Z diagonal;
+              corners face off first, flats cut as air)
+            </p>
+          )}
         </>
       )}
 

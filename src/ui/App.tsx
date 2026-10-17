@@ -6,7 +6,7 @@ import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
-import { identityTransform } from '../core/types';
+import { identityTransform, rotaryCalibrationOf } from '../core/types';
 import type {
   JobOp,
   ModelTransform,
@@ -32,7 +32,7 @@ import {
   seedJobOpIds,
   type GeneratedOp,
 } from './jobGeneration';
-import { decodeStl, downloadJobFile, jobFingerprint, normalizeJobOps, parseJobFile, saveJobFile } from './jobFile';
+import { decodeStl, downloadJobFile, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
 import { transformFn } from './featureOverlays';
@@ -46,6 +46,7 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   length: 100,
   xOrigin: 'min',
   calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 };
 
@@ -172,8 +173,8 @@ export function App() {
    * the latest Index op preceding it in the sequence */
   const featureDepthInFrame = (op: JobOp, p: Vector3): number => {
     const angle = datumAngleBefore(ops, op.id);
-    if (stock.kind === 'cylinder' && angle !== 0) {
-      return indexedPointRotation(angle, stock.calibration.axisZ)(p).z;
+    if (stock.axisMode === '4-axis' && angle !== 0) {
+      return indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ)(p).z;
     }
     return p.z;
   };
@@ -337,7 +338,7 @@ export function App() {
   /** index the stock so the op's first selected feature faces the cutter:
    * a face's normal (or hole's axis) aligned with machine +Z */
   const indexToSelection = (op: JobOp) => {
-    if (stock.kind !== 'cylinder' || op.kind !== 'index') return;
+    if (stock.axisMode !== '4-axis' || op.kind !== 'index') return;
     const id = op.featureIds[0];
     if (!id || !features) return;
     const xf = transformFn(transform);
@@ -350,7 +351,7 @@ export function App() {
     if (!dir && e) {
       // edges have no facing direction: fall back to their midpoint's radial
       const mid = xf(e.a).add(xf(e.b)).multiplyScalar(0.5);
-      dir = mid.sub(new Vector3(0, 0, stock.calibration.axisZ)).normalize();
+      dir = mid.sub(new Vector3(0, 0, rotaryCalibrationOf(stock).axisZ)).normalize();
     }
     if (!dir) return;
     const angle = indexToAlignDirection(dir);
@@ -427,7 +428,8 @@ export function App() {
     // imported files normalize inside parseJobFile; the autosave restore
     // skips it, so normalize here — the one gate both load paths pass
     const ops = normalizeJobOps(job.ops);
-    setStock(job.stock);
+    const stock = normalizeStock(job.stock);
+    setStock(stock);
     setPrimitives(job.primitives);
     setOps(ops);
     seedJobOpIds(ops);
@@ -672,7 +674,7 @@ export function App() {
                 expandedOpId={expandedOpId}
                 showPreview={showPreview}
                 hasModel={!!geometry}
-                stockKind={stock.kind}
+                axisMode={stock.axisMode}
                 stock={stock}
                 materialId={stock.materialId}
                 primitives={primitives}

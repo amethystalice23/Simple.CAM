@@ -19,6 +19,7 @@ const cylinderStock: Extract<Stock, { kind: 'cylinder' }> = {
   length: 100,
   xOrigin: 'min',
   calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 };
 

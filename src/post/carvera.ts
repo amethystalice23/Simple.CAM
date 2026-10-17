@@ -66,11 +66,27 @@ export function postCarvera(input: PostInput): string {
   const lines: string[] = [];
   const active = (s: string) => (opts.prepHeader === 'active' ? s : `; ${s}`);
 
+  // Pre-pass over the moves for rotary state, so the header can act on it:
+  // anyA — any A word at all (even a pure-A index rapid): the job rides the
+  // 4th axis and needs the prep-assumption header (an index-only job
+  // depends on the angular zero and axis datum as much as a facing job).
+  // usedA — anything that leaves A unwrapped: feed moves that turn A
+  // (coordinated XYZ+A or the A-only rings of vertical facing) and
+  // A-advancing positioning rapids (horizontal passes) — but NOT the pure-A
+  // rapid of an Index op, which sets the datum on purpose.
+  const anyA = input.moves.some((m) => m.words.a !== undefined);
+  const usedA = input.moves.some((m) => {
+    if (m.words.a === undefined) return false;
+    const pureARapid =
+      m.rapid && m.words.x === undefined && m.words.y === undefined && m.words.z === undefined;
+    return !pureARapid;
+  });
+
   // ---- header ----
   lines.push(`; simple.cam v0.0.1 — job "${opts.jobName}"`);
   lines.push(`; generated ${new Date().toISOString()}`);
   lines.push(...toolComments(input.tools));
-  if (opts.prepHeader !== 'none') {
+  if (opts.prepHeader !== 'none' && anyA) {
     lines.push('; ---- prep assumptions (run in controller before this job) ----');
     lines.push(active('M465.1            ; 4th-axis stock leveling/twist via probe'));
     lines.push(active('G10 L20 P0 A0      ; establish angular zero'));
@@ -82,7 +98,6 @@ export function postCarvera(input: PostInput): string {
   // ---- moves ----
   // holder object: TS narrowing of closure-mutated lets is unsound here
   const st: { mode: FeedMode; lastFeed: number } = { mode: 'G94', lastFeed: -1 };
-  let usedA = false;
 
   const setMode = (want: FeedMode) => {
     if (st.mode !== want) {
@@ -94,13 +109,6 @@ export function postCarvera(input: PostInput): string {
 
   for (const m of input.moves) {
     const simultaneous = isSimultaneous(m);
-    // The wrap must fire for anything that leaves A unwrapped: feed moves
-    // that turn A (coordinated XYZ+A or the A-only rings of vertical
-    // facing) and A-advancing positioning rapids (horizontal passes) — but
-    // NOT the pure-A rapid of an Index op, which sets the datum on purpose.
-    const pureARapid =
-      m.rapid && m.words.x === undefined && m.words.y === undefined && m.words.z === undefined;
-    if (m.words.a !== undefined && !pureARapid) usedA = true;
 
     if (m.rapid) {
       lines.push(`G0 ${wordsLine(m, false)}${m.comment ? ` ; ${m.comment}` : ''}`);

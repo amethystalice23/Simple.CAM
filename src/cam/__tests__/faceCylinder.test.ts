@@ -5,8 +5,8 @@ import {
   ROTARY_FEED_DEG_MIN,
   SAFE_CLEARANCE,
 } from '../faceCylinder';
-import type { FaceCylinderOp, Stock, Tool } from '../../core/types';
-import { isSimultaneous } from '../../core/types';
+import type { FaceCylinderOp, RotaryCalibration, Stock, Tool } from '../../core/types';
+import { isSimultaneous, rotaryCalibrationOf } from '../../core/types';
 
 const tool: Tool = {
   id: 't1',
@@ -21,8 +21,12 @@ const stock: Extract<Stock, { kind: 'cylinder' }> = {
   length: 100,
   xOrigin: 'min',
   calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 }, // Ø50 stock, axis at Z0
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 };
+
+// the generator takes the resolved rotary geometry, not the stock itself
+const calibration: RotaryCalibration = stock.calibration;
 
 const op: FaceCylinderOp = {
   kind: 'faceCylinder',
@@ -44,7 +48,7 @@ const op: FaceCylinderOp = {
 const entryMinutes = Math.max(1 / op.plungeFeed, (90 / 360) / MAX_ROTARY_RPM);
 
 describe('faceCylinder: spiral', () => {
-  const res = faceCylinder(op, stock, tool);
+  const res = faceCylinder(op, calibration, tool);
   const stepDowns = res.moves.filter(
     (m) => !m.rapid && m.words.z !== undefined && m.words.a !== undefined && m.words.x === undefined,
   );
@@ -93,13 +97,13 @@ describe('faceCylinder: spiral', () => {
   });
 
   it('reverses A for ccw rotation', () => {
-    const ccw = faceCylinder({ ...op, rotation: 'ccw' }, stock, tool);
+    const ccw = faceCylinder({ ...op, rotation: 'ccw' }, calibration, tool);
     const ccwSweeps = ccw.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
     expect(ccwSweeps[0].words.a).toBeCloseTo(-(100 / 4.8) * 360 - 90, 3);
   });
 
   it('respects the axial range', () => {
-    const narrow = faceCylinder({ ...op, xStart: 10, xEnd: 90 }, stock, tool);
+    const narrow = faceCylinder({ ...op, xStart: 10, xEnd: 90 }, calibration, tool);
     const narrowSweeps = narrow.moves.filter(
       (m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined,
     );
@@ -108,7 +112,7 @@ describe('faceCylinder: spiral', () => {
 });
 
 describe('faceCylinder: vertical (rings)', () => {
-  const res = faceCylinder({ ...op, pattern: 'vertical' }, stock, tool);
+  const res = faceCylinder({ ...op, pattern: 'vertical' }, calibration, tool);
   const ringMoves = res.moves.filter(
     (m) => !m.rapid && m.words.a !== undefined && m.words.x === undefined && m.words.z === undefined,
   );
@@ -178,7 +182,7 @@ describe('faceCylinder: vertical (rings)', () => {
   });
 
   it('reverses A for ccw rotation', () => {
-    const ccw = faceCylinder({ ...op, pattern: 'vertical', rotation: 'ccw' }, stock, tool);
+    const ccw = faceCylinder({ ...op, pattern: 'vertical', rotation: 'ccw' }, calibration, tool);
     const ccwRings = ccw.moves.filter(
       (m) => !m.rapid && m.words.a !== undefined && m.words.x === undefined && m.words.z === undefined,
     );
@@ -194,7 +198,7 @@ describe('faceCylinder: vertical (rings)', () => {
 });
 
 describe('faceCylinder: horizontal (indexed passes)', () => {
-  const res = faceCylinder({ ...op, pattern: 'horizontal' }, stock, tool);
+  const res = faceCylinder({ ...op, pattern: 'horizontal' }, calibration, tool);
   const sweeps = res.moves.filter((m) => !m.rapid && m.words.x !== undefined);
   const plunges = res.moves.filter((m) => !m.rapid && m.words.z !== undefined);
   const indexRapids = res.moves.filter((m) => m.rapid && m.words.a !== undefined);
@@ -248,23 +252,63 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
 describe('faceCylinder: validation', () => {
   it('rejects a target above stock diameter', () => {
     expect(() =>
-      faceCylinder({ ...op, targetDiameter: 60 }, stock, tool),
+      faceCylinder({ ...op, targetDiameter: 60 }, calibration, tool),
     ).toThrowError(/not below stock radius/);
   });
 
   it('rejects a zero-length axial range', () => {
-    expect(() => faceCylinder({ ...op, xEnd: 0 }, stock, tool)).toThrowError(/must differ/);
+    expect(() => faceCylinder({ ...op, xEnd: 0 }, calibration, tool)).toThrowError(/must differ/);
   });
 
   it('rejects a non-positive cut feed', () => {
-    expect(() => faceCylinder({ ...op, feed: 0 }, stock, tool)).toThrowError(/feed must be positive/);
+    expect(() => faceCylinder({ ...op, feed: 0 }, calibration, tool)).toThrowError(/feed must be positive/);
   });
 
   it('rejects a non-positive step-over', () => {
-    expect(() => faceCylinder({ ...op, stepOver: 0 }, stock, tool)).toThrowError(/stepOver must be positive/);
+    expect(() => faceCylinder({ ...op, stepOver: 0 }, calibration, tool)).toThrowError(/stepOver must be positive/);
   });
 
   it('rejects a zero-diameter tool', () => {
-    expect(() => faceCylinder(op, stock, { ...tool, diameter: 0 })).toThrowError(/tool diameter/);
+    expect(() => faceCylinder(op, calibration, { ...tool, diameter: 0 })).toThrowError(/tool diameter/);
+  });
+});
+
+describe('faceCylinder: 4-axis box stock (derived diagonal calibration)', () => {
+  const box: Extract<Stock, { kind: 'box' }> = {
+    kind: 'box',
+    sizeX: 100,
+    sizeY: 20,
+    sizeZ: 30,
+    origin: { x: 'min', y: 'mid', z: 'min' },
+    axisMode: '4-axis',
+    materialId: 'aluminum-6061',
+  };
+  const calib = rotaryCalibrationOf(box);
+  // corners of a 20(Y)×30(Z) box sit at half the Y-Z diagonal
+  const r0 = Math.hypot(20, 30) / 2;
+
+  it('derives box rotary geometry: axis at the Z-span center, radius = half-diagonal', () => {
+    expect(calib.aOriginDeg).toBe(0);
+    expect(calib.axisZ).toBe(15); // origin z 'min' => box spans machine Z 0…30
+    expect(calib.effectiveRadius).toBeCloseTo(r0, 9);
+  });
+
+  it('derives axisZ from the origin placement', () => {
+    const flipped = rotaryCalibrationOf({ ...box, origin: { ...box.origin, z: 'max' } });
+    expect(flipped.axisZ).toBe(-15); // origin z 'max' => box spans machine Z −30…0
+    expect(flipped.effectiveRadius).toBeCloseTo(r0, 9);
+  });
+
+  it('passes the cylinder stock calibration through unchanged', () => {
+    expect(rotaryCalibrationOf(stock)).toBe(stock.calibration);
+  });
+
+  it('faces the corners first: surface at axisZ + half-diagonal', () => {
+    const res = faceCylinder({ ...op, targetDiameter: 30 }, calib, tool);
+    expect(res.radialDepth).toBeCloseTo(r0 - 15, 9); // Ø30 target on Ø36.06 box corners
+    // first Z cut sits one step-down below the corner surface; the flats
+    // are lower still, so this pass cuts air over them — never a gouge
+    const firstZ = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
+    expect(firstZ?.words.z).toBeCloseTo(15 + r0 - op.stepDown, 6);
   });
 });

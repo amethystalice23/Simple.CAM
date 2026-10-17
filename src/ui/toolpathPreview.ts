@@ -2,21 +2,23 @@
  * Toolpath preview (PLAN.md "Toolpath preview"): Move[] IR → segments in
  * the DISPLAY frame — the un-rotated stock/model as shown at A=0 — so
  * paths draw over the features they cut. Modal axis accumulation; feeds
- * and rapids separated. Mapping into the display frame:
- *  - rotary moves (A-word, cylinder stock): the tool's YZ position rotates
- *    back about the stock axis by −A — wrapped cuts draw on the cylinder
- *    surface where they happen;
+ * and rapids separated. Mapping into the display frame (4-axis stock,
+ * cylinder or box):
+ *  - rotary moves (A-word): the tool's YZ position rotates back about the
+ *    stock axis by −A — wrapped cuts draw on the stock surface where they
+ *    happen;
  *  - pure-A RAPID moves (an Index op) draw nothing (the stock rotates, not
  *    the tool) but establish the datum for what follows. A-only FEED moves
  *    are cuts (vertical facing's full-revolution rings) and draw;
- *  - flat moves on cylinder stock are un-rotated by the running accumulated
- *    A, so an indexed pocket draws over its feature as currently displayed
- *    and a facing plunge draws at the angle the stock is actually at. The
- *    emitted G-code is untouched machine coordinates — only the drawing is
+ *  - flat moves are un-rotated by the running accumulated A, so an indexed
+ *    pocket draws over its feature as currently displayed and a facing
+ *    plunge draws at the angle the stock is actually at. The emitted
+ *    G-code is untouched machine coordinates — only the drawing is
  *    display-frame.
  */
 
 import type { Move, Stock } from '../core/types';
+import { rotaryCalibrationOf } from '../core/types';
 
 export interface PreviewSegments {
   /** flat xyz pairs per segment: [x0,y0,z0, x1,y1,z1, ...] */
@@ -25,8 +27,8 @@ export interface PreviewSegments {
 }
 
 export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegments {
-  const isCylinder = stock?.kind === 'cylinder';
-  const axisZ = isCylinder ? stock.calibration.axisZ : 0;
+  const rotary = stock?.axisMode === '4-axis';
+  const axisZ = rotary ? rotaryCalibrationOf(stock).axisZ : 0;
   const pos = { x: 0, y: 0, z: 0, a: 0 };
   const feed: number[] = [];
   const rapid: number[] = [];
@@ -72,10 +74,10 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
     }
 
     const target = m.rapid ? rapid : feed;
-    const rotary = isCylinder && m.words.a !== undefined;
-    const da = rotary && prevM ? pos.a - prevM.a : 0;
+    const isRotary = rotary && m.words.a !== undefined;
+    const da = isRotary && prevM ? pos.a - prevM.a : 0;
 
-    if (rotary && prev && prevM && Math.abs(da) > ROT_STEP_DEG) {
+    if (isRotary && prev && prevM && Math.abs(da) > ROT_STEP_DEG) {
       // a long rotary sweep (a facing pass is thousands of degrees in one
       // move): interpolate in machine space and map each step, so the
       // helix draws as a helix instead of one giant chord
@@ -96,10 +98,10 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
       let x = pos.x;
       let y = pos.y;
       let z = pos.z;
-      if (rotary) {
+      if (isRotary) {
         // rotary move: un-rotate by its own accumulated A
         [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
-      } else if (isCylinder) {
+      } else if (rotary) {
         // flat move: un-rotate by the stock's current A (the index op's
         // angle for indexed jobs, the pass angle mid-facing) so it draws
         // where the material actually is. A=0 (or flat stock) is identity.

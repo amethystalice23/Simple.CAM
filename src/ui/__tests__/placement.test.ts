@@ -23,6 +23,7 @@ const cylinder: Extract<Stock, { kind: 'cylinder' }> = {
   length: 100,
   xOrigin: 'min',
   calibration: { aOriginDeg: 0, axisZ: 10, effectiveRadius: 25 },
+  axisMode: '4-axis',
   materialId: 'aluminum-6061',
 };
 
@@ -32,6 +33,7 @@ const boxStock: Extract<Stock, { kind: 'box' }> = {
   sizeY: 60,
   sizeZ: 20,
   origin: { x: 'min', y: 'min', z: 'max' },
+  axisMode: '3-axis',
   materialId: 'hardwood',
 };
 

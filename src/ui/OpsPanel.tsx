@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { JobOp, Primitive, Stock, Tool } from '../core/types';
+import type { AxisMode, JobOp, Primitive, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import { defaultFaceStepOver, defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
@@ -13,7 +13,8 @@ interface Props {
   expandedOpId: string | null;
   showPreview: boolean;
   hasModel: boolean;
-  stockKind: Stock['kind'];
+  /** machine capability — gates the rotary ops (index, face cylinder) */
+  axisMode: AxisMode;
   /** the stock object — new ops derive their defaults from it */
   stock: Stock;
   /** stock material id, for tool-appropriate step defaults */
@@ -96,13 +97,13 @@ function DepthFields(props: {
 /** The index op: absolute A, plus align-the-selection convenience. */
 function IndexFields(props: {
   op: Extract<JobOp, { kind: 'index' }>;
-  stockKind: Stock['kind'];
+  axisMode: AxisMode;
   onIndexToSelection: (op: JobOp) => void;
   onChange: (op: JobOp) => void;
 }) {
   const { op } = props;
-  if (props.stockKind !== 'cylinder') {
-    return <p className="hint">indexing needs cylinder stock</p>;
+  if (props.axisMode !== '4-axis') {
+    return <p className="hint">indexing needs 4-axis mode (Stock tab)</p>;
   }
   return (
     <>
@@ -132,7 +133,7 @@ function IndexFields(props: {
 /** The per-type parameter fields for an open op panel. */
 function ParamFields(props: {
   op: JobOp;
-  stockKind: Stock['kind'];
+  axisMode: AxisMode;
   primitives: Primitive[];
   /** the op's own tool (undefined if its id dangles after a library edit) */
   tool?: Tool;
@@ -147,7 +148,7 @@ function ParamFields(props: {
       return (
         <IndexFields
           op={op}
-          stockKind={props.stockKind}
+          axisMode={props.axisMode}
           onIndexToSelection={props.onIndexToSelection}
           onChange={props.onChange}
         />
@@ -392,7 +393,7 @@ export function OpsPanel(props: Props) {
                   </label>
                   <ParamFields
                     op={op}
-                    stockKind={props.stockKind}
+                    axisMode={props.axisMode}
                     primitives={props.primitives}
                     tool={props.tools.find((t) => t.id === op.toolId)}
                     onChange={props.onChangeOp}
@@ -405,8 +406,8 @@ export function OpsPanel(props: Props) {
                   {!props.hasModel && op.kind !== 'faceCylinder' && (
                     <p className="hint">needs a loaded model</p>
                   )}
-                  {op.kind === 'faceCylinder' && props.stockKind !== 'cylinder' && (
-                    <p className="hint">needs cylinder stock</p>
+                  {op.kind === 'faceCylinder' && props.axisMode !== '4-axis' && (
+                    <p className="hint">needs 4-axis mode (Stock tab)</p>
                   )}
                 </div>
               )}

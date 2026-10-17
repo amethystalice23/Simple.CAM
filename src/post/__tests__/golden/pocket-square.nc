@@ -1,9 +1,5 @@
 ; simple.cam v0.0.1 — job "pocket-square"
 ; TOOL: T1 name="2mm flat" type=flat diameter=2.000 spindle=18000rpm
-; ---- prep assumptions (run in controller before this job) ----
-; M465.1            ; 4th-axis stock leveling/twist via probe
-; G10 L20 P0 A0      ; establish angular zero
-; verify 4th-axis Z datum (stock-center, Z1-probed) matches the job stock calibration
 G21 G90 G94
 G92.4 A0 S0
 G0 X9.000 Y9.000 Z5.000 ; level z-1.00 pass 1

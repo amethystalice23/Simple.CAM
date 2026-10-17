@@ -139,12 +139,13 @@ describe('generator post goldens', () => {
     length: 100,
     xOrigin: 'min',
     calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+    axisMode: '4-axis',
     materialId: 'aluminum-6061',
   } as const;
   checkGolden(
     'face-spiral.nc',
     postCarvera({
-      moves: faceCylinder(spiralFaceOp, faceStock, tool).moves,
+      moves: faceCylinder(spiralFaceOp, faceStock.calibration, tool).moves,
       tools: [tool],
       options: { jobName: 'face-spiral' },
     }),
@@ -171,7 +172,7 @@ describe('generator post goldens', () => {
   checkGolden(
     'face-vertical.nc',
     postCarvera({
-      moves: faceCylinder(ringFaceOp, faceStock, tool).moves,
+      moves: faceCylinder(ringFaceOp, faceStock.calibration, tool).moves,
       tools: [tool],
       options: { jobName: 'face-cylinder' },
     }),

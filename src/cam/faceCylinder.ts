@@ -1,5 +1,10 @@
 /**
- * Face a cylinder to a target diameter — the "4D lathe" operation.
+ * Face rotary stock to a target diameter — the "4D lathe" operation.
+ *
+ * Works for any 4-axis stock via its resolved calibration: cylinder stock
+ * passes its probed calibration; box stock is faced as a cylinder of the
+ * Y-Z half-diagonal radius (rotaryCalibrationOf) — corners turn off first,
+ * early passes cut air over the flats, so it never gouges.
  *
  * Z is stepped down per depth level until the radial depth reaches
  * effectiveRadius - targetDiameter/2: roughing passes at stepDown, then one
@@ -22,7 +27,7 @@
  * at ROTARY_FEED_DEG_MIN (deg/min).
  */
 
-import type { FaceCylinderOp, Move, Stock, Tool } from '../core/types';
+import type { FaceCylinderOp, Move, RotaryCalibration, Tool } from '../core/types';
 
 /** Community-firmware sustainable rotary limit (C1 harmonic drive). */
 export const MAX_ROTARY_RPM = 6.6;
@@ -67,10 +72,9 @@ function ringPositions(from: number, to: number, stepOver: number): number[] {
 
 export function faceCylinder(
   op: FaceCylinderOp,
-  stock: Extract<Stock, { kind: 'cylinder' }>,
+  calibration: RotaryCalibration,
   tool: Tool,
 ): FaceCylinderResult {
-  if (stock.kind !== 'cylinder') throw new Error('faceCylinder requires cylindrical stock');
   if (op.targetDiameter <= 0) throw new Error('targetDiameter must be positive');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
   if (op.stepOver <= 0) throw new Error('stepOver must be positive');
@@ -81,7 +85,7 @@ export function faceCylinder(
     throw new Error(`unknown face pattern ${String(op.pattern)}`);
   }
 
-  const { axisZ, effectiveRadius: r0 } = stock.calibration;
+  const { axisZ, effectiveRadius: r0 } = calibration;
   const r1 = op.targetDiameter / 2;
   const totalDepth = r0 - r1;
   if (totalDepth <= 0) {
