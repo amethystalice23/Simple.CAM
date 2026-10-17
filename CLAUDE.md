@@ -37,3 +37,8 @@ npm test           # vitest run (generators + post golden files)
 - `post-processor` — Carvera dialect, G93/G92.4 rules, golden tests (`src/post`)
 - `viewport-ui` — React + three.js front end (`src/ui`)
 - 
+- `runner` — cheap model (haiku). Mechanical verification only: run the
+  unit tests, the build, or golden regeneration and relay the output.
+  **Delegate to it whenever you need a test/build result and nothing
+  else** — don't run `npm test` inline unless you're mid-debug and need
+  the output yourself. It never edits source files.
