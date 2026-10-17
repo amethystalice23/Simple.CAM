@@ -348,25 +348,36 @@ export function Viewport({
     let center = new THREE.Vector3();
 
     if (stock.kind === 'cylinder') {
-      const { effectiveRadius: r, axisZ } = stock.calibration;
-      const [x0, x1] = originSpan(stock.xOrigin, stock.length);
-      const cx = (x0 + x1) / 2;
-      // Z0 for 4-axis work is the stock center (the axis datum), so the
-      // cylinder is drawn centered on machine Z = axisZ
+      const r = stock.calibration.effectiveRadius;
       const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, stock.length, 64), stockMat);
-      cyl.rotation.z = Math.PI / 2; // default Y-axis cylinder → machine X
-      cyl.position.set(cx, 0, axisZ);
-      stockGroup.add(cyl);
-      stockGroup.add(
-        new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints([
-            new THREE.Vector3(x0, 0, axisZ),
-            new THREE.Vector3(x1, 0, axisZ),
-          ]),
-          new THREE.LineBasicMaterial({ color: 0x44aa44 }),
-        ),
-      );
-      center.set(cx, 0, axisZ);
+      if (stock.axisMode === '3-axis') {
+        // 3-axis: the cylinder stands vertical (axis ∥ Z), centered on X0/Y0;
+        // machine Z0 sits along its height per xOrigin
+        const [z0, z1] = originSpan(stock.xOrigin, stock.length);
+        cyl.rotation.x = Math.PI / 2; // default Y-axis cylinder → machine Z
+        cyl.position.set(0, 0, (z0 + z1) / 2);
+        stockGroup.add(cyl);
+        center.set(0, 0, (z0 + z1) / 2);
+      } else {
+        // 4-axis: Z0 is the stock center (the axis datum), so the cylinder
+        // lies along machine X, drawn centered on Z = axisZ
+        const axisZ = stock.calibration.axisZ;
+        const [x0, x1] = originSpan(stock.xOrigin, stock.length);
+        const cx = (x0 + x1) / 2;
+        cyl.rotation.z = Math.PI / 2; // default Y-axis cylinder → machine X
+        cyl.position.set(cx, 0, axisZ);
+        stockGroup.add(cyl);
+        stockGroup.add(
+          new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(x0, 0, axisZ),
+              new THREE.Vector3(x1, 0, axisZ),
+            ]),
+            new THREE.LineBasicMaterial({ color: 0x44aa44 }),
+          ),
+        );
+        center.set(cx, 0, axisZ);
+      }
     } else {
       const box = new THREE.Mesh(new THREE.BoxGeometry(stock.sizeX, stock.sizeY, stock.sizeZ), stockMat);
       const [x0, x1] = originSpan(stock.origin.x, stock.sizeX);

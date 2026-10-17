@@ -82,13 +82,13 @@ export function StockPanel({ stock, onChange }: Props) {
             }
           />
           <NumberField
-            label="Length (mm)"
+            label={stock.axisMode === '3-axis' ? 'Height (mm)' : 'Length (mm)'}
             value={stock.length}
             min={1}
             onCommit={(v) => onChange(mergeStock(stock, { length: v }))}
           />
           <div className="field">
-            <span>X0 along axis</span>
+            <span>{stock.axisMode === '3-axis' ? 'Z0 along axis' : 'X0 along axis'}</span>
             <Segmented
               options={['min', 'mid', 'max']}
               value={stock.xOrigin}
@@ -96,25 +96,32 @@ export function StockPanel({ stock, onChange }: Props) {
             />
           </div>
           {stock.axisMode === '4-axis' && (
-            <NumberField
-              label="A origin (deg, probed)"
-              value={stock.calibration.aOriginDeg}
-              onCommit={(v) =>
-                onChange(mergeStock(stock, { calibration: { ...stock.calibration, aOriginDeg: v } }))
-              }
-            />
+            <>
+              <NumberField
+                label="A origin (deg, probed)"
+                value={stock.calibration.aOriginDeg}
+                onCommit={(v) =>
+                  onChange(mergeStock(stock, { calibration: { ...stock.calibration, aOriginDeg: v } }))
+                }
+              />
+              <NumberField
+                label="Axis Z (mm, machine)"
+                value={stock.calibration.axisZ}
+                step={0.1}
+                onCommit={(v) => onChange(mergeStock(stock, { calibration: { ...stock.calibration, axisZ: v } }))}
+              />
+              <p className="hint">
+                Axis Z is the stock-center datum: the Z1-probed 4th-axis motor-block offset (where
+                Makera Studio puts Z0).
+              </p>
+            </>
           )}
-          <NumberField
-            label="Axis Z (mm, machine)"
-            value={stock.calibration.axisZ}
-            step={0.1}
-            onCommit={(v) => onChange(mergeStock(stock, { calibration: { ...stock.calibration, axisZ: v } }))}
-          />
-          <p className="hint">
-            {stock.axisMode === '4-axis'
-              ? 'Axis Z is the stock-center datum: the Z1-probed 4th-axis motor-block offset (where Makera Studio puts Z0).'
-              : 'Axis Z is the stock-center height — it defines the crown (top of the cylinder) the depth boxes measure from.'}
-          </p>
+          {stock.axisMode === '3-axis' && (
+            <p className="hint">
+              Stands vertical: axis ∥ Z, centered on X0/Y0. The crown (top face) the depth boxes
+              measure from is set by the height and the Z0 position along it.
+            </p>
+          )}
         </>
       ) : (
         <>

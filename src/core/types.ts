@@ -164,9 +164,10 @@ export type Stock =
     }
   | {
       kind: 'cylinder';
-      /** stock length along X, mm */
+      /** stock length along its axis: X in 4-axis (rotary), height along Z
+       * in 3-axis (the cylinder stands vertical) */
       length: number;
-      /** where machine X0 sits along the stock axis */
+      /** where machine 0 sits along the stock axis: X0 in 4-axis, Z0 in 3-axis */
       xOrigin: OriginEdge;
       /** rotation axis is machine X (4th axis parallel to X, verified) */
       calibration: RotaryCalibration;

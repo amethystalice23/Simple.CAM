@@ -11,6 +11,7 @@ import {
   dropToSurface,
   rotatedBBox,
   stockSpan,
+  stockTopZ,
 } from '../placement';
 
 /** 2×4×6 box centered on the model origin. */
@@ -164,5 +165,35 @@ describe('alignToStock', () => {
     expect(t.position.x).toBeCloseTo(40);
     expect(t.position.y).toBeCloseTo(30);
     expect(t.position.z).toBeCloseTo(-10);
+  });
+});
+describe('3-axis cylinder stands vertical', () => {
+  const vertical: Extract<Stock, { kind: 'cylinder' }> = {
+    kind: 'cylinder',
+    length: 80,
+    xOrigin: 'min',
+    calibration: { aOriginDeg: 0, axisZ: 99, effectiveRadius: 10 }, // axisZ unused in 3-axis
+    axisMode: '3-axis',
+    materialId: 'aluminum-6061',
+  };
+
+  it('spans X and Y as the silhouette, Z as the height per xOrigin', () => {
+    expect(stockSpan(vertical, 'x')).toEqual([-10, 10]);
+    expect(stockSpan(vertical, 'y')).toEqual([-10, 10]);
+    expect(stockSpan(vertical, 'z')).toEqual([0, 80]);
+    expect(stockSpan({ ...vertical, xOrigin: 'max' }, 'z')).toEqual([-80, 0]);
+    expect(stockSpan({ ...vertical, xOrigin: 'mid' }, 'z')).toEqual([-40, 40]);
+  });
+
+  it('crowns at the top face, ignoring the rotary axisZ', () => {
+    expect(stockTopZ(vertical)).toBeCloseTo(80);
+    expect(stockTopZ({ ...vertical, xOrigin: 'max' })).toBeCloseTo(0);
+  });
+
+  it('keeps the 4-axis interpretation untouched', () => {
+    expect(stockSpan(cylinder, 'x')).toEqual([0, 100]);
+    expect(stockSpan(cylinder, 'y')).toEqual([-25, 25]);
+    expect(stockSpan(cylinder, 'z')).toEqual([-15, 35]); // axisZ 10 ± r 25
+    expect(stockTopZ(cylinder)).toBeCloseTo(35); // axisZ + r
   });
 });

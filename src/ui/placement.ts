@@ -45,20 +45,39 @@ export function rotatedBBox(geometry: THREE.BufferGeometry, transform: ModelTran
   return out;
 }
 
-/** Machine Z of the surface a model rests on (cylinder top, box top face). */
+/**
+ * Machine Z of the surface a model rests on: a box's top face, a 4-axis
+ * cylinder's highest tangent (axis ∥ X, so the surface is axisZ + r), or
+ * a 3-axis cylinder's top face — it stands vertical, so the crown is the
+ * far end of its along-axis span.
+ */
 export function stockTopZ(stock: Stock): number {
-  if (stock.kind === 'cylinder') return stock.calibration.axisZ + stock.calibration.effectiveRadius;
+  if (stock.kind === 'cylinder') {
+    if (stock.axisMode === '3-axis') return originSpan(stock.xOrigin, stock.length)[1];
+    return stock.calibration.axisZ + stock.calibration.effectiveRadius;
+  }
   return originSpan(stock.origin.z, stock.sizeZ)[1];
 }
 
 /**
- * Machine-coordinate span of the stock along an axis. A cylinder's Y span is
- * its silhouette [−r, r] around the rotation axis; its Z span is centered on
- * the axis datum (axisZ ± r).
+ * Machine-coordinate span of the stock along an axis. A 4-axis cylinder
+ * lies along X (its Y span is the silhouette [−r, r] around the rotation
+ * axis; its Z span is centered on the axis datum, axisZ ± r). A 3-axis
+ * cylinder stands vertical: axis ∥ Z, centered on X0/Y0, its length is
+ * the height and xOrigin places machine Z0 along it.
  */
 export function stockSpan(stock: Stock, axis: 'x' | 'y' | 'z'): readonly [number, number] {
   if (stock.kind === 'cylinder') {
     const r = stock.calibration.effectiveRadius;
+    if (stock.axisMode === '3-axis') {
+      switch (axis) {
+        case 'x':
+        case 'y':
+          return [-r, r];
+        case 'z':
+          return originSpan(stock.xOrigin, stock.length);
+      }
+    }
     switch (axis) {
       case 'x':
         return originSpan(stock.xOrigin, stock.length);

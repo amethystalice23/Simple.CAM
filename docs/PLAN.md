@@ -92,7 +92,10 @@ Stock has two orthogonal properties: **shape** (cylinder or box — pure
 geometry: placement spans, mesh, crown) and **mode** ('3-axis' or '4-axis' —
 machine capability). A cylinder can sit in a vise (3-axis); a box can ride
 the rotary axis (4-axis). The rotary ops (index, face cylinder) gate on mode,
-never on shape.
+never on shape. Cylinder orientation follows mode: horizontal along X on the
+rotary axis (4-axis), standing vertical — axis ∥ Z, centered on X0/Y0, its
+length is the height and xOrigin places machine Z0 along it (3-axis); the
+crown is the top face, and the rotary calibration fields are unused.
 
 ### Stock calibration model (4-axis)
 
