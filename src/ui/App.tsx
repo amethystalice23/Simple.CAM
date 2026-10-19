@@ -80,6 +80,7 @@ const TAB_LABELS: Record<Tab, string> = {
 export function App() {
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
   const [gcode, setGcode] = useState<string | null>(null);
+  const [showGcode, setShowGcode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
@@ -707,7 +708,15 @@ export function App() {
               {gcode && (
                 <section>
                   <h2>G-code</h2>
-                  <pre>{gcode.slice(0, 4000)}</pre>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={showGcode}
+                      onChange={(e) => setShowGcode(e.target.checked)}
+                    />
+                    <span>View g-code</span>
+                  </label>
+                  {showGcode && <pre>{gcode.slice(0, 4000)}</pre>}
                   <button onClick={download}>Download .nc</button>
                 </section>
               )}
