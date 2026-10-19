@@ -13,13 +13,20 @@ const vbit = (over: Partial<Tool> = {}): Tool => ({
   ...over,
 });
 
-const rim = { kind: 'circle', center: { x: 0, y: 0 }, radius: 5, z: 0, materialOutside: true } as const;
+const rim = {
+  kind: 'circle',
+  center: { x: 0, y: 0 },
+  radius: 5,
+  z: 0,
+  materialOutside: true,
+} as const;
 
 const op = (over: Partial<ChamferOp> = {}): ChamferOp => ({
   kind: 'chamfer',
   id: 'op1',
   toolId: 't1',
   loops: [rim],
+  mode: 'add',
   side: 'inside',
   direction: 'down',
   depth: 1,
@@ -170,5 +177,56 @@ describe('chamfer validation', () => {
   it('throws on unknown side/direction instead of silently inverting (undefined reads as the else branch)', () => {
     expect(() => chamfer(op({ side: undefined as unknown as ChamferOp['side'] }), vbit())).toThrow(/side/);
     expect(() => chamfer(op({ direction: undefined as unknown as ChamferOp['direction'] }), vbit())).toThrow(/direction/);
+    expect(() => chamfer(op({ mode: undefined as unknown as ChamferOp['mode'] }), vbit())).toThrow(/mode/);
+  });
+});
+
+describe("mode 'existing': ride the modelled chamfer face", () => {
+  // the user's case: a modelled 1.3mm 45° chamfer on a bore — top edge
+  // at Ø12.6 (r 6.3) on the face plane, bottom edge at Ø10 (r 5) 1.3mm down.
+  // DIRECTION selects which end was clicked: 'down' = top edge (slide by
+  // depth), 'up' = bottom edge (trace exactly, depth ignored).
+  const topEdge = { ...rim, radius: 6.3 };
+  const bottomEdge = { ...rim, radius: 5, z: -1.3 };
+
+  it("direction 'down' (top edge selected): tip traces down-and-in by depth, landing on the bottom edge", () => {
+    const res = chamfer(op({ mode: 'existing', loops: [topEdge], depth: 1.3 }), vbit());
+    for (const r of radii(feedXY(res.moves))) expect(r).toBeCloseTo(5, 6); // 6.3 − 1.3·tan45
+    const plunge = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
+    expect(plunge?.words.z).toBeCloseTo(-1.3, 9);
+  });
+
+  it('top edge with a flat tip: path shifted by rt so the tip edge hits the bottom edge', () => {
+    const res = chamfer(op({ mode: 'existing', loops: [topEdge], depth: 1.3 }), vbit({ tipDiameter: 0.1 }));
+    for (const r of radii(feedXY(res.moves))) expect(r).toBeCloseTo(4.95, 6); // 5 − 0.05
+  });
+
+  it("direction 'up' (bottom edge selected): depth ignored — the tip traces the anchor exactly", () => {
+    const res = chamfer(op({ mode: 'existing', loops: [bottomEdge], depth: 0.5, direction: 'up' }), vbit());
+    for (const r of radii(feedXY(res.moves))) expect(r).toBeCloseTo(5, 6); // rt = 0
+    const plunge = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
+    expect(plunge?.words.z).toBeCloseTo(-1.3, 9); // anchor z, not 0.5 above it
+    // a flat tip still shifts the path so the tip edge rides the wall
+    const flat = chamfer(op({ mode: 'existing', loops: [bottomEdge], depth: 0.5, direction: 'up' }), vbit({ tipDiameter: 0.1 }));
+    for (const r of radii(feedXY(flat.moves))) expect(r).toBeCloseTo(4.95, 6);
+    // a huge depth stays ignored — the flank guard needs only rt
+    expect(() => chamfer(op({ mode: 'existing', loops: [bottomEdge], depth: 99, direction: 'up' }), vbit({ diameter: 1 }))).not.toThrow();
+  });
+
+  it("bottom-edge and top-edge anchors agree when depth matches the modelled chamfer", () => {
+    const fromTop = chamfer(op({ mode: 'existing', loops: [topEdge], depth: 1.3 }), vbit({ tipDiameter: 0.1 }));
+    const fromBottom = chamfer(op({ mode: 'existing', loops: [bottomEdge], depth: 99, direction: 'up' }), vbit({ tipDiameter: 0.1 }));
+    // identical cut geometry; the safe-Z rapids legitimately track each
+    // anchor's own plane
+    expect(feedXY(fromBottom.moves)).toEqual(feedXY(fromTop.moves));
+    const tip = (m: Move[]) => m.find((x) => !x.rapid && x.words.z !== undefined)?.words.z;
+    expect(tip(fromBottom.moves)).toBeCloseTo(tip(fromTop.moves) as number, 9);
+  });
+
+  it("'add' makes no bottom/top distinction: direction is the wall side, either edge is cut through", () => {
+    const res = chamfer(op({ mode: 'add', loops: [bottomEdge] }), vbit());
+    for (const r of radii(feedXY(res.moves))) expect(r).toBeCloseTo(5, 6); // no slide
+    const plunge = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
+    expect(plunge?.words.z).toBeCloseTo(-2.3, 9); // anchor z − depth: no special case
   });
 });

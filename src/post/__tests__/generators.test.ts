@@ -194,7 +194,10 @@ describe('generator post goldens', () => {
     kind: 'chamfer',
     id: 'op6',
     toolId: 't3',
-    loops: [{ kind: 'circle', center: { x: 5, y: 5 }, radius: 2, z: 0, materialOutside: true }],
+    loops: [
+      { kind: 'circle', center: { x: 5, y: 5 }, radius: 2, z: 0, materialOutside: true },
+    ],
+    mode: 'add',
     side: 'auto',
     direction: 'down',
     depth: 0.5,

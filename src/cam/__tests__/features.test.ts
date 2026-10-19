@@ -158,6 +158,7 @@ describe('detectFeatures', () => {
     expect(boreRoot).toBeDefined();
     expect(boreRoot?.inner).toBe(true);
   });
+
 });
 
 describe('holesFromCircles', () => {

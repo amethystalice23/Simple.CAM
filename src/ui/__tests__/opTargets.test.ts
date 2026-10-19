@@ -299,4 +299,5 @@ describe('chamferTargetsFromSelection', () => {
     const f = detectFeatures(plateWithHole());
     expect(chamferTargetsFromSelection(f, [], identityTransform())).toBeNull();
   });
+
 });

@@ -349,9 +349,9 @@ export interface ProfileOp {
 
 /**
  * One chamfer path: a closed loop the V-bit flank is placed through.
- * 'circle' loops are analytic (hole rims, boss outlines, chamfer root
- * circles); 'poly' loops are face outlines (planeLoops) that didn't
- * circle-match. materialOutside orients the 'auto' side per loop.
+ * 'circle' loops are analytic (hole rims, boss outlines); 'poly' loops
+ * are face outlines (planeLoops) that didn't circle-match.
+ * materialOutside orients the 'auto' side per loop.
  */
 export type ChamferLoop =
   | { kind: 'circle'; center: Vec2; radius: number; z: number; materialOutside: boolean }
@@ -370,9 +370,22 @@ export interface ChamferOp {
   id: string;
   toolId: string;
   loops: ChamferLoop[];
+  /**
+   * 'add': the selected edge is a sharp corner — cut a new chamfer through
+   * it (flank through the anchor, tip depth below at the anchor radius).
+   * 'existing': the model already has the chamfer — the DIRECTION option
+   * selects which end was clicked: 'up' = the bottom edge, traced exactly
+   * (depth ignored); 'down' = the top edge, tip slides down-and-in by
+   * depth·tan(vAngle/2) along the modelled face.
+   */
+  mode: 'add' | 'existing';
   /** 'auto' resolves per loop from materialOutside; the others override */
   side: 'auto' | 'inside' | 'outside';
-  /** which way along the wall the chamfer extends from the anchor plane */
+  /**
+   * Which way the wall extends from the edge ('add'), or which end of the
+   * modelled chamfer was selected ('existing'): 'up' = bottom edge
+   * (traced exactly), 'down' = top edge (slides by depth).
+   */
   direction: 'down' | 'up';
   /** chamfer reach along the wall from the anchor loop's plane, mm */
   depth: number;
@@ -456,9 +469,15 @@ export type JobOp =
     })
   | (JobOpBase & {
       kind: 'chamfer';
+      /** 'add' cuts a new chamfer through the edge; 'existing' rides the modelled face */
+      mode: 'add' | 'existing';
       /** 'auto' resolves per loop from the feature geometry (material side) */
       side: 'auto' | 'inside' | 'outside';
-      /** which way along the wall the chamfer extends from the anchor edge */
+      /**
+       * Which way the wall extends from the edge ('add'), or which end of
+       * the modelled chamfer was selected ('existing'): 'up' = bottom edge
+       * (traced exactly), 'down' = top edge (slides by depth).
+       */
       direction: 'down' | 'up';
       /** chamfer reach along the wall, mm */
       depth: number;

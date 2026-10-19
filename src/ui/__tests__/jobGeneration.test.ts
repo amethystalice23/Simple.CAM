@@ -142,6 +142,13 @@ describe('newJobOp / defaults', () => {
     if (p.kind === 'profile') expect(p.side).toBe('outside');
     const d = newJobOp('drill', drillTool, boxStock.materialId, boxStock);
     if (d.kind === 'drill') expect(d.peckDepth).toBeGreaterThan(0);
+    const c = newJobOp('chamfer', chamferTool, boxStock.materialId, boxStock);
+    if (c.kind === 'chamfer') {
+      expect(c.mode).toBe('add');
+      expect(c.side).toBe('auto');
+      expect(c.direction).toBe('down');
+      expect(c.depth).toBe(0.5);
+    }
   });
 
   it('seeds ids above loaded jobs so new ops never collide', () => {
@@ -527,6 +534,7 @@ const chamferOp: Extract<JobOp, { kind: 'chamfer' }> = {
   toolId: 't5',
   featureIds: [holeCircleId],
   kind: 'chamfer',
+  mode: 'add',
   side: 'auto',
   direction: 'down',
   depth: 0.5,
@@ -552,6 +560,31 @@ describe('chamfer op generation', () => {
     const res = generateJobOp({ ...chamferOp, toolId: 't1' }, chamferCtx);
     expect(res.moves).toEqual([]);
     expect(res.error).toBe('chamfer needs a V-bit — pick a chamfering/engraving bit from the library');
+  });
+
+  it("mode 'existing' slides the tip down the modelled chamfer face: down-and-in by depth", () => {
+    // same sharp rim circle, 90° bit, sharp tip: 'add' keeps the path at
+    // r=2 with the tip 0.5 below; 'existing' + direction 'down' (the top
+    // edge was selected) rides the modelled face — the path shifts in by
+    // w = 0.5·tan45 = 0.5 → r=1.5, tip still 0.5 below (down-and-in by
+    // depth, landing on the bottom edge when depth matches the model)
+    const add = generateJobOp(chamferOp, chamferCtx);
+    const existing = generateJobOp({ ...chamferOp, mode: 'existing' }, chamferCtx);
+    expect(add.error).toBeNull();
+    expect(existing.error).toBeNull();
+    const radius = (res: ReturnType<typeof generateJobOp>): number | undefined => {
+      const pass = res.moves.find(
+        (m) => m.feed > 0 && m.words.x !== undefined && m.words.y !== undefined,
+      );
+      return pass ? Math.hypot(pass.words.x!, pass.words.y!) : undefined;
+    };
+    expect(radius(add)).toBeCloseTo(2, 5);
+    expect(radius(existing)).toBeCloseTo(1.5, 5);
+    const plunge = existing.moves.find(
+      (m) => m.words.z !== undefined && !m.rapid && m.words.x === undefined,
+    );
+    expect(plunge).toBeDefined();
+    expect(plunge!.words.z).toBeCloseTo(-4.5, 5); // rim z −4 − 0.5 depth
   });
 
   it('rejects a V-bit without a usable tip angle', () => {

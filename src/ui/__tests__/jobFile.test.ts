@@ -279,6 +279,7 @@ describe('chamfer op round-trip', () => {
       toolId: 't-used',
       featureIds: ['some-circle'],
       kind: 'chamfer',
+      mode: 'add',
       side: 'auto',
       direction: 'down',
       depth: 0.5,
@@ -299,22 +300,28 @@ describe('chamfer op round-trip', () => {
 
 describe('normalizeJobOps: chamfer', () => {
   const base = { id: 'jobop-1', toolId: 't1', featureIds: ['f1'] };
-  it('repairs ops saved before side/direction/depth existed (panel showed the default, generator read undefined)', () => {
+  it('repairs ops saved before mode/side/direction/depth existed (panel showed the default, generator read undefined)', () => {
     const stale = normalizeJobOps([
       { ...base, kind: 'chamfer' },
     ] as unknown as JobOp[]);
-    expect(stale[0]).toEqual({ ...base, kind: 'chamfer', side: 'auto', direction: 'down', depth: 0.5 });
+    expect(stale[0]).toEqual({
+      ...base, kind: 'chamfer', mode: 'add', side: 'auto', direction: 'down', depth: 0.5,
+    });
   });
 
   it('repairs invalid values but keeps valid ones', () => {
     const repaired = normalizeJobOps([
-      { ...base, kind: 'chamfer', side: 'sideways', direction: 'up', depth: -1 },
+      { ...base, kind: 'chamfer', mode: 'sometimes', side: 'sideways', direction: 'up', depth: -1 },
     ] as unknown as JobOp[]);
-    expect(repaired[0]).toEqual({ ...base, kind: 'chamfer', side: 'auto', direction: 'up', depth: 0.5 });
+    expect(repaired[0]).toEqual({
+      ...base, kind: 'chamfer', mode: 'add', side: 'auto', direction: 'up', depth: 0.5,
+    });
 
     const kept = normalizeJobOps([
-      { ...base, kind: 'chamfer', side: 'outside', direction: 'up', depth: 1.5 },
+      { ...base, kind: 'chamfer', mode: 'existing', side: 'outside', direction: 'up', depth: 1.5 },
     ] as unknown as JobOp[]);
-    expect(kept[0]).toEqual({ ...base, kind: 'chamfer', side: 'outside', direction: 'up', depth: 1.5 });
+    expect(kept[0]).toEqual({
+      ...base, kind: 'chamfer', mode: 'existing', side: 'outside', direction: 'up', depth: 1.5,
+    });
   });
 });

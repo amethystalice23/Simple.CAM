@@ -125,7 +125,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
     case 'chamfer':
-      return { ...base, kind, side: 'auto', direction: 'down', depth: 0.5 };
+      return { ...base, kind, mode: 'add', side: 'auto', direction: 'down', depth: 0.5 };
     case 'index':
       return { ...base, kind, angle: 90 };
     case 'profile':
@@ -461,6 +461,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             id: op.id,
             toolId: tool.id,
             loops: src.loops,
+            mode: op.mode,
             side: op.side,
             direction: op.direction,
             depth: op.depth,

@@ -263,6 +263,13 @@ function ParamFields(props: {
       return (
         <>
           <label className="field">
+            <span>Mode</span>
+            <select value={op.mode} onChange={(e) => upd({ mode: e.target.value as 'add' | 'existing' })}>
+              <option value="add">add — chamfer through the selected edge</option>
+              <option value="existing">existing — ride the modelled chamfer face</option>
+            </select>
+          </label>
+          <label className="field">
             <span>Side</span>
             <select
               value={op.side}
@@ -279,8 +286,17 @@ function ParamFields(props: {
               value={op.direction}
               onChange={(e) => upd({ direction: e.target.value as 'down' | 'up' })}
             >
-              <option value="down">down — wall below the edge</option>
-              <option value="up">up — wall above the edge</option>
+              {op.mode === 'add' ? (
+                <>
+                  <option value="down">down — wall below the edge</option>
+                  <option value="up">up — wall above the edge</option>
+                </>
+              ) : (
+                <>
+                  <option value="up">up — selected the bottom edge: traced exactly, depth ignored</option>
+                  <option value="down">down — selected the top edge: down-and-in by depth</option>
+                </>
+              )}
             </select>
           </label>
           <NumberField
@@ -291,8 +307,11 @@ function ParamFields(props: {
             onCommit={(v) => upd({ depth: v })}
           />
           <p className="hint">
-            the bit's flank runs through the selected edge — select circles, or a face to chamfer
-            its outline; depth is the reach along the wall, width follows the bit's angle
+            add cuts a new chamfer through the selected edge (direction = which way the wall
+            extends); existing rides a chamfer already in the model — direction selects which end
+            you clicked: the bottom edge (up) traces that circle exactly, the top edge (down)
+            traces down-and-in by depth. Select circles, or a face to chamfer its outline; width
+            follows the bit's angle
           </p>
         </>
       );
