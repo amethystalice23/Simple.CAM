@@ -22,6 +22,13 @@ export interface DetectedFeatures {
   edges: EdgeFeature[];
   /** raw-geometry triangle index → plane index (−1 for degenerate drops) */
   faceToPlane: Int32Array;
+  /**
+   * Every plane's stitched border loops, as 3D point rings, with the owning
+   * plane index. All loops per plane — circle-fitted ones and straight
+   * outlines alike. The chamfer op traces a selected face's outline from
+   * these; ids are not needed (selection goes through the plane feature).
+   */
+  planeLoops: { plane: number; points: Vec3[] }[];
 }
 
 /** Coplanar grouping tolerance, degrees. */
@@ -644,7 +651,14 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     faceToPlane[topo.rawIndexOf[i]] = planeOf[i];
   });
 
-  return { planes, circles, edges, faceToPlane };
+  // border loops as 3D point rings for outline-following ops (chamfer);
+  // `loops` order is deterministic (borderNext insertion order)
+  const planeLoops = loops.map(({ plane, verts: lv }) => ({
+    plane,
+    points: lv.map((vi) => verts[vi]),
+  }));
+
+  return { planes, circles, edges, faceToPlane, planeLoops };
 }
 
 // ------------------------------------------------- machine-space derivation

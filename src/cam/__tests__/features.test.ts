@@ -66,6 +66,39 @@ describe('detectFeatures', () => {
     for (const c of inner) expect(Math.abs(c.radius - 2)).toBeLessThan(0.05);
   });
 
+  it('exposes every plane border loop (planeLoops) for outline-following ops', () => {
+    const f = detectFeatures(plateWithHole());
+    // loop radius measured from its centroid
+    const loopRadius = (points: { x: number; y: number; z: number }[]) => {
+      const c = points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y, z: acc.z + p.z }), {
+        x: 0,
+        y: 0,
+        z: 0,
+      });
+      const n = points.length;
+      return Math.max(
+        ...points.map((p) => Math.hypot(p.x - c.x / n, p.y - c.y / n, p.z - c.z / n)),
+      );
+    };
+    expect(f.planeLoops.length).toBeGreaterThanOrEqual(4); // outer + hole, top + bottom caps
+    // the top cap plane carries both its outline loops: Ø5 ring and Ø2 bore
+    const top = f.planeLoops.filter((l) => Math.abs(l.points[0].z - 2) < 1e-6);
+    expect(top.length).toBe(2);
+    expect(top.some((l) => Math.abs(loopRadius(l.points) - 5) < 0.05)).toBe(true);
+    expect(top.some((l) => Math.abs(loopRadius(l.points) - 2) < 0.05)).toBe(true);
+    // loop → owning plane index is always valid
+    for (const l of f.planeLoops) {
+      expect(l.plane).toBeGreaterThanOrEqual(0);
+      expect(l.plane).toBeLessThan(f.planes.length);
+    }
+  });
+
+  it('gives a cube one 4-point outline loop per face plane', () => {
+    const f = detectFeatures(box());
+    expect(f.planeLoops).toHaveLength(6);
+    for (const l of f.planeLoops) expect(l.points).toHaveLength(4);
+  });
+
   it('places circle centers on off-origin planes (no doubled coordinates)', () => {
     // cylinder at (10, ·, 5): cap planes do not pass through the model origin
     const geo = new THREE.CylinderGeometry(3, 3, 10, 24).toNonIndexed();

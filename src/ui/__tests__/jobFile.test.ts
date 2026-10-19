@@ -7,6 +7,7 @@ import {
   jobFingerprint,
   JOB_FORMAT,
   JOB_VERSION,
+  normalizeJobOps,
   normalizeStock,
   parseJobFile,
   saveJobFile,
@@ -269,5 +270,51 @@ describe('jobFingerprint', () => {
     expect(jobFingerprint(a)).not.toBe(jobFingerprint(c));
     const d = saveJobFile({ ...base, modelName: 'other.stl' });
     expect(jobFingerprint(a)).not.toBe(jobFingerprint(d));
+  });
+});
+describe('chamfer op round-trip', () => {
+  it('saves and parses a chamfer op unchanged', () => {
+    const chamferOp: JobOp = {
+      id: 'jobop-9',
+      toolId: 't-used',
+      featureIds: ['some-circle'],
+      kind: 'chamfer',
+      side: 'auto',
+      direction: 'down',
+      depth: 0.5,
+    };
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops: [chamferOp],
+      tools,
+      modelName: 'part.stl',
+      modelBytes: new Uint8Array([1, 2, 3]),
+    });
+    const parsed = parseJobFile(JSON.stringify(file));
+    expect(parsed.ops).toEqual([chamferOp]);
+  });
+});
+
+describe('normalizeJobOps: chamfer', () => {
+  const base = { id: 'jobop-1', toolId: 't1', featureIds: ['f1'] };
+  it('repairs ops saved before side/direction/depth existed (panel showed the default, generator read undefined)', () => {
+    const stale = normalizeJobOps([
+      { ...base, kind: 'chamfer' },
+    ] as unknown as JobOp[]);
+    expect(stale[0]).toEqual({ ...base, kind: 'chamfer', side: 'auto', direction: 'down', depth: 0.5 });
+  });
+
+  it('repairs invalid values but keeps valid ones', () => {
+    const repaired = normalizeJobOps([
+      { ...base, kind: 'chamfer', side: 'sideways', direction: 'up', depth: -1 },
+    ] as unknown as JobOp[]);
+    expect(repaired[0]).toEqual({ ...base, kind: 'chamfer', side: 'auto', direction: 'up', depth: 0.5 });
+
+    const kept = normalizeJobOps([
+      { ...base, kind: 'chamfer', side: 'outside', direction: 'up', depth: 1.5 },
+    ] as unknown as JobOp[]);
+    expect(kept[0]).toEqual({ ...base, kind: 'chamfer', side: 'outside', direction: 'up', depth: 1.5 });
   });
 });

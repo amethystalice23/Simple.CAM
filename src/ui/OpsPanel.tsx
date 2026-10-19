@@ -259,6 +259,43 @@ function ParamFields(props: {
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
         </>
       );
+    case 'chamfer':
+      return (
+        <>
+          <label className="field">
+            <span>Side</span>
+            <select
+              value={op.side}
+              onChange={(e) => upd({ side: e.target.value as 'auto' | 'inside' | 'outside' })}
+            >
+              <option value="auto">auto — from the feature geometry</option>
+              <option value="inside">inside — tool inside the loop</option>
+              <option value="outside">outside — tool outside the loop</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Direction</span>
+            <select
+              value={op.direction}
+              onChange={(e) => upd({ direction: e.target.value as 'down' | 'up' })}
+            >
+              <option value="down">down — wall below the edge</option>
+              <option value="up">up — wall above the edge</option>
+            </select>
+          </label>
+          <NumberField
+            label="Chamfer depth (mm)"
+            value={op.depth}
+            min={0.05}
+            step={0.1}
+            onCommit={(v) => upd({ depth: v })}
+          />
+          <p className="hint">
+            the bit's flank runs through the selected edge — select circles, or a face to chamfer
+            its outline; depth is the reach along the wall, width follows the bit's angle
+          </p>
+        </>
+      );
   }
 }
 

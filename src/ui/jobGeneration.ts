@@ -7,6 +7,7 @@
 
 import type * as THREE from 'three';
 import { DEFAULT_STEP_OVER_FACTOR, faceCylinder } from '../cam/faceCylinder';
+import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
@@ -17,7 +18,7 @@ import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
 import type { JobOp, ModelTransform, Move, Primitive, Stock, Tool, ToolPreset } from '../core/types';
 import { rotaryCalibrationOf } from '../core/types';
-import { drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
+import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { stockSpan, stockTopZ } from './placement';
 
 export interface GeneratedOp {
@@ -47,6 +48,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string }[] = [
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
   { kind: 'drill', label: 'Drill' },
+  { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'index', label: 'Index (4-axis)' },
   { kind: 'faceCylinder', label: 'Face cylinder' },
 ];
@@ -122,6 +124,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
+    case 'chamfer':
+      return { ...base, kind, side: 'auto', direction: 'down', depth: 0.5 };
     case 'index':
       return { ...base, kind, angle: 90 };
     case 'profile':
@@ -432,6 +436,45 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           minutes: res.estimatedMinutes,
           error: null,
           summary: `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
+        };
+      }
+
+      case 'chamfer': {
+        if (!ctx.features) return fail('load a model first');
+        if (tool.type !== 'vbit') {
+          return fail('chamfer needs a V-bit — pick a chamfering/engraving bit from the library');
+        }
+        if (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180) {
+          return fail('this V-bit has no usable tip angle — set the included angle in the tool library');
+        }
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const src = chamferTargetsFromSelection(
+          ctx.features,
+          op.featureIds,
+          ctx.transform,
+          rotate,
+        );
+        if (!src) return fail('select circles or flat faces to chamfer');
+        const res = chamfer(
+          {
+            kind: 'chamfer',
+            id: op.id,
+            toolId: tool.id,
+            loops: src.loops,
+            side: op.side,
+            direction: op.direction,
+            depth: op.depth,
+            feed,
+            plungeFeed,
+            safeClearance: 5,
+          },
+          tool,
+        );
+        return {
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
+          error: null,
+          summary: `${src.loops.length} loop(s), ${op.depth}mm chamfer, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

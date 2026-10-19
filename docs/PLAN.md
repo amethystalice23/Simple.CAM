@@ -82,6 +82,7 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 | Thread (90° V-bit) | parametric helix | per pass: `G1 X… A…` constant Z, A advances `(length/pitch)·360°`; Z depth-steps between passes re-entering at identical absolute A phase; multi-start = angular offsets; spring pass; external threads only |
 | Wrapped groove / spiral pattern | parametric | same family as threads: helix/Archimedean/straight/cross-hatch path in (U,V), repeated at angular offsets |
 | Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection |
+| Flat chamfer (V-bit) | single-pass flank | the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path); user side option (inside/outside — geometry can't always tell) and depth along the wall; both edges of an existing chamfer work as anchors (the detector finds root circles) |
 
 Later (v2+): 3-axis custom roughing/finishing via opencamlib WASM
 (drop-cutter/push-cutter). Parked: dexel 3D relief on cylinder.

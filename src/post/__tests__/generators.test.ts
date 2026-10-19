@@ -2,14 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { postCarvera } from '../carvera';
+import { chamfer } from '../../cam/chamfer';
 import { drill } from '../../cam/drill';
 import { faceCylinder } from '../../cam/faceCylinder';
 import { pocket2d } from '../../cam/pocket';
 import { profile2d } from '../../cam/profile';
-import type { DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
+import type { ChamferOp, DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
 
 const tool: Tool = { id: 't1', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
 const drillTool: Tool = { id: 't2', name: '3mm drill', type: 'drill', diameter: 3, spindleRpm: 18000 };
+const chamferTool: Tool = {
+  id: 't3',
+  name: 'Chamfering Bit 1/8',
+  type: 'vbit',
+  diameter: 3.175,
+  vAngle: 90,
+  tipDiameter: 0.1,
+  spindleRpm: 12000,
+};
 
 const square: Vec2[] = [
   { x: 0, y: 0 },
@@ -175,6 +185,29 @@ describe('generator post goldens', () => {
       moves: faceCylinder(ringFaceOp, faceStock.calibration, tool).moves,
       tools: [tool],
       options: { jobName: 'face-cylinder' },
+    }),
+  );
+
+  // V-bit chamfer on one hole rim: auto side (material outside the loop →
+  // tool rides inside it), tip 0.5mm below the anchor plane, one closed pass
+  const chamferOp: ChamferOp = {
+    kind: 'chamfer',
+    id: 'op6',
+    toolId: 't3',
+    loops: [{ kind: 'circle', center: { x: 5, y: 5 }, radius: 2, z: 0, materialOutside: true }],
+    side: 'auto',
+    direction: 'down',
+    depth: 0.5,
+    feed: 600,
+    plungeFeed: 200,
+    safeClearance: 5,
+  };
+  checkGolden(
+    'chamfer-rim.nc',
+    postCarvera({
+      moves: chamfer(chamferOp, chamferTool).moves,
+      tools: [chamferTool],
+      options: { jobName: 'chamfer-rim' },
     }),
   );
 });

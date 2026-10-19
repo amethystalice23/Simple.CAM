@@ -347,7 +347,44 @@ export interface ProfileOp {
   safeClearance: number;
 }
 
-export type Operation = FaceCylinderOp | PocketOp | DrillOp | ProfileOp;
+/**
+ * One chamfer path: a closed loop the V-bit flank is placed through.
+ * 'circle' loops are analytic (hole rims, boss outlines, chamfer root
+ * circles); 'poly' loops are face outlines (planeLoops) that didn't
+ * circle-match. materialOutside orients the 'auto' side per loop.
+ */
+export type ChamferLoop =
+  | { kind: 'circle'; center: Vec2; radius: number; z: number; materialOutside: boolean }
+  | { kind: 'poly'; points: Vec2[]; z: number; materialOutside: boolean };
+
+/**
+ * Cut a chamfer along edge loops with a V-bit/chamfer tool. The cone
+ * flank passes through the anchor loop: tip Z is depth d beyond the
+ * loop's plane (down or up along the wall), tool-center path is the loop
+ * offset rt (the flat-tip radius) toward the chosen side — the tip's far
+ * edge lands on the loop at the chamfer's deepest point, and the flank
+ * meets the anchor plane at width d·tan(vAngle/2).
+ */
+export interface ChamferOp {
+  kind: 'chamfer';
+  id: string;
+  toolId: string;
+  loops: ChamferLoop[];
+  /** 'auto' resolves per loop from materialOutside; the others override */
+  side: 'auto' | 'inside' | 'outside';
+  /** which way along the wall the chamfer extends from the anchor plane */
+  direction: 'down' | 'up';
+  /** chamfer reach along the wall from the anchor loop's plane, mm */
+  depth: number;
+  /** XY cut feed, mm/min (G94) */
+  feed: number;
+  /** plunge feed, mm/min (G94) */
+  plungeFeed: number;
+  /** rapid clearance above the anchor plane, mm */
+  safeClearance: number;
+}
+
+export type Operation = FaceCylinderOp | PocketOp | DrillOp | ProfileOp | ChamferOp;
 // Phase 1 adds: engrave | indexedPocket
 // Phase 2 adds: thread | wrappedGroove
 
@@ -416,6 +453,15 @@ export type JobOp =
       kind: 'drill';
       depth: number;
       peckDepth: number;
+    })
+  | (JobOpBase & {
+      kind: 'chamfer';
+      /** 'auto' resolves per loop from the feature geometry (material side) */
+      side: 'auto' | 'inside' | 'outside';
+      /** which way along the wall the chamfer extends from the anchor edge */
+      direction: 'down' | 'up';
+      /** chamfer reach along the wall, mm */
+      depth: number;
     })
   | (JobOpBase & {
       kind: 'profile';

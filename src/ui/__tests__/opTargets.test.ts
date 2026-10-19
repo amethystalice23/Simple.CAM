@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import { indexedPointRotation } from '../../cam/indexing';
-import { drillTargetsFromSelection, pocketRegionsFromSelection } from '../opTargets';
+import { drillTargetsFromSelection, pocketRegionsFromSelection, chamferTargetsFromSelection } from '../opTargets';
 
 function plateWithHole(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -138,5 +138,165 @@ describe('drillTargetsFromSelection', () => {
     expect(targets![0].x).toBeCloseTo(0, 5);
     expect(targets![0].y).toBeCloseTo(0, 5);
     expect(targets![0].topZ).toBeCloseTo(8, 5); // rim now faces up
+  });
+});
+/** A plate with a SQUARE hole: the top face's outline loops are polygons
+ * that cannot circle-match, exercising the poly path and classification. */
+function squareHolePlate(): THREE.BufferGeometry {
+  const shape = new THREE.Shape();
+  shape.moveTo(-5, -5);
+  shape.lineTo(5, -5);
+  shape.lineTo(5, 5);
+  shape.lineTo(-5, 5);
+  shape.closePath();
+  const hole = new THREE.Path();
+  hole.moveTo(-2, -2);
+  hole.lineTo(2, -2);
+  hole.lineTo(2, 2);
+  hole.lineTo(-2, 2);
+  hole.closePath();
+  shape.holes.push(hole);
+  return new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
+}
+
+describe('chamferTargetsFromSelection', () => {
+  it('accepts inner AND outer circles, with the material side per loop', () => {
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const src = chamferTargetsFromSelection(f, f.circles.map((c) => c.id), identityTransform());
+    expect(src).not.toBeNull();
+    expect(src!.loops).toHaveLength(4); // hole + outer rim, top + bottom
+    for (const l of src!.loops) {
+      expect(l.kind).toBe('circle');
+      if (l.kind === 'circle') {
+        expect(l.center.x).toBeCloseTo(0, 5);
+        expect(l.center.y).toBeCloseTo(0, 5);
+        // hole rims have material outside (the funnel cut), outer rims inside
+        expect(l.materialOutside).toBe(l.radius < 3);
+      }
+    }
+  });
+
+  it('traces a face outline into analytic circles when they match', () => {
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 2) < 1e-6,
+    );
+    expect(topPlane).toBeDefined();
+    const src = chamferTargetsFromSelection(f, [topPlane!.id], identityTransform());
+    expect(src).not.toBeNull();
+    // the top face's outline = outer boundary + hole rim, both circles
+    expect(src!.loops).toHaveLength(2);
+    const radii = src!.loops
+      .filter((l): l is Extract<typeof l, { kind: 'circle' }> => l.kind === 'circle')
+      .map((l) => l.radius)
+      .sort((a, b) => a - b);
+    expect(radii).toHaveLength(2);
+    expect(radii[0]).toBeCloseTo(2, 5);
+    expect(radii[1]).toBeCloseTo(5, 5);
+  });
+
+  it('selecting the rim circle equals selecting the face it bounds', () => {
+    // a cylinder's top cap: its entire outline is the rim circle. (THREE's
+    // cylinder stands along Y — stand it up along machine Z first.)
+    const geo = new THREE.CylinderGeometry(2, 2, 2, 32).rotateX(Math.PI / 2).toNonIndexed();
+    const f = detectFeatures(geo);
+    const topCircle = f.circles.find(
+      (c) => !c.inner && Math.abs(c.center.z - 1) < 1e-6 && Math.abs(c.radius - 2) < 1e-3,
+    );
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 1) < 1e-6,
+    );
+    expect(topCircle).toBeDefined();
+    expect(topPlane).toBeDefined();
+    const byCircle = chamferTargetsFromSelection(f, [topCircle!.id], identityTransform());
+    const byFace = chamferTargetsFromSelection(f, [topPlane!.id], identityTransform());
+    expect(byFace).not.toBeNull();
+    // identical loops — the face loop resolves to the same analytic circle
+    expect(byFace!.loops).toEqual(byCircle!.loops);
+  });
+
+  it('dedupes when a circle and its face are both selected', () => {
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const holeCircle = f.circles.find(
+      (c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z - 2) < 0.01,
+    )!;
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 2) < 1e-6,
+    )!;
+    const src = chamferTargetsFromSelection(f, [holeCircle.id, topPlane.id], identityTransform());
+    expect(src).not.toBeNull();
+    const holeLoops = src!.loops.filter(
+      (l) => l.kind === 'circle' && (l as { radius: number }).radius < 3,
+    );
+    expect(holeLoops).toHaveLength(1); // not once for each selection
+    expect(src!.loops).toHaveLength(2); // + the face's outer boundary
+  });
+
+  it('classifies unmatched polygon loops by containment', () => {
+    const geo = squareHolePlate();
+    const f = detectFeatures(geo);
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 2) < 1e-6,
+    );
+    expect(topPlane).toBeDefined();
+    const src = chamferTargetsFromSelection(f, [topPlane!.id], identityTransform());
+    expect(src).not.toBeNull();
+    expect(src!.loops).toHaveLength(2);
+    const polys = src!.loops.filter((l): l is Extract<typeof l, { kind: 'poly' }> => l.kind === 'poly');
+    expect(polys).toHaveLength(2);
+    // the containing (outer) loop bounds material outside; the square hole
+    // bounds material inside the face
+    const outer = polys.find((l) => l.materialOutside === false)!;
+    const inner = polys.find((l) => l.materialOutside === true)!;
+    expect(outer).toBeDefined();
+    expect(inner).toBeDefined();
+    expect(Math.abs(loopArea(outer.points))).toBeCloseTo(100, 5);
+    expect(Math.abs(loopArea(inner.points))).toBeCloseTo(16, 5);
+    for (const l of polys) expect(l.z).toBeCloseTo(2, 5);
+  });
+
+  it('rejects a selection with no usable edge in the frame, with a diagnosis', () => {
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const sidePlane = f.planes.find((p) => Math.abs(p.normal.z) < 0.5);
+    expect(sidePlane).toBeDefined();
+    expect(() =>
+      chamferTargetsFromSelection(f, [sidePlane!.id], identityTransform()),
+    ).toThrowError(/cannot be chamfered in the cutting frame/);
+  });
+
+  it('chamfers a radial edge when indexed to face the cutter', () => {
+    const geo = plateWithHole();
+    geo.rotateX(-Math.PI / 2); // hole axis +Z → +Y
+    geo.translate(0, 6, 0);
+    const f = detectFeatures(geo);
+    const radialHole = f.circles.find(
+      (c) => c.inner && Math.abs(c.axis.y) > 0.99 && c.center.y > 7.9,
+    )!;
+    // flat: the rim is radial, not Z — a diagnosis, not silence
+    expect(() =>
+      chamferTargetsFromSelection(f, [radialHole.id], identityTransform()),
+    ).toThrowError(/cannot be chamfered in the cutting frame/);
+    const rot = indexedPointRotation(90, 0);
+    const src = chamferTargetsFromSelection(f, [radialHole.id], identityTransform(), rot);
+    expect(src).not.toBeNull();
+    expect(src!.loops).toHaveLength(1);
+    const l = src!.loops[0];
+    expect(l.kind).toBe('circle');
+    if (l.kind === 'circle') {
+      expect(l.center.x).toBeCloseTo(0, 5);
+      expect(l.center.y).toBeCloseTo(0, 5);
+      expect(l.z).toBeCloseTo(8, 5); // the rim now faces up
+      expect(l.radius).toBeCloseTo(2, 5);
+      expect(l.materialOutside).toBe(true);
+    }
+  });
+
+  it('returns null for an empty selection', () => {
+    const f = detectFeatures(plateWithHole());
+    expect(chamferTargetsFromSelection(f, [], identityTransform())).toBeNull();
   });
 });

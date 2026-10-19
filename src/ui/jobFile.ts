@@ -50,6 +50,19 @@ export function normalizeStock(stock: Stock): Stock {
  */
 export function normalizeJobOps(ops: JobOp[]): JobOp[] {
   return ops.map((op) => {
+    if (op.kind === 'chamfer') {
+      // ops saved before all three fields existed (or by a mid-build dev
+      // state) carry undefined values — the panel select then displays the
+      // default while the generator treats undefined as the OTHER option
+      const rawSide = (op as { side?: unknown }).side;
+      const side = rawSide === 'inside' || rawSide === 'outside' || rawSide === 'auto' ? rawSide : 'auto';
+      const rawDir = (op as { direction?: unknown }).direction;
+      const direction = rawDir === 'down' || rawDir === 'up' ? rawDir : 'down';
+      const rawDepth = (op as { depth?: unknown }).depth;
+      const depth = typeof rawDepth === 'number' && rawDepth > 0 ? rawDepth : 0.5;
+      const changed = side !== op.side || direction !== op.direction || depth !== op.depth;
+      return changed ? { ...op, side, direction, depth } : op;
+    }
     if (op.kind !== 'faceCylinder') return op;
     const raw = (op as { pattern?: unknown }).pattern;
     const pattern: FacePattern =

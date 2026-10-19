@@ -510,3 +510,107 @@ describe('generateJobOp', () => {
     expect(res.error).toContain('does not fit');
   });
 });
+/** Makera's 90° chamfering bit, Ø3.175, sharp tip. */
+const chamferTool: Tool = {
+  id: 't5',
+  name: '90° chamfer bit',
+  type: 'vbit',
+  diameter: 3.175,
+  vAngle: 90,
+  spindleRpm: 12000,
+};
+
+const chamferCtx: GenContext = { ...ctx, tools: [...ctx.tools, chamferTool] };
+
+const chamferOp: Extract<JobOp, { kind: 'chamfer' }> = {
+  id: 'op5',
+  toolId: 't5',
+  featureIds: [holeCircleId],
+  kind: 'chamfer',
+  side: 'auto',
+  direction: 'down',
+  depth: 0.5,
+};
+
+describe('chamfer op generation', () => {
+  it('generates a single-pass chamfer for a selected rim circle', () => {
+    const res = generateJobOp(chamferOp, chamferCtx);
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(0);
+    expect(res.summary).toMatch(/1 loop\(s\), 0\.5mm chamfer/);
+    // auto on a hole rim (material outside) cuts from inside the hole:
+    // tool path radius = r − rt = 2 (sharp tip), tip 0.5 below the rim
+    const pass = res.moves.find((m) => m.feed > 0 && m.words.x !== undefined && m.words.y !== undefined);
+    expect(pass).toBeDefined();
+    expect(Math.hypot(pass!.words.x!, pass!.words.y!)).toBeCloseTo(2, 5);
+    const plunge = res.moves.find((m) => m.words.z !== undefined && !m.rapid && m.words.x === undefined);
+    expect(plunge).toBeDefined();
+    expect(plunge!.words.z).toBeCloseTo(-4.5, 5); // rim z −4 minus 0.5 depth
+  });
+
+  it('rejects a non-V-bit tool with a pointer to the library', () => {
+    const res = generateJobOp({ ...chamferOp, toolId: 't1' }, chamferCtx);
+    expect(res.moves).toEqual([]);
+    expect(res.error).toBe('chamfer needs a V-bit — pick a chamfering/engraving bit from the library');
+  });
+
+  it('rejects a V-bit without a usable tip angle', () => {
+    const noAngle = { ...chamferTool, id: 't6', vAngle: undefined } as Tool;
+    const res = generateJobOp({ ...chamferOp, toolId: 't6' }, { ...chamferCtx, tools: [...chamferCtx.tools, noAngle] });
+    expect(res.moves).toEqual([]);
+    expect(res.error).toContain('no usable tip angle');
+  });
+
+  it('gives the IDENTICAL toolpath for the rim circle and the face it bounds', () => {
+    // a cylinder's top cap is a disc face whose whole outline is the rim
+    // circle — the user's circle ≡ face-outline requirement. (THREE's
+    // cylinder stands along Y — stand it up along machine Z first.)
+    const geo = new THREE.CylinderGeometry(2, 2, 2, 32).rotateX(Math.PI / 2).toNonIndexed();
+    const f = detectFeatures(geo);
+    const topCircle = f.circles.find(
+      (c) => !c.inner && Math.abs(c.center.z - 1) < 1e-6 && Math.abs(c.radius - 2) < 1e-3,
+    )!;
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 1) < 1e-6,
+    )!;
+    const capCtx: GenContext = { ...chamferCtx, geometry: geo, features: f };
+    const byCircle = generateJobOp(
+      { ...chamferOp, featureIds: [topCircle.id] },
+      capCtx,
+    );
+    const byFace = generateJobOp(
+      { ...chamferOp, featureIds: [topPlane.id] },
+      capCtx,
+    );
+    expect(byCircle.error).toBeNull();
+    expect(byFace.error).toBeNull();
+    expect(byFace.moves).toEqual(byCircle.moves);
+    expect(byFace.summary).toBe(byCircle.summary);
+  });
+
+  it('gives the user options control over side and direction', () => {
+    // a flat-tip bit (rt 0.25) makes the side visible in the tool path:
+    // inside → r − rt, outside → r + rt
+    const flatTip = { ...chamferTool, id: 't7', tipDiameter: 0.5 };
+    const tipCtx: GenContext = { ...chamferCtx, tools: [...chamferCtx.tools, flatTip] };
+    const pathRadius = (res: ReturnType<typeof generateJobOp>): number => {
+      const pass = res.moves.find(
+        (m) => m.feed > 0 && m.words.x !== undefined && m.words.y !== undefined,
+      );
+      expect(pass).toBeDefined();
+      return Math.hypot(pass!.words.x!, pass!.words.y!);
+    };
+    const inside = generateJobOp({ ...chamferOp, toolId: 't7', side: 'inside' }, tipCtx);
+    expect(inside.error).toBeNull();
+    expect(pathRadius(inside)).toBeCloseTo(1.75, 5); // 2 − 0.25
+    const outside = generateJobOp({ ...chamferOp, toolId: 't7', side: 'outside' }, tipCtx);
+    expect(outside.error).toBeNull();
+    expect(pathRadius(outside)).toBeCloseTo(2.25, 5); // 2 + 0.25
+    // 'up': the tip sits ABOVE the anchor plane instead of below it
+    const up = generateJobOp({ ...chamferOp, direction: 'up' }, chamferCtx);
+    expect(up.error).toBeNull();
+    const plunge = up.moves.find((m) => m.words.z !== undefined && !m.rapid && m.words.x === undefined);
+    expect(plunge).toBeDefined();
+    expect(plunge!.words.z).toBeCloseTo(-3.5, 5); // rim z −4 plus 0.5
+  });
+});
