@@ -6,7 +6,7 @@ import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
-import { identityTransform, rotaryCalibrationOf } from '../core/types';
+import { identityTransform, isDepthBearingJobOp, rotaryCalibrationOf } from '../core/types';
 import type {
   CircleFeature,
   EdgeFeature,
@@ -386,14 +386,14 @@ export function App() {
 
   /** the selection becomes the op's floor: live-linked, drives end depth */
   const floorFromSelection = (op: JobOp) => {
-    if (!floorCandidate || (op.kind !== 'pocket' && op.kind !== 'profile')) return;
+    if (!floorCandidate || !isDepthBearingJobOp(op)) return;
     const id = selection[0];
     const p = featureMachinePoint(id);
     if (!p) return;
     const endDepth = Math.max(stockTopZ(stock) - featureDepthInFrame(op, p), 0.3);
     setOps((prev) =>
       prev.map((o) =>
-        o.id === op.id && (o.kind === 'pocket' || o.kind === 'profile')
+        o.id === op.id && isDepthBearingJobOp(op)
           ? ({ ...o, endDepth, floorFeatureId: id } as JobOp)
           : o,
       ),
@@ -406,7 +406,7 @@ export function App() {
     const crown = stockTopZ(stock);
     let changed = false;
     const next = ops.map((o) => {
-      if ((o.kind === 'pocket' || o.kind === 'profile') && o.floorFeatureId !== null) {
+      if (isDepthBearingJobOp(o) && o.floorFeatureId !== null) {
         const p = featureMachinePoint(o.floorFeatureId);
         if (p) {
           const endDepth = Math.max(crown - featureDepthInFrame(o, p), 0.3);

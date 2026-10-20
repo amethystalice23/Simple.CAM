@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isDepthBearingJobOp, type DepthBearingJobOp } from '../core/types';
 import type { AxisMode, JobOp, OpRates, Primitive, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import {
@@ -61,11 +62,12 @@ function selectionSnippet(op: JobOp, labels: Record<string, string>): string {
 }
 
 /** The floor/rim selector with the depth boxes it prefiles. */
-/** The floor/rim selector with the depth boxes it prefiles. The ⇩ pick
- * (edge-tracing §5) links a selected plane/circle as the floor: it drives
- * end depth live until the box is hand-edited, which detaches it. */
+/** The floor/rim selector with the depth boxes it prefiles (slice pockets
+ * reuse everything but the selector — they select no features). The ⇩
+ * pick (edge-tracing §5) links a selected plane/circle as the floor: it
+ * drives end depth live until the box is hand-edited, which detaches it. */
 function DepthFields(props: {
-  op: Extract<JobOp, { kind: 'pocket' | 'profile' }>;
+  op: DepthBearingJobOp;
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   /** a single plane/circle is selected in measure mode — the ⇩ is enabled */
@@ -79,16 +81,18 @@ function DepthFields(props: {
     props.onChange({ ...op, ...patch } as JobOp);
   return (
     <>
-      <label className="field">
-        <span>Selection is the</span>
-        <select
-          value={op.selectionIs}
-          onChange={(e) => props.onSelectionIsChange(op, e.target.value as 'floor' | 'rim')}
-        >
-          <option value="floor">floor — end depth from the feature</option>
-          <option value="rim">rim — start depth from the feature</option>
-        </select>
-      </label>
+      {'selectionIs' in op && (
+        <label className="field">
+          <span>Selection is the</span>
+          <select
+            value={op.selectionIs}
+            onChange={(e) => props.onSelectionIsChange(op, e.target.value as 'floor' | 'rim')}
+          >
+            <option value="floor">floor — end depth from the feature</option>
+            <option value="rim">rim — start depth from the feature</option>
+          </select>
+        </label>
+      )}
       <NumberField
         label="Start depth (mm)"
         value={op.startDepth}
@@ -340,6 +344,36 @@ function ParamFields(props: {
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
       );
+    case 'slicePocket':
+      return (
+        <>
+          <label className="field">
+            <span>Region</span>
+            <select
+              value={op.regionMode}
+              onChange={(e) => upd({ regionMode: e.target.value as 'outside' | 'inside' })}
+            >
+              <option value="outside">outside — clear around the slice, leave the cross-section</option>
+              <option value="inside">inside — clear the slice interior</option>
+            </select>
+          </label>
+          <DepthFields
+            op={op}
+            onChange={props.onChange}
+            onSelectionIsChange={props.onSelectionIsChange}
+            floorCandidate={props.floorCandidate}
+            onFloorPick={props.onFloorPick}
+            floorLabel={props.floorLabel}
+          />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <p className="hint">
+            the region is the model's cross-section, re-sliced at every level — start = end
+            cuts one simple pocket, a step-down walks a waterline through the band (features
+            that curve inside a level come out stepped)
+          </p>
+        </>
+      );
     case 'drill':
       return (
         <>
@@ -550,7 +584,7 @@ export function OpsPanel(props: Props) {
                 <div className="op-body">
                   {op.kind !== 'index' && (
                     <div className="buttons">
-                      {op.kind !== 'faceCylinder' && (
+                      {op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && (
                         <button
                           type="button"
                           className={editing ? '' : 'secondary'}
@@ -608,7 +642,7 @@ export function OpsPanel(props: Props) {
                     floorCandidate={props.floorCandidate}
                     onFloorPick={props.onFloorPick}
                     floorLabel={
-                      (op.kind === 'pocket' || op.kind === 'profile') && op.floorFeatureId !== null
+                      isDepthBearingJobOp(op) && op.floorFeatureId !== null
                         ? (props.featureLabels[op.floorFeatureId] ?? null)
                         : null
                     }
@@ -616,7 +650,10 @@ export function OpsPanel(props: Props) {
                   {gen?.error && <p className="error">{gen.error}</p>}
                   {gen?.summary && <p className="hint">{gen.summary}</p>}
                   {!gen && <p className="hint">not calculated yet</p>}
-                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && (
+                  {op.kind === 'slicePocket' && !props.hasModel && (
+                    <p className="hint">needs a model — the slice comes from the loaded STL</p>
+                  )}
+                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && (
                     <p className="hint">needs a model or a primitive to select from</p>
                   )}
                   {op.kind === 'faceCylinder' && props.axisMode !== '4-axis' && (

@@ -869,3 +869,115 @@ describe('⇩ floor pick (floorFeatureId)', () => {
     expect(res.moves).toEqual([]);
   });
 });
+
+describe('slice pocket (waterline)', () => {
+  // a stepped model: 20×20 base (z −6…−4) under a 8×8 boss (z −4…0) —
+  // slicing it at different Z levels yields different cross-sections
+  const stepped = (() => {
+    const base = new THREE.BoxGeometry(20, 20, 2).translate(0, 0, -5).toNonIndexed();
+    const boss = new THREE.BoxGeometry(8, 8, 4).translate(0, 0, -2).toNonIndexed();
+    const g = new THREE.BufferGeometry();
+    const a = base.getAttribute('position');
+    const b = boss.getAttribute('position');
+    g.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([...Array.from(a.array), ...Array.from(b.array)], 3),
+    );
+    return g;
+  })();
+  const steppedFeatures = detectFeatures(stepped);
+  const steppedCtx: GenContext = {
+    ...ctx,
+    geometry: stepped,
+    features: steppedFeatures,
+    sources: sourcesFor(stepped, steppedFeatures, identityTransform(), []),
+  };
+  const sliceOp: Extract<JobOp, { kind: 'slicePocket' }> = {
+    id: 'opS',
+    toolId: 't3',
+    featureIds: [],
+    kind: 'slicePocket',
+    regionMode: 'outside',
+    startDepth: 0, // the crown
+    endDepth: 2, // down to z −2 (still inside the boss → same 8×8 section)
+    allowance: 0,
+    stepDown: 1,
+    stepOver: 2,
+    floorFeatureId: null,
+  };
+
+  it('new ops default to outside mode with tool-derived steps', () => {
+    const op = newJobOp('slicePocket', smallTool, boxStock.materialId, boxStock);
+    if (op.kind !== 'slicePocket') throw new Error('kind');
+    expect(op.regionMode).toBe('outside');
+    expect(op.floorFeatureId).toBeNull();
+    expect(op.stepDown).toBeGreaterThan(0);
+    expect(op.stepOver).toBeGreaterThan(0);
+  });
+
+  it('outside: clears around the cross-section, leaving it standing', () => {
+    const res = generateJobOp(sliceOp, steppedCtx);
+    expect(res.error).toBeNull();
+    // cut moves exist and never enter the 8×8 boss footprint
+    const feed = res.moves.filter((m) => !m.rapid);
+    expect(feed.length).toBeGreaterThan(0);
+    const insideBoss = feed.some((m) => Math.abs(m.words.x!) < 3.9 && Math.abs(m.words.y!) < 3.9);
+    expect(insideBoss, 'a cut entered the part cross-section').toBe(false);
+    // two levels (step-down 1 over a 2mm band) → level count in the summary
+    expect(res.summary).toContain('2 level(s)');
+  });
+
+  it('outside with allowance leaves wall stock: no cut within allowance of the section', () => {
+    const res = generateJobOp({ ...sliceOp, allowance: 1 }, steppedCtx);
+    expect(res.error).toBeNull();
+    const feed = res.moves.filter((m) => !m.rapid);
+    // 4mm boss half + 1mm allowance; 0.9 keeps float slack, tool radius 1
+    const tooClose = feed.some(
+      (m) => Math.abs(m.words.x!) < 4 + 0.9 - 1 && Math.abs(m.words.y!) < 4 + 0.9 - 1,
+    );
+    expect(tooClose, 'a cut came within the allowance of the part').toBe(false);
+  });
+
+  it('inside: clears the cross-section interior only', () => {
+    const res = generateJobOp({ ...sliceOp, regionMode: 'inside' }, steppedCtx);
+    expect(res.error).toBeNull();
+    const feed = res.moves.filter((m) => !m.rapid);
+    // every cut is inside the 8×8 section (tool radius 1 → |x|,|y| < 3.9)
+    expect(feed.length).toBeGreaterThan(0);
+    const outside = feed.some(
+      (m) => Math.abs(m.words.x!) > 4 + 0.1 || Math.abs(m.words.y!) > 4 + 0.1,
+    );
+    expect(outside, 'an inside cut escaped the cross-section').toBe(false);
+  });
+
+  it('start = end cuts exactly one level', () => {
+    const res = generateJobOp({ ...sliceOp, endDepth: 0 }, steppedCtx);
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('1 level(s)');
+  });
+
+  it('a deeper band follows the wider base section (the waterline shape change)', () => {
+    // cut to z −4.5: level 1 at −0.5 slices the 8×8 boss, level 2 at −1.5... 
+    // end depth 5.5 → levels reach below −4 → the 20×20 base section
+    const res = generateJobOp({ ...sliceOp, endDepth: 5.5, stepDown: 1.5 }, steppedCtx);
+    expect(res.error).toBeNull();
+    // base level (z −5, section 20×20): cuts spread beyond the boss extent
+    const maxX = Math.max(...res.moves.filter((m) => !m.rapid).map((m) => Math.abs(m.words.x ?? 0)));
+    expect(maxX).toBeGreaterThan(8); // outside the 8×8 boss, inside the 20×20 stock
+  });
+
+  it('fails visibly without a model and under an index datum', () => {
+    const noModel = generateJobOp(sliceOp, { ...steppedCtx, geometry: null, features: null, sources: [] });
+    expect(noModel.error).toContain('needs a loaded model');
+    const indexed = generateJobOp(sliceOp, { ...steppedCtx, datumAngle: 90 });
+    expect(indexed.error).toContain('flat frame');
+  });
+
+  it('the ⚡ floor pick applies to slice pockets too', () => {
+    const faceId = steppedFeatures.planes.find((p) => Math.abs(p.normal.z) > 0.99)!.id;
+    const linked = generateJobOp({ ...sliceOp, floorFeatureId: faceId }, steppedCtx);
+    expect(linked.error).toBeNull();
+    const dangling = generateJobOp({ ...sliceOp, floorFeatureId: 'p:gone:plane-x' }, steppedCtx);
+    expect(dangling.error).toContain('no longer exist');
+  });
+});

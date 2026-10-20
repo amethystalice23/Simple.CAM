@@ -527,7 +527,40 @@ export type JobOp =
       side: 'outside' | 'inside' | 'online';
       /** the ⇩ floor pick — see the pocket variant */
       floorFeatureId: string | null;
+    })
+  | (JobOpBase & {
+      kind: 'slicePocket';
+      /**
+       * The waterline pocket (edge-tracing §2): the region is the model's
+       * Z cross-section, sliced fresh at every depth level — start = end
+       * cuts one simple pocket, a step-down walks a waterline through the
+       * band. No feature selection; the floor comes from the ⇩ pick.
+       */
+      /** 'outside' clears the stock around the slice (leaves the
+       * cross-section standing — outer shaping); 'inside' clears the
+       * slice's interior (hollow parts, negative-space flutes) */
+      regionMode: 'outside' | 'inside';
+      /** the slice Z / cut start, mm below the stock crown */
+      startDepth: number;
+      /** cut floor, mm below the stock crown (start = end → single level) */
+      endDepth: number;
+      /** roughing stock left on the part walls and the floor, mm */
+      allowance: number;
+      stepDown: number;
+      stepOver: number;
+      /** the ⇩ floor pick — see the pocket variant */
+      floorFeatureId: string | null;
     });
+
+/** Ops with depth boxes and the ⇩ floor pick (edge-tracing §5). */
+export type DepthBearingJobOp = Extract<
+  JobOp,
+  { kind: 'pocket' | 'profile' | 'slicePocket' }
+>;
+
+export function isDepthBearingJobOp(op: JobOp): op is DepthBearingJobOp {
+  return op.kind === 'pocket' || op.kind === 'profile' || op.kind === 'slicePocket';
+}
 
 export interface Vec3 {
   x: number;

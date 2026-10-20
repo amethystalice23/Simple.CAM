@@ -11,7 +11,8 @@ import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
-import { offsetInward } from '../cam/clipper';
+import { offsetInward, offsetOutward, difference } from '../cam/clipper';
+import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
@@ -29,10 +30,10 @@ import type {
   ToolPreset,
   Vec2,
 } from '../core/types';
-import { rotaryCalibrationOf } from '../core/types';
+import { isDepthBearingJobOp, rotaryCalibrationOf } from '../core/types';
 import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
-import { stockSpan, stockTopZ } from './placement';
+import { stockFootprint, stockSpan, stockTopZ } from './placement';
 
 export interface GeneratedOp {
   moves: Move[];
@@ -63,6 +64,7 @@ export interface GenContext {
 export const OP_KINDS: { kind: JobOp['kind']; label: string }[] = [
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
+  { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'index', label: 'Index (4-axis)' },
@@ -132,6 +134,18 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         ...base,
         kind,
         selectionIs: 'floor',
+        startDepth: 0,
+        endDepth: 2,
+        allowance: 0,
+        stepDown,
+        stepOver: defaultStepOver(tool),
+        floorFeatureId: null,
+      };
+    case 'slicePocket':
+      return {
+        ...base,
+        kind,
+        regionMode: 'outside',
         startDepth: 0,
         endDepth: 2,
         allowance: 0,
@@ -323,7 +337,7 @@ function selectionAcrossSources(
 export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
   // a dangling ⇩ floor pick fails visibly (the standard reselect path)
   if (
-    (op.kind === 'pocket' || op.kind === 'profile') &&
+    isDepthBearingJobOp(op) &&
     op.floorFeatureId !== null &&
     !resolveFeature(ctx.sources, op.floorFeatureId)
   ) {
@@ -474,6 +488,84 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
         };
       }
 
+      case 'slicePocket': {
+        // the region is the model's cross-section (edge-tracing §2) —
+        // no selection at all; the slice comes fresh from the mesh
+        if (!ctx.geometry) return fail('needs a loaded model — the slice comes from it');
+        if (ctx.datumAngle !== 0) {
+          return fail('slice pockets run in the flat frame — no Index op above them (tilted slicing comes later)');
+        }
+        const crown = stockTopZ(ctx.stock);
+        const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
+        if (!range) {
+          return fail(
+            'end depth must be at or below start depth, and the allowance must leave something to cut',
+          );
+        }
+        // one slice per depth level — start = end → the single level itself
+        const levels: number[] = [];
+        for (let z = range.topZ; z > range.floorZ + 1e-9; z = Math.max(z - op.stepDown, range.floorZ)) {
+          levels.push(z);
+        }
+        if (levels.length === 0) levels.push(range.floorZ);
+        const positions = transformedPositions(ctx.geometry, ctx.transform);
+        const footprint = op.regionMode === 'outside' ? stockFootprint(ctx.stock) : null;
+        const moves: Move[] = [];
+        let minutes = 0;
+        let passes = 0;
+        let slicedLevels = 0;
+        let dropped = 0;
+        for (const z of levels) {
+          const slice = sliceAtZ(positions, z);
+          dropped += slice.droppedChains;
+          if (slice.contours.length === 0) continue; // model absent at this level
+          let regions: Vec2[][];
+          if (op.regionMode === 'inside') {
+            regions =
+              op.allowance > 0 ? offsetInward(slice.contours, op.allowance) : slice.contours;
+          } else {
+            // wall stock grows the part; the cut region is everything else
+            const part =
+              op.allowance > 0 ? offsetOutward(slice.contours, op.allowance) : slice.contours;
+            regions = difference(footprint!, part);
+          }
+          if (regions.length === 0) continue;
+          const res = pocket2d(
+            {
+              kind: 'pocket',
+              id: op.id,
+              toolId: tool.id,
+              regions,
+              topZ: z,
+              floorZ: z,
+              stepDown: op.stepDown,
+              stepOver: op.stepOver,
+              feed,
+              plungeFeed,
+              safeClearance: 5,
+            },
+            tool,
+          );
+          moves.push(...res.moves);
+          minutes += res.estimatedMinutes;
+          passes += res.passes;
+          slicedLevels++;
+        }
+        if (slicedLevels === 0) {
+          return fail('every level sliced empty — the model sits outside the cut range');
+        }
+        return {
+          moves,
+          minutes,
+          error: null,
+          summary:
+            `${passes} passes / ${levels.length} level(s) (${op.regionMode}), ` +
+            `z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
+            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+            `, ~${minutes.toFixed(1)} min` +
+            (dropped > 0 ? ` · ${dropped} open chain(s) dropped — slice incomplete` : ''),
+        };
+      }
       case 'drill': {
         const SEL = 'select holes (interior circles)';
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);

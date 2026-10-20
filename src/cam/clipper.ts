@@ -10,7 +10,7 @@
  * loops CCW, holes CW.
  */
 
-import { ClipperOffset, EndType, JoinType } from 'clipper-lib';
+import { Clipper, ClipperOffset, ClipType, EndType, JoinType, PolyFillType, PolyType } from 'clipper-lib';
 import type { ClipperPath } from 'clipper-lib';
 import type { Vec2 } from '../core/types';
 
@@ -64,5 +64,21 @@ export function offsetOutward(contours: Vec2[][], deltaMm: number): Vec2[][] {
   );
   const sol: ClipperPath[] = [];
   co.Execute(sol, deltaMm * SCALE);
+  return fromSolution(sol);
+}
+
+/**
+ * Boolean difference subject − clip (non-zero fill, so nested CCW-outer /
+ * CW-hole contours behave as areas). The slice pocket's 'outside' mode:
+ * stock footprint minus the model's cross-section.
+ */
+export function difference(subject: Vec2[][], clip: Vec2[][]): Vec2[][] {
+  if (subject.length === 0) return [];
+  if (clip.length === 0) return subject;
+  const c = new Clipper();
+  c.AddPaths(subject.map(toPath), PolyType.ptSubject, true);
+  c.AddPaths(clip.map(toPath), PolyType.ptClip, true);
+  const sol: ClipperPath[] = [];
+  c.Execute(ClipType.ctDifference, sol, PolyFillType.pftNonZero, PolyFillType.pftNonZero);
   return fromSolution(sol);
 }

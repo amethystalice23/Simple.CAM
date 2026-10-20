@@ -5,6 +5,7 @@
  * are not persisted — they regenerate deterministically from the ops.
  */
 
+import { isDepthBearingJobOp } from '../core/types';
 import type { JobOp, ModelTransform, Primitive, Stock, Tool } from '../core/types';
 
 export const JOB_FORMAT = 'simple.cam job';
@@ -51,7 +52,7 @@ export function normalizeStock(stock: Stock): Stock {
 export function normalizeJobOps(ops: JobOp[]): JobOp[] {
   return ops.map((op) => {
     // pre-⇩ saves carry no floorFeatureId — detached is the null default
-    if (op.kind === 'pocket' || op.kind === 'profile') {
+    if (isDepthBearingJobOp(op)) {
       return op.floorFeatureId === undefined ? { ...op, floorFeatureId: null } : op;
     }
     if (op.kind === 'chamfer') {

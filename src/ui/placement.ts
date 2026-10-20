@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { originSpan } from '../core/types';
-import type { ModelTransform, OriginEdge, Stock, Vec3 } from '../core/types';
+import type { ModelTransform, OriginEdge, Stock, Vec2, Vec3 } from '../core/types';
 
 const D2R = Math.PI / 180;
 
@@ -95,6 +95,31 @@ export function stockSpan(stock: Stock, axis: 'x' | 'y' | 'z'): readonly [number
     case 'z':
       return originSpan(stock.origin.z, stock.sizeZ);
   }
+}
+
+/**
+ * The stock's XY footprint as one closed CCW contour — the region the
+ * slice pocket's 'outside' mode clears around the model's cross-section.
+ * A standing cylinder is a 64-gon circle at X0/Y0; a 4-axis cylinder's
+ * silhouette is its length × diameter rectangle.
+ */
+export function stockFootprint(stock: Stock): Vec2[][] {
+  if (stock.kind === 'box') {
+    const [x0, x1] = stockSpan(stock, 'x');
+    const [y0, y1] = stockSpan(stock, 'y');
+    return [[{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]];
+  }
+  const r = stock.calibration.effectiveRadius;
+  if (stock.axisMode === '3-axis') {
+    const pts: Vec2[] = [];
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      pts.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+    }
+    return [pts];
+  }
+  const [x0, x1] = stockSpan(stock, 'x');
+  return [[{ x: x0, y: -r }, { x: x1, y: -r }, { x: x1, y: r }, { x: x0, y: r }]];
 }
 
 /**
