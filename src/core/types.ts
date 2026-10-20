@@ -254,6 +254,41 @@ export interface SpiralCarveOp {
   plungeFeed: number;
 }
 
+/**
+ * External thread cut with a V-bit on the rotary axis (PLAN.md Phase 2).
+ * The cylinder is defined like the spiral carve (Start/End X + a
+ * diameter — here the NOMINAL diameter); groove depth and the crest
+ * diameter derive from pitch, the tool's tip angle, and tolerance
+ * (src/cam/thread.ts); `faceFirst` pre-faces the stock to the crest
+ * diameter via the faceCylinder generator. Levels retrace the same
+ * helix at identical absolute A phase; a spring pass finishes each start.
+ */
+export interface ThreadOp {
+  kind: 'thread';
+  id: string;
+  toolId: string;
+  /** the thread's nominal diameter, mm */
+  nominalDiameter: number;
+  xStart: number;
+  xEnd: number;
+  /** tooth-to-tooth distance, mm (lead = starts × pitch) */
+  pitch: number;
+  /** thread starts (multi-start: 360°-spaced helices) */
+  starts: number;
+  /** fit allowance: tenths of a mm shrinking the teeth (deeper grooves +
+   * a smaller crest diameter), 0 = nominal geometry */
+  tolerance: number;
+  /** axial depth-per-level ladder for the grooves, mm */
+  stepDown: number;
+  rotation: 'cw' | 'ccw';
+  /** pre-face the stock to the crest diameter before the grooves */
+  faceFirst: boolean;
+  /** G94 mm/min — the facing prefix */
+  feed: number;
+  /** G94 plunge feed at the start entries */
+  plungeFeed: number;
+}
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -438,7 +473,7 @@ export interface ChamferOp {
   safeClearance: number;
 }
 
-export type Operation = FaceCylinderOp | SpiralCarveOp | PocketOp | DrillOp | ProfileOp | ChamferOp;
+export type Operation = FaceCylinderOp | SpiralCarveOp | ThreadOp | PocketOp | DrillOp | ProfileOp | ChamferOp;
 // Phase 1 adds: engrave | indexedPocket
 // Phase 2 adds: thread | wrappedGroove
 
@@ -509,6 +544,27 @@ export type JobOp =
       /** axial depth-per-level ladder, mm */
       stepDown: number;
       rotation: 'cw' | 'ccw';
+    })
+  | (JobOpBase & {
+      kind: 'thread';
+      /** external V-bit thread about the stock axis (PLAN.md Phase 2).
+       * The cylinder definition is the spiral carve's, with the Ø being
+       * the thread's NOMINAL diameter (⇩-pickable); pitch, starts,
+       * tolerance, and the optional pre-face carry the thread. */
+      nominalDiameter: number;
+      xStart: number;
+      xEnd: number;
+      /** tooth-to-tooth distance, mm (lead = starts × pitch) */
+      pitch: number;
+      /** thread starts (multi-start: 360°-spaced helices) */
+      starts: number;
+      /** fit allowance: tenths of a mm shrinking the teeth; 0 = nominal */
+      tolerance: number;
+      /** depth-per-level ladder for the grooves (and the pre-face), mm */
+      stepDown: number;
+      rotation: 'cw' | 'ccw';
+      /** pre-face the stock to the crest diameter before the grooves */
+      faceFirst: boolean;
     })
   | (JobOpBase & {
       kind: 'index';

@@ -456,6 +456,70 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'thread':
+      return (
+        <>
+          <div className="floor-row">
+            <NumberField label="Start X (mm)" value={op.xStart} step={0.5} onCommit={(v) => upd({ xStart: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'startX' ? ' active' : ''}`}
+              title="Pick start X from a feature — click, then select one in the viewport"
+              onClick={() => props.onFeaturePick(op, 'startX')}
+            >
+              ⇩
+            </button>
+          </div>
+          <div className="floor-row">
+            <NumberField label="End X (mm)" value={op.xEnd} step={0.5} onCommit={(v) => upd({ xEnd: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'endX' ? ' active' : ''}`}
+              title="Pick end X from a feature — click, then select one in the viewport"
+              onClick={() => props.onFeaturePick(op, 'endX')}
+            >
+              ⇩
+            </button>
+          </div>
+          <div className="floor-row">
+            <NumberField label="Nominal Ø (mm)" value={op.nominalDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ nominalDiameter: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'targetDiameter' ? ' active' : ''}`}
+              title="Pick the nominal Ø from a circular feature — click, then select the circle"
+              onClick={() => props.onFeaturePick(op, 'targetDiameter')}
+            >
+              ⇩
+            </button>
+          </div>
+          <NumberField label="Pitch (mm)" value={op.pitch} min={0.1} step={0.25} onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)} />
+          <NumberField label="Starts" value={op.starts} min={1} step={1} onCommit={(v) => upd({ starts: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
+          <NumberField label="Tolerance (mm)" value={op.tolerance} min={0} step={0.05} onCommit={(v) => upd({ tolerance: Math.max(v, 0) } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <label className="field">
+            <span>Rotation</span>
+            <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
+              <option value="cw">cw</option>
+              <option value="ccw">ccw</option>
+            </select>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={op.faceFirst}
+              onChange={(e) => upd({ faceFirst: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>face to the crest Ø first</span>
+          </label>
+          <p className="hint">
+            external V-bit thread — groove depth derives from pitch, the bit's angle, and
+            tolerance (crest Ø = nominal − 2·tolerance; grooves cut deeper by it). The tick
+            pre-faces the stock to the crest Ø; without it the ladder starts at the stock
+            surface, so surplus stock becomes extra levels. Fit is empirical — cut a test
+            coupon before committing the part
+          </p>
+        </>
+      );
     case 'drill':
       return (
         <>
@@ -764,7 +828,7 @@ export function OpsPanel(props: Props) {
                   {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && (
                     <p className="hint">needs a model or a primitive to select from</p>
                   )}
-                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve') && props.axisMode !== '4-axis' && (
+                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread') && props.axisMode !== '4-axis' && (
                     <p className="hint">needs 4-axis mode (Stock tab)</p>
                   )}
                 </div>

@@ -8,6 +8,7 @@
 import type * as THREE from 'three';
 import { DEFAULT_STEP_OVER_FACTOR, faceCylinder } from '../cam/faceCylinder';
 import { spiralCarve } from '../cam/spiralCarve';
+import { thread } from '../cam/thread';
 import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
@@ -71,6 +72,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'index', label: 'Index (4-axis)', rotaryOnly: true },
   { kind: 'faceCylinder', label: 'Face cylinder (4-axis)', rotaryOnly: true },
   { kind: 'spiralCarve', label: 'Spiral carve (4-axis)', rotaryOnly: true },
+  { kind: 'thread', label: 'Thread (4-axis)', rotaryOnly: true },
 ];
 
 /**
@@ -145,6 +147,23 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         width: 3,
         stepDown: Math.max(stepDown, 0.5),
         rotation: 'cw',
+      };
+    }
+    case 'thread': {
+      const rotary = stock.axisMode === '4-axis';
+      const [xStart, xEnd] = rotary ? stockSpan(stock, 'x') : [0, 40];
+      return {
+        ...base,
+        kind,
+        nominalDiameter: rotary ? Math.max(1, rotaryCalibrationOf(stock).effectiveRadius * 2 - 1) : 20,
+        xStart,
+        xEnd,
+        pitch: 2,
+        starts: 1,
+        tolerance: 0,
+        stepDown,
+        rotation: 'cw',
+        faceFirst: false,
       };
     }
     case 'pocket':
@@ -526,6 +545,46 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
               `${op.count} strand(s) × ${res.passes / op.count} sweep(s), ${op.spiralAngle}° helix, ` +
               `${op.depth}mm deep × ${op.width}mm wide, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ` +
               `~${res.estimatedMinutes.toFixed(1)} min`,
+          };
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
+      }
+
+      case 'thread': {
+        if (ctx.stock.axisMode !== '4-axis') return fail('threading needs 4-axis mode (Stock tab)');
+        try {
+          const res = thread(
+            {
+              kind: 'thread',
+              id: op.id,
+              toolId: tool.id,
+              nominalDiameter: op.nominalDiameter,
+              xStart: op.xStart,
+              xEnd: op.xEnd,
+              pitch: op.pitch,
+              starts: op.starts,
+              tolerance: op.tolerance,
+              stepDown: op.stepDown,
+              rotation: op.rotation,
+              faceFirst: op.faceFirst,
+              feed,
+              plungeFeed,
+            },
+            rotaryCalibrationOf(ctx.stock),
+            tool,
+            ctx.datumAngle,
+          );
+          return {
+            moves: res.moves,
+            minutes: res.estimatedMinutes,
+            error: null,
+            summary:
+              `Ø${op.nominalDiameter} × ${op.pitch}mm pitch` +
+              (op.starts > 1 ? ` (${op.starts} starts)` : '') +
+              `${op.faceFirst ? `, faced to Ø${res.faceDiameter.toFixed(2)}` : ''}` +
+              `, ${res.depth.toFixed(2)}mm grooves, ${res.passes} sweep(s) + spring, ` +
+              `X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
           };
         } catch (e) {
           return fail(e instanceof Error ? e.message : String(e));

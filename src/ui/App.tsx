@@ -6,6 +6,7 @@ import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { sampleSpiralMarks } from '../cam/spiralCarve';
+import { threadDepth, threadFaceDiameter } from '../cam/thread';
 import { postCarvera } from '../post/carvera';
 import {
   identityTransform,
@@ -202,7 +203,8 @@ export function App() {
 
   /** a ⇩ toggles its op's pick mode (measure mode on for the pick) */
   const toggleFeaturePick = (op: JobOp, kind: FeaturePickKind) => {
-    const takesFacePicks = op.kind === 'faceCylinder' || op.kind === 'spiralCarve';
+    const takesFacePicks =
+      op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread';
     if (kind === 'floor' ? !isDepthBearingJobOp(op) : !takesFacePicks) return;
     setFeaturePick((cur) =>
       cur?.opId === op.id && cur.kind === kind ? null : { opId: op.id, kind },
@@ -225,6 +227,7 @@ export function App() {
           if (o.id !== pick.opId) return o;
           if (o.kind === 'faceCylinder') return { ...o, targetDiameter: diameter };
           if (o.kind === 'spiralCarve') return { ...o, surfaceDiameter: diameter };
+          if (o.kind === 'thread') return { ...o, nominalDiameter: diameter };
           return o;
         }),
       );
@@ -237,7 +240,9 @@ export function App() {
       setOps((prev) =>
         prev.map((o) => {
           if (o.id !== pick.opId) return o;
-          if (o.kind !== 'faceCylinder' && o.kind !== 'spiralCarve') return o;
+          if (o.kind !== 'faceCylinder' && o.kind !== 'spiralCarve' && o.kind !== 'thread') {
+            return o;
+          }
           return pick.kind === 'startX'
             ? { ...o, xStart: round2(p.x) }
             : { ...o, xEnd: round2(p.x) };
@@ -433,6 +438,42 @@ export function App() {
             count: op.count,
             depth: op.depth,
             width: op.width,
+            stepDown: op.stepDown,
+            rotation: op.rotation,
+            feed: 1,
+            plungeFeed: 1,
+          },
+          rotaryCalibrationOf(stock),
+          t?.diameter ?? 6,
+          datumAngleBefore(ops, op.id),
+        ),
+      };
+    }
+    if (op.kind === 'thread') {
+      const t = tools.find((x) => x.id === op.toolId);
+      const vAngle = t?.type === 'vbit' ? (t.vAngle ?? 90) : 90;
+      const faceDia = threadFaceDiameter(op.nominalDiameter, op.tolerance);
+      const depth = threadDepth(op.pitch, vAngle, op.tolerance);
+      // the groove helices: lead-based angle, mapped onto the sampler
+      const lead = op.starts * op.pitch;
+      const angle = (Math.atan(lead / (Math.PI * faceDia)) * 180) / Math.PI;
+      return {
+        xStart: op.xStart,
+        xEnd: op.xEnd,
+        diameter: faceDia,
+        axisZ,
+        marks: sampleSpiralMarks(
+          {
+            kind: 'spiralCarve',
+            id: op.id,
+            toolId: op.toolId,
+            surfaceDiameter: faceDia,
+            xStart: op.xStart,
+            xEnd: op.xEnd,
+            spiralAngle: angle,
+            count: op.starts,
+            depth,
+            width: 0.1, // one line per start — the V profile is the tool's
             stepDown: op.stepDown,
             rotation: op.rotation,
             feed: 1,
