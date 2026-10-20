@@ -10,33 +10,39 @@ import type { GenContext } from '../jobGeneration';
 
 /**
  * The Delrin coupon: the Phase 1/2 hardware acceptance job for Alice's
- * Ø16 rod (jobs/coupon-delrin-m14x1.cam.json). One bar, four segments:
- * three M14×1 ccw threads at tolerance 0 / 0.1 / 0.2 (fit tuned against
- * a nut on the machine — PLAN risk 3), then a 3-strand spiral carve on
- * the raw rod (handedness + geometry check). Each thread segment is
- * faced to its crest Ø first, and the thread's surfaceDiameter says so —
- * no air levels. Regenerate deliberately with UPDATE_GOLDEN=1.
+ * Ø16 rod (jobs/coupon-delrin-m14x1.cam.json). Everything fits a 50mm
+ * section of rod. 3.175 shank bits only — Alice's everyday set: the
+ * Spiral O Metal 3.175×12 flat, and a 60° engraving bit (metric threads
+ * cut 60° flanks, not the chamfer bit's 90°). Four segments: three
+ * M14×1 ccw threads at tolerance 0 / 0.1 / 0.2 (fit tuned against a nut
+ * on the machine — PLAN risk 3), each faced to its crest Ø first (the
+ * thread's surfaceDiameter says so — no air levels), then a 3-strand
+ * spiral carve on the raw rod, cw — the other hand, both on one bar.
+ * Regenerate deliberately with UPDATE_GOLDEN=1.
  */
 
 const couponPath = join(import.meta.dirname, '..', '..', '..', 'jobs', 'coupon-delrin-m14x1.cam.json');
 
 function coupon(): { stock: Stock; ops: JobOp[]; tools: Tool[] } {
-  const flat = MAKERA_TOOLS.find((t) => t.id === 'makera-o-flute-bits-spiral-o-metal-6-17mm-dlc')!;
-  const vbit = MAKERA_TOOLS.find((t) => t.id === 'makera-other-tools-chamfering-bit-1-8in-shank')!;
+  const flat = MAKERA_TOOLS.find((t) => t.id === 'makera-o-flute-bits-spiral-o-metal-3-175-12mm')!;
+  const vbit = MAKERA_TOOLS.find(
+    (t) => t.id === 'makera-engraving-bits-single-flute-engraving-metal-60-deg-1mm',
+  )!;
   const stock: Extract<Stock, { kind: 'cylinder' }> = {
     kind: 'cylinder',
-    length: 90,
-    xOrigin: 'mid', // machine X −45…45
+    length: 50,
+    xOrigin: 'mid', // machine X −25…25 — a 50mm section of rod
     calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
     axisMode: '4-axis',
     materialId: 'delrin',
   };
-  // tolerance sweep → crest Ø 14 / 13.9 / 13.8 (nominal − 2·tol)
+  // tolerance sweep → crest Ø 14 / 13.9 / 13.8 (nominal − 2·tol);
+  // 10mm threads with 3mm gaps, spiral behind — all within ±24mm
   const threads: [string, number, number, number, number][] = [
     // [id, xStart, xEnd, tolerance, crest Ø]
-    ['jobop-1', -40, -20, 0.0, 14.0],
-    ['jobop-2', -15, 5, 0.1, 13.9],
-    ['jobop-3', 10, 30, 0.2, 13.8],
+    ['jobop-1', -24, -14, 0.0, 14.0],
+    ['jobop-2', -11, -1, 0.1, 13.9],
+    ['jobop-3', 2, 12, 0.2, 13.8],
   ];
   const ops: JobOp[] = [];
   threads.forEach(([id, xStart, xEnd, tolerance, crest], i) => {
@@ -76,8 +82,10 @@ function coupon(): { stock: Stock; ops: JobOp[]; tools: Tool[] } {
         featureIds: [],
         kind: 'spiralCarve',
         surfaceDiameter: 16, // the raw rod behind the threads
-        xStart: 34,
-        xEnd: 44,
+        xStart: 15,
+        xEnd: 24,
+        // width 4 > the Ø3.175 tool fans two parallel passes — the fan
+        // path gets iron time too
         spiralAngle: 30,
         count: 3,
         depth: 0.5,
@@ -99,7 +107,7 @@ describe('the Delrin coupon job', () => {
       primitives: [],
       ops,
       tools,
-      modelName: null,
+      modelName: 'none', // no model — the coupon is rotary ops only
       modelBytes: null,
     });
     if (process.env.UPDATE_GOLDEN) {

@@ -3,7 +3,7 @@
   "version": 1,
   "stock": {
     "kind": "cylinder",
-    "length": 90,
+    "length": 50,
     "xOrigin": "mid",
     "calibration": {
       "aOriginDeg": 0,
@@ -34,12 +34,12 @@
   "ops": [
     {
       "id": "jobop-1-face",
-      "toolId": "makera-o-flute-bits-spiral-o-metal-6-17mm-dlc",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
       "featureIds": [],
       "kind": "faceCylinder",
       "targetDiameter": 14,
-      "xStart": -40,
-      "xEnd": -20,
+      "xStart": -24,
+      "xEnd": -14,
       "stepDown": 0.5,
       "stepOver": null,
       "finishAllowance": 0,
@@ -48,12 +48,12 @@
     },
     {
       "id": "jobop-1-thread",
-      "toolId": "makera-other-tools-chamfering-bit-1-8in-shank",
+      "toolId": "makera-engraving-bits-single-flute-engraving-metal-60-deg-1mm",
       "featureIds": [],
       "kind": "thread",
       "nominalDiameter": 14,
-      "xStart": -40,
-      "xEnd": -20,
+      "xStart": -24,
+      "xEnd": -14,
       "pitch": 1,
       "starts": 1,
       "tolerance": 0,
@@ -63,12 +63,12 @@
     },
     {
       "id": "jobop-2-face",
-      "toolId": "makera-o-flute-bits-spiral-o-metal-6-17mm-dlc",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
       "featureIds": [],
       "kind": "faceCylinder",
       "targetDiameter": 13.9,
-      "xStart": -15,
-      "xEnd": 5,
+      "xStart": -11,
+      "xEnd": -1,
       "stepDown": 0.5,
       "stepOver": null,
       "finishAllowance": 0,
@@ -77,12 +77,12 @@
     },
     {
       "id": "jobop-2-thread",
-      "toolId": "makera-other-tools-chamfering-bit-1-8in-shank",
+      "toolId": "makera-engraving-bits-single-flute-engraving-metal-60-deg-1mm",
       "featureIds": [],
       "kind": "thread",
       "nominalDiameter": 14,
-      "xStart": -15,
-      "xEnd": 5,
+      "xStart": -11,
+      "xEnd": -1,
       "pitch": 1,
       "starts": 1,
       "tolerance": 0.1,
@@ -92,12 +92,12 @@
     },
     {
       "id": "jobop-3-face",
-      "toolId": "makera-o-flute-bits-spiral-o-metal-6-17mm-dlc",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
       "featureIds": [],
       "kind": "faceCylinder",
       "targetDiameter": 13.8,
-      "xStart": 10,
-      "xEnd": 30,
+      "xStart": 2,
+      "xEnd": 12,
       "stepDown": 0.5,
       "stepOver": null,
       "finishAllowance": 0,
@@ -106,12 +106,12 @@
     },
     {
       "id": "jobop-3-thread",
-      "toolId": "makera-other-tools-chamfering-bit-1-8in-shank",
+      "toolId": "makera-engraving-bits-single-flute-engraving-metal-60-deg-1mm",
       "featureIds": [],
       "kind": "thread",
       "nominalDiameter": 14,
-      "xStart": 10,
-      "xEnd": 30,
+      "xStart": 2,
+      "xEnd": 12,
       "pitch": 1,
       "starts": 1,
       "tolerance": 0.2,
@@ -121,12 +121,12 @@
     },
     {
       "id": "jobop-4-spiral",
-      "toolId": "makera-o-flute-bits-spiral-o-metal-6-17mm-dlc",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
       "featureIds": [],
       "kind": "spiralCarve",
       "surfaceDiameter": 16,
-      "xStart": 34,
-      "xEnd": 44,
+      "xStart": 15,
+      "xEnd": 24,
       "spiralAngle": 30,
       "count": 3,
       "depth": 0.5,
@@ -137,80 +137,17 @@
   ],
   "tools": [
     {
-      "id": "makera-o-flute-bits-spiral-o-metal-6-17mm-dlc",
-      "name": "Spiral O Metal 6*17mm DLC",
+      "id": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "name": "Spiral O Metal 3.175*12mm",
       "type": "flat",
       "subtype": "Spiral O · Metal",
-      "diameter": 6,
-      "spindleRpm": 18000,
-      "presets": [
-        {
-          "material": "Aluminum",
-          "spindleRpm": 12000,
-          "feed": 500,
-          "plungeFeed": 200,
-          "stepDown": 0.2,
-          "rampFeed": 333
-        },
-        {
-          "material": "Brass",
-          "spindleRpm": 12000,
-          "feed": 300,
-          "plungeFeed": 100,
-          "stepDown": 0.1,
-          "rampFeed": 333
-        },
-        {
-          "material": "Copper",
-          "spindleRpm": 12000,
-          "feed": 300,
-          "plungeFeed": 100,
-          "stepDown": 0.1,
-          "rampFeed": 333
-        },
-        {
-          "material": "Hardwood",
-          "spindleRpm": 12000,
-          "feed": 1000,
-          "plungeFeed": 300,
-          "stepDown": 1,
-          "rampFeed": 333
-        },
-        {
-          "material": "Plastic",
-          "spindleRpm": 12000,
-          "feed": 1000,
-          "plungeFeed": 300,
-          "stepDown": 1,
-          "rampFeed": 333
-        },
-        {
-          "material": "Softwood",
-          "spindleRpm": 12000,
-          "feed": 500,
-          "plungeFeed": 200,
-          "stepDown": 2,
-          "rampFeed": 333
-        }
-      ],
-      "shaftDiameter": 6,
-      "fluteLength": 17,
-      "overallLength": 50,
-      "flutes": 1,
-      "material": "carbide"
-    },
-    {
-      "id": "makera-other-tools-chamfering-bit-1-8in-shank",
-      "name": "Chamfering Bit - 1/8″ Shank",
-      "type": "vbit",
-      "subtype": "Chamfering",
       "diameter": 3.175,
       "spindleRpm": 18000,
       "presets": [
         {
           "material": "Aluminum",
           "spindleRpm": 12000,
-          "feed": 600,
+          "feed": 500,
           "plungeFeed": 200,
           "stepDown": 0.2,
           "rampFeed": 333
@@ -218,24 +155,16 @@
         {
           "material": "Brass",
           "spindleRpm": 12000,
-          "feed": 500,
-          "plungeFeed": 200,
-          "stepDown": 0.1,
-          "rampFeed": 333
-        },
-        {
-          "material": "Carbon Fiber",
-          "spindleRpm": 12000,
-          "feed": 500,
-          "plungeFeed": 200,
+          "feed": 300,
+          "plungeFeed": 100,
           "stepDown": 0.1,
           "rampFeed": 333
         },
         {
           "material": "Copper",
           "spindleRpm": 12000,
-          "feed": 500,
-          "plungeFeed": 200,
+          "feed": 300,
+          "plungeFeed": 100,
           "stepDown": 0.1,
           "rampFeed": 333
         },
@@ -243,41 +172,104 @@
           "material": "Hardwood",
           "spindleRpm": 12000,
           "feed": 1000,
-          "plungeFeed": 500,
+          "plungeFeed": 300,
           "stepDown": 1,
-          "rampFeed": 333
-        },
-        {
-          "material": "PCB",
-          "spindleRpm": 12000,
-          "feed": 500,
-          "plungeFeed": 200,
-          "stepDown": 0.1,
           "rampFeed": 333
         },
         {
           "material": "Plastic",
           "spindleRpm": 12000,
           "feed": 1000,
-          "plungeFeed": 500,
+          "plungeFeed": 300,
           "stepDown": 1,
           "rampFeed": 333
         },
         {
           "material": "Softwood",
           "spindleRpm": 12000,
-          "feed": 1200,
+          "feed": 500,
+          "plungeFeed": 200,
+          "stepDown": 2,
+          "rampFeed": 333
+        }
+      ],
+      "shaftDiameter": 3.175,
+      "fluteLength": 12,
+      "overallLength": 38,
+      "flutes": 1,
+      "material": "carbide"
+    },
+    {
+      "id": "makera-engraving-bits-single-flute-engraving-metal-60-deg-1mm",
+      "name": "Single Flute Engraving Metal 60 deg*.1mm",
+      "type": "vbit",
+      "subtype": "Engraving · Metal",
+      "diameter": 3.175,
+      "spindleRpm": 18000,
+      "presets": [
+        {
+          "material": "Aluminum",
+          "spindleRpm": 11962,
+          "feed": 498,
+          "plungeFeed": 200,
+          "stepDown": 0.2,
+          "rampFeed": 333
+        },
+        {
+          "material": "Brass",
+          "spindleRpm": 11962,
+          "feed": 299,
+          "plungeFeed": 100,
+          "stepDown": 0.1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Copper",
+          "spindleRpm": 11962,
+          "feed": 299,
+          "plungeFeed": 100,
+          "stepDown": 0.1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Hardwood",
+          "spindleRpm": 11962,
+          "feed": 997,
+          "plungeFeed": 500,
+          "stepDown": 1,
+          "rampFeed": 333
+        },
+        {
+          "material": "PCB",
+          "spindleRpm": 11962,
+          "feed": 498,
+          "plungeFeed": 200,
+          "stepDown": 0.1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Plastic",
+          "spindleRpm": 11962,
+          "feed": 997,
+          "plungeFeed": 500,
+          "stepDown": 1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Softwood",
+          "spindleRpm": 11962,
+          "feed": 997,
           "plungeFeed": 500,
           "stepDown": 2,
           "rampFeed": 333
         }
       ],
       "shaftDiameter": 3.175,
-      "fluteLength": 3,
+      "fluteLength": 8,
       "overallLength": 38,
-      "flutes": 2,
+      "flutes": 1,
       "material": "carbide",
-      "vAngle": 90,
+      "vAngle": 60,
       "tipDiameter": 0.1
     }
   ],
