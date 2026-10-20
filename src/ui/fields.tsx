@@ -19,6 +19,8 @@ export function NumberField(props: {
   value: number;
   min?: number;
   step?: number;
+  /** extra classes on the wrapping label (e.g. layout tweaks) */
+  className?: string;
   onCommit: (v: number) => void;
 }) {
   const [text, setText] = useState(String(props.value));
@@ -30,7 +32,7 @@ export function NumberField(props: {
     if (Number.isFinite(v) && (props.min === undefined || v >= props.min)) props.onCommit(v);
   };
   return (
-    <label className="field">
+    <label className={`field${props.className ? ` ${props.className}` : ''}`}>
       <span>{props.label}</span>
       <input
         type="number"

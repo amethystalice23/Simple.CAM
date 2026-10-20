@@ -224,12 +224,13 @@ const RING_SAMPLES = 24; // hover-snap sampling density
 const SNAP_PX_FLOOR = 10;
 const SNAP_MM = 0.5;
 /**
- * Key features (circles, holes) snap with this much extra generosity and
- * win outright over edges inside that radius — tuned low enough that flat
- * faces between features stay easy to click (edge tolerance ×1.65 ≈ 16.5 px
- * screen floor).
+ * Key features (circles, holes) snap within this multiple of the edge
+ * tolerance and win outright over edges inside that radius. Tuned DOWN to
+ * a third of the old 1.65 at Alice's request — circles were stealing face
+ * clicks (edge tolerance ×0.55 ≈ 5.5 px screen floor; edges are the
+ * fallback beyond that).
  */
-const CIRCLE_PRIORITY = 1.65;
+const CIRCLE_PRIORITY = 0.55;
 
 export interface FeatureOverlayData {
   edgeLines: THREE.LineSegments;
@@ -373,10 +374,10 @@ export interface NearestFeature {
 }
 
 /**
- * Nearest feature to the mouse in screen space. Circles and holes are key
- * dimensions and take precedence: they snap within 2.5× the tolerance
- * (25 px / 1.25 mm floors) and win outright if anything is inside that
- * radius. Edges are the fallback, snapping within ~0.5 mm (10 px floor).
+ * Nearest feature to the mouse in screen space. Circles and holes take
+ * precedence but snap tightly (CIRCLE_PRIORITY × the tolerance — they win
+ * outright only inside that small radius, so faces stay easy to click).
+ * Edges are the fallback, snapping within ~0.5 mm (10 px floor).
  */
 export function findNearestFeature(
   data: FeatureOverlayData,

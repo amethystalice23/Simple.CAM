@@ -32,7 +32,7 @@ describe('pocketRegionsFromSelection', () => {
       (c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z - 2) < 0.01,
     );
     expect(holeCircle).toBeDefined();
-    const src = pocketRegionsFromSelection(geo, f, [holeCircle!.id], identityTransform());
+    const src = pocketRegionsFromSelection(f, [holeCircle!.id], identityTransform());
     expect(src).not.toBeNull();
     expect(src!.regions).toHaveLength(1);
     expect(loopArea(src!.regions[0])).toBeCloseTo(Math.PI * 4, 1); // Ø4 hole
@@ -47,7 +47,7 @@ describe('pocketRegionsFromSelection', () => {
       (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z + 4) < 1e-6,
     );
     expect(topPlane).toBeDefined();
-    const src = pocketRegionsFromSelection(geo, f, [topPlane!.id], identityTransform());
+    const src = pocketRegionsFromSelection(f, [topPlane!.id], identityTransform());
     expect(src).not.toBeNull();
     expect(src!.regions).toHaveLength(1);
     expect(loopArea(src!.regions[0])).toBeCloseTo(40, 5);
@@ -63,7 +63,7 @@ describe('pocketRegionsFromSelection', () => {
     );
     expect(topPlane).toBeDefined();
     expect(() =>
-      pocketRegionsFromSelection(geo, f, [holeCircle.id, topPlane!.id], identityTransform()),
+      pocketRegionsFromSelection(f, [holeCircle.id, topPlane!.id], identityTransform()),
     ).toThrowError(/either faces or holes/);
   });
 
@@ -73,8 +73,59 @@ describe('pocketRegionsFromSelection', () => {
     const sidePlane = f.planes.find((p) => Math.abs(p.normal.z) < 0.5);
     expect(sidePlane).toBeDefined();
     expect(() =>
-      pocketRegionsFromSelection(geo, f, [sidePlane!.id], identityTransform()),
+      pocketRegionsFromSelection(f, [sidePlane!.id], identityTransform()),
     ).toThrowError(/cannot be pocketed in the cutting frame/);
+  });
+
+  it("follows a concave face's OUTLINE, not its bounding box (the cross bug)", () => {
+    // an L-shaped top face (two 10×2 bars, union area 36, bounding box
+    // 100) — the profile must turn the concave corners, not ride a
+    // rounded square around the bounding box
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(10, 0);
+    shape.lineTo(10, 2);
+    shape.lineTo(2, 2);
+    shape.lineTo(2, 10);
+    shape.lineTo(0, 10);
+    shape.closePath();
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
+    geo.translate(0, 0, -6); // top face at z −4
+    const f = detectFeatures(geo);
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z + 4) < 1e-6,
+    );
+    expect(topPlane).toBeDefined();
+    const src = pocketRegionsFromSelection(f, [topPlane!.id], identityTransform());
+    expect(src).not.toBeNull();
+    expect(src!.regions).toHaveLength(1);
+    const region = src!.regions[0];
+    // the L outline (6 corners, possibly with seam duplicates) — never the
+    // 4-corner bounding rectangle
+    expect(region.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(region.map((pt) => `${pt.x},${pt.y}`)).size).toBeGreaterThanOrEqual(6);
+    expect(loopArea(region)).toBeCloseTo(36, 5); // not 100 (the AABB)
+  });
+
+  it("orients a face's loops: outer CCW, holes CW", () => {
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 2) < 1e-6,
+    );
+    expect(topPlane).toBeDefined();
+    const src = pocketRegionsFromSelection(f, [topPlane!.id], identityTransform());
+    expect(src).not.toBeNull();
+    expect(src!.regions).toHaveLength(2); // the rim + the hole
+    const areas = src!.regions.map(loopArea).sort((a, b) => a - b);
+    expect(areas[0]).toBeLessThan(0); // the hole, CW
+    expect(areas[1]).toBeGreaterThan(0); // the outer rim, CCW
+    // tessellated rims sit inside the true circles (chord error): within
+    // a few percent, right sign on each
+    expect(Math.abs(areas[0])).toBeGreaterThan(0.95 * Math.PI * 4);
+    expect(Math.abs(areas[0])).toBeLessThan(Math.PI * 4);
+    expect(areas[1]).toBeGreaterThan(0.95 * Math.PI * 25);
+    expect(areas[1]).toBeLessThan(Math.PI * 25);
   });
 
   it('accepts floors within ~10° of horizontal in the cutting frame', () => {
@@ -84,7 +135,7 @@ describe('pocketRegionsFromSelection', () => {
     const ft = detectFeatures(tilted);
     const tiltedTop = ft.planes.find((p) => p.normal.z > 0.98 && p.normal.z < 0.999)!;
     expect(tiltedTop.normal.z).toBeGreaterThan(0.985);
-    const src = pocketRegionsFromSelection(tilted, ft, [tiltedTop.id], identityTransform());
+    const src = pocketRegionsFromSelection(ft, [tiltedTop.id], identityTransform());
     expect(src).not.toBeNull();
     expect(src!.regions).toHaveLength(1);
   });

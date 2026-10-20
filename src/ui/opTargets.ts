@@ -39,15 +39,15 @@ function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: numbe
 
 /**
  * Pocket regions from the selection: circles aligned to the machine Z
- * axis become their disc; Z-normal planes become their footprint
- * rectangle. `selectionZ` is the highest selected plane (with several
- * faces at different heights, the shallowest wins — add another op for
- * deeper ones). Mixing faces and holes in one op is rejected.
+ * axis become their disc; Z-normal planes become their BORDER LOOPS —
+ * the tool follows the selected outline (a cross cuts a cross, not its
+ * bounding box). `selectionZ` is the highest selected plane (with
+ * several faces at different heights, the shallowest wins — add another
+ * op for deeper ones). Mixing faces and holes in one op is rejected.
  * `indexRotation` maps points into the indexed cutting frame (see
  * src/cam/indexing.ts) so radial features face the cutter.
  */
 export function pocketRegionsFromSelection(
-  geometry: THREE.BufferGeometry,
   features: DetectedFeatures,
   selection: string[],
   transform: ModelTransform,
@@ -80,31 +80,19 @@ export function pocketRegionsFromSelection(
     const p = features.planes[pi];
     if (!selection.includes(p.id)) continue;
     if (Math.abs(machineAxisZ(new THREE.Vector3(p.normal.x, p.normal.y, p.normal.z), xf)) < Z_TOL) continue;
-    // member-triangle XY footprint rectangle
-    const geo = geometry.index ? geometry.toNonIndexed() : geometry;
-    const attr = geo.getAttribute('position') as THREE.BufferAttribute;
-    const triCount = Math.floor(attr.count / 3);
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (let t = 0; t < triCount; t++) {
-      if (features.faceToPlane[t] !== pi) continue;
-      for (let k = 0; k < 3; k++) {
-        const v = xf({ x: attr.getX(t * 3 + k), y: attr.getY(t * 3 + k), z: attr.getZ(t * 3 + k) });
-        minX = Math.min(minX, v.x);
-        maxX = Math.max(maxX, v.x);
-        minY = Math.min(minY, v.y);
-        maxY = Math.max(maxY, v.y);
-      }
-    }
-    if (minX > maxX) continue;
-    planeRegions.push([
-      { x: minX, y: minY },
-      { x: maxX, y: minY },
-      { x: maxX, y: maxY },
-      { x: minX, y: maxY },
-    ]);
+    // the face's own border loops, projected to machine XY and oriented
+    // outer-CCW / holes-CW by nesting depth (sliceAtZ's classification
+    // rule) — the path follows the outline, not a box containing it
+    const faceLoops = features.planeLoops
+      .filter((l) => l.plane === pi)
+      .map((l) =>
+        l.points.map((pt) => {
+          const v = xf(pt);
+          return { x: v.x, y: v.y };
+        }),
+      );
+    if (faceLoops.length === 0) continue;
+    planeRegions.push(...orientLoops(faceLoops));
     faceZ = Math.max(faceZ, xf(p.point).z);
   }
 
@@ -175,6 +163,38 @@ function loopSignedArea(points: Vec2[]): number {
     a += p.x * q.y - q.x * p.y;
   }
   return a / 2;
+}
+
+function pointInLoop(pt: Vec2, loop: Vec2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+    const pi = loop[i];
+    const pj = loop[j];
+    if (
+      pi.y > pt.y !== pj.y > pt.y &&
+      pt.x < ((pj.x - pi.x) * (pt.y - pi.y)) / (pj.y - pi.y) + pi.x
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** Orient face loops into the slicing convention — outer CCW, holes CW —
+ * by nesting depth (the largest placed loop containing a candidate makes
+ * it a hole), the same rule sliceAtZ uses for its contours. */
+function orientLoops(loops: Vec2[][]): Vec2[][] {
+  const byArea = loops
+    .map((c) => ({ c, area: loopSignedArea(c) }))
+    .sort((a, b) => Math.abs(b.area) - Math.abs(a.area));
+  const out: Vec2[][] = [];
+  for (const { c, area } of byArea) {
+    let depth = 0;
+    for (const placed of out) if (pointInLoop(c[0], placed)) depth++;
+    const wantCCW = depth % 2 === 0;
+    out.push((area > 0) === wantCCW ? c : [...c].reverse());
+  }
+  return out;
 }
 
 /**

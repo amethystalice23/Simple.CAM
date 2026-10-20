@@ -562,6 +562,12 @@ export function isDepthBearingJobOp(op: JobOp): op is DepthBearingJobOp {
   return op.kind === 'pocket' || op.kind === 'profile' || op.kind === 'slicePocket';
 }
 
+/** Round to 2 decimals — every value the app auto-fills into a number box
+ * (depths, positions, angles) reads clean; user-typed values are untouched. */
+export function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
 export interface Vec3 {
   x: number;
   y: number;

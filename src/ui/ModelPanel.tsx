@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import * as THREE from 'three';
+import { round2 } from '../core/types';
 import type { ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
 import { alignAxisToStock, alignToStock, dropToSurface } from './placement';
 import { primitiveGeometry } from './featureSources';
@@ -17,7 +18,8 @@ interface Props {
   selectedObjectId: string | null; // 'model', a primitive id, or nothing
   onSelectObject: (id: string) => void;
   onPrimitiveChange: (p: Primitive) => void;
-  onDeleteObject: () => void;
+  /** remove one primitive by id (the row's ✕) */
+  onDeletePrimitive: (id: string) => void;
   onAddPrimitive: (kind: 'cylinder' | 'box') => void;
   showFeatures: boolean;
   measureMode: boolean;
@@ -80,8 +82,14 @@ export function ModelPanel(props: Props) {
 
   // extents for snapping: the model's geometry, or the primitive's shape
   // (unified builder — the same mesh the detector and viewport use)
-  const withSnapGeometry = (fn: (geo: THREE.BufferGeometry) => ModelTransform) =>
-    setActive(fn(isModel ? geometry! : primitiveGeometry(selectedPrimitive!)));
+  const withSnapGeometry = (fn: (geo: THREE.BufferGeometry) => ModelTransform) => {
+    const t = fn(isModel ? geometry! : primitiveGeometry(selectedPrimitive!));
+    // snapped positions are auto-filled numbers — they read clean at 2dp
+    setActive({
+      ...t,
+      position: { x: round2(t.position.x), y: round2(t.position.y), z: round2(t.position.z) },
+    });
+  };
 
   // model dims are only meaningful with a model
   let native: Vec3 | null = null;
@@ -112,32 +120,46 @@ export function ModelPanel(props: Props) {
         <h2>Objects</h2>
         <div className="tool-list">
           {geometry && (
-            <button
-              type="button"
-              className={`tool-row${isModel ? ' active' : ''}`}
-              onClick={() => props.onSelectObject('model')}
-            >
-              <span className="tool-name">{props.modelName}</span>
-              <span className="tool-meta">
-                loaded · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
-                {displayed!.z.toFixed(1)} mm
-              </span>
-            </button>
+            <div className={`tool-row${isModel ? ' active' : ''}`}>
+              <button
+                type="button"
+                className="tool-row-main"
+                onClick={() => props.onSelectObject('model')}
+              >
+                <span className="tool-name">{props.modelName}</span>
+                <span className="tool-meta">
+                  loaded · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
+                  {displayed!.z.toFixed(1)} mm
+                </span>
+              </button>
+            </div>
           )}
           {primitives.map((p) => (
-            <button
+            <div
               key={p.id}
-              type="button"
               className={`tool-row${p.id === selectedObjectId ? ' active' : ''}`}
-              onClick={() => props.onSelectObject(p.id)}
             >
-              <span className="tool-name">
-                {p.kind === 'cylinder'
-                  ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
-                  : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`}
-              </span>
-              <span className="tool-meta">primitive</span>
-            </button>
+              <button
+                type="button"
+                className="tool-row-main"
+                onClick={() => props.onSelectObject(p.id)}
+              >
+                <span className="tool-name">
+                  {p.kind === 'cylinder'
+                    ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
+                    : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`}
+                </span>
+                <span className="tool-meta">primitive</span>
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="Remove this primitive"
+                onClick={() => props.onDeletePrimitive(p.id)}
+              >
+                ✕
+              </button>
+            </div>
           ))}
           {!geometry && primitives.length === 0 && (
             <p className="hint">no model loaded — add a primitive below</p>
@@ -269,14 +291,6 @@ export function ModelPanel(props: Props) {
           </button>
           <button type="button" onClick={() => props.onAddPrimitive('box')}>
             + Box
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={isModel || !selectedPrimitive}
-            onClick={props.onDeleteObject}
-          >
-            Delete object
           </button>
         </div>
         <label className="check">

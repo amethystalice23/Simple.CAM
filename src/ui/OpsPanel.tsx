@@ -37,9 +37,9 @@ interface Props {
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   /** compute the index angle that brings the op's selection to face the cutter */
   onIndexToSelection: (op: JobOp) => void;
-  /** ⇩ floor pick (edge-tracing §5): link the selected plane/circle as the
-   * op's floor — enabled when exactly one is selected */
-  floorCandidate: boolean;
+  /** ⇩ floor pick (edge-tracing §5): the op in floor-picking mode (its ⇩
+   * is lit, the panel banners it, the next viewport click sets the floor) */
+  floorPickingOpId: string | null;
   onFloorPick: (op: JobOp) => void;
   /** ops whose toolpath is hidden from the preview (the g-code keeps them) */
   hiddenOps: ReadonlySet<string>;
@@ -70,8 +70,8 @@ function DepthFields(props: {
   op: DepthBearingJobOp;
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
-  /** a single plane/circle is selected in measure mode — the ⇩ is enabled */
-  floorCandidate: boolean;
+  /** this op is in floor-picking mode — the ⇩ is lit */
+  floorPicking: boolean;
   onFloorPick: (op: JobOp) => void;
   /** the linked floor feature's short label, for the provenance hint */
   floorLabel: string | null;
@@ -99,19 +99,21 @@ function DepthFields(props: {
         min={0}
         onCommit={(v) => upd({ startDepth: v })}
       />
-      <NumberField
-        label="End depth (mm)"
-        value={op.endDepth}
-        min={0.1}
-        // a hand edit detaches the ⇩ floor link — the number wins
-        onCommit={(v) => upd({ endDepth: v, floorFeatureId: null })}
-      />
-      <div className="buttons">
+      {/* end depth + the ⇩ floor pick share a line — the box shrinks a
+       * little to make room for the button */}
+      <div className="floor-row">
+        <NumberField
+          label="End depth (mm)"
+          className="floor-depth"
+          value={op.endDepth}
+          min={0.1}
+          // a hand edit detaches the ⇩ floor link — the number wins
+          onCommit={(v) => upd({ endDepth: v, floorFeatureId: null })}
+        />
         <button
           type="button"
-          className="icon-btn"
-          title="Set the cut floor from the selected face — its Z drives the end depth until you edit the box"
-          disabled={!props.floorCandidate}
+          className={`icon-btn${props.floorPicking ? ' active' : ''}`}
+          title="Pick the cut floor — click, then select a face or circle in the viewport; its Z drives the end depth until you edit the box"
           onClick={() => props.onFloorPick(op)}
         >
           ⇩
@@ -240,7 +242,7 @@ function ParamFields(props: {
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   onIndexToSelection: (op: JobOp) => void;
   /** ⇩ floor pick (edge-tracing §5) — see DepthFields */
-  floorCandidate: boolean;
+  floorPickingOpId: string | null;
   onFloorPick: (op: JobOp) => void;
   floorLabel: string | null;
 }) {
@@ -336,7 +338,7 @@ function ParamFields(props: {
             op={op}
             onChange={props.onChange}
             onSelectionIsChange={props.onSelectionIsChange}
-            floorCandidate={props.floorCandidate}
+            floorPicking={props.floorPickingOpId === op.id}
             onFloorPick={props.onFloorPick}
             floorLabel={props.floorLabel}
           />
@@ -361,7 +363,7 @@ function ParamFields(props: {
             op={op}
             onChange={props.onChange}
             onSelectionIsChange={props.onSelectionIsChange}
-            floorCandidate={props.floorCandidate}
+            floorPicking={props.floorPickingOpId === op.id}
             onFloorPick={props.onFloorPick}
             floorLabel={props.floorLabel}
           />
@@ -399,7 +401,7 @@ function ParamFields(props: {
             op={op}
             onChange={props.onChange}
             onSelectionIsChange={props.onSelectionIsChange}
-            floorCandidate={props.floorCandidate}
+            floorPicking={props.floorPickingOpId === op.id}
             onFloorPick={props.onFloorPick}
             floorLabel={props.floorLabel}
           />
@@ -486,7 +488,7 @@ export function OpsPanel(props: Props) {
   };
 
   return (
-    <section>
+    <section className="ops">
       <div className="buttons">
         <button type="button" onClick={props.onAddOp}>
           + Add toolpath
@@ -584,26 +586,37 @@ export function OpsPanel(props: Props) {
                 <div className="op-body">
                   {op.kind !== 'index' && (
                     <div className="buttons">
-                      {op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && (
+                      {props.floorPickingOpId === op.id ? (
+                        /* the floor-picking mode banners the whole row — the
+                         * next viewport click is the floor; clicking the
+                         * banner cancels back to the normal panel */
                         <button
                           type="button"
-                          className={editing ? '' : 'secondary'}
-                          onClick={() => props.onSelectFeatures(editing ? null : op.id)}
+                          onClick={() => props.onFloorPick(op)}
+                          title="Click a face or circle in the viewport to set this op's floor — click here to cancel"
                         >
-                          {editing
-                            ? `Selecting… click features in the viewport (${op.featureIds.length})`
-                            : `Select features (${op.featureIds.length})`}
+                          Selecting floor — click a feature in the viewport
                         </button>
+                      ) : (
+                        ['pocket', 'profile', 'drill', 'chamfer'].includes(op.kind) && (
+                          <button
+                            type="button"
+                            className={editing ? '' : 'secondary'}
+                            onClick={() => props.onSelectFeatures(editing ? null : op.id)}
+                          >
+                            {editing
+                              ? `Selecting… click features in the viewport (${op.featureIds.length})`
+                              : `Select features (${op.featureIds.length})`}
+                          </button>
+                        )
                       )}
                       <button
                         type="button"
-                        className={`icon-btn${op.rates ? ' has-rates' : ''}${
+                        className={`icon-btn rates-btn${op.rates ? ' has-rates' : ''}${
                           ratesOpenId === op.id ? ' active' : ''
                         }`}
                         title="Feeds & speeds for this operation — defaults from the Tools tab"
-                        onClick={() =>
-                          setRatesOpenId(ratesOpenId === op.id ? null : op.id)
-                        }
+                        onClick={() => setRatesOpenId(ratesOpenId === op.id ? null : op.id)}
                       >
                         ⚡
                       </button>
@@ -639,7 +652,7 @@ export function OpsPanel(props: Props) {
                     onChange={props.onChangeOp}
                     onSelectionIsChange={props.onSelectionIsChange}
                     onIndexToSelection={props.onIndexToSelection}
-                    floorCandidate={props.floorCandidate}
+                    floorPickingOpId={props.floorPickingOpId}
                     onFloorPick={props.onFloorPick}
                     floorLabel={
                       isDepthBearingJobOp(op) && op.floorFeatureId !== null

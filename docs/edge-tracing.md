@@ -227,8 +227,9 @@ Types for v1:
   once put the mesh 90° out of sync with every overlay and pick).
   Caveats: a cylinder's curved side is NOT one plane — it yields sliver
   facet planes and vertical edges (adjacent facets differ 7.5° > the 0.5°
-  plane tolerance); to face a cylinder, select its rim CIRCLE (a cap
-  plane's member-triangle footprint is a square AABB, not the disc).
+  plane tolerance). Face regions are the face's own border loops (a cap
+  face gives its tessellated rim, e.g. a 48-gon on primitives — the
+  crisper analytic circle is still there for rim-CIRCLE selections).
 
 ## 5. Slice-pocket UI: cut-plane overlay, ⇩ floor pick, plane handle
 
@@ -316,11 +317,11 @@ selection state and panels in `src/ui`.
 
 1. **Hover snap is zoom-dependent**: a screen-space radius with a ~0.5 mm
    floor, so precision holds when zoomed in but the picker stays usable
-   when zoomed out. Circles and holes are key dimensions and take
-   precedence: they snap within 1.65× the tolerance (~16.5 px / 0.83 mm
-   floors) and win outright over edges inside that radius; edges are the
-   fallback. The boost stays modest so flat faces between features remain
-   easy to click.
+   when zoomed out. Circles and holes take precedence but snap TIGHTLY:
+   CIRCLE_PRIORITY × the tolerance (0.55× since 2026-10-20, cut to a third
+   of the old 1.65 at Alice's request — circles were stealing face clicks;
+   ~5.5 px / 0.28 mm floors) and win outright over edges only inside that
+   small radius; edges are the fallback.
 2. **v1 features are straight lines and circles only** — no arcs, no
    regular polygons. Loops that fit neither stay unclassified polylines.
 3. **Feature ids hash model-space geometry only**, so moving or rotating

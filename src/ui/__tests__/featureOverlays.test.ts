@@ -53,7 +53,7 @@ describe('findNearestFeature (measure-mode snap)', () => {
     expect(findNearestFeature(data, 700, 100, camera, 800, 600)).toBeNull();
   });
 
-  it('grabs circles with a generous snap radius (no pixel precision needed)', () => {
+  it('grabs circles within its tight snap radius — and lets faces win beyond it', () => {
     const f = detectFeatures(tubeAlongX());
     const data = buildFeatureOverlayData(f, identityTransform());
     const w = 800;
@@ -66,11 +66,27 @@ describe('findNearestFeature (measure-mode snap)', () => {
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
     const sample = data.circleSamples[capIdx][6];
     const ndc = sample.clone().project(camera);
-    const mx = ((ndc.x + 1) / 2) * w + 10; // ~12px off the ring, still inside
-    const my = ((1 - ndc.y) / 2) * h + 7; // the boosted circle tolerance
-
-    const nearest = findNearestFeature(data, mx, my, camera, w, h);
-    expect(nearest?.kind).toBe('circle');
+    // close in (~4.5px): inside the tight circle tolerance (0.55× ≈ 5.5px)
+    const near = findNearestFeature(
+      data,
+      ((ndc.x + 1) / 2) * w + 4,
+      ((1 - ndc.y) / 2) * h + 2,
+      camera,
+      w,
+      h,
+    );
+    expect(near?.kind).toBe('circle');
+    // the old generous offset (~12px): beyond it — circles must not steal
+    // the click from the face work around them
+    const far = findNearestFeature(
+      data,
+      ((ndc.x + 1) / 2) * w + 10,
+      ((1 - ndc.y) / 2) * h + 7,
+      camera,
+      w,
+      h,
+    );
+    expect(far?.kind).not.toBe('circle');
   });
 
   it('still snaps precisely onto an edge when aimed at one', () => {

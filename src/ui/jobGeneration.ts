@@ -30,7 +30,7 @@ import type {
   ToolPreset,
   Vec2,
 } from '../core/types';
-import { isDepthBearingJobOp, rotaryCalibrationOf } from '../core/types';
+import { isDepthBearingJobOp, rotaryCalibrationOf, round2 } from '../core/types';
 import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
@@ -274,12 +274,14 @@ export function defaultStepDown(tool: Tool, materialId: string): number {
  * user-editable — this is a convenience, not a constraint.
  */
 export function prefillDepths(op: JobOp, selectionZ: number, crownZ: number): JobOp {
-  if (op.kind !== 'pocket' && op.kind !== 'profile') return op;
-  if (op.selectionIs === 'floor') {
-    return { ...op, startDepth: 0, endDepth: Math.max(crownZ - selectionZ, 0.3) } as JobOp;
+  if (!isDepthBearingJobOp(op)) return op;
+  // slice pockets select no features — a stray pick reads as a floor
+  const selectionIs = 'selectionIs' in op ? op.selectionIs : 'floor';
+  if (selectionIs === 'floor') {
+    return { ...op, startDepth: 0, endDepth: round2(Math.max(crownZ - selectionZ, 0.3)) } as JobOp;
   }
-  const start = Math.max(crownZ - selectionZ, 0);
-  return { ...op, startDepth: start, endDepth: start + 2 } as JobOp;
+  const start = round2(Math.max(crownZ - selectionZ, 0));
+  return { ...op, startDepth: start, endDepth: round2(start + 2) } as JobOp;
 }
 
 /**
@@ -436,7 +438,6 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             part.source.features.planes.some((p) => p.id === id),
           );
           const src = pocketRegionsFromSelection(
-            part.source.geometry,
             part.source.features,
             part.ids,
             part.source.transform,
@@ -622,7 +623,6 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             part.source.features.planes.some((p) => p.id === id),
           );
           const src = pocketRegionsFromSelection(
-            part.source.geometry,
             part.source.features,
             part.ids,
             part.source.transform,

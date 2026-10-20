@@ -6,7 +6,12 @@ import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
-import { identityTransform, isDepthBearingJobOp, rotaryCalibrationOf } from '../core/types';
+import {
+  identityTransform,
+  isDepthBearingJobOp,
+  rotaryCalibrationOf,
+  round2,
+} from '../core/types';
 import type {
   CircleFeature,
   EdgeFeature,
@@ -184,7 +189,41 @@ export function App() {
   /** viewport feature clicks: edit the active op's selection, or the global
    * one (primitives / measuring) when no op is being edited. The first
    * feature into an op prefills its depth boxes. */
+  // ---- the ⇩ floor pick (edge-tracing §5) ----
+
+  /** the op whose floor-picking mode is active: the NEXT viewport click on
+   * a plane/circle becomes its cut floor (one-shot; the panel banners it) */
+  const [floorPickOpId, setFloorPickOpId] = useState<string | null>(null);
+
+  /** ⇩ toggles the op's floor-picking mode (measure mode on for the pick) */
+  const toggleFloorPick = (op: JobOp) => {
+    if (!isDepthBearingJobOp(op)) return;
+    setFloorPickOpId((cur) => (cur === op.id ? null : op.id));
+    setMeasureMode(true);
+  };
+
+  /** a viewport click sets the floor for an op in floor-picking mode */
+  const applyFloorPick = (opId: string, featureId: string) => {
+    const p = featureMachinePoint(featureId);
+    if (!p) return; // an edge carries no facing point — stay in the mode
+    setOps((prev) =>
+      prev.map((o) => {
+        if (o.id !== opId || !isDepthBearingJobOp(o)) return o;
+        const endDepth = round2(
+          Math.max(stockTopZ(stock) - featureDepthInFrame(o, p), 0.3),
+        );
+        return { ...o, endDepth, floorFeatureId: featureId } as JobOp;
+      }),
+    );
+    setFloorPickOpId(null);
+  };
+
+
   const toggleSelect = (id: string) => {
+    if (floorPickOpId) {
+      applyFloorPick(floorPickOpId, id);
+      return;
+    }
     if (editingOpId) {
       const p = featureMachinePoint(id);
       const crown = stockTopZ(stock);
@@ -241,12 +280,16 @@ export function App() {
     setSelectedObjectId(p.id);
   };
 
-  const deleteSelectedObject = () => {
-    if (selectedObjectId === 'model') return;
-    setPrimitives((prev) => prev.filter((p) => p.id !== selectedObjectId));
-    // fall back: the model if one is loaded, else another primitive
-    setSelectedObjectId(
-      geometry ? 'model' : (primitives.find((p) => p.id !== selectedObjectId)?.id ?? null),
+  /** remove one primitive (the object row's ✕); selection falls back to
+   * the model if one is loaded, else another primitive */
+  const deletePrimitive = (id: string) => {
+    setPrimitives((prev) => prev.filter((p) => p.id !== id));
+    setSelectedObjectId((cur) =>
+      cur === id
+        ? geometry
+          ? 'model'
+          : (primitives.find((p) => p.id !== id)?.id ?? null)
+        : cur,
     );
   };
 
@@ -258,9 +301,15 @@ export function App() {
 
   /** combined preview + gcode for the whole job, from per-op results; the
    * preview shows only ops not hidden, the g-code includes everything */
-  const updateJobOutput = (results: Record<string, GeneratedOp>, hidden: ReadonlySet<string> = hiddenOps) => {
-    const allMoves = ops.flatMap((o) => results[o.id]?.moves ?? []);
-    const shownMoves = ops
+  const updateJobOutput = (
+    results: Record<string, GeneratedOp>,
+    hidden: ReadonlySet<string> = hiddenOps,
+    /** the op list to flatten — defaults to the current ops; callers that
+     * change ops in the same tick (delete) pass the next list explicitly */
+    opList: JobOp[] = ops,
+  ) => {
+    const allMoves = opList.flatMap((o) => results[o.id]?.moves ?? []);
+    const shownMoves = opList
       .filter((o) => !hidden.has(o.id))
       .flatMap((o) => results[o.id]?.moves ?? []);
     setPreviewMoves(shownMoves.length > 0 ? shownMoves : null);
@@ -269,11 +318,11 @@ export function App() {
       return;
     }
     const usedTools = [
-      ...new Set(ops.filter((o) => (results[o.id]?.moves.length ?? 0) > 0).map((o) => o.toolId)),
+      ...new Set(opList.filter((o) => (results[o.id]?.moves.length ?? 0) > 0).map((o) => o.toolId)),
     ]
       .map((id) => tools.find((t) => t.id === id))
       .filter((t): t is Tool => t !== undefined);
-    const minutes = ops.reduce((sum, o) => sum + (results[o.id]?.minutes ?? 0), 0);
+    const minutes = opList.reduce((sum, o) => sum + (results[o.id]?.minutes ?? 0), 0);
     const nc = postCarvera({ moves: allMoves, tools: usedTools, options: { jobName: 'job' } });
     setGcode(
       `; job: ${ops.length} op(s), ~${minutes.toFixed(1)} min cut time\n` + nc,
@@ -292,7 +341,7 @@ export function App() {
         setOps((prev) =>
           prev.map((o) =>
             o.id === op.id && o.kind === 'slicePocket'
-              ? { ...o, startDepth: Math.max(crown - z, 0) }
+              ? { ...o, startDepth: round2(Math.max(crown - z, 0)) }
               : o,
           ),
         ),
@@ -361,7 +410,10 @@ export function App() {
   /** start/stop editing an op's feature selection (enables measure mode) */
   const toggleOpFeatures = (id: string | null) => {
     setEditingOpId(id);
-    if (id !== null) setMeasureMode(true);
+    if (id !== null) {
+      setMeasureMode(true);
+      setFloorPickOpId(null); // one picking mode at a time
+    }
   };
 
   /** floor/rim switch re-prefills the depth boxes from the first feature */
@@ -394,29 +446,8 @@ export function App() {
       const mid = xf(e.a).add(xf(e.b)).multiplyScalar(0.5);
       dir = mid.sub(new Vector3(0, 0, rotaryCalibrationOf(stock).axisZ)).normalize();
     }
-    const angle = indexToAlignDirection(dir);
+    const angle = round2(indexToAlignDirection(dir));
     setOps((prev) => prev.map((o) => (o.id === op.id ? { ...o, angle } : o)));
-  };
-
-  // ---- the ⇩ floor pick (edge-tracing §5) ----
-
-  /** exactly one plane/circle selected in measure mode → a valid floor pick */
-  const floorCandidate = selection.length === 1 && featureMachinePoint(selection[0]) !== null;
-
-  /** the selection becomes the op's floor: live-linked, drives end depth */
-  const floorFromSelection = (op: JobOp) => {
-    if (!floorCandidate || !isDepthBearingJobOp(op)) return;
-    const id = selection[0];
-    const p = featureMachinePoint(id);
-    if (!p) return;
-    const endDepth = Math.max(stockTopZ(stock) - featureDepthInFrame(op, p), 0.3);
-    setOps((prev) =>
-      prev.map((o) =>
-        o.id === op.id && isDepthBearingJobOp(op)
-          ? ({ ...o, endDepth, floorFeatureId: id } as JobOp)
-          : o,
-      ),
-    );
   };
 
   /** the floor link stays live: model/primitive moves update every linked
@@ -428,7 +459,7 @@ export function App() {
       if (isDepthBearingJobOp(o) && o.floorFeatureId !== null) {
         const p = featureMachinePoint(o.floorFeatureId);
         if (p) {
-          const endDepth = Math.max(crown - featureDepthInFrame(o, p), 0.3);
+          const endDepth = round2(Math.max(crown - featureDepthInFrame(o, p), 0.3));
           if (Math.abs(endDepth - o.endDepth) > 1e-9) {
             changed = true;
             return { ...o, endDepth } as JobOp;
@@ -728,7 +759,7 @@ export function App() {
               onPrimitiveChange={(p) =>
                 setPrimitives((prev) => prev.map((x) => (x.id === p.id ? p : x)))
               }
-              onDeleteObject={deleteSelectedObject}
+              onDeletePrimitive={deletePrimitive}
               onAddPrimitive={addPrimitive}
               showFeatures={showFeatures}
               measureMode={measureMode}
@@ -774,23 +805,23 @@ export function App() {
                 }}
                 onSelectionIsChange={changeSelectionIs}
                 onIndexToSelection={indexToSelection}
-                floorCandidate={floorCandidate}
-                onFloorPick={floorFromSelection}
+                floorPickingOpId={floorPickOpId}
+                onFloorPick={toggleFloorPick}
                 onDeleteOp={(id) => {
-                  setOps((prev) => prev.filter((o) => o.id !== id));
-                  setGenerated((prev) => {
-                    const next = { ...prev };
-                    delete next[id];
-                    return next;
-                  });
-                  setHiddenOps((prev) => {
-                    if (!prev.has(id)) return prev;
-                    const next = new Set(prev);
-                    next.delete(id);
-                    return next;
-                  });
+                  const nextOps = ops.filter((o) => o.id !== id);
+                  const nextGen = { ...generated };
+                  delete nextGen[id];
+                  const nextHidden = new Set(hiddenOps);
+                  nextHidden.delete(id);
+                  setOps(nextOps);
+                  setGenerated(nextGen);
+                  setHiddenOps(nextHidden);
                   if (editingOpId === id) setEditingOpId(null);
                   if (expandedOpId === id) setExpandedOpId(null);
+                  // drop the deleted op's preview and g-code NOW, not at
+                  // the next recalc (updateJobOutput defaults to the stale
+                  // closure ops, so pass the next list explicitly)
+                  updateJobOutput(nextGen, nextHidden, nextOps);
                 }}
                 onReorder={reorderOps}
                 onSelectFeatures={toggleOpFeatures}
