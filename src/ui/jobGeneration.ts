@@ -61,14 +61,14 @@ export interface GenContext {
   datumAngle: number;
 }
 
-export const OP_KINDS: { kind: JobOp['kind']; label: string }[] = [
+export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolean }[] = [
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
-  { kind: 'index', label: 'Index (4-axis)' },
-  { kind: 'faceCylinder', label: 'Face cylinder' },
+  { kind: 'index', label: 'Index (4-axis)', rotaryOnly: true },
+  { kind: 'faceCylinder', label: 'Face cylinder (4-axis)', rotaryOnly: true },
 ];
 
 /**

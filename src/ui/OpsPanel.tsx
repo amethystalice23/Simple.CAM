@@ -563,7 +563,12 @@ export function OpsPanel(props: Props) {
                   }}
                 >
                   {OP_KINDS.map((k) => (
-                    <option key={k.kind} value={k.kind}>
+                    <option
+                      key={k.kind}
+                      value={k.kind}
+                      // the rotary ops wait for 4-axis mode (Stock tab)
+                      disabled={k.rotaryOnly && props.axisMode !== '4-axis'}
+                    >
                       {k.label}
                     </option>
                   ))}
