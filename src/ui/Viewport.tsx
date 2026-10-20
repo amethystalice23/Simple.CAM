@@ -510,55 +510,32 @@ export function Viewport({
     }
     datumGroup.add(stockGroup);
 
-    // 4-axis only: the A0-direction marker — an amber arrow from the stock
-    // axis pointing at the material that faced the cutter at A0. It lives
-    // in the (rotating) stock group, so it turns with the part and
-    // orientation never gets lost: whatever the open op's datum, this
-    // arrow shows where "A0 up" sits now (edge-tracing §5).
+    // 4-axis only: the A0-direction marker — a small amber arrow hint at
+    // X=0 (with the machine axes), rising from the stock axis toward the
+    // material that faced the cutter at A0. Length = stock radius plus a
+    // little clearance, so the tip peeks out of the stock ghost. It lives
+    // in the (rotating) stock group, so it turns with the part: whatever
+    // the open op's datum, this arrow shows where "A0 up" sits now
+    // (edge-tracing §5).
     if (stock.axisMode === '4-axis') {
       const axisZ = rotaryCalibrationOf(stock).axisZ;
       const r = rotaryCalibrationOf(stock).effectiveRadius;
-      const len = Math.max(8, r * 0.5);
-      // the X span (cylinder length or box X), marker past its far end
-      const sx =
-        stock.kind === 'cylinder'
-          ? originSpan(stock.xOrigin, stock.length)
-          : originSpan(stock.origin.x, stock.sizeX);
-      const ax = sx[1] + Math.max(6, (sx[1] - sx[0]) * 0.08);
+      const len = r + 6; // clear of the stock ghost
       const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffb347, depthTest: false });
       const shaft = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(ax, 0, axisZ),
-          new THREE.Vector3(ax, 0, axisZ + len),
+          new THREE.Vector3(0, 0, axisZ),
+          new THREE.Vector3(0, 0, axisZ + len),
         ]),
         new THREE.LineBasicMaterial({ color: 0xffb347, depthTest: false }),
       );
-      const tip = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3, 12), arrowMat);
+      // just a hint of an arrowhead
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.2, 10), arrowMat);
       tip.rotation.x = Math.PI / 2; // apex +Z (local — A0 up)
-      tip.position.set(ax, 0, axisZ + len + 1);
+      tip.position.set(0, 0, axisZ + len + 0.5);
       shaft.renderOrder = 6;
       tip.renderOrder = 6;
-      // a tiny canvas sprite labels the arrow "A0"
-      const cvs = document.createElement('canvas');
-      cvs.width = 64;
-      cvs.height = 64;
-      const ctx = cvs.getContext('2d')!;
-      ctx.font = 'bold 44px system-ui, sans-serif';
-      ctx.fillStyle = '#ffb347';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('A0', 32, 34);
-      const label = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-          map: new THREE.CanvasTexture(cvs),
-          depthTest: false,
-          transparent: true,
-        }),
-      );
-      label.scale.set(6, 6, 1);
-      label.position.set(ax, 0, axisZ + len + 6);
-      label.renderOrder = 6;
-      stockGroup.add(shaft, tip, label);
+      stockGroup.add(shaft, tip);
     }
 
     // machine Z=0 plane

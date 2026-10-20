@@ -291,9 +291,10 @@ preview's per-op un-rotation, so toolpaths land at their true machine
 positions. No panel open → A0. The machine grid, axes, and navcube
 never rotate.
 
-**The A0 marker** (4-axis only): an amber arrow from the stock axis
-pointing at the material that faced the cutter at A0, with a small
-"A0" sprite at its tip, past the stock's far X end. It lives in the
+**The A0 marker** (4-axis only): a small amber arrow hint at X=0 (with
+the machine axes), rising from the stock axis toward the material that
+faced the cutter at A0 — its length is the stock radius plus a little
+clearance, so the tip peeks out of the stock ghost. It lives in the
 rotating group, so it turns with the part — whatever the datum, it
 shows where "A0 up" sits now, so a symmetric part never loses its
 orientation.
