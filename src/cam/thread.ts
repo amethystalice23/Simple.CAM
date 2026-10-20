@@ -13,15 +13,14 @@
  *    a pitch wide at the crest surface, teeth half a pitch at crest;
  *    tolerance shrinks the teeth (a looser fit), tenths of a mm
  *  - face Ø (the crest diameter) = nominal − 2·tolerance
- *  - `faceFirst` pre-faces the stock to the crest Ø via the faceCylinder
- *    generator (spiral pattern) before the grooves; without it the depth
- *    ladder starts at the stock surface and walks down to the thread
- *    root, so surplus stock simply becomes extra levels.
+ *  - facing is a SEPARATE op ("Add facing toolpath" inserts a prefilled
+ *    Face cylinder op before this one — its own tool and feeds); without
+ *    it the groove ladder starts at the stock surface and walks down to
+ *    the thread root, so surplus stock simply becomes extra levels.
  */
 
-import type { FaceCylinderOp, Move, RotaryCalibration, ThreadOp, Tool } from '../core/types';
-import { faceCylinder } from './faceCylinder';
-import { MAX_ROTARY_RPM, SAFE_CLEARANCE, DEFAULT_STEP_OVER_FACTOR } from './faceCylinder';
+import type { Move, RotaryCalibration, ThreadOp, Tool } from '../core/types';
+import { MAX_ROTARY_RPM, SAFE_CLEARANCE } from './faceCylinder';
 
 /** Groove depth below the crest surface, mm. */
 export function threadDepth(pitch: number, vAngle: number, tolerance: number): number {
@@ -66,41 +65,19 @@ export function thread(
   const faceDiameter = threadFaceDiameter(op.nominalDiameter, op.tolerance);
   const rootR = faceDiameter / 2 - depth;
   if (rootR <= 0) throw new Error('the groove depth exceeds the thread radius — nothing would remain');
-  const startR = op.faceFirst ? faceDiameter / 2 : stockR;
+  // the ladder starts at the STOCK surface (a separate facing op, when
+  // the user adds one, brings it to the crest Ø first) — surplus stock
+  // simply becomes extra levels
+  const startR = stockR;
   if (rootR >= startR) {
     throw new Error(
-      'the stock is at or below the thread root — nothing to cut (face up first, or check the nominal Ø)',
+      'the stock is at or below the thread root — nothing to cut (add the facing toolpath, or check the nominal Ø)',
     );
   }
 
   const moves: Move[] = [];
   let minutes = 0;
   let a = 0; // accumulated machine A; the post wraps with G92.4
-
-  // ---- the optional pre-face: spiral facing to the crest diameter ----
-  if (op.faceFirst) {
-    const face: FaceCylinderOp = {
-      kind: 'faceCylinder',
-      id: op.id,
-      toolId: tool.id,
-      targetDiameter: faceDiameter,
-      xStart: op.xStart,
-      xEnd: op.xEnd,
-      stepDown: op.stepDown,
-      stepOver: DEFAULT_STEP_OVER_FACTOR * tool.diameter,
-      finishAllowance: 0,
-      rotation: op.rotation,
-      pattern: 'spiral',
-      feed: op.feed,
-      plungeFeed: op.plungeFeed,
-    };
-    const res = faceCylinder(face, calibration, tool);
-    moves.push(...res.moves);
-    minutes += res.estimatedMinutes;
-    // the facing's final A (the facing's last move is an A-less retract)
-    const lastA = [...res.moves].reverse().find((m) => m.words.a !== undefined)?.words.a;
-    a = lastA ?? a;
-  }
 
   // ---- the grooves: phase-locked retrace levels + spring passes ----
   const span = Math.abs(op.xEnd - op.xStart);

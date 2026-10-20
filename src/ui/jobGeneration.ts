@@ -89,6 +89,22 @@ export function datumAngleBefore(ops: JobOp[], opId: string): number {
   return angle;
 }
 
+/** ISO 261 coarse metric threads: nominal Ø (mm) → pitch (mm). */
+const METRIC_PITCH: Record<number, number> = {
+  1: 0.25, 1.2: 0.25, 1.6: 0.35, 2: 0.4, 2.5: 0.45,
+  3: 0.5, 3.5: 0.6, 4: 0.7, 5: 0.8, 6: 1.0, 7: 1.0, 8: 1.25,
+  9: 1.25, 10: 1.5, 11: 1.5, 12: 1.75, 14: 2.0, 16: 2.0,
+  18: 2.5, 20: 2.5, 22: 2.5, 24: 3.0, 27: 3.0, 30: 3.5,
+  33: 3.5, 36: 4.0, 39: 4.0, 42: 4.5, 45: 4.5, 48: 5.0,
+  52: 5.0, 56: 5.5, 60: 5.5, 64: 6.0,
+};
+
+/** The standard coarse metric pitch for a nominal Ø (M6 → 1.0, M4 → 0.7),
+ * null when the Ø is not a standard size. */
+export function metricPitch(nominalDiameter: number): number | null {
+  return METRIC_PITCH[nominalDiameter] ?? null;
+}
+
 let opCount = 0;
 /** Loaded jobs carry their own op ids — seed the counter above them so a
  * later "+ Add toolpath" can never collide. */
@@ -152,18 +168,18 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
     case 'thread': {
       const rotary = stock.axisMode === '4-axis';
       const [xStart, xEnd] = rotary ? stockSpan(stock, 'x') : [0, 40];
+      const nominal = rotary ? Math.max(1, rotaryCalibrationOf(stock).effectiveRadius * 2 - 1) : 20;
       return {
         ...base,
         kind,
-        nominalDiameter: rotary ? Math.max(1, rotaryCalibrationOf(stock).effectiveRadius * 2 - 1) : 20,
+        nominalDiameter: nominal,
         xStart,
         xEnd,
-        pitch: 2,
+        pitch: metricPitch(nominal) ?? 2, // the standard thread for the size
         starts: 1,
         tolerance: 0,
         stepDown,
         rotation: 'cw',
-        faceFirst: false,
       };
     }
     case 'pocket':
@@ -567,8 +583,6 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
               tolerance: op.tolerance,
               stepDown: op.stepDown,
               rotation: op.rotation,
-              faceFirst: op.faceFirst,
-              feed,
               plungeFeed,
             },
             rotaryCalibrationOf(ctx.stock),
@@ -582,8 +596,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             summary:
               `Ø${op.nominalDiameter} × ${op.pitch}mm pitch` +
               (op.starts > 1 ? ` (${op.starts} starts)` : '') +
-              `${op.faceFirst ? `, faced to Ø${res.faceDiameter.toFixed(2)}` : ''}` +
-              `, ${res.depth.toFixed(2)}mm grooves, ${res.passes} sweep(s) + spring, ` +
+              `, crest Ø${res.faceDiameter.toFixed(2)}, ${res.depth.toFixed(2)}mm grooves, ` +
+              `${res.passes} sweep(s) + spring, ` +
               `X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
           };
         } catch (e) {

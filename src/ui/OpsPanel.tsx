@@ -6,6 +6,7 @@ import {
   defaultFaceStepOver,
   defaultStepDown,
   defaultStepOver,
+  metricPitch,
   newJobOp,
   OP_KINDS,
   presetRates,
@@ -41,6 +42,8 @@ interface Props {
    * op's ⇩ is lit, the panel banners it, the next viewport click applies */
   picking: { opId: string; kind: FeaturePickKind } | null;
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
+  /** thread: insert a prefilled Face cylinder op right before it */
+  onInsertFacingOp: (op: JobOp) => void;
   /** ops whose toolpath is hidden from the preview (the g-code keeps them) */
   hiddenOps: ReadonlySet<string>;
   onToggleVisible: (id: string) => void;
@@ -253,6 +256,8 @@ function ParamFields(props: {
   /** one-shot feature picks (edge-tracing §5) — see DepthFields */
   picking: { opId: string; kind: FeaturePickKind } | null;
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
+  /** thread: insert a prefilled Face cylinder op right before it */
+  onInsertFacingOp: (op: JobOp) => void;
   floorLabel: string | null;
 }) {
   const { op, onChange } = props;
@@ -482,7 +487,16 @@ function ParamFields(props: {
             </button>
           </div>
           <div className="floor-row">
-            <NumberField label="Nominal Ø (mm)" value={op.nominalDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ nominalDiameter: v } as Partial<JobOp>)} />
+            <NumberField
+              label="Nominal Ø (mm)"
+              value={op.nominalDiameter}
+              min={0.1}
+              step={0.1}
+              // editing the size fills the standard coarse pitch (M6 → 1.0)
+              onCommit={(v) =>
+                upd({ nominalDiameter: v, pitch: metricPitch(v) ?? op.pitch } as Partial<JobOp>)
+              }
+            />
             <button
               type="button"
               className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'targetDiameter' ? ' active' : ''}`}
@@ -503,20 +517,22 @@ function ParamFields(props: {
               <option value="ccw">ccw</option>
             </select>
           </label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={op.faceFirst}
-              onChange={(e) => upd({ faceFirst: e.target.checked } as Partial<JobOp>)}
-            />
-            <span>face to the crest Ø first</span>
-          </label>
+          <div className="buttons">
+            <button
+              type="button"
+              className="secondary"
+              disabled={props.axisMode !== '4-axis'}
+              onClick={() => props.onInsertFacingOp(op)}
+              title="Insert a Face cylinder toolpath right before this thread, prefilled to face the crest Ø — its own tool, feeds, and step-over"
+            >
+              Add facing toolpath
+            </button>
+          </div>
           <p className="hint">
             external V-bit thread — groove depth derives from pitch, the bit's angle, and
-            tolerance (crest Ø = nominal − 2·tolerance; grooves cut deeper by it). The tick
-            pre-faces the stock to the crest Ø; without it the ladder starts at the stock
-            surface, so surplus stock becomes extra levels. Fit is empirical — cut a test
-            coupon before committing the part
+            tolerance (crest Ø = nominal − 2·tolerance; grooves cut deeper by it). Editing
+            the nominal Ø fills the standard coarse pitch (M6 → 1.0, M4 → 0.7…); override
+            it freely. Fit is empirical — cut a test coupon before committing the part
           </p>
         </>
       );
@@ -813,6 +829,7 @@ export function OpsPanel(props: Props) {
                     onIndexToSelection={props.onIndexToSelection}
                     picking={props.picking}
                     onFeaturePick={props.onFeaturePick}
+                    onInsertFacingOp={props.onInsertFacingOp}
                     floorLabel={
                       isDepthBearingJobOp(op) && op.floorFeatureId !== null
                         ? (props.featureLabels[op.floorFeatureId] ?? null)

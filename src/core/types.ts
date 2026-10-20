@@ -259,8 +259,7 @@ export interface SpiralCarveOp {
  * The cylinder is defined like the spiral carve (Start/End X + a
  * diameter — here the NOMINAL diameter); groove depth and the crest
  * diameter derive from pitch, the tool's tip angle, and tolerance
- * (src/cam/thread.ts); `faceFirst` pre-faces the stock to the crest
- * diameter via the faceCylinder generator. Levels retrace the same
+ * (src/cam/thread.ts). Levels retrace the same
  * helix at identical absolute A phase; a spring pass finishes each start.
  */
 export interface ThreadOp {
@@ -281,10 +280,6 @@ export interface ThreadOp {
   /** axial depth-per-level ladder for the grooves, mm */
   stepDown: number;
   rotation: 'cw' | 'ccw';
-  /** pre-face the stock to the crest diameter before the grooves */
-  faceFirst: boolean;
-  /** G94 mm/min — the facing prefix */
-  feed: number;
   /** G94 plunge feed at the start entries */
   plungeFeed: number;
 }
@@ -560,11 +555,9 @@ export type JobOp =
       starts: number;
       /** fit allowance: tenths of a mm shrinking the teeth; 0 = nominal */
       tolerance: number;
-      /** depth-per-level ladder for the grooves (and the pre-face), mm */
+      /** depth-per-level ladder for the grooves, mm */
       stepDown: number;
       rotation: 'cw' | 'ccw';
-      /** pre-face the stock to the crest diameter before the grooves */
-      faceFirst: boolean;
     })
   | (JobOpBase & {
       kind: 'index';

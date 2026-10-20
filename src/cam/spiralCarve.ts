@@ -168,9 +168,12 @@ export function sampleSpiralMarks(
       for (let i = 0; i < steps; i++) {
         const t = i / (steps - 1);
         const ang = ((phase + aSign * t * aAdvance) * Math.PI) / 180;
+        // the preview's validated angle convention (toolpathPreview
+        // toDisplay): part angle θ sits at y = +r·sin(θ) — the minus
+        // form mirrored the computed toolpath
         pts.push({
           x: op.xStart + off + t * span,
-          y: -r * Math.sin(ang),
+          y: r * Math.sin(ang),
           z: axisZ + r * Math.cos(ang),
         });
       }

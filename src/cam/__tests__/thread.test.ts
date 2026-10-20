@@ -25,8 +25,6 @@ const op: ThreadOp = {
   tolerance: 0,
   stepDown: 0.5,
   rotation: 'cw',
-  faceFirst: false,
-  feed: 400,
   plungeFeed: 100,
 };
 
@@ -74,17 +72,6 @@ describe('thread', () => {
     // lead 4mm: half the A advance of the single start
     const sweep = res.moves.find((m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined)!;
     expect(sweep.words.a!).toBeCloseTo((20 / 4) * 360, 6);
-  });
-
-  it('faceFirst prefixes the spiral facing to the crest Ø', () => {
-    const res = thread({ ...op, faceFirst: true }, cal, vbit, 0);
-    expect(res.moves.length).toBeGreaterThan(6);
-    // the first rapid is the facing approach; a facing rough comment exists
-    expect(res.moves.some((m) => m.comment?.includes('pass'))).toBe(true);
-    // with the facing, the groove ladder is exactly the derived depth
-    expect(res.faceDiameter).toBe(20);
-    // facing moves end at the crest radius Z: 10 (R = face Ø/2)
-    expect(res.moves.some((m) => m.words.z !== undefined && Math.abs(m.words.z - 10) < 1e-6)).toBe(true);
   });
 
   it('tolerance shrinks teeth: deeper grooves and a smaller crest', () => {

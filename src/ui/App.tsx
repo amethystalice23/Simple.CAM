@@ -40,6 +40,7 @@ import {
 import {
   datumAngleBefore,
   generateJobOp,
+  metricPitch,
   newJobOp,
   prefillDepths,
   seedJobOpIds,
@@ -227,7 +228,9 @@ export function App() {
           if (o.id !== pick.opId) return o;
           if (o.kind === 'faceCylinder') return { ...o, targetDiameter: diameter };
           if (o.kind === 'spiralCarve') return { ...o, surfaceDiameter: diameter };
-          if (o.kind === 'thread') return { ...o, nominalDiameter: diameter };
+          if (o.kind === 'thread') {
+            return { ...o, nominalDiameter: diameter, pitch: metricPitch(diameter) ?? o.pitch };
+          }
           return o;
         }),
       );
@@ -560,6 +563,29 @@ export function App() {
       );
       return rest;
     });
+  };
+
+  /** thread op: insert a Face cylinder toolpath right before it, prefilled
+   * to face the crest Ø (nominal − 2·tolerance) over the thread's X range —
+   * its own tool, feeds, and step-over, fully editable as a normal op */
+  const insertFacingOp = (op: JobOp) => {
+    if (op.kind !== 'thread' || stock.axisMode !== '4-axis') return;
+    const faceTool = tools.find((t) => t.type === 'flat') ?? tools[0];
+    if (!faceTool) return;
+    const base = newJobOp('faceCylinder', faceTool, stock.materialId, stock);
+    const face = {
+      ...base,
+      targetDiameter: round2(op.nominalDiameter - 2 * op.tolerance),
+      xStart: op.xStart,
+      xEnd: op.xEnd,
+      rotation: op.rotation,
+    } as JobOp;
+    setOps((prev) => {
+      const idx = prev.findIndex((o) => o.id === op.id);
+      const at = idx < 0 ? prev.length : idx;
+      return [...prev.slice(0, at), face, ...prev.slice(at)];
+    });
+    setExpandedOpId(face.id); // open it for tool and feed tweaks
   };
 
   /** start/stop editing an op's feature selection (enables measure mode) */
@@ -965,6 +991,7 @@ export function App() {
                 onIndexToSelection={indexToSelection}
                 picking={featurePick}
                 onFeaturePick={toggleFeaturePick}
+                onInsertFacingOp={insertFacingOp}
                 onDeleteOp={(id) => {
                   const nextOps = ops.filter((o) => o.id !== id);
                   const nextGen = { ...generated };

@@ -8,6 +8,7 @@ import type { Primitive } from '../../core/types';
 import {
   datumAngleBefore,
   defaultFaceStepOver,
+  metricPitch,
   defaultStepDown,
   defaultStepOver,
   generateJobOp,
@@ -1107,6 +1108,24 @@ describe('slice pocket (section plane + band)', () => {
     // 3-axis rejects it
     const flat = generateJobOp(op, { ...ctx, stock: boxStock, datumAngle: 0 });
     expect(flat.error).toContain('4-axis');
+  });
+
+  it('metricPitch maps standard nominal sizes to their coarse pitch', () => {
+    expect(metricPitch(6)).toBe(1.0);
+    expect(metricPitch(4)).toBe(0.7);
+    expect(metricPitch(10)).toBe(1.5);
+    expect(metricPitch(20)).toBe(2.5);
+    expect(metricPitch(24)).toBe(3.0);
+    expect(metricPitch(6.3)).toBeNull(); // not a standard size
+  });
+
+  it('new thread ops prefill the standard pitch for their nominal size', () => {
+    const op = newJobOp('thread', chamferTool, cylStock.materialId, cylStock);
+    if (op.kind !== 'thread') throw new Error('kind');
+    // stock R 25 → nominal 49 — not standard: the generic 2mm fallback
+    expect(op.nominalDiameter).toBeCloseTo(49, 5);
+    expect(op.pitch).toBe(2);
+    expect(op.tolerance).toBe(0); // nominal geometry by default
   });
 
   it('the ⇩ floor pick applies to slice pockets too', () => {
