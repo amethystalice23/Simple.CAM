@@ -156,6 +156,15 @@ one region.
   change inside the band keep the section's silhouette — a true
   per-level waterline and smooth draft walls stay Phase-3 arguments.
 
+**Future enhancement (noted 2026-10-20, Alice — build when a real part
+demands it):** a per-op **waste-stock toggle**. ON: paths may run off
+the stock edge — clean exits on tight stocks (an outside profile whose
+offset ring crosses the boundary), and the slice pocket's outside mode
+could additionally clear to the stock wall when the frame fits the tool
+(falling back to the profile ring when it doesn't). OFF (default):
+generation clamps regions rigidly within the stock footprint. One
+knob, shared by the ops it applies to — no third region mode.
+
 ## 3. Markup and selection
 
 - **Hover**: raycast → face → resolve to the feature owning that face

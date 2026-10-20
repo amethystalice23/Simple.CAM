@@ -91,6 +91,11 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 
 Later (v2+): 3-axis custom roughing/finishing via opencamlib WASM
 (drop-cutter/push-cutter). Parked: dexel 3D relief on cylinder.
+Parked (noted 2026-10-20): a per-op **waste-stock toggle** — ON lets
+paths run off the stock edge (clean exits on tight stocks; the slice
+pocket's outside mode could clear to the stock wall when the frame fits
+the tool), OFF clamps regions within the stock footprint
+(docs/edge-tracing.md §2).
 
 ### Stock: shape vs mode
 
