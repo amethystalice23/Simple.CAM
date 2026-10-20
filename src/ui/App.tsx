@@ -478,7 +478,9 @@ export function App() {
             depth,
             width: 0.1, // one line per start — the V profile is the tool's
             stepDown: op.stepDown,
-            rotation: op.rotation,
+            // the sampler speaks the spiral's convention; the thread's
+            // handedness is swapped (cam/thread.ts), so invert to match
+            rotation: op.rotation === 'cw' ? 'ccw' : 'cw',
             feed: 1,
             plungeFeed: 1,
           },

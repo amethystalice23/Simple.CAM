@@ -51,7 +51,8 @@ describe('thread', () => {
     const sweeps = res.moves.filter((m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined);
     expect(sweeps).toHaveLength(6);
     const adv = (20 / 2) * 360; // lead = 1 start × 2mm
-    expect(sweeps[0].words.a!).toBeCloseTo(adv, 6);
+    // cw threads cut with A DECanalysisSING (cam/thread.ts's swapped hand)
+    expect(sweeps[0].words.a!).toBeCloseTo(-adv, 6);
     // the level sweep returns along the helix (A back toward the phase)
     expect(sweeps[1].words.a!).toBeCloseTo(0, 6);
     // the spring pass retraces the last level — backward by the
@@ -69,9 +70,9 @@ describe('thread', () => {
     const a1 = ((strandRapids[1].words.a! % 360) + 360) % 360;
     expect(a0).toBeCloseTo(0, 6);
     expect(a1).toBeCloseTo(180, 6);
-    // lead 4mm: half the A advance of the single start
+    // lead 4mm: half the A advance of the single start, negative for cw
     const sweep = res.moves.find((m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined)!;
-    expect(sweep.words.a!).toBeCloseTo((20 / 4) * 360, 6);
+    expect(sweep.words.a!).toBeCloseTo(-(20 / 4) * 360, 6);
   });
 
   it('tolerance shrinks teeth: deeper grooves and a smaller crest', () => {

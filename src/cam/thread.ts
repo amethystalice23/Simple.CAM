@@ -85,7 +85,10 @@ export function thread(
   const aAdvance = (span / lead) * 360;
   const revs = aAdvance / 360;
   const passMinutes = revs / MAX_ROTARY_RPM; // G93 from the rotary limit
-  const aSign = op.rotation === 'cw' ? 1 : -1;
+  // thread handedness runs OPPOSITE the A-advance direction of the face
+  // ops' 'cw' (iron-tested by Alice): a cw-perceived thread cuts with A
+  // decreasing as X advances
+  const aSign = op.rotation === 'cw' ? -1 : 1;
   const safeZ = axisZ + startR + SAFE_CLEARANCE;
 
   // depth ladder from the working surface down to the root, last at it
