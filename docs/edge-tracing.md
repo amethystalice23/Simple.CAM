@@ -284,10 +284,19 @@ slice-depth edits, the plane handle, and model moves all redraw it
 group (stock, model, overlays, preview) renders rotated to that op's
 cutting frame — the index datum established above it, computed by
 `datumAngleBefore` — pivoted about the stock axis (y=0, z=axisZ), the
-exact rotation `indexedPointRotation` applies in generation. This is the
-precise inverse of the toolpath preview's per-op un-rotation, so
-toolpaths land at their true machine positions. No panel open → A0.
-The machine grid, axes, and navcube never rotate.
+exact rotation `indexedPointRotation` applies in generation. An open
+INDEX op shows its OWN angle as already applied: editing the number
+turns the live view. This is the precise inverse of the toolpath
+preview's per-op un-rotation, so toolpaths land at their true machine
+positions. No panel open → A0. The machine grid, axes, and navcube
+never rotate.
+
+**The A0 marker** (4-axis only): an amber arrow from the stock axis
+pointing at the material that faced the cutter at A0, with a small
+"A0" sprite at its tip, past the stock's far X end. It lives in the
+rotating group, so it turns with the part — whatever the datum, it
+shows where "A0 up" sits now, so a symmetric part never loses its
+orientation.
 
 **Plane handle.** A small grab ball on the section plane's near edge: drag
 vertically to slide `sliceDepth` (the cut band is untouched). During the drag the orbit controls

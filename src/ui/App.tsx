@@ -360,7 +360,12 @@ export function App() {
    * (edge-tracing §5 "view follows the datum") */
   const viewDatum = useMemo(() => {
     if (stock.axisMode !== '4-axis' || expandedOpId === null) return null;
-    const angle = datumAngleBefore(ops, expandedOpId);
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!op) return null;
+    // an OPEN INDEX op shows its own angle as already applied — editing
+    // the number turns the live view; every other op shows the datum
+    // established above it
+    const angle = op.kind === 'index' ? op.angle : datumAngleBefore(ops, op.id);
     if (angle === 0) return null;
     return { angle, axisZ: rotaryCalibrationOf(stock).axisZ };
   }, [ops, expandedOpId, stock]);
