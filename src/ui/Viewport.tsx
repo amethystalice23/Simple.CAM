@@ -1135,11 +1135,14 @@ export function Viewport({
       48,
     );
     geo.rotateZ(Math.PI / 2); // geometry Y axis → machine X (the stock axis)
+    // denser than the stock ghost and drawn over it (depthTest off):
+    // the faced result reads clearly THROUGH the brown stock shell
     const mat = new THREE.MeshBasicMaterial({
       color: SLICE_COLOR,
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.28,
       depthWrite: false,
+      depthTest: false,
       side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geo, mat);
@@ -1148,7 +1151,7 @@ export function Viewport({
       0,
       facePreview.axisZ,
     );
-    mesh.renderOrder = 1;
+    mesh.renderOrder = 3;
     group.add(mesh);
     return () => {
       group.remove(mesh);
