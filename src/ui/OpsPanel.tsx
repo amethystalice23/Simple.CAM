@@ -400,6 +400,62 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'spiralCarve':
+      return (
+        <>
+          <div className="floor-row">
+            <NumberField label="Start X (mm)" value={op.xStart} step={0.5} onCommit={(v) => upd({ xStart: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'startX' ? ' active' : ''}`}
+              title="Pick start X from a feature — click, then select one in the viewport"
+              onClick={() => props.onFeaturePick(op, 'startX')}
+            >
+              ⇩
+            </button>
+          </div>
+          <div className="floor-row">
+            <NumberField label="End X (mm)" value={op.xEnd} step={0.5} onCommit={(v) => upd({ xEnd: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'endX' ? ' active' : ''}`}
+              title="Pick end X from a feature — click, then select one in the viewport"
+              onClick={() => props.onFeaturePick(op, 'endX')}
+            >
+              ⇩
+            </button>
+          </div>
+          <div className="floor-row">
+            <NumberField label="Surface Ø (mm)" value={op.surfaceDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ surfaceDiameter: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'targetDiameter' ? ' active' : ''}`}
+              title="Pick the surface Ø from a circular feature — click, then select the circle"
+              onClick={() => props.onFeaturePick(op, 'targetDiameter')}
+            >
+              ⇩
+            </button>
+          </div>
+          <NumberField label="Spiral angle (°)" value={op.spiralAngle} min={0.1} step={5} onCommit={(v) => upd({ spiralAngle: Math.min(Math.max(v, 0.1), 90) } as Partial<JobOp>)} />
+          <NumberField label="Strands (around 360°)" value={op.count} min={1} step={1} onCommit={(v) => upd({ count: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
+          <NumberField label="Depth (mm)" value={op.depth} min={0.1} step={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
+          <NumberField label="Width (mm)" value={op.width} min={0.1} step={0.1} onCommit={(v) => upd({ width: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <label className="field">
+            <span>Rotation</span>
+            <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
+              <option value="cw">cw</option>
+              <option value="ccw">ccw</option>
+            </select>
+          </label>
+          <p className="hint">
+            helical grooves about the stock axis — angle off the circumferential direction
+            (90° = axial lines), strands evenly around 360°, depth per step-down ladder whose
+            levels retrace the same groove. Width wider than the tool Ø fans parallel passes.
+            Defaults from the stock; the ⇩ picks fill the area off the model
+          </p>
+        </>
+      );
     case 'drill':
       return (
         <>
@@ -708,7 +764,7 @@ export function OpsPanel(props: Props) {
                   {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && (
                     <p className="hint">needs a model or a primitive to select from</p>
                   )}
-                  {op.kind === 'faceCylinder' && props.axisMode !== '4-axis' && (
+                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve') && props.axisMode !== '4-axis' && (
                     <p className="hint">needs 4-axis mode (Stock tab)</p>
                   )}
                 </div>

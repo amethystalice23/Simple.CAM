@@ -1094,6 +1094,21 @@ describe('slice pocket (section plane + band)', () => {
     expect(res.summary).toContain('waste cleared to the stock edge');
   });
 
+  it('spiral carve: stock defaults, generation, and the 4-axis gate', () => {
+    const op = newJobOp('spiralCarve', tool, cylStock.materialId, cylStock);
+    if (op.kind !== 'spiralCarve') throw new Error('kind');
+    expect(op.surfaceDiameter).toBeCloseTo(50, 5); // the stock surface
+    expect(op.count).toBeGreaterThanOrEqual(1);
+    const res = generateJobOp(op, { ...ctx, stock: cylStock, datumAngle: 0 });
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(0);
+    // the first move carries the op's spindle stamp like every cutting op
+    expect(res.moves[0].spindleRpm).toBe(18000);
+    // 3-axis rejects it
+    const flat = generateJobOp(op, { ...ctx, stock: boxStock, datumAngle: 0 });
+    expect(flat.error).toContain('4-axis');
+  });
+
   it('the ⇩ floor pick applies to slice pockets too', () => {
     const faceId = steppedFeatures.planes.find((p) => Math.abs(p.normal.z) > 0.99)!.id;
     const linked = generateJobOp({ ...sliceOp, floorFeatureId: faceId }, steppedCtx);

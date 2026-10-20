@@ -219,6 +219,41 @@ export interface FaceCylinderOp {
   feed: number;
 }
 
+/**
+ * Carve helical grooves into a cylinder about the stock axis (PLAN.md
+ * Phase 2, wrapped-groove family). Strands are multi-start helices at
+ * `spiralAngle` off the circumferential direction; depth is a step-down
+ * ladder whose levels retrace the same helix; width beyond the tool
+ * Ø fans parallel helices axially. X+A sweeps run G93 from the rotary
+ * limit (src/cam/spiralCarve.ts).
+ */
+export interface SpiralCarveOp {
+  kind: 'spiralCarve';
+  id: string;
+  toolId: string;
+  /** the cylinder surface the spiral cuts into: R = diameter/2 */
+  surfaceDiameter: number;
+  /** axial operating area */
+  xStart: number;
+  xEnd: number;
+  /** helix angle off the circumferential direction, degrees (90 = axial) */
+  spiralAngle: number;
+  /** strands evenly spaced around 360° (multi-start) */
+  count: number;
+  /** groove depth below the surface, mm */
+  depth: number;
+  /** target groove width, mm — wider than the tool Ø fans parallel passes */
+  width: number;
+  /** axial depth-per-level ladder, mm */
+  stepDown: number;
+  /** direction of A advance */
+  rotation: 'cw' | 'ccw';
+  /** G94 mm/min — axial sweeps (a 90° spiral) and fan re-positioning */
+  feed: number;
+  /** G94 plunge feed at the strand starts */
+  plungeFeed: number;
+}
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -403,7 +438,7 @@ export interface ChamferOp {
   safeClearance: number;
 }
 
-export type Operation = FaceCylinderOp | PocketOp | DrillOp | ProfileOp | ChamferOp;
+export type Operation = FaceCylinderOp | SpiralCarveOp | PocketOp | DrillOp | ProfileOp | ChamferOp;
 // Phase 1 adds: engrave | indexedPocket
 // Phase 2 adds: thread | wrappedGroove
 
@@ -454,6 +489,26 @@ export type JobOp =
       rotation: 'cw' | 'ccw';
       /** ring / indexed-pass / continuous-helix — same semantics as FaceCylinderOp.pattern */
       pattern: 'vertical' | 'horizontal' | 'spiral';
+    })
+  | (JobOpBase & {
+      kind: 'spiralCarve';
+      /** helical grooves about the stock axis (edge of the Phase-2
+       * wrapped-groove family). Start/End X and Surface Ø come from the
+       * stock by default or the ⇩ picks, like the face cylinder. */
+      surfaceDiameter: number;
+      xStart: number;
+      xEnd: number;
+      /** helix angle off the circumferential direction, degrees (90 = axial) */
+      spiralAngle: number;
+      /** strands evenly spaced around 360° (multi-start) */
+      count: number;
+      /** groove depth below the surface, mm */
+      depth: number;
+      /** target groove width, mm — wider than the tool Ø fans parallel passes */
+      width: number;
+      /** axial depth-per-level ladder, mm */
+      stepDown: number;
+      rotation: 'cw' | 'ccw';
     })
   | (JobOpBase & {
       kind: 'index';

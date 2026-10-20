@@ -7,6 +7,7 @@
 
 import type * as THREE from 'three';
 import { DEFAULT_STEP_OVER_FACTOR, faceCylinder } from '../cam/faceCylinder';
+import { spiralCarve } from '../cam/spiralCarve';
 import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
@@ -69,6 +70,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'index', label: 'Index (4-axis)', rotaryOnly: true },
   { kind: 'faceCylinder', label: 'Face cylinder (4-axis)', rotaryOnly: true },
+  { kind: 'spiralCarve', label: 'Spiral carve (4-axis)', rotaryOnly: true },
 ];
 
 /**
@@ -126,6 +128,23 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         finishAllowance: 0.2,
         rotation: 'cw',
         pattern: 'spiral',
+      };
+    }
+    case 'spiralCarve': {
+      const rotary = stock.axisMode === '4-axis';
+      const [xStart, xEnd] = rotary ? stockSpan(stock, 'x') : [0, 80];
+      return {
+        ...base,
+        kind,
+        surfaceDiameter: rotary ? rotaryCalibrationOf(stock).effectiveRadius * 2 : 50,
+        xStart,
+        xEnd,
+        spiralAngle: 30,
+        count: 4,
+        depth: 1,
+        width: 3,
+        stepDown: Math.max(stepDown, 0.5),
+        rotation: 'cw',
       };
     }
     case 'pocket':
@@ -473,6 +492,44 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
           error: null,
           summary: `${res.passes} passes (${op.pattern}) → Ø${op.targetDiameter.toFixed(1)}mm, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
+      }
+
+      case 'spiralCarve': {
+        if (ctx.stock.axisMode !== '4-axis') return fail('spiral carving needs 4-axis mode (Stock tab)');
+        try {
+          const res = spiralCarve(
+            {
+              kind: 'spiralCarve',
+              id: op.id,
+              toolId: tool.id,
+              surfaceDiameter: op.surfaceDiameter,
+              xStart: op.xStart,
+              xEnd: op.xEnd,
+              spiralAngle: op.spiralAngle,
+              count: op.count,
+              depth: op.depth,
+              width: op.width,
+              stepDown: op.stepDown,
+              rotation: op.rotation,
+              feed,
+              plungeFeed,
+            },
+            rotaryCalibrationOf(ctx.stock),
+            tool.diameter,
+            ctx.datumAngle,
+          );
+          return {
+            moves: res.moves,
+            minutes: res.estimatedMinutes,
+            error: null,
+            summary:
+              `${op.count} strand(s) × ${res.passes / op.count} sweep(s), ${op.spiralAngle}° helix, ` +
+              `${op.depth}mm deep × ${op.width}mm wide, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ` +
+              `~${res.estimatedMinutes.toFixed(1)} min`,
+          };
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
       }
 
       case 'pocket': {

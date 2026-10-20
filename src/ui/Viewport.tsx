@@ -119,10 +119,17 @@ interface Props {
    * the pickable feature kinds highlight — edges never flash, and the Ø
    * pick shows circles alone. Null = normal measure mode. */
   pickKind: FeaturePickKind | null;
-  /** the expanded face-cylinder op's intended result (edge-tracing §5):
-   * the violet ghost cylinder about the stock axis. Null when the open
-   * op is not a face cylinder. */
-  facePreview: { xStart: number; xEnd: number; diameter: number; axisZ: number } | null;
+  /** the expanded rotary op's intended result (edge-tracing §5): the
+   * violet ghost cylinder about the stock axis, plus the spiral carve's
+   * groove helices as part-local mark polylines. Null when the open op
+   * is not a rotary surface op. */
+  facePreview: {
+    xStart: number;
+    xEnd: number;
+    diameter: number;
+    axisZ: number;
+    marks: { x: number; y: number; z: number }[][] | null;
+  } | null;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
 }
@@ -1125,7 +1132,8 @@ export function Viewport({
   // it untouched); live-updates as the ⇩ picks fill the fields.
   useEffect(() => {
     const group = sliceGroupRef.current;
-    if (!group) return;
+    const partGroup = featureGroupRef.current;
+    if (!group || !partGroup) return;
     if (!facePreview || facePreview.xEnd <= facePreview.xStart) return;
     const len = facePreview.xEnd - facePreview.xStart;
     const geo = new THREE.CylinderGeometry(
@@ -1136,11 +1144,12 @@ export function Viewport({
     );
     geo.rotateZ(Math.PI / 2); // geometry Y axis → machine X (the stock axis)
     // denser than the stock ghost and drawn over it (depthTest off):
-    // the faced result reads clearly THROUGH the brown stock shell
+    // the result reads clearly THROUGH the brown stock shell — paler
+    // when the spiral marks carry the detail
     const mat = new THREE.MeshBasicMaterial({
       color: SLICE_COLOR,
       transparent: true,
-      opacity: 0.28,
+      opacity: facePreview.marks ? 0.14 : 0.28,
       depthWrite: false,
       depthTest: false,
       side: THREE.DoubleSide,
@@ -1152,11 +1161,35 @@ export function Viewport({
       facePreview.axisZ,
     );
     mesh.renderOrder = 3;
+
+    // the spiral grooves: opaque violet polylines in the part-local
+    // frame — the datum rotation carries them with the part
+    const markGeos: THREE.BufferGeometry[] = [];
+    const markMat = new THREE.LineBasicMaterial({
+      color: SLICE_COLOR,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+    });
+    const markLines = (facePreview.marks ?? []).map((pts) => {
+      const lg = new THREE.BufferGeometry().setFromPoints(
+        pts.map((q) => new THREE.Vector3(q.x, q.y, q.z)),
+      );
+      markGeos.push(lg);
+      const line = new THREE.Line(lg, markMat);
+      line.renderOrder = 7;
+      return line;
+    });
+
     group.add(mesh);
+    for (const l of markLines) partGroup.add(l);
     return () => {
       group.remove(mesh);
+      for (const l of markLines) partGroup.remove(l);
       geo.dispose();
       mat.dispose();
+      for (const g of markGeos) g.dispose();
+      markMat.dispose();
     };
   }, [facePreview]);
 

@@ -5,6 +5,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
+import { sampleSpiralMarks } from '../cam/spiralCarve';
 import { postCarvera } from '../post/carvera';
 import {
   identityTransform,
@@ -201,7 +202,8 @@ export function App() {
 
   /** a ⇩ toggles its op's pick mode (measure mode on for the pick) */
   const toggleFeaturePick = (op: JobOp, kind: FeaturePickKind) => {
-    if (kind === 'floor' ? !isDepthBearingJobOp(op) : op.kind !== 'faceCylinder') return;
+    const takesFacePicks = op.kind === 'faceCylinder' || op.kind === 'spiralCarve';
+    if (kind === 'floor' ? !isDepthBearingJobOp(op) : !takesFacePicks) return;
     setFeaturePick((cur) =>
       cur?.opId === op.id && cur.kind === kind ? null : { opId: op.id, kind },
     );
@@ -217,12 +219,14 @@ export function App() {
     if (pick.kind === 'targetDiameter') {
       const r = resolveFeature(sources, featureId);
       if (!r || r.kind !== 'circle') return; // Ø comes off a circle only
+      const diameter = round2((r.feature as CircleFeature).radius * 2);
       setOps((prev) =>
-        prev.map((o) =>
-          o.id === pick.opId && o.kind === 'faceCylinder'
-            ? { ...o, targetDiameter: round2((r.feature as CircleFeature).radius * 2) }
-            : o,
-        ),
+        prev.map((o) => {
+          if (o.id !== pick.opId) return o;
+          if (o.kind === 'faceCylinder') return { ...o, targetDiameter: diameter };
+          if (o.kind === 'spiralCarve') return { ...o, surfaceDiameter: diameter };
+          return o;
+        }),
       );
       setFeaturePick(null);
       return;
@@ -232,7 +236,8 @@ export function App() {
       if (!p) return; // an edge carries no facing point — stay in the mode
       setOps((prev) =>
         prev.map((o) => {
-          if (o.id !== pick.opId || o.kind !== 'faceCylinder') return o;
+          if (o.id !== pick.opId) return o;
+          if (o.kind !== 'faceCylinder' && o.kind !== 'spiralCarve') return o;
           return pick.kind === 'startX'
             ? { ...o, xStart: round2(p.x) }
             : { ...o, xEnd: round2(p.x) };
@@ -393,18 +398,54 @@ export function App() {
     };
   }, [ops, expandedOpId, geometry, stock]);
 
-  /** the expanded face-cylinder op's intended result (edge-tracing §5):
-   * the violet ghost cylinder about the stock axis for the viewport */
+  /** the expanded rotary op's intended result (edge-tracing §5): the
+   * violet ghost cylinder about the stock axis — a spiral carve adds its
+   * groove helices as sampled marks, and tools come from the library */
   const facePreview = useMemo(() => {
     const op = ops.find((o) => o.id === expandedOpId);
-    if (!op || op.kind !== 'faceCylinder' || stock.axisMode !== '4-axis') return null;
-    return {
-      xStart: op.xStart,
-      xEnd: op.xEnd,
-      diameter: op.targetDiameter,
-      axisZ: rotaryCalibrationOf(stock).axisZ,
-    };
-  }, [ops, expandedOpId, stock]);
+    if (!op || stock.axisMode !== '4-axis') return null;
+    const axisZ = rotaryCalibrationOf(stock).axisZ;
+    if (op.kind === 'faceCylinder') {
+      return {
+        xStart: op.xStart,
+        xEnd: op.xEnd,
+        diameter: op.targetDiameter,
+        axisZ,
+        marks: null,
+      };
+    }
+    if (op.kind === 'spiralCarve') {
+      const t = tools.find((x) => x.id === op.toolId);
+      return {
+        xStart: op.xStart,
+        xEnd: op.xEnd,
+        diameter: op.surfaceDiameter,
+        axisZ,
+        marks: sampleSpiralMarks(
+          {
+            kind: 'spiralCarve',
+            id: op.id,
+            toolId: op.toolId,
+            surfaceDiameter: op.surfaceDiameter,
+            xStart: op.xStart,
+            xEnd: op.xEnd,
+            spiralAngle: op.spiralAngle,
+            count: op.count,
+            depth: op.depth,
+            width: op.width,
+            stepDown: op.stepDown,
+            rotation: op.rotation,
+            feed: 1,
+            plungeFeed: 1,
+          },
+          rotaryCalibrationOf(stock),
+          t?.diameter ?? 6,
+          datumAngleBefore(ops, op.id),
+        ),
+      };
+    }
+    return null;
+  }, [ops, expandedOpId, stock, tools]);
 
   /** the open op's cutting frame: the viewport shows the part rotated to
    * the index datum established above that op — A0 when nothing is open
