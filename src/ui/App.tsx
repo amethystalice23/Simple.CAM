@@ -330,14 +330,20 @@ export function App() {
   };
 
   /** the expanded slice-pocket op's section plane (edge-tracing §5):
-   * machine Z from its SLICE depth (independent of the cut band), and
-   * the drag-handle commit back into the op */
+   * machine Z from its SLICE depth (independent of the cut band), the
+   * datum rotation for slicing the rotated part, and the drag-handle
+   * commit back into the op */
   const slicePreview = useMemo(() => {
     const op = ops.find((o) => o.id === expandedOpId);
     if (!geometry || !op || op.kind !== 'slicePocket') return null;
     const crown = stockTopZ(stock);
+    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
     return {
       z: crown - op.sliceDepth,
+      rotate:
+        angle !== 0
+          ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ)
+          : null,
       onZChange: (z: number) =>
         setOps((prev) =>
           prev.map((o) =>
@@ -348,6 +354,16 @@ export function App() {
         ),
     };
   }, [ops, expandedOpId, geometry, stock]);
+
+  /** the open op's cutting frame: the viewport shows the part rotated to
+   * the index datum established above that op — A0 when nothing is open
+   * (edge-tracing §5 "view follows the datum") */
+  const viewDatum = useMemo(() => {
+    if (stock.axisMode !== '4-axis' || expandedOpId === null) return null;
+    const angle = datumAngleBefore(ops, expandedOpId);
+    if (angle === 0) return null;
+    return { angle, axisZ: rotaryCalibrationOf(stock).axisZ };
+  }, [ops, expandedOpId, stock]);
 
   /** show/hide one op's toolpath — display only, the g-code keeps every op */
   const toggleOpVisible = (id: string) => {
@@ -728,6 +744,7 @@ export function App() {
             previewMoves={previewMoves}
             showPreview={showPreview}
             slicePreview={slicePreview}
+            viewDatum={viewDatum}
             onToggleSelect={toggleSelect}
             onClearSelection={clearSelection}
           />

@@ -101,10 +101,20 @@ interface Props {
   /** generated moves to draw (PLAN.md "Toolpath preview") */
   previewMoves: Move[] | null;
   showPreview: boolean;
-  /** the expanded slice-pocket op's cut plane (edge-tracing §5): the
-   * machine Z to draw the plane + contour at, and the callback a drag of
-   * the plane handle commits through (updates the op's start depth) */
-  slicePreview: { z: number; onZChange: (z: number) => void } | null;
+  /** the expanded slice-pocket op's section plane (edge-tracing §5): the
+   * machine Z to draw the plane + contour at, the datum rotation for
+   * slicing the rotated part, and the callback a drag of the plane
+   * handle commits through (updates the op's slice depth) */
+  slicePreview: {
+    z: number;
+    rotate: ((p: { x: number; y: number; z: number }) => THREE.Vector3) | null;
+    onZChange: (z: number) => void;
+  } | null;
+  /** the open op's cutting frame (edge-tracing §5): the part renders
+   * rotated to this index datum; null = A0. Everything part-relative
+   * (stock, model, overlays, preview) rotates together; the grid and axes
+   * stay machine. */
+  viewDatum: { angle: number; axisZ: number } | null;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
 }
@@ -131,6 +141,7 @@ export function Viewport({
   previewMoves,
   showPreview,
   slicePreview,
+  viewDatum,
   onToggleSelect,
   onClearSelection,
 }: Props) {
@@ -148,6 +159,10 @@ export function Viewport({
   /** the LIVE slice overlay's rebuild/placeHandle — pending drag frames
    * must target the current group, not a disposed previous effect run */
   const sliceFnsRef = useRef<{ rebuild: (z: number) => void; placeHandle: (z: number) => void } | null>(null);
+  /** part-relative world (stock, model, overlays, preview) rotated to the
+   * open op's index datum; the slice overlay stays machine-space */
+  const datumGroupRef = useRef<THREE.Group | null>(null);
+  const sliceGroupRef = useRef<THREE.Group | null>(null);
   /** per-source overlay data — null-entry = no sources (nothing selectable) */
   const overlaysRef = useRef<SourceOverlay[]>([]);
   /** primitive meshes (non-indexed, source-aligned) for plane raycast picks */
@@ -421,6 +436,15 @@ export function Viewport({
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
+    // part-relative world (rotated to the open op's datum), and the
+    // machine-space slice overlay group outside it
+    const datumGroup = new THREE.Group();
+    datumGroupRef.current = datumGroup;
+    scene.add(datumGroup);
+    const sliceGroup = new THREE.Group();
+    sliceGroupRef.current = sliceGroup;
+    scene.add(sliceGroup);
+
     const stockGroup = new THREE.Group();
     const stockMat = new THREE.MeshStandardMaterial({
       color: 0x8a6f4d,
@@ -484,7 +508,7 @@ export function Viewport({
       }
       center.copy(box.position);
     }
-    scene.add(stockGroup);
+    datumGroup.add(stockGroup);
 
     // machine Z=0 plane
     const grid = new THREE.GridHelper(400, 40, 0x2b2f35, 0x22262a);
@@ -588,6 +612,8 @@ export function Viewport({
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       navCube.dispose();
       featureGroupRef.current = null;
+      datumGroupRef.current = null;
+      sliceGroupRef.current = null;
       rendererRef.current = null;
       cameraRef.current = null;
       controlsRef.current = null;
@@ -628,6 +654,28 @@ export function Viewport({
     model.position.set(transform.position.x, transform.position.y, transform.position.z);
     model.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
   }, [transform, stock]);
+
+  // The open op's cutting frame (edge-tracing §5): the part-relative
+  // group renders rotated to the op's index datum — a right-hand rotation
+  // about the stock axis (y=0, z=axisZ), the exact inverse of the
+  // preview's per-op un-rotation, so toolpaths land at their true machine
+  // positions. A0 when no panel is open.
+  useEffect(() => {
+    const g = datumGroupRef.current;
+    if (!g) return;
+    const th = (viewDatum?.angle ?? 0) * D2R;
+    if (th === 0) {
+      g.rotation.set(0, 0, 0);
+      g.position.set(0, 0, 0);
+      return;
+    }
+    // pivot about the line through (y=0, z=axisZ) along X:
+    // world = off + R·(local − off)  ⇒  position = off − R·off
+    const off = new THREE.Vector3(0, 0, viewDatum!.axisZ);
+    const p = off.clone().applyEuler(new THREE.Euler(th, 0, 0));
+    g.rotation.set(th, 0, 0);
+    g.position.copy(off).sub(p);
+  }, [viewDatum, stock]);
 
   // Feature overlays: static outlines + the measure-mode hover line, one
   // overlay per source (model + primitives). Runs after the scene effect
@@ -778,7 +826,9 @@ export function Viewport({
   // near edge that drags it up/down — the orbit pauses for the drag, the
   // op's start-depth box follows live (one re-slice per frame at most)
   useEffect(() => {
-    const group = featureGroupRef.current;
+    // machine-space group: the overlay shows where the tool cuts (the
+    // datum group rotates the PART, this plane stays machine-horizontal)
+    const group = sliceGroupRef.current;
     const renderer = rendererRef.current;
     const camera = cameraRef.current;
     const controls = controlsRef.current;
@@ -818,9 +868,26 @@ export function Viewport({
     g.add(plane, outline, handle);
     group.add(g);
 
-    // the placed model's machine-space bounds: the quad spans its XY
-    // extent, the drag clamps to its Z range
-    const pos = transformedPositions(geometry, transform);
+    // the placed model's machine-space bounds (rotated to the op's
+    // datum when one is active — generation slices the same rotated
+    // positions): the quad spans the XY extent, the drag clamps to Z
+    const pos0 = transformedPositions(geometry, transform);
+    const pos = slicePreview.rotate
+      ? (() => {
+          const out = new Float32Array(pos0.length);
+          for (let i = 0; i < pos0.length; i += 3) {
+            const v = slicePreview.rotate({
+              x: pos0[i],
+              y: pos0[i + 1],
+              z: pos0[i + 2],
+            });
+            out[i] = v.x;
+            out[i + 1] = v.y;
+            out[i + 2] = v.z;
+          }
+          return out;
+        })()
+      : pos0;
     let x0 = Infinity;
     let x1 = -Infinity;
     let y0 = Infinity;

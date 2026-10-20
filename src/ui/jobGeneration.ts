@@ -195,9 +195,10 @@ function clearanceResult(
   feed: number,
   plungeFeed: number,
   ctx: GenContext,
+  datumRotated: boolean,
 ): { moves: Move[]; minutes: number; passes: number } | null {
   const keepOut = op.allowance > 0 ? offsetOutward(contours, op.allowance) : contours;
-  const regions = difference(stockFootprint(ctx.stock), keepOut);
+  const regions = difference(stockFootprint(ctx.stock, datumRotated), keepOut);
   if (regions.length === 0) return null;
   try {
     const res = pocket2d(
@@ -556,11 +557,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
 
       case 'slicePocket': {
         // the region is the model's cross-section (edge-tracing §2) — no
-        // selection at all; the slice comes from the mesh at ONE plane
+        // selection at all; the slice comes from the mesh at ONE plane.
+        // Under an index datum the part sits rotated, so slice the
+        // ROTATED positions at machine Z — the same convention as every
+        // other indexed op (features mapped through the datum).
         if (!ctx.geometry) return fail('needs a loaded model — the slice comes from it');
-        if (ctx.datumAngle !== 0) {
-          return fail('slice pockets run in the flat frame — no Index op above them (tilted slicing comes later)');
-        }
         const crown = stockTopZ(ctx.stock);
         const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
         if (!range) {
@@ -568,7 +569,24 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             'end depth must be at or below start depth, and the allowance must leave something to cut',
           );
         }
-        const positions = transformedPositions(ctx.geometry, ctx.transform);
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
+        const positions = rotate
+          ? (() => {
+              const out = new Float32Array(positions0.length);
+              for (let i = 0; i < positions0.length; i += 3) {
+                const v = rotate({
+                  x: positions0[i],
+                  y: positions0[i + 1],
+                  z: positions0[i + 2],
+                });
+                out[i] = v.x;
+                out[i + 1] = v.y;
+                out[i + 2] = v.z;
+              }
+              return out;
+            })()
+          : positions0;
         const slice = sliceAtZ(positions, crown - op.sliceDepth);
         if (slice.contours.length === 0) {
           return fail(
@@ -639,6 +657,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
         if (op.clearToStock) {
           const cleared = clearanceResult(
             op, tool, slice.contours, range, op.stepOver, feed, plungeFeed, ctx,
+            ctx.datumAngle !== 0,
           );
           if (cleared) {
             moves = moves.concat(cleared.moves);
@@ -759,6 +778,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
         if (op.clearToStock && op.side === 'outside') {
           const cleared = clearanceResult(
             op, tool, contours, range, defaultStepOver(tool), feed, plungeFeed, ctx,
+            ctx.datumAngle !== 0,
           );
           if (cleared) {
             moves = moves.concat(cleared.moves);

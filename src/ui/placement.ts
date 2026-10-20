@@ -99,14 +99,26 @@ export function stockSpan(stock: Stock, axis: 'x' | 'y' | 'z'): readonly [number
 
 /**
  * The stock's XY footprint as one closed CCW contour — the region the
- * slice pocket's 'outside' mode clears around the model's cross-section.
- * A standing cylinder is a 64-gon circle at X0/Y0; a 4-axis cylinder's
- * silhouette is its length × diameter rectangle.
+ * waste-stock toggle clears around the model's cross-section. A standing
+ * cylinder is a 64-gon circle at X0/Y0; a 4-axis cylinder's silhouette is
+ * its length × diameter rectangle. `rotated` = the stock sits at a nonzero
+ * index angle: a cylinder's silhouette is unchanged (rotation about its own
+ * axis), a box's Y-extent becomes its conservative half-diagonal envelope
+ * (rotation about X carries the Z extent into Y) — clearing slightly
+ * outside the true silhouette, never inside it.
  */
-export function stockFootprint(stock: Stock): Vec2[][] {
+export function stockFootprint(stock: Stock, rotated = false): Vec2[][] {
   if (stock.kind === 'box') {
     const [x0, x1] = stockSpan(stock, 'x');
-    const [y0, y1] = stockSpan(stock, 'y');
+    let y0: number;
+    let y1: number;
+    if (rotated) {
+      const halfDiag = Math.hypot(stock.sizeY, stock.sizeZ) / 2;
+      y0 = -halfDiag;
+      y1 = halfDiag;
+    } else {
+      [y0, y1] = stockSpan(stock, 'y');
+    }
     return [[{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]];
   }
   const r = stock.calibration.effectiveRadius;

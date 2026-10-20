@@ -151,6 +151,12 @@ one region.
   parts, negative-space flutes).
 - The region comes from `sliceAtZ` at the section plane only — never
   from the cut band; `droppedChains` surfaces in the summary.
+- **Indexed operation**: under an Index datum the positions are rotated
+  through `indexedPointRotation` BEFORE slicing, at machine Z — the same
+  convention as every other indexed op (the part sits rotated; the
+  machine-horizontal plane cuts the rotated body). Clearance uses the
+  stock's rotated silhouette (a cylinder's is unchanged; a box's Y
+  extent becomes its conservative half-diagonal envelope).
 - No feature selection is needed for the region — the model is the
   input (the face-cylinder precedent). Honest limit: features that
   change inside the band keep the section's silhouette — a true
@@ -265,11 +271,23 @@ selection no longer has to guess at both.
 **Section-plane overlay (slice pocket only).** While the slice-pocket
 op is expanded, the viewport draws, in a dedicated slice color (violet —
 distinct from every existing overlay), two things: (a) the SECTION
-PLANE — a translucent quad at `crown − sliceDepth` spanning the model's
-XY bounds — and (b) the contour outline at that plane (the `sliceAtZ`
-loops as a polyline, same color, full opacity). It refreshes live:
+PLANE — a translucent quad at machine Z `crown − sliceDepth` (machine
+space, in a group OUTSIDE the datum group, so it stays machine-
+horizontal while the part rotates) spanning the rotated part's XY
+bounds — and (b) the contour outline at that plane (the `sliceAtZ`
+loops of the datum-rotated positions, as a polyline, same color, full
+opacity). It refreshes live:
 slice-depth edits, the plane handle, and model moves all redraw it
 (slicing is a single mesh pass; recomputed at most once per frame).
+
+**View follows the datum.** While ANY op panel is open the part-relative
+group (stock, model, overlays, preview) renders rotated to that op's
+cutting frame — the index datum established above it, computed by
+`datumAngleBefore` — pivoted about the stock axis (y=0, z=axisZ), the
+exact rotation `indexedPointRotation` applies in generation. This is the
+precise inverse of the toolpath preview's per-op un-rotation, so
+toolpaths land at their true machine positions. No panel open → A0.
+The machine grid, axes, and navcube never rotate.
 
 **Plane handle.** A small grab ball on the section plane's near edge: drag
 vertically to slide `sliceDepth` (the cut band is untouched). During the drag the orbit controls

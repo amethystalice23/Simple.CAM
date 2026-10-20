@@ -978,14 +978,50 @@ describe('slice pocket (section plane + band)', () => {
     }
   });
 
-  it('fails visibly: no model, index datum, empty section plane', () => {
+  it('fails visibly: no model, and an empty section plane', () => {
     const noModel = generateJobOp(sliceOp, { ...steppedCtx, geometry: null, features: null, sources: [] });
     expect(noModel.error).toContain('needs a loaded model');
-    const indexed = generateJobOp(sliceOp, { ...steppedCtx, datumAngle: 90 });
-    expect(indexed.error).toContain('flat frame');
     // the plane below the model's body slices empty
     const empty = generateJobOp({ ...sliceOp, sliceDepth: 10 }, steppedCtx);
     expect(empty.error).toContain('section plane');
+  });
+
+  it('slices the ROTATED part under an index datum (indexed 4-axis flow)', () => {
+    // a 4×4×20 bar standing on the rotary axis (axisZ 0, crown at z 25):
+    // indexed 90° it lies along Y, thin in Z (z −2…2). The section at
+    // machine z 0 is 4 (X) × 20 (Y) — an A0 slice there would be 4×4.
+    const bar = new THREE.BoxGeometry(4, 4, 20).toNonIndexed();
+    const barFeatures = detectFeatures(bar);
+    const barCtx: GenContext = {
+      ...ctx,
+      stock: cylStock,
+      geometry: bar,
+      features: barFeatures,
+      sources: sourcesFor(bar, barFeatures, identityTransform(), []),
+      datumAngle: 90,
+    };
+    const indexed: Extract<JobOp, { kind: 'slicePocket' }> = {
+      ...sliceOp,
+      sliceDepth: 25, // crown 25 − 25 = machine z 0
+      startDepth: 22,
+      endDepth: 25, // band z 3 → 0 (slips to z 0 by step-down 1)
+      clearToStock: false,
+    };
+    const res = generateJobOp(indexed, barCtx);
+    expect(res.error).toBeNull();
+    const xy = res.moves.filter(
+      (x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined),
+    );
+    expect(xy.length).toBeGreaterThan(0);
+    // the ring rides the ROTATED section: out past its 10mm Y half-length
+    // (an A0 4×4 section could never put a move past 3.9)
+    expect(xy.some((m) => Math.abs(m.words.y ?? 0) > 10.9)).toBe(true);
+    // and the machine-z band matches the op (a move down at z ≤ 0.1)
+    expect(res.moves.some((m) => !m.rapid && (m.words.z ?? 0) < 0.1)).toBe(true);
+    // a plane at machine z 2.9 is OUTSIDE the rotated bar (z −2…2) —
+    // the empty-section gate proves the rotation applied to the slice
+    const outside = generateJobOp({ ...indexed, sliceDepth: 22.1, endDepth: 22 }, barCtx);
+    expect(outside.error).toContain('section plane');
   });
 
   it('the waste-stock toggle clears the excess out to the stock edge', () => {
