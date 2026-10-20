@@ -133,6 +133,29 @@ Z = const and stitch closed contours for Clipper2.
 - Depth levels come from the operations (step-down ladders); slicing is
   on demand and cached by (model id, transform hash, z).
 
+### The slice-pocket op (waterline pocket)
+
+Region source = the model's cross-section, not a selection: at each
+depth level slice the placed model at that Z (above), then run the
+pocket engine over the region. Start depth = end depth → one simple
+pocket at one slice; a step-down through a band re-slices per level — a
+true waterline that follows fins, buttresses, and flutes through the Z
+range.
+
+- **Region mode**: `'outside'` clears the stock footprint minus the
+  slice (leaves the cross-section standing — outer shaping); `'inside'`
+  clears the slice's interior (hollow parts, flutes as negative space).
+  `'outside'` needs a boolean-difference helper in `src/cam/clipper.ts`
+  (Clipper2 booleans — already a dependency, MIT).
+- Region contours per level come straight from `sliceAtZ`;
+  `droppedChains` surfaces as a per-op warning ("open mesh edges at this
+  level — slice incomplete").
+- No feature selection is needed for the region — the model is the
+  input (the face-cylinder precedent); the floor comes from the ⇩ pick
+  (§5). Honest limit: features that curve *within* a step-down band
+  come out stair-stepped — smooth draft walls stay the Phase-3
+  drop-cutter argument.
+
 ## 3. Markup and selection
 
 - **Hover**: raycast → face → resolve to the feature owning that face
@@ -207,6 +230,40 @@ Types for v1:
   plane tolerance); to face a cylinder, select its rim CIRCLE (a cap
   plane's member-triangle footprint is a square AABB, not the disc).
 
+## 5. Slice-pocket UI: cut-plane overlay, ⇩ floor pick, plane handle
+
+**⇩ Floor pick (every depth-bearing op: pocket, profile, slice
+pocket).** A small ⇩ icon button (an arrow pointing down at a floor
+line; tooltip: "Set the cut floor from the selected face") beside the
+depth boxes, enabled when exactly one plane or circle is selected in
+measure mode. Click: *End depth* := crown − machine Z(feature point),
+and the feature id is stored as `floorFeatureId`. The link is LIVE —
+the feature's Z keeps driving the depth (move the model or primitive
+and the floor follows, no re-measuring) — until the end-depth box is
+hand-edited, which detaches it (the face-cylinder primitive-target
+pattern: an explicit user edit wins). Tilted faces use the feature's
+representative point, the same convention `selectionIs: floor` uses.
+A provenance hint shows the source ("floor: face at z −3.20"); a
+dangling id fails with the standard "no longer exist — reselect"
+message. This decouples region definition from depth definition — one
+selection no longer has to guess at both.
+
+**Cut-plane overlay (slice pocket only).** While the slice-pocket op
+is expanded, the viewport draws, in a dedicated slice color (violet —
+distinct from every existing overlay), two things: (a) the CUT PLANE —
+a translucent quad at the slice Z spanning the model's XY bounds — and
+(b) the contour outline at that slice (the `sliceAtZ` loops as a
+polyline, same color, full opacity). It refreshes live: depth-box
+edits, the plane handle, and model moves all redraw it (slicing is a
+single mesh pass; recomputed at most once per frame).
+
+**Plane handle.** A grab pill on the cut plane's near edge: drag
+vertically to slide the slice Z. During the drag the orbit controls
+disable, pointer Δy maps to ΔZ at the handle's depth (the same
+px-per-mm the snap logic uses), the overlay and the start-depth box
+follow live, and releasing commits. One handle = the slice plane; the
+floor stays a feature pick, not a second handle.
+
 ## Data model (src/core/types.ts additions)
 
 ```ts
@@ -222,6 +279,22 @@ export type Primitive =
   | { kind: 'rect' | 'circle2d' | 'polygon2d'; id: string; z: number; /* shape params */ };
 
 export type OperationTarget = { featureId: string } | { primitiveId: string };
+
+// §5: the floor pick — a live feature reference driving end depth
+export interface FloorPicked { floorFeatureId: string | null }
+// on the depth-bearing JobOps (pocket / profile / slice pocket);
+// detached (nulled) by a hand edit of the end-depth box
+
+// §2 slice-pocket op: region = the model's Z cross-section
+export interface SlicePocketJobOp {
+  kind: 'slicePocket';
+  regionMode: 'outside' | 'inside'; // stock − slice | slice interior
+  startDepth: number; // mm below the crown (the slice Z)
+  endDepth: number; // mm below the crown (floor: ⇩ pick or a box)
+  allowance: number;
+  stepDown: number;
+  stepOver: number;
+}
 ```
 
 Implementation layout: detection math in `src/cam/features.ts` and

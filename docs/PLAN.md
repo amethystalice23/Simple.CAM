@@ -86,6 +86,7 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 | Thread (90° V-bit) | parametric helix | per pass: `G1 X… A…` constant Z, A advances `(length/pitch)·360°`; Z depth-steps between passes re-entering at identical absolute A phase; multi-start = angular offsets; spring pass; external threads only |
 | Wrapped groove / spiral pattern | parametric | same family as threads: helix/Archimedean/straight/cross-hatch path in (U,V), repeated at angular offsets |
 | Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection |
+| Slice pocket / waterline (3-axis) | 2.5D | per depth level: `sliceAtZ` cross-section → pocket2d over the region; region mode outside (stock − slice) / inside (slice interior); floor via the ⇩ pick; violet cut-plane overlay + drag handle in the viewport (docs/edge-tracing.md §2, §5) |
 | Flat chamfer (V-bit) | single-pass flank | two modes. **add**: the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path) — a new chamfer through a sharp edge. **existing**: the model already has the chamfer — the bit rides the modelled face, and direction selects which end was clicked: **up** = the bottom edge, traced exactly (depth ignored — the bit cuts up and out from there); **down** = the top edge, the tip slides down-and-in by depth·tan(angle/2) along the modelled face, landing on the bottom edge when depth matches the model. User side option (inside/outside — geometry can't always tell) and depth along the wall |
 
 Later (v2+): 3-axis custom roughing/finishing via opencamlib WASM
@@ -151,7 +152,7 @@ later).
 | Phase | Deliverable | Acceptance | Est. (part-time) |
 |---|---|---|---|
 | 0 | Repo, viewer, post skeleton, facing generator | `npm test` green; drag an STL; face a virtual Ø50→Ø40 cylinder emits valid G93 gcode | done in scaffold |
-| 1 | Stock setup, model placement, tool library, flat 2.5D ops + indexed 4-axis + edge/hole tracing, toolpath preview | cut a sign job and an indexed pocket job on real hardware | ~2–3 months |
+| 1 | Stock setup, model placement, tool library, flat 2.5D ops + indexed 4-axis + edge/hole tracing + slice-pocket/waterline, toolpath preview | cut a sign job and an indexed pocket job on real hardware | ~2–3 months |
 | 2 | Cylinder canvas: facing, threads, wrapped grooves | cut a V-bit thread that mates with a nut; face a cylinder to ±0.05 mm | +4–6 weeks |
 | 3 | 3-axis custom (opencamlib) | 3D part roughed+finished | ~6–10 weeks, may slip to v2 |
 
