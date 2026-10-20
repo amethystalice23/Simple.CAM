@@ -1001,7 +1001,9 @@ describe('slice pocket (section plane + band)', () => {
       expect(distToSquare(m.words.x ?? 0, m.words.y ?? 0, 4)).toBeGreaterThan(0.9);
     }
     expect(xy.some((m) => Math.abs(m.words.x ?? 0) > 15 || Math.abs(m.words.y ?? 0) > 15)).toBe(true);
-    expect(res.summary).toContain('to the stock edge');
+    // the ring still runs — appended waste clearing never replaces it
+    expect(xy.some((m) => Math.abs(m.words.x ?? 0) < 5.5)).toBe(true);
+    expect(res.summary).toContain('waste cleared to the stock edge');
   });
 
   it('the toggle falls back to the outline ring on a frame thinner than the tool', () => {
@@ -1017,7 +1019,7 @@ describe('slice pocket (section plane + band)', () => {
     const tightCtx = { ...steppedCtx, stock: tightStock };
     const res = generateJobOp({ ...sliceOp, clearToStock: true }, tightCtx);
     expect(res.error).toBeNull();
-    expect(res.summary).toContain('outline ring only');
+    expect(res.summary).toContain('waste left standing');
     const xy = res.moves.filter((x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined));
     for (const m of xy) {
       // the ring: at the tool radius off the section, never near 6 (the
@@ -1051,8 +1053,10 @@ describe('slice pocket (section plane + band)', () => {
     const res = generateJobOp(op, steppedCtx);
     expect(res.error).toBeNull();
     const xy = res.moves.filter((x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined));
+    // both: the wall ring AND the waste out to the stock edge
     expect(xy.some((m) => Math.abs(m.words.x ?? 0) > 15)).toBe(true);
-    expect(res.summary).toContain('cleared to the stock edge');
+    expect(xy.some((m) => Math.abs(m.words.x ?? 0) < 5.5)).toBe(true);
+    expect(res.summary).toContain('waste cleared to the stock edge');
   });
 
   it('the ⇩ floor pick applies to slice pockets too', () => {

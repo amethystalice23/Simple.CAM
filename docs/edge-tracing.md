@@ -158,12 +158,14 @@ one region.
 
 **The waste-stock toggle** (`clearToStock`, implemented 2026-10-20
 after Alice's cross-part needed it): a per-op checkbox "clear excess
-stock to the stock edge", on profile (side=outside) and slice pocket
-(regionMode=outside). ON: the excess between the contour/section and
-the stock footprint is pocketed with step-over passes over the whole
-band (region = stock − allowance-grown part); when the frame is
-thinner than the tool the op falls back to the outline ring and says
-so in the summary — an error is never the price of the toggle. OFF
+stock", on profile (side=outside) and slice pocket (regionMode=
+outside). ON: the outline ring ALWAYS runs first — it may cross the
+stock edge (settled: leaving the stock is fine, so a tight stock never
+truncates the profile) — and then whatever waste remains INSIDE the
+stock footprint is pocketed with step-over passes over the whole band
+(region = stock − allowance-grown part), appended to the ring's moves;
+a frame thinner than the tool leaves that waste standing and the
+summary says so — an error is never the price of the toggle. OFF
 (default): the outline ring only. One knob, shared by both ops — no
 third region mode.
 

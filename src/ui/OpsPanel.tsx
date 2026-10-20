@@ -373,7 +373,7 @@ function ParamFields(props: {
                 checked={op.clearToStock}
                 onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
               />
-              <span>clear excess stock to the stock edge</span>
+              <span>clear excess stock</span>
             </label>
           )}
           <DepthFields
@@ -422,7 +422,7 @@ function ParamFields(props: {
                 checked={op.clearToStock}
                 onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
               />
-              <span>clear excess stock to the stock edge</span>
+              <span>clear excess stock</span>
             </label>
           )}
           <DepthFields

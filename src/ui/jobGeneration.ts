@@ -611,26 +611,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
 
         // 'outside': the tool rides the outline offset out by the tool
         // radius (+allowance as wall stock), exactly the profile op's
-        // outside pass but over the section shape from the slice plane —
-        // never needs to fit between the part and the stock wall, so a
-        // snug stock can't reject the tool. The waste-stock toggle adds
-        // full clearance to the stock edge on top of that.
-        if (op.clearToStock) {
-          const cleared = clearanceResult(
-            op, tool, slice.contours, range, op.stepOver, feed, plungeFeed, ctx,
-          );
-          if (cleared) {
-            return {
-              moves: cleared.moves,
-              minutes: cleared.minutes,
-              error: null,
-              summary:
-                sliceSummary(op, range, cleared.passes, cleared.minutes, dropped, 'clearance') +
-                ', to the stock edge',
-            };
-          }
-        }
-        const res = profile2d(
+        // outside pass over the section shape — the ring may cross the
+        // stock edge (settled: leaving the stock is fine). The
+        // waste-stock toggle APPENDS clearing of whatever waste remains
+        // inside the stock; it never replaces the ring.
+        const ring = profile2d(
           {
             kind: 'profile',
             id: op.id,
@@ -647,13 +632,28 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
           },
           tool,
         );
+        let moves = ring.moves;
+        let minutes = ring.estimatedMinutes;
+        let passes = ring.passes;
+        let wasteNote = '';
+        if (op.clearToStock) {
+          const cleared = clearanceResult(
+            op, tool, slice.contours, range, op.stepOver, feed, plungeFeed, ctx,
+          );
+          if (cleared) {
+            moves = moves.concat(cleared.moves);
+            minutes += cleared.minutes;
+            passes += cleared.passes;
+            wasteNote = ', waste cleared to the stock edge';
+          } else {
+            wasteNote = ' · frame thinner than the tool — waste left standing';
+          }
+        }
         return {
-          moves: res.moves,
-          minutes: res.estimatedMinutes,
+          moves,
+          minutes,
           error: null,
-          summary:
-            sliceSummary(op, range, res.passes, res.estimatedMinutes, dropped, 'profile') +
-            (op.clearToStock ? ' · frame thinner than the tool — outline ring only' : ''),
+          summary: sliceSummary(op, range, passes, minutes, dropped, 'profile') + wasteNote,
         };
       }
       case 'drill': {
@@ -733,26 +733,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             'end depth must be at or below start depth, and the allowance must leave something to cut',
           );
         }
-        // waste-stock toggle: clear from the contour out to the stock
-        // wall when asked — the outline ring is the fallback (a frame
-        // thinner than the tool cannot be pocketed)
-        if (op.clearToStock && op.side === 'outside') {
-          const cleared = clearanceResult(
-            op, tool, contours, range, defaultStepOver(tool), feed, plungeFeed, ctx,
-          );
-          if (cleared) {
-            return {
-              moves: cleared.moves,
-              minutes: cleared.minutes,
-              error: null,
-              summary:
-                `${cleared.passes} passes cleared to the stock edge / ` +
-                `z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
-                (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
-                `, ~${cleared.minutes.toFixed(1)} min`,
-            };
-          }
-        }
+        // the wall passes always run (the ring may cross the stock edge
+        // — settled: leaving the stock is fine); the waste-stock toggle
+        // APPENDS clearing of whatever waste remains inside the stock
         const res = profile2d(
           {
             kind: 'profile',
@@ -770,17 +753,30 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
           },
           tool,
         );
+        let moves = res.moves;
+        let minutes = res.estimatedMinutes;
+        let wasteNote = '';
+        if (op.clearToStock && op.side === 'outside') {
+          const cleared = clearanceResult(
+            op, tool, contours, range, defaultStepOver(tool), feed, plungeFeed, ctx,
+          );
+          if (cleared) {
+            moves = moves.concat(cleared.moves);
+            minutes += cleared.minutes;
+            wasteNote = ', waste cleared to the stock edge';
+          } else {
+            wasteNote = ' · frame thinner than the tool — waste left standing';
+          }
+        }
         return {
-          moves: res.moves,
-          minutes: res.estimatedMinutes,
+          moves,
+          minutes,
           error: null,
           summary:
             `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
-            `, ~${res.estimatedMinutes.toFixed(1)} min` +
-            (op.clearToStock && op.side === 'outside'
-              ? ' · frame thinner than the tool — outline ring only'
-              : ''),
+            `, ~${minutes.toFixed(1)} min` +
+            wasteNote,
         };
       }
 
