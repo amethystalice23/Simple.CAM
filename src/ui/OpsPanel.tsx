@@ -353,6 +353,14 @@ function ParamFields(props: {
             onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={op.flatten}
+              onChange={(e) => upd({ flatten: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>flatten — cut across interior voids</span>
+          </label>
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>

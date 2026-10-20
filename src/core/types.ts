@@ -594,6 +594,11 @@ export type JobOp =
        * Null = detached (a plain number).
        */
       floorFeatureId: string | null;
+      /** FLATTEN: interior loops are voids to cross, not islands to keep —
+       * the region is each selected face's outer boundary alone, so the
+       * tool passes over indents/holes and mills off anything proud
+       * inside. Off (default) preserves interior features. */
+      flatten: boolean;
     })
   | (JobOpBase & {
       kind: 'drill';

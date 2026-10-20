@@ -41,6 +41,7 @@ const ops: JobOp[] = [
     stepDown: 0.5,
     stepOver: 3,
     floorFeatureId: null,
+    flatten: false,
   },
 ];
 

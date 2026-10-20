@@ -143,6 +143,13 @@ body is clean, away from rounded/chamfered tops. The op then cuts the
 ⇩ pick) using THAT section's shape — cut above and below the slice with
 one region.
 
+- **Pocket flatten** (`flatten`, 2026-10-20): the pocket op's "flatten —
+  cut across interior voids" checkbox. Interior loops of a selected face
+  are voids to cross, not islands to keep: the region is each face's
+  outer boundary alone, so the tool overflies indents and holes and
+  mills off anything proud inside. Off (default) preserves interior
+  features — geometry alone cannot tell an indent from a boss, so the
+  intent is explicit and per-op.
 - **Region mode**: `'outside'` PROFILES around the section — the tool
   center rides the outline offset out by the tool radius (+ allowance as
   wall stock), the profile op's outside pass over the section shape; it

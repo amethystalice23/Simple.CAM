@@ -96,6 +96,7 @@ const pocketOp: Extract<JobOp, { kind: 'pocket' }> = {
   stepDown: 0.5,
   stepOver: 1,
   floorFeatureId: null,
+  flatten: false,
 };
 const drillOp: Extract<JobOp, { kind: 'drill' }> = {
   id: 'op2',

@@ -107,6 +107,28 @@ describe('pocketRegionsFromSelection', () => {
     expect(loopArea(region)).toBeCloseTo(36, 5); // not 100 (the AABB)
   });
 
+  it("flatten keeps only the outer boundary — interior voids are crossed", () => {
+    // the plate-with-hole top face: outer rim + hole rim. Flatten drops
+    // the hole: the region is the disc alone (Alice's indent case — the
+    // tool must overfly the void to reach the rest of the face)
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 2) < 1e-6,
+    );
+    expect(topPlane).toBeDefined();
+    const src = pocketRegionsFromSelection(
+      f, [topPlane!.id], identityTransform(), undefined, true,
+    );
+    expect(src).not.toBeNull();
+    expect(src!.regions).toHaveLength(1); // the hole loop is gone
+    const area = loopArea(src!.regions[0]);
+    expect(area).toBeGreaterThan(0); // CCW outer
+    // the full disc (tessellated rim sits just inside the true circle)
+    expect(area).toBeGreaterThan(0.95 * Math.PI * 25);
+    expect(area).toBeLessThan(Math.PI * 25);
+  });
+
   it("orients a face's loops: outer CCW, holes CW", () => {
     const geo = plateWithHole();
     const f = detectFeatures(geo);

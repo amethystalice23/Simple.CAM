@@ -193,6 +193,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepDown,
         stepOver: defaultStepOver(tool),
         floorFeatureId: null,
+        flatten: false, // islands preserved unless asked
       };
     case 'slicePocket':
       return {
@@ -627,6 +628,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             part.ids,
             part.source.transform,
             rotate,
+            op.flatten,
           );
           if (!src || src.regions.length === 0) continue;
           if (allCircles) sawHole = true;

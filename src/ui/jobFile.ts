@@ -62,6 +62,13 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
           return { ...normalized, sliceDepth: normalized.startDepth } as JobOp;
         }
       }
+      // pre-flatten pocket saves: islands preserved
+      if (normalized.kind === 'pocket') {
+        const rawFlat = (normalized as { flatten?: unknown }).flatten;
+        if (rawFlat !== true && rawFlat !== false) {
+          return { ...normalized, flatten: false } as JobOp;
+        }
+      }
       // pre-clearToStock profile/slicePocket saves: the toggle is off
       if (normalized.kind === 'profile' || normalized.kind === 'slicePocket') {
         const rawClear = (normalized as { clearToStock?: unknown }).clearToStock;

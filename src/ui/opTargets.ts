@@ -41,7 +41,8 @@ function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: numbe
  * Pocket regions from the selection: circles aligned to the machine Z
  * axis become their disc; Z-normal planes become their BORDER LOOPS —
  * the tool follows the selected outline (a cross cuts a cross, not its
- * bounding box). `selectionZ` is the highest selected plane (with
+ * bounding box); `flatten` keeps only each face's OUTER boundary
+ * (interior voids are crossed, interior islands milled off). `selectionZ` is the highest selected plane (with
  * several faces at different heights, the shallowest wins — add another
  * op for deeper ones). Mixing faces and holes in one op is rejected.
  * `indexRotation` maps points into the indexed cutting frame (see
@@ -52,6 +53,9 @@ export function pocketRegionsFromSelection(
   selection: string[],
   transform: ModelTransform,
   indexRotation?: (p: { x: number; y: number; z: number }) => THREE.Vector3,
+  /** FLATTEN: interior loops are voids to cross, not islands to keep —
+   * each selected face contributes only its outer boundary. */
+  flatten = false,
 ): PocketSource | null {
   const xf0 = transformFn(transform);
   const xf = indexRotation
@@ -92,7 +96,23 @@ export function pocketRegionsFromSelection(
         }),
       );
     if (faceLoops.length === 0) continue;
-    planeRegions.push(...orientLoops(faceLoops));
+    if (flatten) {
+      // the outer boundary alone (the largest loop), CCW — the tool
+      // crosses every interior feature: indents and holes are air,
+      // anything proud gets milled to the floor
+      let outer = faceLoops[0];
+      let outerArea = -Infinity;
+      for (const c of faceLoops) {
+        const area = Math.abs(loopSignedArea(c));
+        if (area > outerArea) {
+          outerArea = area;
+          outer = c;
+        }
+      }
+      planeRegions.push(loopSignedArea(outer) >= 0 ? outer : [...outer].reverse());
+    } else {
+      planeRegions.push(...orientLoops(faceLoops));
+    }
     faceZ = Math.max(faceZ, xf(p.point).z);
   }
 
