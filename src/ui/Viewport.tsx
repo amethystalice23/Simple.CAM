@@ -526,12 +526,12 @@ export function Viewport({
       new THREE.MeshStandardMaterial({ color: 0x4d7ea8, flatShading: true }),
     );
     modelRef.current = model;
-    scene.add(model);
+    datumGroup.add(model);
     if (geometry) geometry.computeBoundingBox();
 
     // feature overlay group: children managed by the overlay effect below
     const featureGroup = new THREE.Group();
-    scene.add(featureGroup);
+    datumGroup.add(featureGroup);
     featureGroupRef.current = featureGroup;
 
     controls.target.copy(center);
