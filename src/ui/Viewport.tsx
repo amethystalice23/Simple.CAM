@@ -145,6 +145,9 @@ export function Viewport({
   /** live slice-plane drag state — a ref so effect re-runs (the live box
    * update changes props mid-drag) never kill an active drag */
   const sliceDragRef = useRef<{ startClientY: number; startZ: number; z: number; raf: number } | null>(null);
+  /** the LIVE slice overlay's rebuild/placeHandle — pending drag frames
+   * must target the current group, not a disposed previous effect run */
+  const sliceFnsRef = useRef<{ rebuild: (z: number) => void; placeHandle: (z: number) => void } | null>(null);
   /** per-source overlay data — null-entry = no sources (nothing selectable) */
   const overlaysRef = useRef<SourceOverlay[]>([]);
   /** primitive meshes (non-indexed, source-aligned) for plane raycast picks */
@@ -799,12 +802,18 @@ export function Viewport({
       new THREE.LineBasicMaterial({ color: SLICE_COLOR, transparent: true, depthTest: false }),
     );
     outline.renderOrder = 9;
-    const handle = new THREE.Mesh(
-      // small — it sits ON the plane edge, not a blob over the part
-      new THREE.SphereGeometry(1.2, 16, 12),
-      new THREE.MeshBasicMaterial({ color: SLICE_COLOR, depthTest: false }),
-    );
-    handle.renderOrder = 10;
+    // the handle: two small arrows (stacked cones, slight gap) reading
+    // "drag up / drag down" — never a blob over the part
+    const arrowMat = new THREE.MeshBasicMaterial({ color: SLICE_COLOR, depthTest: false });
+    const handle = new THREE.Group();
+    for (const dir of [1, -1] as const) {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 12), arrowMat);
+      // ConeGeometry points +Y; stand it on the Z axis, apex outward
+      cone.rotation.x = (dir * Math.PI) / 2;
+      cone.position.z = dir * 0.9;
+      cone.renderOrder = 10;
+      handle.add(cone);
+    }
     const g = new THREE.Group();
     g.add(plane, outline, handle);
     group.add(g);
@@ -874,8 +883,15 @@ export function Viewport({
       }
       handle.position.set(...best);
     };
-    if (!sliceDragRef.current) rebuild(slicePreview.z);
-    placeHandle(sliceDragRef.current?.z ?? slicePreview.z);
+    // always draw at the CURRENT plane height — during a drag that's the
+    // drag's z (the live box update re-runs this effect, and a skipped
+    // rebuild would flash the overlay off for a frame)
+    const zNow = sliceDragRef.current?.z ?? slicePreview.z;
+    rebuild(zNow);
+    placeHandle(zNow);
+    // pending drag frames apply through the ref so they always target
+    // the LIVE group, never a disposed previous instance
+    sliceFnsRef.current = { rebuild, placeHandle };
 
     // ---- the drag ----
     const raycaster = new THREE.Raycaster();
@@ -888,7 +904,7 @@ export function Viewport({
         ),
         camera,
       );
-      return raycaster.intersectObject(handle, false).length > 0;
+      return raycaster.intersectObject(handle, true).length > 0;
     };
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0 || sliceDragRef.current || !hoverHandle(e)) return;
@@ -917,8 +933,11 @@ export function Viewport({
       if (d.raf === 0) {
         d.raf = requestAnimationFrame(() => {
           d.raf = 0;
-          rebuild(d.z);
-          placeHandle(d.z);
+          const fns = sliceFnsRef.current;
+          if (fns) {
+            fns.rebuild(d.z);
+            fns.placeHandle(d.z);
+          }
           slicePreview.onZChange(d.z);
         });
       }
@@ -946,7 +965,9 @@ export function Viewport({
       // mid-gesture: the fresh effect re-adds listeners that continue via
       // sliceDragRef, and onUp restores the controls when the user lets
       // go. Only a true unmount has no fresh run (the unmount-only effect
-      // below handles that).
+      // below handles that). Drop the fns only if WE are still the live
+      // instance — a newer effect run has already replaced them.
+      if (sliceFnsRef.current?.rebuild === rebuild) sliceFnsRef.current = null;
       group.remove(g);
       disposeGroup(g);
     };
