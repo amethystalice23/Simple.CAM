@@ -50,6 +50,10 @@ export function normalizeStock(stock: Stock): Stock {
  */
 export function normalizeJobOps(ops: JobOp[]): JobOp[] {
   return ops.map((op) => {
+    // pre-⇩ saves carry no floorFeatureId — detached is the null default
+    if (op.kind === 'pocket' || op.kind === 'profile') {
+      return op.floorFeatureId === undefined ? { ...op, floorFeatureId: null } : op;
+    }
     if (op.kind === 'chamfer') {
       // ops saved before all four fields existed (or by a mid-build dev
       // state) carry undefined values — the panel select then displays the

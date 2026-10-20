@@ -73,6 +73,7 @@ describe('indexed job flow: top pocket, index 180, bottom pocket', () => {
       allowance: 0,
       stepDown: 1,
       stepOver: 1,
+      floorFeatureId: null,
     },
     { id: 'idx', toolId: 't3', featureIds: [], kind: 'index', angle: 180 },
     {
@@ -86,6 +87,7 @@ describe('indexed job flow: top pocket, index 180, bottom pocket', () => {
       allowance: 0,
       stepDown: 1,
       stepOver: 1,
+      floorFeatureId: null,
     },
   ];
 

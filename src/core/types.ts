@@ -486,6 +486,13 @@ export type JobOp =
       allowance: number;
       stepDown: number;
       stepOver: number;
+      /**
+       * The ⇩ floor pick (edge-tracing §5): a live-linked plane/circle whose
+       * Z drives endDepth (its depth-in-frame, so indexed datums are
+       * respected) until the end-depth box is hand-edited — which nulls it.
+       * Null = detached (a plain number).
+       */
+      floorFeatureId: string | null;
     })
   | (JobOpBase & {
       kind: 'drill';
@@ -518,6 +525,8 @@ export type JobOp =
       allowance: number;
       stepDown: number;
       side: 'outside' | 'inside' | 'online';
+      /** the ⇩ floor pick — see the pocket variant */
+      floorFeatureId: string | null;
     });
 
 export interface Vec3 {

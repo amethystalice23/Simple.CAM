@@ -94,6 +94,7 @@ const pocketOp: Extract<JobOp, { kind: 'pocket' }> = {
   allowance: 0,
   stepDown: 0.5,
   stepOver: 1,
+  floorFeatureId: null,
 };
 const drillOp: Extract<JobOp, { kind: 'drill' }> = {
   id: 'op2',
@@ -114,6 +115,7 @@ const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   allowance: 0,
   stepDown: 0.5,
   side: 'online',
+  floorFeatureId: null,
 };
 
 describe('newJobOp / defaults', () => {
@@ -845,5 +847,25 @@ describe('per-op cutting-rate overrides (rates)', () => {
     };
     const indexed = generateJobOp(indexOp, { ...ctx, stock: boxStock4 });
     expect(indexed.moves[0].spindleRpm).toBeUndefined();
+  });
+});
+
+describe('⇩ floor pick (floorFeatureId)', () => {
+  it('new ops start detached', () => {
+    const op = newJobOp('pocket', tool, boxStock.materialId, boxStock);
+    if (op.kind !== 'pocket') throw new Error('kind');
+    expect(op.floorFeatureId).toBeNull();
+  });
+
+  it('generation is unchanged while the link resolves', () => {
+    const linked = generateJobOp({ ...pocketOp, floorFeatureId: holeCircleId }, ctx);
+    expect(linked.error).toBeNull();
+    expect(linked.moves.length).toBeGreaterThan(0);
+  });
+
+  it('a dangling floor feature fails visibly with the reselect message', () => {
+    const res = generateJobOp({ ...pocketOp, floorFeatureId: 'p:prim-gone:circle-x' }, ctx);
+    expect(res.error).toContain('no longer exist');
+    expect(res.moves).toEqual([]);
   });
 });

@@ -36,6 +36,10 @@ interface Props {
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   /** compute the index angle that brings the op's selection to face the cutter */
   onIndexToSelection: (op: JobOp) => void;
+  /** ⇩ floor pick (edge-tracing §5): link the selected plane/circle as the
+   * op's floor — enabled when exactly one is selected */
+  floorCandidate: boolean;
+  onFloorPick: (op: JobOp) => void;
   /** ops whose toolpath is hidden from the preview (the g-code keeps them) */
   hiddenOps: ReadonlySet<string>;
   onToggleVisible: (id: string) => void;
@@ -57,10 +61,18 @@ function selectionSnippet(op: JobOp, labels: Record<string, string>): string {
 }
 
 /** The floor/rim selector with the depth boxes it prefiles. */
+/** The floor/rim selector with the depth boxes it prefiles. The ⇩ pick
+ * (edge-tracing §5) links a selected plane/circle as the floor: it drives
+ * end depth live until the box is hand-edited, which detaches it. */
 function DepthFields(props: {
   op: Extract<JobOp, { kind: 'pocket' | 'profile' }>;
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
+  /** a single plane/circle is selected in measure mode — the ⇩ is enabled */
+  floorCandidate: boolean;
+  onFloorPick: (op: JobOp) => void;
+  /** the linked floor feature's short label, for the provenance hint */
+  floorLabel: string | null;
 }) {
   const { op } = props;
   const upd = (patch: Partial<typeof op>) =>
@@ -87,8 +99,20 @@ function DepthFields(props: {
         label="End depth (mm)"
         value={op.endDepth}
         min={0.1}
-        onCommit={(v) => upd({ endDepth: v })}
+        // a hand edit detaches the ⇩ floor link — the number wins
+        onCommit={(v) => upd({ endDepth: v, floorFeatureId: null })}
       />
+      <div className="buttons">
+        <button
+          type="button"
+          className="icon-btn"
+          title="Set the cut floor from the selected face — its Z drives the end depth until you edit the box"
+          disabled={!props.floorCandidate}
+          onClick={() => props.onFloorPick(op)}
+        >
+          ⇩
+        </button>
+      </div>
       <NumberField
         label="Allowance (mm)"
         value={op.allowance}
@@ -99,6 +123,8 @@ function DepthFields(props: {
       <p className="hint">
         depths are below the stock top · start = end → single finishing pass · allowance = stock
         left for finishing
+        {op.floorFeatureId !== null &&
+          ` · floor: ${props.floorLabel ?? 'linked feature'} (moves with the model)`}
       </p>
     </>
   );
@@ -209,6 +235,10 @@ function ParamFields(props: {
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   onIndexToSelection: (op: JobOp) => void;
+  /** ⇩ floor pick (edge-tracing §5) — see DepthFields */
+  floorCandidate: boolean;
+  onFloorPick: (op: JobOp) => void;
+  floorLabel: string | null;
 }) {
   const { op, onChange } = props;
   const upd = (patch: Partial<JobOp>) => onChange({ ...op, ...patch } as JobOp);
@@ -298,7 +328,14 @@ function ParamFields(props: {
     case 'pocket':
       return (
         <>
-          <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
+          <DepthFields
+            op={op}
+            onChange={props.onChange}
+            onSelectionIsChange={props.onSelectionIsChange}
+            floorCandidate={props.floorCandidate}
+            onFloorPick={props.onFloorPick}
+            floorLabel={props.floorLabel}
+          />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
@@ -324,7 +361,14 @@ function ParamFields(props: {
               <option value="online">on line</option>
             </select>
           </label>
-          <DepthFields op={op} onChange={props.onChange} onSelectionIsChange={props.onSelectionIsChange} />
+          <DepthFields
+            op={op}
+            onChange={props.onChange}
+            onSelectionIsChange={props.onSelectionIsChange}
+            floorCandidate={props.floorCandidate}
+            onFloorPick={props.onFloorPick}
+            floorLabel={props.floorLabel}
+          />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
         </>
       );
@@ -561,6 +605,13 @@ export function OpsPanel(props: Props) {
                     onChange={props.onChangeOp}
                     onSelectionIsChange={props.onSelectionIsChange}
                     onIndexToSelection={props.onIndexToSelection}
+                    floorCandidate={props.floorCandidate}
+                    onFloorPick={props.onFloorPick}
+                    floorLabel={
+                      (op.kind === 'pocket' || op.kind === 'profile') && op.floorFeatureId !== null
+                        ? (props.featureLabels[op.floorFeatureId] ?? null)
+                        : null
+                    }
                   />
                   {gen?.error && <p className="error">{gen.error}</p>}
                   {gen?.summary && <p className="hint">{gen.summary}</p>}

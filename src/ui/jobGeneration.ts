@@ -31,7 +31,7 @@ import type {
 } from '../core/types';
 import { rotaryCalibrationOf } from '../core/types';
 import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
-import { splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
+import { resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { stockSpan, stockTopZ } from './placement';
 
 export interface GeneratedOp {
@@ -137,6 +137,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         allowance: 0,
         stepDown,
         stepOver: defaultStepOver(tool),
+        floorFeatureId: null,
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
@@ -154,6 +155,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         allowance: 0,
         stepDown,
         side: 'outside',
+        floorFeatureId: null,
       };
   }
 }
@@ -319,6 +321,14 @@ function selectionAcrossSources(
  * `S<rpm> M3` line at every op boundary where the speed changes.
  */
 export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
+  // a dangling ⇩ floor pick fails visibly (the standard reselect path)
+  if (
+    (op.kind === 'pocket' || op.kind === 'profile') &&
+    op.floorFeatureId !== null &&
+    !resolveFeature(ctx.sources, op.floorFeatureId)
+  ) {
+    return fail('the floor feature no longer exists — reselect');
+  }
   const res = generateJobOpInner(op, ctx);
   if (op.kind === 'index' || res.moves.length === 0) return res;
   const rpm = op.rates?.spindleRpm ?? ctx.tools.find((t) => t.id === op.toolId)?.spindleRpm;

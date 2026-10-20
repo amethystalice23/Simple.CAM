@@ -40,6 +40,7 @@ const ops: JobOp[] = [
     allowance: 0,
     stepDown: 0.5,
     stepOver: 3,
+    floorFeatureId: null,
   },
 ];
 
@@ -145,6 +146,37 @@ describe('parseJobFile', () => {
     expect(() => parseJobFile(newer)).toThrowError(/newer/);
     const gutted = JSON.stringify({ format: JOB_FORMAT, version: JOB_VERSION, ops: [] });
     expect(() => parseJobFile(gutted)).toThrowError(/missing required sections/);
+  });
+
+  it('normalizes legacy floor picks (absent → null) and round-trips a set one', () => {
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops,
+      tools,
+      modelName: 'part.stl',
+      modelBytes: new Uint8Array([9, 9]),
+    });
+    // strip the key entirely — a pre-⇩ save carries nothing
+    const raw = JSON.parse(JSON.stringify(file)) as { ops: JobOp[] };
+    delete (raw.ops[0] as { floorFeatureId?: string | null }).floorFeatureId;
+    const parsed = parseJobFile(JSON.stringify(raw));
+    if (parsed.ops[0].kind !== 'pocket') throw new Error('kind');
+    expect(parsed.ops[0].floorFeatureId).toBeNull();
+    // a linked floor survives the round trip
+    const linked = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops: [{ ...ops[0], floorFeatureId: 'circle-ff' } as JobOp],
+      tools,
+      modelName: 'part.stl',
+      modelBytes: new Uint8Array([9, 9]),
+    });
+    const reloaded = parseJobFile(JSON.stringify(linked)).ops[0];
+    if (reloaded.kind !== 'pocket') throw new Error('kind');
+    expect(reloaded.floorFeatureId).toBe('circle-ff');
   });
 
   it('normalizes legacy face patterns: zigzag and missing both map to spiral', () => {

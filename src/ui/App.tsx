@@ -379,6 +379,48 @@ export function App() {
     setOps((prev) => prev.map((o) => (o.id === op.id ? { ...o, angle } : o)));
   };
 
+  // ---- the ⇩ floor pick (edge-tracing §5) ----
+
+  /** exactly one plane/circle selected in measure mode → a valid floor pick */
+  const floorCandidate = selection.length === 1 && featureMachinePoint(selection[0]) !== null;
+
+  /** the selection becomes the op's floor: live-linked, drives end depth */
+  const floorFromSelection = (op: JobOp) => {
+    if (!floorCandidate || (op.kind !== 'pocket' && op.kind !== 'profile')) return;
+    const id = selection[0];
+    const p = featureMachinePoint(id);
+    if (!p) return;
+    const endDepth = Math.max(stockTopZ(stock) - featureDepthInFrame(op, p), 0.3);
+    setOps((prev) =>
+      prev.map((o) =>
+        o.id === op.id && (o.kind === 'pocket' || o.kind === 'profile')
+          ? ({ ...o, endDepth, floorFeatureId: id } as JobOp)
+          : o,
+      ),
+    );
+  };
+
+  /** the floor link stays live: model/primitive moves update every linked
+   * op's end depth (guarded — identical values don't re-set state) */
+  useEffect(() => {
+    const crown = stockTopZ(stock);
+    let changed = false;
+    const next = ops.map((o) => {
+      if ((o.kind === 'pocket' || o.kind === 'profile') && o.floorFeatureId !== null) {
+        const p = featureMachinePoint(o.floorFeatureId);
+        if (p) {
+          const endDepth = Math.max(crown - featureDepthInFrame(o, p), 0.3);
+          if (Math.abs(endDepth - o.endDepth) > 1e-9) {
+            changed = true;
+            return { ...o, endDepth } as JobOp;
+          }
+        }
+      }
+      return o;
+    });
+    if (changed) setOps(next);
+  }, [ops, sources, stock]);
+
   useEffect(() => {
     try {
       localStorage.setItem(TOOL_STORAGE_KEY, JSON.stringify({ v: 1, tools }));
@@ -712,6 +754,8 @@ export function App() {
                 }}
                 onSelectionIsChange={changeSelectionIs}
                 onIndexToSelection={indexToSelection}
+                floorCandidate={floorCandidate}
+                onFloorPick={floorFromSelection}
                 onDeleteOp={(id) => {
                   setOps((prev) => prev.filter((o) => o.id !== id));
                   setGenerated((prev) => {
