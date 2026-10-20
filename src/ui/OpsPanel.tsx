@@ -1,7 +1,14 @@
 import { useState } from 'react';
-import type { AxisMode, JobOp, Primitive, Stock, Tool } from '../core/types';
+import type { AxisMode, JobOp, OpRates, Primitive, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
-import { defaultFaceStepOver, defaultStepDown, defaultStepOver, newJobOp, OP_KINDS } from './jobGeneration';
+import {
+  defaultFaceStepOver,
+  defaultStepDown,
+  defaultStepOver,
+  newJobOp,
+  OP_KINDS,
+  presetRates,
+} from './jobGeneration';
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
 import { NumberField } from './fields';
 
@@ -130,6 +137,65 @@ function IndexFields(props: {
         the stock freezes at this A — every op below runs in the rotated frame
       </p>
     </>
+  );
+}
+
+/** Cutting-rate overrides for one op — the optional popup behind the ⚡
+ * button. The boxes show the effective values (an override, else the tool +
+ * stock-material presets, i.e. the Tools-tab values); editing a box sets
+ * that override, "Use tool defaults" clears them all. */
+function RatesPopup(props: {
+  op: JobOp;
+  tool?: Tool;
+  materialId: string;
+  onChange: (op: JobOp) => void;
+}) {
+  const { op, tool } = props;
+  if (!tool) {
+    return <p className="hint">tool missing from the library — fix the Tool select first</p>;
+  }
+  const defaults = presetRates(op.kind, tool, props.materialId);
+  const rates = op.rates ?? {};
+  const setRate = (patch: Partial<OpRates>) =>
+    props.onChange({ ...op, rates: { ...rates, ...patch } });
+  return (
+    <div className="op-rates">
+      <p className="hint">
+        defaults come from the tool + stock material presets — edit only what this one op
+        needs; an edited box overrides the tool default until reset
+      </p>
+      <NumberField
+        label="Feed (mm/min)"
+        value={rates.feed ?? defaults.feed}
+        min={1}
+        step={10}
+        onCommit={(v) => setRate({ feed: v })}
+      />
+      <NumberField
+        label="Plunge (mm/min)"
+        value={rates.plungeFeed ?? defaults.plungeFeed}
+        min={1}
+        step={10}
+        onCommit={(v) => setRate({ plungeFeed: v })}
+      />
+      <NumberField
+        label="Spindle (rpm)"
+        value={rates.spindleRpm ?? defaults.spindleRpm}
+        min={100}
+        step={1000}
+        onCommit={(v) => setRate({ spindleRpm: v })}
+      />
+      <div className="buttons">
+        <button
+          type="button"
+          className="secondary"
+          disabled={!op.rates}
+          onClick={() => props.onChange({ ...op, rates: undefined })}
+        >
+          Use tool defaults
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -323,6 +389,8 @@ function ParamFields(props: {
 
 export function OpsPanel(props: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
+  /** the op whose feeds & speeds popup is open (one at a time) */
+  const [ratesOpenId, setRatesOpenId] = useState<string | null>(null);
 
   /** tool change re-derives the step defaults for the new cutter */
   const changeTool = (op: JobOp, toolId: string) => {
@@ -436,18 +504,40 @@ export function OpsPanel(props: Props) {
               </div>
               {expanded && (
                 <div className="op-body">
-                  {op.kind !== 'faceCylinder' && (
+                  {op.kind !== 'index' && (
                     <div className="buttons">
+                      {op.kind !== 'faceCylinder' && (
+                        <button
+                          type="button"
+                          className={editing ? '' : 'secondary'}
+                          onClick={() => props.onSelectFeatures(editing ? null : op.id)}
+                        >
+                          {editing
+                            ? `Selecting… click features in the viewport (${op.featureIds.length})`
+                            : `Select features (${op.featureIds.length})`}
+                        </button>
+                      )}
                       <button
                         type="button"
-                        className={editing ? '' : 'secondary'}
-                        onClick={() => props.onSelectFeatures(editing ? null : op.id)}
+                        className={`icon-btn${op.rates ? ' has-rates' : ''}${
+                          ratesOpenId === op.id ? ' active' : ''
+                        }`}
+                        title="Feeds & speeds for this operation — defaults from the Tools tab"
+                        onClick={() =>
+                          setRatesOpenId(ratesOpenId === op.id ? null : op.id)
+                        }
                       >
-                        {editing
-                          ? `Selecting… click features in the viewport (${op.featureIds.length})`
-                          : `Select features (${op.featureIds.length})`}
+                        ⚡
                       </button>
                     </div>
+                  )}
+                  {ratesOpenId === op.id && op.kind !== 'index' && (
+                    <RatesPopup
+                      op={op}
+                      tool={props.tools.find((t) => t.id === op.toolId)}
+                      materialId={props.materialId}
+                      onChange={props.onChangeOp}
+                    />
                   )}
                   <label className="field">
                     <span>Tool</span>

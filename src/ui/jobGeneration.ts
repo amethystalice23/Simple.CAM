@@ -22,6 +22,7 @@ import type {
   JobOp,
   ModelTransform,
   Move,
+  OpRates,
   Primitive,
   Stock,
   Tool,
@@ -184,13 +185,67 @@ export function toolPresetFor(tool: Tool, materialId: string): ToolPreset | null
 }
 
 /** Feeds for an op: the tool's own preset for the stock material wins,
- * else the material-preset tables. */
-function feedsFor(tool: Tool, material: MaterialPreset) {
+ * else the material-preset tables; per-op overrides win over both. */
+function feedsFor(tool: Tool, material: MaterialPreset, rates?: OpRates) {
   const preset = toolPresetFor(tool, material.id);
-  const feed = preset?.feed ?? material.feedByTool[tool.type];
+  const feed = rates?.feed ?? preset?.feed ?? material.feedByTool[tool.type];
   const plungeFeed =
-    preset?.plungeFeed ?? Math.round(material.feedByTool[tool.type] * material.plungeFraction);
+    rates?.plungeFeed ??
+    preset?.plungeFeed ??
+    Math.round(material.feedByTool[tool.type] * material.plungeFraction);
   return { feed, plungeFeed };
+}
+
+/**
+ * The rates the ops-panel popup shows as this op's defaults — EXACTLY what
+ * generation uses when the op has no `rates` overrides. Drill plunges at
+ * the preset drill feed (no plunge fraction); spindle comes from the
+ * tool's Tools-tab value.
+ */
+export function presetRates(
+  kind: JobOp['kind'],
+  tool: Tool,
+  materialId: string,
+): { feed: number; plungeFeed: number; spindleRpm: number } {
+  const material = getMaterial(materialId);
+  const { feed, plungeFeed } = feedsFor(tool, material);
+  return {
+    feed,
+    plungeFeed:
+      kind === 'drill'
+        ? (toolPresetFor(tool, material.id)?.plungeFeed ?? material.feedByTool.drill)
+        : plungeFeed,
+    spindleRpm: tool.spindleRpm,
+  };
+}
+
+/**
+ * Inline g-code note for an op's rate overrides (appended to its first
+ * move's comment): the feed/plunge overrides change the emitted F words
+ * themselves, but the post has no verified spindle-start command yet
+ * (src/post/carvera.ts TODO), so the spindle override travels as a
+ * comment the operator can see at the op boundary. Null when nothing is
+ * overridden.
+ */
+export function ratesNote(op: JobOp): string | null {
+  const r = op.rates;
+  if (!r) return null;
+  const parts: string[] = [];
+  if (r.feed !== undefined) parts.push(`feed ${r.feed} mm/min`);
+  if (r.plungeFeed !== undefined) parts.push(`plunge ${r.plungeFeed} mm/min`);
+  if (r.spindleRpm !== undefined) parts.push(`spindle ${r.spindleRpm} rpm`);
+  return parts.length > 0 ? `rates: ${parts.join(', ')} (overrides tool defaults)` : null;
+}
+
+/** The op's moves with the rates note (if any) on the first move's comment. */
+export function movesWithRatesNote(moves: Move[], op: JobOp): Move[] {
+  const note = ratesNote(op);
+  if (!note || moves.length === 0) return moves;
+  const first = moves[0];
+  return [
+    { ...first, comment: first.comment ? `${first.comment} — ${note}` : note },
+    ...moves.slice(1),
+  ];
 }
 
 /**
@@ -293,7 +348,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
     const tool = ctx.tools.find((t) => t.id === op.toolId);
     if (!tool) return fail('tool missing from library');
     const material = getMaterial(ctx.stock.materialId);
-    const { feed, plungeFeed } = feedsFor(tool, material);
+    const { feed, plungeFeed } = feedsFor(tool, material, op.rates);
 
     switch (op.kind) {
       case 'index': {
@@ -447,7 +502,10 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             toolId: tool.id,
             targets,
             peckDepth: op.peckDepth,
-            plungeFeed: toolPresetFor(tool, material.id)?.plungeFeed ?? material.feedByTool.drill,
+            plungeFeed:
+              op.rates?.plungeFeed ??
+              toolPresetFor(tool, material.id)?.plungeFeed ??
+              material.feedByTool.drill,
             safeClearance: 5,
           },
           tool,

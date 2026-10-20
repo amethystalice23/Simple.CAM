@@ -32,6 +32,7 @@ import {
 import {
   datumAngleBefore,
   generateJobOp,
+  movesWithRatesNote,
   newJobOp,
   prefillDepths,
   seedJobOpIds,
@@ -259,7 +260,7 @@ export function App() {
   /** combined preview + gcode for the whole job, from per-op results; the
    * preview shows only ops not hidden, the g-code includes everything */
   const updateJobOutput = (results: Record<string, GeneratedOp>, hidden: ReadonlySet<string> = hiddenOps) => {
-    const allMoves = ops.flatMap((o) => results[o.id]?.moves ?? []);
+    const allMoves = ops.flatMap((o) => movesWithRatesNote(results[o.id]?.moves ?? [], o));
     const shownMoves = ops
       .filter((o) => !hidden.has(o.id))
       .flatMap((o) => results[o.id]?.moves ?? []);

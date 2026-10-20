@@ -11,8 +11,10 @@ import {
   defaultStepDown,
   defaultStepOver,
   generateJobOp,
+  movesWithRatesNote,
   newJobOp,
   prefillDepths,
+  presetRates,
   seedJobOpIds,
   type GenContext,
 } from '../jobGeneration';
@@ -771,5 +773,71 @@ describe('generateJobOp: primitive feature sources', () => {
       { ...ctx, geometry: null, features: null, sources: boxSources },
     );
     expect(res.error).toContain('select holes');
+  });
+});
+
+describe('per-op cutting-rate overrides (rates)', () => {
+  it('presetRates: exactly what generation uses when nothing is overridden', () => {
+    // 2mm flat on aluminum: material-table feed, plunge = feed × plungeFraction
+    expect(presetRates('pocket', smallTool, boxStock.materialId)).toEqual({
+      feed: 420,
+      plungeFeed: 139, // round(420 × 0.33)
+      spindleRpm: 18000, // the Tools-tab value
+    });
+    // drill plunges at the full preset drill feed — no plunge fraction
+    expect(presetRates('drill', drillTool, boxStock.materialId)).toEqual({
+      feed: 200,
+      plungeFeed: 200,
+      spindleRpm: 18000,
+    });
+  });
+
+  it('overrides replace the preset feeds in the generated moves', () => {
+    const base = generateJobOp(pocketOp, ctx);
+    const overridden = generateJobOp(
+      { ...pocketOp, rates: { feed: 300, plungeFeed: 90 } },
+      ctx,
+    );
+    expect(overridden.error).toBeNull();
+    const feeds = (g: ReturnType<typeof generateJobOp>) =>
+      new Set(g.moves.filter((m) => !m.rapid).map((m) => m.feed));
+    expect(feeds(overridden)).toContain(300); // XY cuts
+    expect(feeds(overridden)).toContain(90); // plunges
+    expect(feeds(base)).not.toContain(300);
+    expect(feeds(base)).not.toContain(90);
+  });
+
+  it('drill plunge override wins over the preset drill feed', () => {
+    const overridden = generateJobOp({ ...drillOp, rates: { plungeFeed: 80 } }, ctx);
+    expect(overridden.error).toBeNull();
+    const feeds = new Set(overridden.moves.filter((m) => !m.rapid).map((m) => m.feed));
+    expect(feeds).toContain(80);
+    expect(feeds).not.toContain(200); // the aluminum drill-table preset
+  });
+
+  it('a spindle-only override leaves the moves on the tool defaults', () => {
+    const base = generateJobOp(pocketOp, ctx);
+    const g = generateJobOp({ ...pocketOp, rates: { spindleRpm: 12000 } }, ctx);
+    expect(g.moves).toEqual(base.moves);
+  });
+
+  it('movesWithRatesNote: overrides travel into the g-code on the first move', () => {
+    const moves = generateJobOp(pocketOp, ctx).moves;
+    // nothing overridden → untouched
+    expect(movesWithRatesNote(moves, pocketOp)).toBe(moves);
+    // spindle (or any rate) set → note appended, rest untouched
+    const withNote = movesWithRatesNote(moves, {
+      ...pocketOp,
+      rates: { spindleRpm: 12000 },
+    });
+    expect(withNote).toHaveLength(moves.length);
+    expect(withNote[0].comment).toContain('spindle 12000 rpm');
+    expect(withNote.slice(1)).toEqual(moves.slice(1));
+    // an existing first-move comment is kept, not replaced
+    const merged = movesWithRatesNote(
+      [{ ...moves[0], comment: 'first cut' }],
+      { ...pocketOp, rates: { feed: 300 } },
+    );
+    expect(merged[0].comment).toBe('first cut — rates: feed 300 mm/min (overrides tool defaults)');
   });
 });

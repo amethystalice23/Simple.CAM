@@ -106,6 +106,38 @@ describe('parseJobFile', () => {
     expect(decodeStl(parsed.model!.stlBase64)).toEqual(new Uint8Array([9, 9]));
   });
 
+  it('round-trips per-op rate overrides, and absent rates stay absent', () => {
+    const withRates: JobOp[] = [
+      { ...ops[0], id: 'jobop-2', rates: { feed: 300, spindleRpm: 12000 } },
+    ];
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops: withRates,
+      tools,
+      modelName: 'part.stl',
+      modelBytes: new Uint8Array([9, 9]),
+    });
+    const parsed = parseJobFile(JSON.stringify(file));
+    expect(parsed.ops[0].rates).toEqual({ feed: 300, spindleRpm: 12000 });
+    // a job saved before the popup existed loads with rates simply absent
+    const plain = parseJobFile(
+      JSON.stringify(
+        saveJobFile({
+          stock: boxStock,
+          transform: identityTransform(),
+          primitives: [],
+          ops,
+          tools,
+          modelName: 'part.stl',
+          modelBytes: new Uint8Array([9, 9]),
+        }),
+      ),
+    );
+    expect(plain.ops[0].rates).toBeUndefined();
+  });
+
   it('rejects foreign files and newer formats', () => {
     expect(() => parseJobFile('{"format":"something else"}')).toThrowError(/not a simple/);
     expect(() => parseJobFile('not json at all')).toThrowError();

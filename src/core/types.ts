@@ -405,13 +405,32 @@ export type Operation = FaceCylinderOp | PocketOp | DrillOp | ProfileOp | Chamfe
  * An operation in the job sequence: user-editable state that generation
  * resolves against the selection, stock, and tool (src/ui/jobGeneration.ts).
  * Feeds/step-downs come from material presets × tool type at generation
- * time; these fields are only the per-type parameters worth exposing.
+ * time — per-type parameters worth exposing live here, and cutting-rate
+ * deviations from the tool defaults live in `rates`.
  */
 export interface JobOpBase {
   id: string;
   toolId: string;
   /** selected feature ids feeding this op */
   featureIds: string[];
+  /**
+   * Per-op cutting-rate overrides — "this one operation is a bit different".
+   * Unset fields fall back to the tool + stock-material preset values (the
+   * Tools tab) at generation time; the ops-panel popup edits these. Kept on
+   * a tool change on purpose (the popup shows the deviation from the new
+   * tool's defaults); job files carry it as-is.
+   */
+  rates?: OpRates;
+}
+
+export interface OpRates {
+  /** XY cut feed, mm/min (G94) */
+  feed?: number;
+  /** plunge feed, mm/min (G94) */
+  plungeFeed?: number;
+  /** spindle speed, RPM (surfaces in the op's g-code as a comment — the
+   * post has no verified spindle-start command yet) */
+  spindleRpm?: number;
 }
 
 export type JobOp =

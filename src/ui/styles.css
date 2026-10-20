@@ -225,7 +225,19 @@ button.secondary:disabled:hover { background: #31373e; }
 /* the eye toggle of a hidden toolpath */
 .icon-btn.dim { color: #5a636b; }
 .icon-btn.dim:hover { color: #9aa4ad; }
+/* feeds & speeds: open state, and the at-a-glance "this op deviates" accent */
+.icon-btn.active { background: #31373e; color: #fff; }
+.icon-btn.has-rates { color: #f0c050; }
+.icon-btn.has-rates:hover { color: #ffd27f; }
 .op-body { padding: 6px 8px 10px; border-top: 1px solid #262b30; }
+/* the per-op feeds & speeds popup — a quiet inset panel, not a modal */
+.op-rates {
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  background: #1b1f24;
+  padding: 8px;
+  margin: 8px 0 0;
+}
 
 .subhead {
   font-size: 11px;
