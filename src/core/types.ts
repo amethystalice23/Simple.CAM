@@ -282,6 +282,9 @@ export interface ThreadOp {
   rotation: 'cw' | 'ccw';
   /** G94 plunge feed at the start entries */
   plungeFeed: number;
+  /** the surface the depth ladder starts from, mm Ø — the faced crest
+   * Ø when a facing op precedes; null = the stock surface */
+  surfaceDiameter: number | null;
 }
 
 export interface Vec2 {
@@ -558,6 +561,9 @@ export type JobOp =
       /** depth-per-level ladder for the grooves, mm */
       stepDown: number;
       rotation: 'cw' | 'ccw';
+      /** the surface the ladder starts from (the faced crest Ø when a
+       * facing op precedes); null = the stock surface */
+      surfaceDiameter: number | null;
     })
   | (JobOpBase & {
       kind: 'index';

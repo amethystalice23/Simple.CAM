@@ -26,6 +26,7 @@ const op: ThreadOp = {
   stepDown: 0.5,
   rotation: 'cw',
   plungeFeed: 100,
+  surfaceDiameter: null,
 };
 
 describe('thread geometry helpers', () => {
@@ -73,6 +74,16 @@ describe('thread', () => {
     // lead 4mm: half the A advance of the single start, negative for cw
     const sweep = res.moves.find((m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined)!;
     expect(sweep.words.a!).toBeCloseTo(-(20 / 4) * 360, 6);
+  });
+
+  it('surfaceDiameter sets where the ladder starts — no air levels after a facing op', () => {
+    // faced to the crest Ø (nominal 20, tolerance 0 → root R 9.5): the
+    // ladder is exactly the groove depth, not the stock surplus
+    const faced = thread({ ...op, surfaceDiameter: 20 }, cal, vbit, 0);
+    const raw = thread({ ...op }, cal, vbit, 0);
+    expect(faced.passes).toBeLessThan(raw.passes);
+    // depth 0.25 at stepDown 0.25 → 1 level + spring = 2 sweeps
+    expect(faced.passes).toBe(2);
   });
 
   it('tolerance shrinks teeth: deeper grooves and a smaller crest', () => {

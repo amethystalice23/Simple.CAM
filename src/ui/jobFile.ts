@@ -51,6 +51,13 @@ export function normalizeStock(stock: Stock): Stock {
  */
 export function normalizeJobOps(ops: JobOp[]): JobOp[] {
   return ops.map((op) => {
+    // pre-surfaceDiameter thread saves: ladder from the stock surface
+    if (op.kind === 'thread') {
+      const rawSurf = (op as { surfaceDiameter?: unknown }).surfaceDiameter;
+      if (typeof rawSurf !== 'number' && rawSurf !== null) {
+        return { ...op, surfaceDiameter: null } as JobOp;
+      }
+    }
     // pre-⇩ saves carry no floorFeatureId — detached is the null default
     if (isDepthBearingJobOp(op)) {
       const normalized = op.floorFeatureId === undefined ? { ...op, floorFeatureId: null } : op;

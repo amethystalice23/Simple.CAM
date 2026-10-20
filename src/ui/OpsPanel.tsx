@@ -1,5 +1,10 @@
 import { useState } from 'react';
-import { isDepthBearingJobOp, type DepthBearingJobOp, type FeaturePickKind } from '../core/types';
+import {
+  isDepthBearingJobOp,
+  rotaryCalibrationOf,
+  type DepthBearingJobOp,
+  type FeaturePickKind,
+} from '../core/types';
 import type { AxisMode, JobOp, OpRates, Primitive, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import {
@@ -247,6 +252,8 @@ function RatesPopup(props: {
 function ParamFields(props: {
   op: JobOp;
   axisMode: AxisMode;
+  /** the stock object — new ops derive their defaults from it */
+  stock: Stock;
   primitives: Primitive[];
   /** the op's own tool (undefined if its id dangles after a library edit) */
   tool?: Tool;
@@ -518,6 +525,14 @@ function ParamFields(props: {
           <NumberField label="Starts" value={op.starts} min={1} step={1} onCommit={(v) => upd({ starts: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
           <NumberField label="Tolerance (mm)" value={op.tolerance} min={0} step={0.05} onCommit={(v) => upd({ tolerance: Math.max(v, 0) } as Partial<JobOp>)} />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField
+            // null = the stock surface; show the stock Ø until set
+            label="Surface Ø (mm)"
+            value={op.surfaceDiameter ?? rotaryCalibrationOf(props.stock).effectiveRadius * 2}
+            min={0.1}
+            step={0.1}
+            onCommit={(v) => upd({ surfaceDiameter: v } as Partial<JobOp>)}
+          />
           <label className="field">
             <span>Rotation</span>
             <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
@@ -830,6 +845,7 @@ export function OpsPanel(props: Props) {
                   <ParamFields
                     op={op}
                     axisMode={props.axisMode}
+                    stock={props.stock}
                     primitives={props.primitives}
                     tool={props.tools.find((t) => t.id === op.toolId)}
                     onChange={props.onChangeOp}

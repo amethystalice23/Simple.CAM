@@ -65,10 +65,10 @@ export function thread(
   const faceDiameter = threadFaceDiameter(op.nominalDiameter, op.tolerance);
   const rootR = faceDiameter / 2 - depth;
   if (rootR <= 0) throw new Error('the groove depth exceeds the thread radius — nothing would remain');
-  // the ladder starts at the STOCK surface (a separate facing op, when
-  // the user adds one, brings it to the crest Ø first) — surplus stock
-  // simply becomes extra levels
-  const startR = stockR;
+  // the ladder starts at the STOCK surface by default; when a facing op
+  // precedes (or the rod was pre-turned), `surfaceDiameter` says where
+  // the surface actually is — saving the air levels in between
+  const startR = op.surfaceDiameter !== null ? op.surfaceDiameter / 2 : stockR;
   if (rootR >= startR) {
     throw new Error(
       'the stock is at or below the thread root — nothing to cut (add the facing toolpath, or check the nominal Ø)',

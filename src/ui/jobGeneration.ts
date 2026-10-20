@@ -180,6 +180,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         tolerance: 0,
         stepDown,
         rotation: 'cw',
+        surfaceDiameter: null, // ladder from the stock surface
       };
     }
     case 'pocket':
@@ -585,6 +586,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
               stepDown: op.stepDown,
               rotation: op.rotation,
               plungeFeed,
+              surfaceDiameter: op.surfaceDiameter,
             },
             rotaryCalibrationOf(ctx.stock),
             tool,
