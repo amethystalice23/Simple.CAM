@@ -116,6 +116,40 @@ describe('carvera post-processor', () => {
     expect(gcode).toContain('; G10 L20 P0 A0');
   });
 
+  it('emits tool headers in Makera’s @MKR tag format', () => {
+    // tag names verified in MakeraStudio (reference/notes)
+    expect(gcode).toContain(
+      ';@MKR|TOOL|number=1|name=6mm flat|diameter=6.000|type=flat',
+    );
+  });
+
+  it('starts the spindle with Makera’s S<rpm> M3 line, only on speed change', () => {
+    const cut = postCarvera({
+      moves: [
+        { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000 },
+        { words: { z: -1 }, feed: 200 },
+        // a second op with a different speed: restart at the new RPM
+        { words: { x: 10, z: 5 }, feed: 0, rapid: true, spindleRpm: 12000 },
+        { words: { z: -2 }, feed: 200 },
+        // same speed again — modal, no re-emit
+        { words: { x: 20, z: 5 }, feed: 0, rapid: true, spindleRpm: 12000 },
+      ],
+      tools: [tool],
+      options: { jobName: 'spindle-test' },
+    });
+    const starts = cut.match(/S\d+ M3/g) ?? [];
+    expect(starts).toEqual(['S18000 M3', 'S12000 M3']);
+    // the start precedes the first move, not the header
+    expect(cut.indexOf('S18000 M3')).toBeGreaterThan(cut.indexOf('G92.4 A0 S0'));
+    // moves without stamps emit no spindle command at all
+    const bare = postCarvera({
+      moves: [{ words: { z: -1 }, feed: 200 }],
+      tools: [tool],
+      options: { jobName: 'bare-test' },
+    });
+    expect(bare).not.toMatch(/ M3($|\n)/);
+  });
+
   it('matches the golden file (regenerate deliberately with UPDATE_GOLDEN=1)', () => {
     const goldenPath = join(import.meta.dirname, 'golden', 'face-cylinder.nc');
     if (process.env.UPDATE_GOLDEN) {

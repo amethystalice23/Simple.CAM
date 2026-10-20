@@ -1,5 +1,5 @@
 ; simple.cam v0.0.1 — job "drill-holes"
-; TOOL: T1 name="3mm drill" type=drill diameter=3.000 spindle=18000rpm
+;@MKR|TOOL|number=1|name=3mm drill|diameter=3.000|type=drill
 G21 G90 G94
 G92.4 A0 S0
 G0 X5.000 Y5.000 Z5.000 ; drill (5.00, 5.00) depth 5.00mm

@@ -78,6 +78,12 @@ export interface Move {
   /** G0 rapid (ignores feed) */
   rapid?: boolean;
   comment?: string;
+  /**
+   * Spindle speed to (re)start before this move, RPM — the effective rate
+   * (tool default, or the op's ⚡ override) stamped on an op's first move;
+   * the post emits Makera's own `S<rpm> M3` line when it changes.
+   */
+  spindleRpm?: number;
 }
 
 /** True when a move coordinates A with a linear axis (needs G93). */
@@ -428,8 +434,8 @@ export interface OpRates {
   feed?: number;
   /** plunge feed, mm/min (G94) */
   plungeFeed?: number;
-  /** spindle speed, RPM (surfaces in the op's g-code as a comment — the
-   * post has no verified spindle-start command yet) */
+  /** spindle speed, RPM — emitted as an active `S<rpm> M3` line at the op
+   * boundary (Makera's own format, verified in MakeraStudio) */
   spindleRpm?: number;
 }
 

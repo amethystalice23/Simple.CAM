@@ -1,5 +1,5 @@
 ; simple.cam v0.0.1 — job "chamfer-rim"
-; TOOL: T1 name="Chamfering Bit 1/8" type=vbit diameter=3.175 tip=0.100 angle=90deg spindle=12000rpm
+;@MKR|TOOL|number=1|name=Chamfering Bit 1/8|diameter=3.175|type=vbit|tipdiameter=0.100
 G21 G90 G94
 G92.4 A0 S0
 G0 X6.950 Y5.000 Z5.000 ; chamfer 0.50mm deep, 0.50mm wide, side inside

@@ -1,5 +1,5 @@
 ; simple.cam v0.0.1 — job "drill-indexed"
-; TOOL: T1 name="3mm drill" type=drill diameter=3.000 spindle=18000rpm
+;@MKR|TOOL|number=1|name=3mm drill|diameter=3.000|type=drill
 ; ---- prep assumptions (run in controller before this job) ----
 ; M465.1            ; 4th-axis stock leveling/twist via probe
 ; G10 L20 P0 A0      ; establish angular zero

@@ -220,35 +220,6 @@ export function presetRates(
 }
 
 /**
- * Inline g-code note for an op's rate overrides (appended to its first
- * move's comment): the feed/plunge overrides change the emitted F words
- * themselves, but the post has no verified spindle-start command yet
- * (src/post/carvera.ts TODO), so the spindle override travels as a
- * comment the operator can see at the op boundary. Null when nothing is
- * overridden.
- */
-export function ratesNote(op: JobOp): string | null {
-  const r = op.rates;
-  if (!r) return null;
-  const parts: string[] = [];
-  if (r.feed !== undefined) parts.push(`feed ${r.feed} mm/min`);
-  if (r.plungeFeed !== undefined) parts.push(`plunge ${r.plungeFeed} mm/min`);
-  if (r.spindleRpm !== undefined) parts.push(`spindle ${r.spindleRpm} rpm`);
-  return parts.length > 0 ? `rates: ${parts.join(', ')} (overrides tool defaults)` : null;
-}
-
-/** The op's moves with the rates note (if any) on the first move's comment. */
-export function movesWithRatesNote(moves: Move[], op: JobOp): Move[] {
-  const note = ratesNote(op);
-  if (!note || moves.length === 0) return moves;
-  const first = moves[0];
-  return [
-    { ...first, comment: first.comment ? `${first.comment} — ${note}` : note },
-    ...moves.slice(1),
-  ];
-}
-
-/**
  * Default radial step-over: a fraction of the cutter diameter — no tool
  * library carries step-over, it is a strategy parameter.
  */
@@ -342,8 +313,23 @@ function selectionAcrossSources(
  * Resolve one op into moves. NEVER THROWS: every failure — including bad
  * context (unknown material, missing tool) — comes back as a per-op error
  * so one broken op can never silently kill a whole-job recalculation.
+ *
+ * Each cutting op's first move is stamped with its effective spindle speed
+ * (the op's ⚡ override, else the tool's library RPM) so the post emits a
+ * `S<rpm> M3` line at every op boundary where the speed changes.
  */
 export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
+  const res = generateJobOpInner(op, ctx);
+  if (op.kind === 'index' || res.moves.length === 0) return res;
+  const rpm = op.rates?.spindleRpm ?? ctx.tools.find((t) => t.id === op.toolId)?.spindleRpm;
+  if (rpm === undefined) return res;
+  return {
+    ...res,
+    moves: [{ ...res.moves[0], spindleRpm: rpm }, ...res.moves.slice(1)],
+  };
+}
+
+function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
   try {
     const tool = ctx.tools.find((t) => t.id === op.toolId);
     if (!tool) return fail('tool missing from library');

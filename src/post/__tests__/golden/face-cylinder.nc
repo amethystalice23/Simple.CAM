@@ -1,5 +1,5 @@
 ; simple.cam v0.0.1 — job "face-test"
-; TOOL: T1 name="6mm flat" type=flat diameter=6.000 spindle=18000rpm
+;@MKR|TOOL|number=1|name=6mm flat|diameter=6.000|type=flat
 ; ---- prep assumptions (run in controller before this job) ----
 ; M465.1            ; 4th-axis stock leveling/twist via probe
 ; G10 L20 P0 A0      ; establish angular zero

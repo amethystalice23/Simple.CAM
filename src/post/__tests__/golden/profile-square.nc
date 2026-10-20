@@ -1,5 +1,5 @@
 ; simple.cam v0.0.1 — job "profile-square"
-; TOOL: T1 name="2mm flat" type=flat diameter=2.000 spindle=18000rpm
+;@MKR|TOOL|number=1|name=2mm flat|diameter=2.000|type=flat
 G21 G90 G94
 G92.4 A0 S0
 G0 X10.433 Y-0.901 Z5.000 ; level z-1.00

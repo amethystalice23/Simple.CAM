@@ -32,17 +32,23 @@ const fmt = (v: number, digits: number): string => {
 };
 
 function toolComments(tools: Tool[]): string[] {
-  // TODO(post): confirm the exact Makera Studio tool-comment format the
-  // community controller parses (use the local notes on
-  // reference/notes, or capture a real Makera export). Fusion-style
-  // fallback below is readable by the controller per its viewer docs.
-  return tools.map(
-    (t, i) =>
-      `; TOOL: T${i + 1} name="${t.name}" type=${t.type} diameter=${t.diameter.toFixed(3)}` +
-      (t.tipDiameter !== undefined ? ` tip=${t.tipDiameter.toFixed(3)}` : '') +
-      (t.vAngle !== undefined ? ` angle=${t.vAngle}deg` : '') +
-      ` spindle=${t.spindleRpm}rpm`,
-  );
+  // Makera's own tag format, verified in MakeraStudio
+  // (reference/s-makera-mkr-tags.json + s-makera-tool-comments.json):
+  // tool lines are `;@MKR|TOOL|number=…` with `|name=`, `|diameter=`,
+  // `|type=`, `|tipdiameter=`, `|flutelength=` fields (the binary shows
+  // `Ball Nose` as a `type=` value — our vocabulary is the tool-library
+  // enum instead; field order is not pinned by the strings alone).
+  return tools.map((t, i) => {
+    const parts = [
+      `;@MKR|TOOL|number=${i + 1}`,
+      `name=${t.name}`,
+      `diameter=${t.diameter.toFixed(3)}`,
+      `type=${t.type}`,
+    ];
+    if (t.tipDiameter !== undefined) parts.push(`tipdiameter=${t.tipDiameter.toFixed(3)}`);
+    if (t.fluteLength !== undefined) parts.push(`flutelength=${t.fluteLength.toFixed(3)}`);
+    return parts.join('|');
+  });
 }
 
 function wordsLine(m: Move, withFeed: boolean): string {
@@ -97,7 +103,11 @@ export function postCarvera(input: PostInput): string {
 
   // ---- moves ----
   // holder object: TS narrowing of closure-mutated lets is unsound here
-  const st: { mode: FeedMode; lastFeed: number } = { mode: 'G94', lastFeed: -1 };
+  const st: { mode: FeedMode; lastFeed: number; lastSpindle: number } = {
+    mode: 'G94',
+    lastFeed: -1,
+    lastSpindle: -1,
+  };
 
   const setMode = (want: FeedMode) => {
     if (st.mode !== want) {
@@ -108,6 +118,17 @@ export function postCarvera(input: PostInput): string {
   };
 
   for (const m of input.moves) {
+    // spindle (re)start at the op boundary — Makera's own start syntax
+    // `S<rpm> M3`, verified as the literal format string `S{0} M3` in
+    // MakeraStudio (reference/s-makera-spindle-emission.json).
+    // No stop command: M30 ends the program and the controller stops the
+    // spindle there (no `M5` string exists in the binary; the `M3 S0`
+    // literal's semantics are unconfirmed, so we don't emit it).
+    if (m.spindleRpm !== undefined && m.spindleRpm !== st.lastSpindle) {
+      lines.push(`S${m.spindleRpm} M3`);
+      st.lastSpindle = m.spindleRpm;
+    }
+
     const simultaneous = isSimultaneous(m);
 
     if (m.rapid) {

@@ -11,7 +11,6 @@ import {
   defaultStepDown,
   defaultStepOver,
   generateJobOp,
-  movesWithRatesNote,
   newJobOp,
   prefillDepths,
   presetRates,
@@ -815,29 +814,36 @@ describe('per-op cutting-rate overrides (rates)', () => {
     expect(feeds).not.toContain(200); // the aluminum drill-table preset
   });
 
-  it('a spindle-only override leaves the moves on the tool defaults', () => {
+  it('a spindle-only override changes just the first move (feeds stay on the tool defaults)', () => {
     const base = generateJobOp(pocketOp, ctx);
     const g = generateJobOp({ ...pocketOp, rates: { spindleRpm: 12000 } }, ctx);
-    expect(g.moves).toEqual(base.moves);
+    expect(g.moves[0].spindleRpm).toBe(12000);
+    expect(g.moves.slice(1)).toEqual(base.moves.slice(1));
+    const feeds = (x: ReturnType<typeof generateJobOp>) =>
+      x.moves.filter((m) => !m.rapid).map((m) => m.feed);
+    expect(feeds(g)).toEqual(feeds(base));
   });
 
-  it('movesWithRatesNote: overrides travel into the g-code on the first move', () => {
-    const moves = generateJobOp(pocketOp, ctx).moves;
-    // nothing overridden → untouched
-    expect(movesWithRatesNote(moves, pocketOp)).toBe(moves);
-    // spindle (or any rate) set → note appended, rest untouched
-    const withNote = movesWithRatesNote(moves, {
-      ...pocketOp,
-      rates: { spindleRpm: 12000 },
-    });
-    expect(withNote).toHaveLength(moves.length);
-    expect(withNote[0].comment).toContain('spindle 12000 rpm');
-    expect(withNote.slice(1)).toEqual(moves.slice(1));
-    // an existing first-move comment is kept, not replaced
-    const merged = movesWithRatesNote(
-      [{ ...moves[0], comment: 'first cut' }],
-      { ...pocketOp, rates: { feed: 300 } },
+  it("stamps the effective spindle rpm on each cutting op's first move", () => {
+    // default: the tool's library RPM, first move only
+    const base = generateJobOp(pocketOp, ctx);
+    expect(base.moves[0].spindleRpm).toBe(18000);
+    expect(base.moves.slice(1).every((m) => m.spindleRpm === undefined)).toBe(true);
+    // ⚡ override wins over the tool default
+    const overridden = generateJobOp(
+      { ...pocketOp, rates: { spindleRpm: 12000 } },
+      ctx,
     );
-    expect(merged[0].comment).toBe('first cut — rates: feed 300 mm/min (overrides tool defaults)');
+    expect(overridden.moves[0].spindleRpm).toBe(12000);
+    // an index op cuts nothing — no stamp on its A positioning rapid
+    const indexOp: Extract<JobOp, { kind: 'index' }> = {
+      id: 'op9',
+      toolId: 't1',
+      featureIds: [],
+      kind: 'index',
+      angle: 90,
+    };
+    const indexed = generateJobOp(indexOp, { ...ctx, stock: boxStock4 });
+    expect(indexed.moves[0].spindleRpm).toBeUndefined();
   });
 });
