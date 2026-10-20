@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
 import type { JobOp, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
+import { sourcesFor } from '../featureSources';
 import {
   datumAngleBefore,
   generateJobOp,
@@ -49,6 +50,7 @@ describe('indexed job flow: top pocket, index 180, bottom pocket', () => {
     transform: identityTransform(),
     tools: [tool],
     primitives: [],
+    sources: sourcesFor(geo, features, identityTransform(), []),
     datumAngle: 0,
   };
 

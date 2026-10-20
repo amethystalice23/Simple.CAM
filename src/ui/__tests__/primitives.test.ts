@@ -8,10 +8,12 @@ import {
   cylinderFromCircle,
   defaultBox,
   defaultCylinder,
+  nextPrimitiveId,
   resizePrimitive,
   revertPrimitive,
   scaleForSize,
   scaledDims,
+  seedPrimitiveIds,
 } from '../primitives';
 
 const cylinderStock: Extract<Stock, { kind: 'cylinder' }> = {
@@ -191,5 +193,25 @@ describe('size editing', () => {
     const reverted = revertPrimitive(changed, 'x', true);
     if (reverted.kind !== 'box') return;
     expect(reverted.size).toEqual({ x: 10, y: 10, z: 5 });
+  });
+});
+describe('seedPrimitiveIds', () => {
+  it('seeds the id counter past loaded ids so a later add cannot collide', () => {
+    const base = {
+      kind: 'cylinder' as const,
+      diameter: 20,
+      length: 50,
+      original: { diameter: 20, length: 50 },
+      transform: identityTransform(),
+    };
+    seedPrimitiveIds([{ ...base, id: 'prim-41' }, { ...base, id: 'prim-7' }]);
+    expect(nextPrimitiveId()).toBe('prim-42');
+  });
+
+  it('ignores non-numeric ids', () => {
+    seedPrimitiveIds([
+      { kind: 'box' as const, id: 'weird', size: { x: 1, y: 1, z: 1 }, original: { x: 1, y: 1, z: 1 }, transform: identityTransform() },
+    ]);
+    expect(/^prim-\d+$/.test(nextPrimitiveId())).toBe(true);
   });
 });

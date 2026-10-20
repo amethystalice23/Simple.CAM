@@ -107,7 +107,7 @@ describe('manual measuring', () => {
     const f = detectFeatures(tubeAlongX());
     const data = buildFeatureOverlayData(f, identityTransform());
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
-    const nearest = { kind: 'circle' as const, index: capIdx, text: '', color: 0, anchor: { x: 0, y: 0 } };
+    const nearest = { kind: 'circle' as const, index: capIdx, text: '', color: 0, anchor: { x: 0, y: 0 }, d: 0 };
     const pick = pickFromNearest(data, nearest);
     expect(pick.kind).toBe('circle');
     expect(pick.center.x).toBeCloseTo(5);

@@ -16,9 +16,21 @@ import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
-import type { JobOp, ModelTransform, Move, Primitive, Stock, Tool, ToolPreset } from '../core/types';
+import type {
+  ChamferLoop,
+  DrillOp,
+  JobOp,
+  ModelTransform,
+  Move,
+  Primitive,
+  Stock,
+  Tool,
+  ToolPreset,
+  Vec2,
+} from '../core/types';
 import { rotaryCalibrationOf } from '../core/types';
 import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
+import { splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { stockSpan, stockTopZ } from './placement';
 
 export interface GeneratedOp {
@@ -39,6 +51,9 @@ export interface GenContext {
   tools: Tool[];
   /** user-added primitives (the face op can target a cylinder) */
   primitives: Primitive[];
+  /** every selectable-feature provider: the model + one per primitive.
+   * The four feature ops resolve their selections against these. */
+  sources: FeatureSource[];
   /** the cutting datum for this op: the absolute A established by the
    * latest Index op preceding it in the job sequence (0 = flat) */
   datumAngle: number;
@@ -248,6 +263,27 @@ function cutRange(
 }
 
 /**
+ * Selection pre-flight shared by the four feature ops: emptiness, source
+ * presence, and dangling ids (a resized/deleted primitive or a gone model —
+ * old ids must fail visibly, not silently drop). Returns per-source parts.
+ */
+function selectionAcrossSources(
+  sources: FeatureSource[],
+  featureIds: string[],
+  emptyMessage: string,
+): { parts: { source: FeatureSource; ids: string[] }[]; error: string | null } {
+  if (featureIds.length === 0) return { parts: [], error: emptyMessage };
+  if (sources.length === 0) return { parts: [], error: 'add a primitive or load a model first' };
+  if (unmatchedIds(sources, featureIds).length > 0) {
+    return {
+      parts: [],
+      error: 'the selected features no longer exist — the primitive was resized or deleted; reselect',
+    };
+  }
+  return { parts: splitSelection(sources, featureIds), error: null };
+}
+
+/**
  * Resolve one op into moves. NEVER THROWS: every failure — including bad
  * context (unknown material, missing tool) — comes back as a per-op error
  * so one broken op can never silently kill a whole-job recalculation.
@@ -318,16 +354,38 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
       }
 
       case 'pocket': {
-        if (!ctx.geometry || !ctx.features) return fail('load a model first');
+        const SEL = 'select features (circles or flat faces)';
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const src = pocketRegionsFromSelection(
-          ctx.geometry,
-          ctx.features,
-          op.featureIds,
-          ctx.transform,
-          rotate,
-        );
-        if (!src) return fail('select features (circles or flat faces)');
+        const regions: Vec2[][] = [];
+        let sawHole = false;
+        let sawFace = false;
+        for (const part of parts) {
+          // pure-part classification keeps faces-XOR-holes true across
+          // sources too (the resolver enforces it within one source)
+          const allCircles = part.ids.every((id) =>
+            part.source.features.circles.some((c) => c.id === id),
+          );
+          const allPlanes = part.ids.every((id) =>
+            part.source.features.planes.some((p) => p.id === id),
+          );
+          const src = pocketRegionsFromSelection(
+            part.source.geometry,
+            part.source.features,
+            part.ids,
+            part.source.transform,
+            rotate,
+          );
+          if (!src || src.regions.length === 0) continue;
+          if (allCircles) sawHole = true;
+          if (allPlanes) sawFace = true;
+          regions.push(...src.regions);
+        }
+        if (sawHole && sawFace) {
+          return fail('select either faces or holes for this operation, not both');
+        }
+        if (regions.length === 0) return fail(SEL);
         const crown = stockTopZ(ctx.stock);
         const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
         if (!range) {
@@ -336,9 +394,9 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           );
         }
         // roughing wall stock: clear a region inset by the allowance
-        const regions =
-          op.allowance > 0 ? offsetInward(src.regions, op.allowance) : src.regions;
-        if (regions.length === 0) {
+        const cutRegions =
+          op.allowance > 0 ? offsetInward(regions, op.allowance) : regions;
+        if (cutRegions.length === 0) {
           return fail('the side allowance exceeds the selected region — nothing left to cut');
         }
         const res = pocket2d(
@@ -346,7 +404,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             kind: 'pocket',
             id: op.id,
             toolId: tool.id,
-            regions,
+            regions: cutRegions,
             topZ: range.topZ,
             floorZ: range.floorZ,
             stepDown: op.stepDown,
@@ -366,16 +424,22 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
       }
 
       case 'drill': {
-        if (!ctx.features) return fail('load a model first');
+        const SEL = 'select holes (interior circles)';
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const targets = drillTargetsFromSelection(
-          ctx.features,
-          op.featureIds,
-          ctx.transform,
-          op.depth,
-          rotate,
-        );
-        if (!targets) return fail('select holes (interior circles)');
+        const targets: DrillOp['targets'] = [];
+        for (const part of parts) {
+          const t = drillTargetsFromSelection(
+            part.source.features,
+            part.ids,
+            part.source.transform,
+            op.depth,
+            rotate,
+          );
+          if (t) targets.push(...t);
+        }
+        if (targets.length === 0) return fail(SEL);
         const res = drill(
           {
             kind: 'drill',
@@ -397,16 +461,36 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
       }
 
       case 'profile': {
-        if (!ctx.geometry || !ctx.features) return fail('load a model first');
+        const SEL = 'select features (circles or flat faces)';
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const src = pocketRegionsFromSelection(
-          ctx.geometry,
-          ctx.features,
-          op.featureIds,
-          ctx.transform,
-          rotate,
-        );
-        if (!src) return fail('select features (circles or flat faces)');
+        const contours: Vec2[][] = [];
+        let sawHole = false;
+        let sawFace = false;
+        for (const part of parts) {
+          const allCircles = part.ids.every((id) =>
+            part.source.features.circles.some((c) => c.id === id),
+          );
+          const allPlanes = part.ids.every((id) =>
+            part.source.features.planes.some((p) => p.id === id),
+          );
+          const src = pocketRegionsFromSelection(
+            part.source.geometry,
+            part.source.features,
+            part.ids,
+            part.source.transform,
+            rotate,
+          );
+          if (!src || src.regions.length === 0) continue;
+          if (allCircles) sawHole = true;
+          if (allPlanes) sawFace = true;
+          contours.push(...src.regions);
+        }
+        if (sawHole && sawFace) {
+          return fail('select either faces or holes for this operation, not both');
+        }
+        if (contours.length === 0) return fail(SEL);
         const crown = stockTopZ(ctx.stock);
         const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
         if (!range) {
@@ -419,7 +503,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
             kind: 'profile',
             id: op.id,
             toolId: tool.id,
-            contours: src.regions,
+            contours,
             side: op.side,
             allowance: op.allowance, // wall stock (path offset from the line)
             topZ: range.topZ,
@@ -440,27 +524,33 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
       }
 
       case 'chamfer': {
-        if (!ctx.features) return fail('load a model first');
         if (tool.type !== 'vbit') {
           return fail('chamfer needs a V-bit — pick a chamfering/engraving bit from the library');
         }
         if (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180) {
           return fail('this V-bit has no usable tip angle — set the included angle in the tool library');
         }
+        const SEL = 'select circles or flat faces to chamfer';
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const src = chamferTargetsFromSelection(
-          ctx.features,
-          op.featureIds,
-          ctx.transform,
-          rotate,
-        );
-        if (!src) return fail('select circles or flat faces to chamfer');
+        const loops: ChamferLoop[] = [];
+        for (const part of parts) {
+          const src = chamferTargetsFromSelection(
+            part.source.features,
+            part.ids,
+            part.source.transform,
+            rotate,
+          );
+          if (src) loops.push(...src.loops);
+        }
+        if (loops.length === 0) return fail(SEL);
         const res = chamfer(
           {
             kind: 'chamfer',
             id: op.id,
             toolId: tool.id,
-            loops: src.loops,
+            loops,
             mode: op.mode,
             side: op.side,
             direction: op.direction,
@@ -475,7 +565,7 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${src.loops.length} loop(s), ${op.depth}mm chamfer, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${loops.length} loop(s), ${op.depth}mm chamfer, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

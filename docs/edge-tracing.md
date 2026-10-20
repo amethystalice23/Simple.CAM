@@ -188,6 +188,24 @@ Types for v1:
 - Primitives are first-class scene objects: rendered in the viewport
   (distinct color from the model), listed under the Features tab, and
   deletable.
+- **Primitives are feature sources** (src/ui/featureSources.ts): each
+  primitive's features come from detecting its local mesh
+  (`primitiveGeometry`, 48 segments — below fitCircle's n≥9 the 8-segment
+  snap mesh yields no circles), with ids namespaced `p:<primId>:` so they
+  never collide with model ids. The Model tab works with no STL loaded,
+  and pocket/profile/drill/chamfer resolve their selections across ALL
+  sources (model + primitives), rejecting faces+holes mixed across sources
+  and failing visibly on dangling ids (a resized primitive — moving it
+  keeps ids stable, resizing does not). The plane-pick raycast covers the
+  primitive meshes (non-indexed, aligned with the detection).
+  The render pose is `primitivePose` — EXACTLY `transformFn(p.transform)`;
+  the axis remap (cylinder ∥ local X) lives only inside
+  `primitiveGeometry`, never in the Viewport (baking it in both places
+  once put the mesh 90° out of sync with every overlay and pick).
+  Caveats: a cylinder's curved side is NOT one plane — it yields sliver
+  facet planes and vertical edges (adjacent facets differ 7.5° > the 0.5°
+  plane tolerance); to face a cylinder, select its rim CIRCLE (a cap
+  plane's member-triangle footprint is a square AABB, not the disc).
 
 ## Data model (src/core/types.ts additions)
 

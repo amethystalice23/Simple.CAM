@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { originSpan, rotaryCalibrationOf } from '../core/types';
 import type { ModelTransform, Move, Primitive, Stock } from '../core/types';
-import type { DetectedFeatures } from '../cam/features';
 import { movesToSegments } from './toolpathPreview';
+import type { FeatureSource } from './featureSources';
+import { primitiveGeometry, primitivePose } from './featureSources';
 import { NavCube } from './navcube';
 import {
   buildFeatureOverlayData,
@@ -19,51 +20,65 @@ import {
   SELECT_COLOR,
   type FeatureOverlayData,
   type MeasurePick,
+  type NearestFeature,
 } from './featureOverlays';
 
 const D2R = Math.PI / 180;
 
 /** A selected feature resolved to its kind and index for highlighting. */
 export interface ResolvedSelection {
+  /** owning feature source: 'model' or a primitive id */
+  sourceId: string;
   kind: 'plane' | 'circle' | 'edge';
   index: number;
 }
 
+/** One source's overlay data — picking and highlighting run per source. */
+interface SourceOverlay {
+  source: FeatureSource;
+  data: FeatureOverlayData;
+}
+
+/** A feature pick annotated with the source it came from. */
+type SourcedPick = MeasurePick & { sourceId: string };
+
 /** Measurement picks for the selected features (selection = measurement). */
-function picksFromSelection(
-  geometry: THREE.BufferGeometry | null,
-  features: DetectedFeatures,
-  data: FeatureOverlayData | null,
-  transform: ModelTransform,
-  sel: ResolvedSelection[],
-): MeasurePick[] {
-  if (!data || !geometry) return [];
-  return sel.map((s): MeasurePick => {
-    if (s.kind === 'plane') return planePick(geometry, features, transform, s.index);
+function picksFromSelection(sel: ResolvedSelection[], overlays: SourceOverlay[]): MeasurePick[] {
+  const out: MeasurePick[] = [];
+  for (const s of sel) {
+    const entry = overlays.find((o) => o.source.id === s.sourceId);
+    if (!entry) continue;
+    if (s.kind === 'plane') {
+      out.push(planePick(entry.source.geometry, entry.source.features, entry.source.transform, s.index));
+      continue;
+    }
     if (s.kind === 'circle') {
-      return {
+      out.push({
         kind: 'circle',
         index: s.index,
-        center: data.circleCenter[s.index].clone(),
+        center: entry.data.circleCenter[s.index].clone(),
         color: SELECT_COLOR,
-        text: data.circleText[s.index],
-      };
+        text: entry.data.circleText[s.index],
+      });
+      continue;
     }
-    return {
+    out.push({
       kind: 'edge',
       index: s.index,
-      center: data.edgeMid[s.index].clone(),
+      center: entry.data.edgeMid[s.index].clone(),
       color: SELECT_COLOR,
-      text: data.edgeText[s.index],
-    };
-  });
+      text: entry.data.edgeText[s.index],
+    });
+  }
+  return out;
 }
 
 interface Props {
   geometry: THREE.BufferGeometry | null;
   stock: Stock;
   transform: ModelTransform;
-  features: DetectedFeatures | null;
+  /** every selectable-feature provider: the model + one per primitive */
+  sources: FeatureSource[];
   showFeatures: boolean;
   measureMode: boolean;
   /** false while an op's feature selection is active: straight lines are
@@ -91,7 +106,7 @@ export function Viewport({
   geometry,
   stock,
   transform,
-  features,
+  sources,
   showFeatures,
   measureMode,
   edgePickingEnabled,
@@ -105,7 +120,12 @@ export function Viewport({
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
   const featureGroupRef = useRef<THREE.Group | null>(null);
-  const overlayRef = useRef<FeatureOverlayData | null>(null);
+  /** per-source overlay data — null-entry = no sources (nothing selectable) */
+  const overlaysRef = useRef<SourceOverlay[]>([]);
+  /** primitive meshes (non-indexed, source-aligned) for plane raycast picks */
+  const primMeshesRef = useRef<THREE.Mesh[]>([]);
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
   const hoverLineRef = useRef<THREE.LineSegments | null>(null);
   const measureRef = useRef(measureMode);
   measureRef.current = measureMode;
@@ -117,12 +137,6 @@ export function Viewport({
   onClearSelectionRef.current = onClearSelection;
   const opSelectionRef = useRef(opSelection);
   opSelectionRef.current = opSelection;
-  const featuresRef = useRef(features);
-  featuresRef.current = features;
-  const geometryRef = useRef(geometry);
-  geometryRef.current = geometry;
-  const transformRef = useRef(transform);
-  transformRef.current = transform;
   const hoverPlaneRef = useRef<THREE.Mesh | null>(null);
   const [label, setLabel] = useState<{ text: string; x: number; y: number } | null>(null);
   /** labels for the selected features, one per pick */
@@ -177,7 +191,7 @@ export function Viewport({
 
     let downX = 0;
     let downY = 0;
-    let hoverPlaneIdx = -1; // transiently hovered face (plane group), -1 none
+    let hoverPlaneKey = ''; // transiently hovered face (source:plane), '' none
     const raycaster = new THREE.Raycaster();
     const onPointerDown = (e: PointerEvent) => {
       downX = e.clientX;
@@ -216,7 +230,8 @@ export function Viewport({
           rect.height,
         );
         if (pick) {
-          const feats = featuresRef.current;
+          const feats = overlaysRef.current.find((o) => o.source.id === pick.sourceId)?.source
+            .features;
           const id =
             pick.kind === 'plane'
               ? feats?.planes[pick.index]?.id
@@ -227,30 +242,44 @@ export function Viewport({
         }
       }
     };
-    /** click target: nearest feature, else the plane under the face */
-    const measurePickAt = (mx: number, my: number, w: number, h: number): MeasurePick | null => {
-      const overlay = overlayRef.current;
-      if (measureRef.current && overlay) {
-        const nearest = findNearestFeature(overlay, mx, my, camera, w, h);
-        if (nearest && (edgePickingRef.current || nearest.kind !== 'edge')) {
-          return pickFromNearest(overlay, nearest);
+    /** click target: the nearest feature across ALL sources, else the plane
+     * under the face (model or primitive mesh) */
+    const measurePickAt = (mx: number, my: number, w: number, h: number): SourcedPick | null => {
+      if (measureRef.current) {
+        let best: SourcedPick | null = null;
+        let bestD = Infinity;
+        for (const entry of overlaysRef.current) {
+          const nearest = findNearestFeature(entry.data, mx, my, camera, w, h);
+          if (!nearest || (!edgePickingRef.current && nearest.kind === 'edge')) continue;
+          if (nearest.d < bestD) {
+            bestD = nearest.d;
+            best = { ...pickFromNearest(entry.data, nearest), sourceId: entry.source.id };
+          }
         }
+        if (best) return best;
       }
-      const feats = featuresRef.current;
+      // plane fallback: raycast the model mesh and the primitive meshes,
+      // resolving the hit face through the OWNING source's faceToPlane
       const model = modelRef.current;
-      if (feats && model && model.visible) {
-        raycaster.setFromCamera(
-          new THREE.Vector2((mx / w) * 2 - 1, -(my / h) * 2 + 1),
-          camera,
-        );
-        const hits = raycaster.intersectObject(model, false);
-        const found = hits.find((hh) => {
-          const fi = hh.faceIndex ?? -1;
-          return fi >= 0 && fi < feats.faceToPlane.length && feats.faceToPlane[fi] >= 0;
-        });
-        if (found && found.faceIndex !== undefined && found.faceIndex !== null) {
-          return planePick(geometryRef.current!, feats, transformRef.current, feats.faceToPlane[found.faceIndex]);
-        }
+      const meshes: THREE.Object3D[] = [
+        ...(model && model.visible ? [model] : []),
+        ...primMeshesRef.current,
+      ];
+      if (meshes.length === 0) return null;
+      raycaster.setFromCamera(new THREE.Vector2((mx / w) * 2 - 1, -(my / h) * 2 + 1), camera);
+      for (const hit of raycaster.intersectObjects(meshes, false)) {
+        const sourceId =
+          hit.object === model ? 'model' : (hit.object.userData.sourceId as string | undefined);
+        const source = sourcesRef.current.find((s) => s.id === sourceId);
+        if (!source) continue;
+        const fi = hit.faceIndex ?? -1;
+        if (fi < 0 || fi >= source.features.faceToPlane.length) continue;
+        const planeIdx = source.features.faceToPlane[fi];
+        if (planeIdx < 0) continue;
+        return {
+          ...planePick(source.geometry, source.features, source.transform, planeIdx),
+          sourceId: source.id,
+        };
       }
       return null;
     };
@@ -260,48 +289,59 @@ export function Viewport({
       renderer.domElement.style.cursor = overNav ? 'pointer' : '';
       const hoverLine = hoverLineRef.current;
       const hoverPlane = hoverPlaneRef.current;
-      const overlay = overlayRef.current;
+      const overlays = overlaysRef.current;
 
       const hideHoverPlane = () => {
         if (hoverPlane) hoverPlane.visible = false;
-        hoverPlaneIdx = -1;
+        hoverPlaneKey = '';
       };
 
-      if (overNav || !measureRef.current || !hoverLine || !overlay) {
+      if (overNav || !measureRef.current || !hoverLine || overlays.length === 0) {
         if (hoverLine) hoverLine.visible = false;
         hideHoverPlane();
         setLabel(null);
         return;
       }
-      const nearest = findNearestFeature(
-        overlay,
-        e.clientX - rect.left,
-        e.clientY - rect.top,
-        camera,
-        rect.width,
-        rect.height,
-      );
-      // while editing an op, lines are not targets — don't hover them, so
-      // the pointer falls through to the face behind
-      const usable = nearest && (edgePickingRef.current || nearest.kind !== 'edge') ? nearest : null;
+      // nearest feature across all sources; while editing an op, lines are
+      // not targets — don't hover them, so the pointer falls through to the
+      // face behind
+      let usable: { entry: SourceOverlay; nearest: NearestFeature } | null = null;
+      for (const entry of overlays) {
+        const nearest = findNearestFeature(
+          entry.data,
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+          camera,
+          rect.width,
+          rect.height,
+        );
+        if (!nearest || (!edgePickingRef.current && nearest.kind === 'edge')) continue;
+        if (!usable || nearest.d < usable.nearest.d) usable = { entry, nearest };
+      }
       if (usable) {
         hoverLine.geometry.dispose();
-        hoverLine.geometry = hoverLineGeometry(overlay, usable.kind, usable.index);
-        (hoverLine.material as THREE.LineBasicMaterial).color.setHex(usable.color);
+        hoverLine.geometry = hoverLineGeometry(usable.entry.data, usable.nearest.kind, usable.nearest.index);
+        (hoverLine.material as THREE.LineBasicMaterial).color.setHex(usable.nearest.color);
         hoverLine.visible = true;
         hideHoverPlane();
-        setLabel({ text: usable.text, x: usable.anchor.x, y: usable.anchor.y });
+        setLabel({
+          text: usable.nearest.text,
+          x: usable.nearest.anchor.x,
+          y: usable.nearest.anchor.y,
+        });
         return;
       }
       hoverLine.visible = false;
       setLabel(null);
 
-      // no feature nearby: transiently wash the face under the cursor so
-      // faces are hoverable like edges and circles are
-      const feats = featuresRef.current;
+      // no feature nearby: transiently wash the face under the cursor (model
+      // or primitive) so faces are hoverable like edges and circles are
       const model = modelRef.current;
-      const geo = geometryRef.current;
-      if (!feats || !model || !model.visible || !geo || !hoverPlane) {
+      const meshes: THREE.Object3D[] = [
+        ...(model && model.visible ? [model] : []),
+        ...primMeshesRef.current,
+      ];
+      if (!hoverPlane || meshes.length === 0) {
         hideHoverPlane();
         return;
       }
@@ -312,27 +352,38 @@ export function Viewport({
         ),
         camera,
       );
-      const found = raycaster
-        .intersectObject(model, false)
-        .find((hh) => {
-          const fi = hh.faceIndex ?? -1;
-          return fi >= 0 && fi < feats.faceToPlane.length && feats.faceToPlane[fi] >= 0;
-        });
-      if (!found || found.faceIndex === undefined || found.faceIndex === null) {
-        hideHoverPlane();
-        return;
-      }
-      const idx = feats.faceToPlane[found.faceIndex];
-      if (idx !== hoverPlaneIdx) {
-        const built = planeHighlightMesh(geo, feats, transformRef.current, idx, PLANE_SELECT);
-        hoverPlane.geometry.dispose();
-        if (built) {
-          hoverPlane.geometry = built.geometry;
-          (built.material as THREE.Material).dispose(); // hoverPlane keeps its own
+      const hits = raycaster.intersectObjects(meshes, false);
+      let washed = false;
+      for (const found of hits) {
+        const sourceId =
+          found.object === model ? 'model' : (found.object.userData.sourceId as string | undefined);
+        const source = sourcesRef.current.find((s) => s.id === sourceId);
+        if (!source) continue;
+        const fi = found.faceIndex ?? -1;
+        if (fi < 0 || fi >= source.features.faceToPlane.length) continue;
+        const idx = source.features.faceToPlane[fi];
+        if (idx < 0) continue;
+        const key = `${source.id}:${idx}`;
+        if (key !== hoverPlaneKey) {
+          const built = planeHighlightMesh(
+            source.geometry,
+            source.features,
+            source.transform,
+            idx,
+            PLANE_SELECT,
+          );
+          hoverPlane.geometry.dispose();
+          if (built) {
+            hoverPlane.geometry = built.geometry;
+            (built.material as THREE.Material).dispose(); // hoverPlane keeps its own
+          }
         }
+        hoverPlaneKey = key;
+        hoverPlane.visible = true;
+        washed = true;
+        break;
       }
-      hoverPlaneIdx = idx;
-      hoverPlane.visible = true;
+      if (!washed) hideHoverPlane();
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
@@ -477,16 +528,7 @@ export function Viewport({
         div.style.left = `${((p.x + 1) / 2) * el.clientWidth + 12}px`;
         div.style.top = `${((1 - p.y) / 2) * el.clientHeight - 14}px`;
       };
-      const feats = featuresRef.current;
-      const picks = feats
-        ? picksFromSelection(
-            geometryRef.current,
-            feats,
-            overlayRef.current,
-            transformRef.current,
-            opSelectionRef.current,
-          )
-        : [];
+      const picks = picksFromSelection(opSelectionRef.current, overlaysRef.current);
       picks.forEach((p, i) => {
         const div = selLabelsRef.current[i];
         if (div) div.textContent = p.text;
@@ -515,7 +557,7 @@ export function Viewport({
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       navCube.dispose();
       featureGroupRef.current = null;
-      overlayRef.current = null;
+      overlaysRef.current = [];
       hoverLineRef.current = null;
       hoverPlaneRef.current = null;
       controls.dispose();
@@ -553,24 +595,30 @@ export function Viewport({
     model.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
   }, [transform, stock]);
 
-  // Feature overlays: static outlines + the measure-mode hover line. Runs
-  // after the scene effect (which owns the feature group) and re-runs when
-  // the stock rebuilds the scene.
+  // Feature overlays: static outlines + the measure-mode hover line, one
+  // overlay per source (model + primitives). Runs after the scene effect
+  // (which owns the feature group) and re-runs when the stock rebuilds
+  // the scene.
   useEffect(() => {
     const group = featureGroupRef.current;
     if (!group) return;
-    if (!features || !geometry) {
-      overlayRef.current = null;
+    if (sources.length === 0) {
+      overlaysRef.current = [];
       hoverLineRef.current = null;
       setLabel(null);
       return;
     }
 
-    const data = buildFeatureOverlayData(features, transform);
-    data.edgeLines.visible = showFeatures;
-    data.circleLines.visible = showFeatures;
-    data.holeLines.visible = showFeatures;
-    group.add(data.edgeLines, data.circleLines, data.holeLines);
+    const entries: SourceOverlay[] = sources.map((source) => ({
+      source,
+      data: buildFeatureOverlayData(source.features, source.transform),
+    }));
+    for (const { data } of entries) {
+      data.edgeLines.visible = showFeatures;
+      data.circleLines.visible = showFeatures;
+      data.holeLines.visible = showFeatures;
+      group.add(data.edgeLines, data.circleLines, data.holeLines);
+    }
 
     const hoverLine = new THREE.LineSegments(
       new THREE.BufferGeometry(),
@@ -600,8 +648,16 @@ export function Viewport({
     // the center-to-center connector when exactly two features are selected
     const selObjects: THREE.Object3D[] = [];
     for (const sel of opSelection) {
+      const entry = entries.find((o) => o.source.id === sel.sourceId);
+      if (!entry) continue;
       if (sel.kind === 'plane') {
-        const mesh = planeHighlightMesh(geometry, features, transform, sel.index, SELECT_COLOR);
+        const mesh = planeHighlightMesh(
+          entry.source.geometry,
+          entry.source.features,
+          entry.source.transform,
+          sel.index,
+          SELECT_COLOR,
+        );
         if (mesh) {
           mesh.renderOrder = 7;
           (mesh.material as THREE.MeshBasicMaterial).opacity = 0.35;
@@ -610,7 +666,7 @@ export function Viewport({
         }
       } else {
         const line = new THREE.LineSegments(
-          hoverLineGeometry(data, sel.kind, sel.index),
+          hoverLineGeometry(entry.data, sel.kind, sel.index),
           new THREE.LineBasicMaterial({ color: SELECT_COLOR, transparent: true, depthTest: false }),
         );
         line.renderOrder = 6;
@@ -618,21 +674,23 @@ export function Viewport({
         selObjects.push(line);
       }
     }
-    const picks = picksFromSelection(geometry, features, data, transform, opSelection);
+    const picks = picksFromSelection(opSelection, entries);
     if (picks.length === 2) {
       const conn = connectorLine(picks[0], picks[1]);
       group.add(conn);
       selObjects.push(conn);
     }
 
-    overlayRef.current = data;
+    overlaysRef.current = entries;
     hoverLineRef.current = hoverLine;
 
     return () => {
-      for (const l of [data.edgeLines, data.circleLines, data.holeLines]) {
-        group.remove(l);
-        l.geometry.dispose();
-        (l.material as THREE.Material).dispose();
+      for (const { data } of entries) {
+        for (const l of [data.edgeLines, data.circleLines, data.holeLines]) {
+          group.remove(l);
+          l.geometry.dispose();
+          (l.material as THREE.Material).dispose();
+        }
       }
       group.remove(hoverLine);
       hoverLine.geometry.dispose();
@@ -648,10 +706,10 @@ export function Viewport({
         const mat = obj.material as THREE.Material;
         mat.dispose();
       }
-      overlayRef.current = null;
+      overlaysRef.current = [];
       hoverLineRef.current = null;
     };
-  }, [features, transform, stock, showFeatures, opSelection, geometry]);
+  }, [sources, stock, showFeatures, opSelection]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR
   useEffect(() => {
@@ -681,16 +739,18 @@ export function Viewport({
     };
   }, [previewMoves, showPreview, stock]);
 
-  // user primitives (roughing volumes, tabs): translucent orange volumes
+  // user primitives (roughing volumes, tabs): translucent orange volumes.
+  // Non-indexed meshes from primitiveGeometry (same construction the feature
+  // sources detect on) so raycast faceIndex aligns with faceToPlane; the
+  // meshes register in primMeshesRef for plane picks and face hovering.
   useEffect(() => {
     const group = featureGroupRef.current;
     if (!group) return;
     const objs: THREE.Mesh[] = [];
     for (const p of primitives) {
-      const geo =
-        p.kind === 'cylinder'
-          ? new THREE.CylinderGeometry(p.diameter / 2, p.diameter / 2, p.length, 48)
-          : new THREE.BoxGeometry(p.size.x, p.size.y, p.size.z);
+      const indexed = primitiveGeometry(p);
+      const geo = indexed.toNonIndexed(); // faces align with the source detection
+      indexed.dispose();
       const mesh = new THREE.Mesh(
         geo,
         new THREE.MeshBasicMaterial({
@@ -701,14 +761,14 @@ export function Viewport({
           side: THREE.DoubleSide,
         }),
       );
-      const t = p.transform;
-      mesh.rotation.set(
-        t.rotationDeg.x * D2R,
-        t.rotationDeg.y * D2R,
-        t.rotationDeg.z * D2R,
-      );
-      if (p.kind === 'cylinder') mesh.rotateZ(Math.PI / 2); // geometry Y axis → machine X
-      mesh.position.set(t.position.x, t.position.y, t.position.z);
+      mesh.userData.sourceId = p.id;
+      // pose = primitivePose = transformFn: the axis remap is baked into the
+      // local geometry, so adding any rotation here desyncs the mesh from
+      // the feature overlays and the faceIndex → plane mapping
+      const pose = primitivePose(p);
+      mesh.position.copy(pose.position);
+      mesh.quaternion.copy(pose.quaternion);
+      mesh.scale.copy(pose.scale);
       mesh.renderOrder = 2;
       // wireframe edge for definition
       const edges = new THREE.LineSegments(
@@ -719,6 +779,7 @@ export function Viewport({
       group.add(mesh);
       objs.push(mesh);
     }
+    primMeshesRef.current = objs;
     return () => {
       for (const m of objs) {
         group.remove(m);
@@ -731,6 +792,7 @@ export function Viewport({
           }
         }
       }
+      primMeshesRef.current = [];
     };
   }, [primitives, stock]);
 
@@ -744,7 +806,7 @@ export function Viewport({
       )}
       {opSelection.map((s, i) => (
         <div
-          key={`${s.kind}:${s.index}`}
+          key={`${s.sourceId}:${s.kind}:${s.index}`}
           ref={(el) => {
             selLabelsRef.current[i] = el;
           }}

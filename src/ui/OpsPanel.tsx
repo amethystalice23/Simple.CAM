@@ -29,6 +29,9 @@ interface Props {
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   /** compute the index angle that brings the op's selection to face the cutter */
   onIndexToSelection: (op: JobOp) => void;
+  /** ops whose toolpath is hidden from the preview (the g-code keeps them) */
+  hiddenOps: ReadonlySet<string>;
+  onToggleVisible: (id: string) => void;
   onDeleteOp: (id: string) => void;
   onReorder: (dragId: string, targetId: string) => void;
   onSelectFeatures: (id: string | null) => void;
@@ -392,9 +395,22 @@ export function OpsPanel(props: Props) {
                 <span className="op-snippet" title={selectionSnippet(op, props.featureLabels)}>
                   {selectionSnippet(op, props.featureLabels)}
                 </span>
-                <span className="op-status">
-                  {gen?.error ? '⚠' : gen ? '✓' : ''}
-                </span>
+                <button
+                  type="button"
+                  className={`icon-btn${props.hiddenOps.has(op.id) ? ' dim' : ''}`}
+                  title={
+                    props.hiddenOps.has(op.id)
+                      ? 'Toolpath hidden — click to show it'
+                      : 'Hide this toolpath (the g-code still includes it)'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    props.onToggleVisible(op.id);
+                  }}
+                >
+                  {props.hiddenOps.has(op.id) ? '⊘' : '👁'}
+                </button>
+                {gen?.error && <span className="op-status" title={gen.error}>⚠</span>}
                 <button
                   type="button"
                   className="icon-btn"
@@ -459,8 +475,8 @@ export function OpsPanel(props: Props) {
                   {gen?.error && <p className="error">{gen.error}</p>}
                   {gen?.summary && <p className="hint">{gen.summary}</p>}
                   {!gen && <p className="hint">not calculated yet</p>}
-                  {!props.hasModel && op.kind !== 'faceCylinder' && (
-                    <p className="hint">needs a loaded model</p>
+                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && (
+                    <p className="hint">needs a model or a primitive to select from</p>
                   )}
                   {op.kind === 'faceCylinder' && props.axisMode !== '4-axis' && (
                     <p className="hint">needs 4-axis mode (Stock tab)</p>

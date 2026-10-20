@@ -32,7 +32,11 @@ tests. Optionally wrapped in Tauri for a desktop build later.
 Import (STL three.js loader; STEP via occt-import-js later)
    → Mesh library (three.js render, decimation for viewport)
    → Placement (ModelTransform: position/rotate vs stock, snap-to-stock)
-   → Feature detection + primitives (edge/loop/hole picker and user-added shapes — see docs/edge-tracing.md)
+   → Feature detection + primitives (edge/loop/hole picker and user-added
+     shapes — see docs/edge-tracing.md; primitives are FEATURE SOURCES:
+     their local-mesh features carry `p:<primId>:` ids and are selectable
+     in ops exactly like model features, and the Model tab works with no
+     STL loaded)
    → Operations (ordered list: type + features + tool + params)
    → Toolpath gen (parametric wrapped generators + Clipper2 2.5D + opencamlib WASM for 3-axis)
    → Preview (Move[] IR → viewport polylines — see below)

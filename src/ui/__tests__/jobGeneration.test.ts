@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { identityTransform, rotaryCalibrationOf } from '../../core/types';
 import type { JobOp, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
+import { sourcesFor } from '../featureSources';
+import type { Primitive } from '../../core/types';
 import {
   datumAngleBefore,
   defaultFaceStepOver,
@@ -75,6 +77,7 @@ const ctx: GenContext = {
   transform: identityTransform(),
   tools: [tool, drillTool, smallTool, tinyTool],
   primitives: [],
+  sources: sourcesFor(geometry, features, identityTransform(), []),
   datumAngle: 0,
 };
 
@@ -351,7 +354,12 @@ describe('generateJobOp', () => {
       stepDown: 1,
     };
     // prefill semantics: selecting that face as its floor sets endDepth 4
-    const faceCtx = { ...ctx, geometry: geo, features: f };
+    const faceCtx = {
+      ...ctx,
+      geometry: geo,
+      features: f,
+      sources: sourcesFor(geo, f, identityTransform(), []),
+    };
     const res = generateJobOp({ ...op, startDepth: 0, endDepth: 4 }, faceCtx);
     expect(res.error).toBeNull();
     expect(res.moves.length).toBeGreaterThan(0);
@@ -391,7 +399,14 @@ describe('generateJobOp', () => {
     };
     // the Index op before it emitted the A positioning move; this op runs
     // in the rotated frame — pure XYZ moves, target brought to face up
-    const res = generateJobOp(op, { ...ctx, datumAngle: 90, stock: cylStock, geometry: geo, features: f });
+    const res = generateJobOp(op, {
+      ...ctx,
+      datumAngle: 90,
+      stock: cylStock,
+      geometry: geo,
+      features: f,
+      sources: sourcesFor(geo, f, identityTransform(), []),
+    });
     expect(res.error).toBeNull();
     expect(res.moves.length).toBeGreaterThan(1);
     expect(res.moves.every((m) => m.words.a === undefined)).toBe(true); // no A words
@@ -606,7 +621,12 @@ describe('chamfer op generation', () => {
     const topPlane = f.planes.find(
       (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 1) < 1e-6,
     )!;
-    const capCtx: GenContext = { ...chamferCtx, geometry: geo, features: f };
+    const capCtx: GenContext = {
+      ...chamferCtx,
+      geometry: geo,
+      features: f,
+      sources: sourcesFor(geo, f, identityTransform(), []),
+    };
     const byCircle = generateJobOp(
       { ...chamferOp, featureIds: [topCircle.id] },
       capCtx,
@@ -645,5 +665,111 @@ describe('chamfer op generation', () => {
     const plunge = up.moves.find((m) => m.words.z !== undefined && !m.rapid && m.words.x === undefined);
     expect(plunge).toBeDefined();
     expect(plunge!.words.z).toBeCloseTo(-3.5, 5); // rim z −4 plus 0.5
+  });
+});
+
+describe('generateJobOp: primitive feature sources', () => {
+  /** cylinder Ø10 × 4 standing vertical on the box-stock crown (z 0…4):
+   * local X (the primitive's axis) rotated to machine Z, center at z=2 */
+  const verticalCyl: Primitive = {
+    kind: 'cylinder',
+    id: 'prim-1',
+    diameter: 10,
+    length: 4,
+    original: { diameter: 10, length: 4 },
+    transform: {
+      position: { x: 0, y: 0, z: 2 },
+      rotationDeg: { x: 0, y: -90, z: 0 }, // local X → machine +Z
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  };
+  /** local rim at x=+2 maps to machine z=4 — the top rim circle */
+  const primSources = sourcesFor(null, null, identityTransform(), [verticalCyl]);
+  const rimId = primSources[0].features.circles.find(
+    (c) => Math.abs(c.center.x - 2) < 1e-6,
+  )!.id;
+  const boxPrim: Primitive = {
+    kind: 'box',
+    id: 'prim-2',
+    size: { x: 8, y: 8, z: 3 },
+    original: { x: 8, y: 8, z: 3 },
+    transform: {
+      position: { x: 0, y: 0, z: 1.5 },
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  };
+  const primOnlyCtx: GenContext = {
+    ...ctx,
+    geometry: null,
+    features: null,
+    sources: primSources,
+  };
+
+  it('pockets a primitive rim circle with NO model loaded (disc region)', () => {
+    const res = generateJobOp(
+      { ...pocketOp, featureIds: [rimId], startDepth: 0, endDepth: 2, stepDown: 2, stepOver: 2 },
+      primOnlyCtx,
+    );
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(0);
+    // the Ø10 disc with the Ø2 tool (t3): the outermost tool-center pass
+    // runs at radius 5 − 1 from the rim center
+    const pts = res.moves.filter((m) => m.words.x !== undefined && m.words.y !== undefined);
+    expect(pts.some((m) => Math.abs(Math.hypot(m.words.x!, m.words.y!) - 4) < 0.05)).toBe(true);
+  });
+
+  it('concatenates model and primitive selections into one pocket', () => {
+    const both = sourcesFor(geometry, features, identityTransform(), [verticalCyl]);
+    const res = generateJobOp(
+      {
+        ...pocketOp,
+        featureIds: [holeCircleId, rimId],
+        startDepth: 0,
+        endDepth: 2,
+        stepDown: 2,
+        stepOver: 2,
+      },
+      { ...ctx, sources: both },
+    );
+    expect(res.error).toBeNull();
+    const pts = res.moves.filter((m) => m.words.x !== undefined && m.words.y !== undefined);
+    // the model's Ø4 hole disc and the primitive's Ø10 disc are both cut
+    // (tool-center passes inset by the Ø2 tool's 1mm radius: 1 and 4)
+    expect(pts.some((m) => Math.abs(Math.hypot(m.words.x!, m.words.y!) - 1) < 0.05)).toBe(true);
+    expect(pts.some((m) => Math.abs(Math.hypot(m.words.x!, m.words.y!) - 4) < 0.05)).toBe(true);
+  });
+
+  it('rejects faces + holes mixed ACROSS sources', () => {
+    const faceId = features.planes.find((p) => Math.abs(p.normal.z - 1) < 1e-6)!.id;
+    const both = sourcesFor(geometry, features, identityTransform(), [verticalCyl]);
+    const res = generateJobOp({ ...pocketOp, featureIds: [faceId, rimId] }, { ...ctx, sources: both });
+    expect(res.error).toContain('select either faces or holes');
+  });
+
+  it('fails visibly on dangling ids (resized/deleted primitive)', () => {
+    const res = generateJobOp(
+      { ...pocketOp, featureIds: ['p:prim-9:circle-deadbeef'] },
+      primOnlyCtx,
+    );
+    expect(res.error).toContain('no longer exist');
+  });
+
+  it('chamfers a primitive rim circle as one loop', () => {
+    const res = generateJobOp(
+      { ...chamferOp, featureIds: [rimId] },
+      { ...chamferCtx, geometry: null, features: null, sources: primSources },
+    );
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('1 loop');
+  });
+
+  it('drill on a box primitive: no holes → the select-holes failure', () => {
+    const boxSources = sourcesFor(null, null, identityTransform(), [boxPrim]);
+    const res = generateJobOp(
+      { ...drillOp, featureIds: boxSources[0].features.planes.map((p) => p.id) },
+      { ...ctx, geometry: null, features: null, sources: boxSources },
+    );
+    expect(res.error).toContain('select holes');
   });
 });

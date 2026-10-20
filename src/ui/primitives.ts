@@ -16,6 +16,15 @@ export function nextPrimitiveId(): string {
   return `prim-${++counter}`;
 }
 
+/** Loaded jobs carry their own primitive ids — seed the counter above them
+ * so a later "+ Cylinder" can never collide (same pattern as seedJobOpIds). */
+export function seedPrimitiveIds(primitives: Primitive[]): void {
+  for (const p of primitives) {
+    const n = Number(p.id.replace(/^prim-/, ''));
+    if (Number.isFinite(n) && n > counter) counter = n;
+  }
+}
+
 const unitTransform = (position: { x: number; y: number; z: number }): ModelTransform => ({
   position,
   rotationDeg: { x: 0, y: 0, z: 0 },

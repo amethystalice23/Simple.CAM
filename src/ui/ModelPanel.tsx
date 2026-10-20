@@ -1,18 +1,20 @@
 import { useState } from 'react';
 import * as THREE from 'three';
-import type { ModelTransform, Primitive, Stock } from '../core/types';
+import type { ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
 import { alignAxisToStock, alignToStock, dropToSurface } from './placement';
+import { primitiveGeometry } from './featureSources';
 import { NumInput } from './fields';
 import { resizePrimitive, revertPrimitive, scaleForSize } from './primitives';
 
 interface Props {
-  geometry: THREE.BufferGeometry;
+  /** null when no STL is loaded — primitives still work (the whole point) */
+  geometry: THREE.BufferGeometry | null;
   modelName: string;
   stock: Stock;
   transform: ModelTransform; // the loaded model's
   onTransformChange: (t: ModelTransform) => void;
   primitives: Primitive[];
-  selectedObjectId: string; // 'model' or a primitive id
+  selectedObjectId: string | null; // 'model', a primitive id, or nothing
   onSelectObject: (id: string) => void;
   onPrimitiveChange: (p: Primitive) => void;
   onDeleteObject: () => void;
@@ -57,20 +59,14 @@ function SizeField(props: {
   );
 }
 
-/** Snap extents for a primitive come from its own shape, not the model. */
-function snapGeometry(p: Primitive): THREE.BufferGeometry {
-  if (p.kind === 'box') return new THREE.BoxGeometry(p.size.x, p.size.y, p.size.z);
-  const g = new THREE.CylinderGeometry(p.diameter / 2, p.diameter / 2, p.length, 8);
-  g.rotateZ(Math.PI / 2); // axis ∥ machine X, like the rendered primitive
-  return g;
-}
-
 export function ModelPanel(props: Props) {
   const { geometry, stock, transform, primitives, selectedObjectId } = props;
-  const isModel = selectedObjectId === 'model';
+  // 'model' is only a valid selection when a model is loaded
+  const isModel = selectedObjectId === 'model' && geometry !== null;
   const selectedPrimitive = isModel
     ? null
     : (primitives.find((p) => p.id === selectedObjectId) ?? null);
+  const hasActive = isModel || selectedPrimitive !== null;
   const [uniform, setUniform] = useState(false);
 
   // the active placement applies to whichever object is selected
@@ -83,17 +79,23 @@ export function ModelPanel(props: Props) {
   };
 
   // extents for snapping: the model's geometry, or the primitive's shape
+  // (unified builder — the same mesh the detector and viewport use)
   const withSnapGeometry = (fn: (geo: THREE.BufferGeometry) => ModelTransform) =>
-    setActive(fn(isModel ? geometry : snapGeometry(selectedPrimitive!)));
+    setActive(fn(isModel ? geometry! : primitiveGeometry(selectedPrimitive!)));
 
-  geometry.computeBoundingBox();
-  const bb = geometry.boundingBox!;
-  const native = { x: bb.max.x - bb.min.x, y: bb.max.y - bb.min.y, z: bb.max.z - bb.min.z };
-  const displayed = {
-    x: native.x * transform.scale.x,
-    y: native.y * transform.scale.y,
-    z: native.z * transform.scale.z,
-  };
+  // model dims are only meaningful with a model
+  let native: Vec3 | null = null;
+  let displayed: Vec3 | null = null;
+  if (geometry) {
+    geometry.computeBoundingBox();
+    const bb = geometry.boundingBox!;
+    native = { x: bb.max.x - bb.min.x, y: bb.max.y - bb.min.y, z: bb.max.z - bb.min.z };
+    displayed = {
+      x: native.x * transform.scale.x,
+      y: native.y * transform.scale.y,
+      z: native.z * transform.scale.z,
+    };
+  }
 
   const setPosition = (axis: Axis, v: number) =>
     setActive({ ...active, position: { ...active.position, [axis]: v } });
@@ -109,16 +111,19 @@ export function ModelPanel(props: Props) {
       <section>
         <h2>Objects</h2>
         <div className="tool-list">
-          <button
-            type="button"
-            className={`tool-row${isModel ? ' active' : ''}`}
-            onClick={() => props.onSelectObject('model')}
-          >
-            <span className="tool-name">{props.modelName}</span>
-            <span className="tool-meta">
-              loaded · {displayed.x.toFixed(1)} × {displayed.y.toFixed(1)} × {displayed.z.toFixed(1)} mm
-            </span>
-          </button>
+          {geometry && (
+            <button
+              type="button"
+              className={`tool-row${isModel ? ' active' : ''}`}
+              onClick={() => props.onSelectObject('model')}
+            >
+              <span className="tool-name">{props.modelName}</span>
+              <span className="tool-meta">
+                loaded · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
+                {displayed!.z.toFixed(1)} mm
+              </span>
+            </button>
+          )}
           {primitives.map((p) => (
             <button
               key={p.id}
@@ -134,6 +139,9 @@ export function ModelPanel(props: Props) {
               <span className="tool-meta">primitive</span>
             </button>
           ))}
+          {!geometry && primitives.length === 0 && (
+            <p className="hint">no model loaded — add a primitive below</p>
+          )}
         </div>
       </section>
 
@@ -149,11 +157,11 @@ export function ModelPanel(props: Props) {
               <SizeField
                 key={a}
                 label={SIZE_LABELS[a]}
-                value={displayed[a]}
+                value={displayed![a]}
                 onCommit={(v) =>
                   props.onTransformChange({
                     ...transform,
-                    scale: scaleForSize(native, displayed, a, v, uniform),
+                    scale: scaleForSize(native!, displayed!, a, v, uniform),
                   })
                 }
                 onRevert={() =>
@@ -211,8 +219,9 @@ export function ModelPanel(props: Props) {
         ) : null}
       </section>
 
-      <section>
-        <p className="subhead">Position (mm)</p>
+      {hasActive && (
+        <section>
+          <p className="subhead">Position (mm)</p>
         {AXES.map((a) => (
           <div className="axis-row" key={a}>
             <span className="axis-label">{a.toUpperCase()}</span>
@@ -250,7 +259,8 @@ export function ModelPanel(props: Props) {
             </button>
           </div>
         ))}
-      </section>
+        </section>
+      )}
 
       <section>
         <div className="buttons">
@@ -263,7 +273,7 @@ export function ModelPanel(props: Props) {
           <button
             type="button"
             className="secondary"
-            disabled={isModel}
+            disabled={isModel || !selectedPrimitive}
             onClick={props.onDeleteObject}
           >
             Delete object

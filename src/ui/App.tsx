@@ -8,21 +8,26 @@ import { transformedPositions } from '../cam/slicing';
 import { postCarvera } from '../post/carvera';
 import { identityTransform, rotaryCalibrationOf } from '../core/types';
 import type {
+  CircleFeature,
+  EdgeFeature,
   JobOp,
   ModelTransform,
   Move,
+  PlaneFeature,
   Primitive,
   Stock,
   Tool,
 } from '../core/types';
 import { MAKERA_TOOLS } from '../core/makeraTools.generated';
-import { planeExtent } from './featureOverlays';
+import { planeExtent, transformFn } from './featureOverlays';
+import { resolveFeature, sourcesFor } from './featureSources';
 import { ModelPanel } from './ModelPanel';
 import {
   boxFromPlane,
   cylinderFromCircle,
   defaultBox,
   defaultCylinder,
+  seedPrimitiveIds,
 } from './primitives';
 import {
   datumAngleBefore,
@@ -35,7 +40,6 @@ import {
 import { decodeStl, downloadJobFile, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
-import { transformFn } from './featureOverlays';
 import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -81,6 +85,8 @@ export function App() {
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
   const [gcode, setGcode] = useState<string | null>(null);
   const [showGcode, setShowGcode] = useState(false);
+  /** ops whose toolpath is hidden from the preview (g-code keeps every op) */
+  const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
@@ -91,7 +97,7 @@ export function App() {
   const [measureMode, setMeasureMode] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
-  const [selectedObjectId, setSelectedObjectId] = useState('model');
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>('model');
   const [modelName, setModelName] = useState('Loaded model');
   /** raw STL bytes of the loaded model, kept for job save (embedded in the file) */
   const [modelBytes, setModelBytes] = useState<Uint8Array | null>(null);
@@ -114,24 +120,31 @@ export function App() {
   // feature detection is model-space only: reruns on model load, not moves
   const features = useMemo(() => (geometry ? detectFeatures(geometry) : null), [geometry]);
 
+  /** every selectable-feature provider: the model plus one source per
+   * primitive (its features detected in local space, ids namespaced
+   * `p:<primId>:` so they never collide with model ids) */
+  const sources = useMemo(
+    () => sourcesFor(geometry, features, transform, primitives),
+    [geometry, features, transform, primitives],
+  );
+
   /** short descriptions by feature id, for op title snippets */
   const featureLabels = useMemo(() => {
     const map: Record<string, string> = {};
-    if (!features) return map;
-    for (const c of features.circles) {
-      map[c.id] = `Ø${(c.radius * 2).toFixed(1)}${c.inner ? ' hole' : ''}`;
-    }
-    for (const e of features.edges) {
-      map[e.id] = `L${Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z).toFixed(1)}`;
-    }
-    if (geometry) {
-      for (let i = 0; i < features.planes.length; i++) {
-        const ext = planeExtent(geometry, features, transform, i);
-        map[features.planes[i].id] = ext ? `${ext.w.toFixed(1)}×${ext.h.toFixed(1)}` : 'face';
+    for (const source of sources) {
+      for (const c of source.features.circles) {
+        map[c.id] = `Ø${(c.radius * 2).toFixed(1)}${c.inner ? ' hole' : ''}`;
+      }
+      for (const e of source.features.edges) {
+        map[e.id] = `L${Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z).toFixed(1)}`;
+      }
+      for (let i = 0; i < source.features.planes.length; i++) {
+        const ext = planeExtent(source.geometry, source.features, source.transform, i);
+        map[source.features.planes[i].id] = ext ? `${ext.w.toFixed(1)}×${ext.h.toFixed(1)}` : 'face';
       }
     }
     return map;
-  }, [features, geometry, transform]);
+  }, [sources]);
 
   /** the feature set the viewport highlights/measures: the op being edited,
    * or the global selection when no op is active */
@@ -139,34 +152,22 @@ export function App() {
     ? (ops.find((o) => o.id === editingOpId)?.featureIds ?? [])
     : selection;
   const resolvedSelection: ResolvedSelection[] = useMemo(() => {
-    if (!features) return [];
     const out: ResolvedSelection[] = [];
     for (const id of activeFeatureIds) {
-      const ci = features.circles.findIndex((c) => c.id === id);
-      if (ci >= 0) {
-        out.push({ kind: 'circle', index: ci });
-        continue;
-      }
-      const ei = features.edges.findIndex((e) => e.id === id);
-      if (ei >= 0) {
-        out.push({ kind: 'edge', index: ei });
-        continue;
-      }
-      const pi = features.planes.findIndex((p) => p.id === id);
-      if (pi >= 0) out.push({ kind: 'plane', index: pi });
+      const r = resolveFeature(sources, id);
+      if (r) out.push({ sourceId: r.source.id, kind: r.kind, index: r.index });
     }
     return out;
-  }, [activeFeatureIds, features]);
+  }, [activeFeatureIds, sources]);
 
   /** machine-space position of a feature by id (A=0 frame), for depth
    * prefills and index-angle computation */
   const featureMachinePoint = (id: string): Vector3 | null => {
-    if (!features) return null;
-    const xf = transformFn(transform);
-    const c = features.circles.find((x) => x.id === id);
-    if (c) return xf(c.center);
-    const p = features.planes.find((x) => x.id === id);
-    if (p) return xf(p.point);
+    const r = resolveFeature(sources, id);
+    if (!r) return null;
+    const xf = transformFn(r.source.transform);
+    if (r.kind === 'circle') return xf((r.feature as CircleFeature).center);
+    if (r.kind === 'plane') return xf((r.feature as PlaneFeature).point);
     return null;
   };
 
@@ -243,19 +244,26 @@ export function App() {
   const deleteSelectedObject = () => {
     if (selectedObjectId === 'model') return;
     setPrimitives((prev) => prev.filter((p) => p.id !== selectedObjectId));
-    setSelectedObjectId('model');
+    // fall back: the model if one is loaded, else another primitive
+    setSelectedObjectId(
+      geometry ? 'model' : (primitives.find((p) => p.id !== selectedObjectId)?.id ?? null),
+    );
   };
 
   /** everything generation needs, in one memo (datumAngle varies per op) */
   const genCtx = useMemo(
-    () => ({ stock, geometry, features, transform, tools, primitives }),
-    [stock, geometry, features, transform, tools, primitives],
+    () => ({ stock, geometry, features, transform, tools, primitives, sources }),
+    [stock, geometry, features, transform, tools, primitives, sources],
   );
 
-  /** combined preview + gcode for the whole job, from per-op results */
-  const updateJobOutput = (results: Record<string, GeneratedOp>) => {
+  /** combined preview + gcode for the whole job, from per-op results; the
+   * preview shows only ops not hidden, the g-code includes everything */
+  const updateJobOutput = (results: Record<string, GeneratedOp>, hidden: ReadonlySet<string> = hiddenOps) => {
     const allMoves = ops.flatMap((o) => results[o.id]?.moves ?? []);
-    setPreviewMoves(allMoves.length > 0 ? allMoves : null);
+    const shownMoves = ops
+      .filter((o) => !hidden.has(o.id))
+      .flatMap((o) => results[o.id]?.moves ?? []);
+    setPreviewMoves(shownMoves.length > 0 ? shownMoves : null);
     if (allMoves.length === 0) {
       setGcode(null);
       return;
@@ -270,6 +278,15 @@ export function App() {
     setGcode(
       `; job: ${ops.length} op(s), ~${minutes.toFixed(1)} min cut time\n` + nc,
     );
+  };
+
+  /** show/hide one op's toolpath — display only, the g-code keeps every op */
+  const toggleOpVisible = (id: string) => {
+    const next = new Set(hiddenOps);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setHiddenOps(next);
+    if (generated) updateJobOutput(generated, next);
   };
 
   const recalcAll = () => {
@@ -341,20 +358,23 @@ export function App() {
   const indexToSelection = (op: JobOp) => {
     if (stock.axisMode !== '4-axis' || op.kind !== 'index') return;
     const id = op.featureIds[0];
-    if (!id || !features) return;
-    const xf = transformFn(transform);
+    if (!id) return;
+    const r = resolveFeature(sources, id);
+    if (!r) return;
+    const xf = transformFn(r.source.transform);
     let dir: Vector3 | null = null;
-    const c = features.circles.find((x) => x.id === id);
-    if (c) dir = xf(c.axis).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
-    const pl = features.planes.find((x) => x.id === id);
-    if (pl) dir = xf(pl.normal).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
-    const e = features.edges.find((x) => x.id === id);
-    if (!dir && e) {
+    if (r.kind === 'circle') {
+      const c = r.feature as CircleFeature;
+      dir = xf(c.axis).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
+    } else if (r.kind === 'plane') {
+      const pl = r.feature as PlaneFeature;
+      dir = xf(pl.normal).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
+    } else {
       // edges have no facing direction: fall back to their midpoint's radial
+      const e = r.feature as EdgeFeature;
       const mid = xf(e.a).add(xf(e.b)).multiplyScalar(0.5);
       dir = mid.sub(new Vector3(0, 0, rotaryCalibrationOf(stock).axisZ)).normalize();
     }
-    if (!dir) return;
     const angle = indexToAlignDirection(dir);
     setOps((prev) => prev.map((o) => (o.id === op.id ? { ...o, angle } : o)));
   };
@@ -434,11 +454,12 @@ export function App() {
     setPrimitives(job.primitives);
     setOps(ops);
     seedJobOpIds(ops);
+    seedPrimitiveIds(job.primitives);
     setGenerated({});
     setEditingOpId(null);
     setExpandedOpId(null);
     setSelection([]);
-    setSelectedObjectId('model');
+    setSelectedObjectId(job.model ? 'model' : (job.primitives[0]?.id ?? null));
     setGcode(null);
     setPreviewMoves(null);
     if (job.model) {
@@ -493,7 +514,7 @@ export function App() {
     setEditingOpId(null);
     setExpandedOpId(null);
     setSelection([]);
-    setSelectedObjectId('model');
+    setSelectedObjectId(null); // no model, no primitives yet
     setGcode(null);
     setPreviewMoves(null);
     lastSavedRef.current = jobFingerprint(
@@ -567,7 +588,11 @@ export function App() {
           <button type="button" onClick={newJob}>
             New job
           </button>
-          <button type="button" onClick={saveJob} disabled={!geometry && ops.length === 0}>
+          <button
+            type="button"
+            onClick={saveJob}
+            disabled={!geometry && primitives.length === 0 && ops.length === 0}
+          >
             Save job
           </button>
           <button type="button" onClick={() => openJobInputRef.current?.click()}>
@@ -601,7 +626,7 @@ export function App() {
             geometry={geometry}
             stock={stock}
             transform={transform}
-            features={features}
+            sources={sources}
             showFeatures={showFeatures}
             measureMode={measureMode}
             edgePickingEnabled={editingOpId === null}
@@ -621,7 +646,6 @@ export function App() {
                 key={t}
                 type="button"
                 className={t === tab ? 'active' : ''}
-                disabled={t === 'model' && !geometry}
                 onClick={() => setTab(t)}
               >
                 {TAB_LABELS[t]}
@@ -629,7 +653,7 @@ export function App() {
             ))}
           </nav>
           {tab === 'stock' && <StockPanel stock={stock} onChange={setStock} />}
-          {tab === 'model' && geometry && (
+          {tab === 'model' && (
             <ModelPanel
               geometry={geometry}
               modelName={modelName}
@@ -695,6 +719,12 @@ export function App() {
                     delete next[id];
                     return next;
                   });
+                  setHiddenOps((prev) => {
+                    if (!prev.has(id)) return prev;
+                    const next = new Set(prev);
+                    next.delete(id);
+                    return next;
+                  });
                   if (editingOpId === id) setEditingOpId(null);
                   if (expandedOpId === id) setExpandedOpId(null);
                 }}
@@ -704,6 +734,8 @@ export function App() {
                 onRecalcAll={recalcAll}
                 onToggleExpanded={(id) => setExpandedOpId(expandedOpId === id ? null : id)}
                 onTogglePreview={setShowPreview}
+                hiddenOps={hiddenOps}
+                onToggleVisible={toggleOpVisible}
               />
               {gcode && (
                 <section>

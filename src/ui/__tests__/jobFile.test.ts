@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { JobOp, Stock, Tool } from '../../core/types';
+import type { JobOp, Primitive, Stock, Tool } from '../../core/types';
 import { identityTransform } from '../../core/types';
 import {
   decodeStl,
@@ -323,5 +323,44 @@ describe('normalizeJobOps: chamfer', () => {
     expect(kept[0]).toEqual({
       ...base, kind: 'chamfer', mode: 'existing', side: 'outside', direction: 'up', depth: 1.5,
     });
+  });
+});
+
+describe('model-less jobs with primitive-targeted ops', () => {
+  it('round-trips primitives and namespaced feature ids unchanged', () => {
+    const primitive: Primitive = {
+      kind: 'cylinder',
+      id: 'prim-1',
+      diameter: 20,
+      length: 50,
+      original: { diameter: 20, length: 50 },
+      transform: identityTransform(),
+    };
+    const chamfer: JobOp = {
+      id: 'jobop-2',
+      toolId: 't-used',
+      featureIds: ['p:prim-1:circle-abc123'],
+      kind: 'chamfer',
+      mode: 'add',
+      side: 'auto',
+      direction: 'down',
+      depth: 0.5,
+    };
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [primitive],
+      ops: [chamfer],
+      tools,
+      modelName: 'none',
+      modelBytes: null,
+    });
+    const parsed = parseJobFile(JSON.stringify(file));
+    expect(parsed.model).toBeNull();
+    expect(parsed.primitives).toEqual([primitive]);
+    const op = parsed.ops[0];
+    if (op.kind !== 'chamfer') throw new Error('kind');
+    expect(op.featureIds).toEqual(['p:prim-1:circle-abc123']);
+    expect(op.mode).toBe('add');
   });
 });

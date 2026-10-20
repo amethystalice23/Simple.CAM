@@ -365,6 +365,9 @@ export interface NearestFeature {
   color: number;
   /** px anchor for the floating label (near the feature's representative point) */
   anchor: { x: number; y: number };
+  /** screen-space distance of the snap, px — lets a caller pick the
+   * winner across several sources' overlay data */
+  d: number;
 }
 
 /**

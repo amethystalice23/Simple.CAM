@@ -222,6 +222,9 @@ button.secondary:disabled:hover { background: #31373e; }
   border-radius: 4px;
 }
 .icon-btn:hover { background: #31373e; color: #fff; }
+/* the eye toggle of a hidden toolpath */
+.icon-btn.dim { color: #5a636b; }
+.icon-btn.dim:hover { color: #9aa4ad; }
 .op-body { padding: 6px 8px 10px; border-top: 1px solid #262b30; }
 
 .subhead {
