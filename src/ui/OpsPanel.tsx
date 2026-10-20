@@ -349,14 +349,21 @@ function ParamFields(props: {
     case 'slicePocket':
       return (
         <>
+          <NumberField
+            label="Slice depth (mm)"
+            value={op.sliceDepth}
+            min={0}
+            step={0.5}
+            onCommit={(v) => upd({ sliceDepth: v } as Partial<JobOp>)}
+          />
           <label className="field">
             <span>Region</span>
             <select
               value={op.regionMode}
               onChange={(e) => upd({ regionMode: e.target.value as 'outside' | 'inside' })}
             >
-              <option value="outside">outside — clear around the slice, leave the cross-section</option>
-              <option value="inside">inside — clear the slice interior</option>
+              <option value="outside">outside — profile around the section, leave it standing</option>
+              <option value="inside">inside — pocket the section interior</option>
             </select>
           </label>
           <DepthFields
@@ -370,9 +377,10 @@ function ParamFields(props: {
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
           <p className="hint">
-            the region is the model's cross-section, re-sliced at every level — start = end
-            cuts one simple pocket, a step-down walks a waterline through the band (features
-            that curve inside a level come out stepped)
+            the region is the cross-section at the slice depth — put it where the body is
+            clean, away from rounded or chamfered tops (the violet plane in the viewport
+            drags). The cut runs start → end depth over that one shape; features that
+            change inside the band keep their slice's silhouette
           </p>
         </>
       );

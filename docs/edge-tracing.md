@@ -133,28 +133,28 @@ Z = const and stitch closed contours for Clipper2.
 - Depth levels come from the operations (step-down ladders); slicing is
   on demand and cached by (model id, transform hash, z).
 
-### The slice-pocket op (waterline pocket)
+### The slice-pocket op (section plane + cut band)
 
-Region source = the model's cross-section, not a selection: at each
-depth level slice the placed model at that Z (above), then run the
-pocket engine over the region. Start depth = end depth → one simple
-pocket at one slice; a step-down through a band re-slices per level — a
-true waterline that follows fins, buttresses, and flutes through the Z
-range.
+Region source = the model's cross-section at ONE slice plane, not a
+selection. `sliceDepth` (mm below the crown, default 2 — the viewport
+handle drags it) picks where the section comes from: put it where the
+body is clean, away from rounded/chamfered tops. The op then cuts the
+`startDepth`…`endDepth` band (start defaults to the crown, floor via the
+⇩ pick) using THAT section's shape — cut above and below the slice with
+one region.
 
-- **Region mode**: `'outside'` clears the stock footprint minus the
-  slice (leaves the cross-section standing — outer shaping); `'inside'`
-  clears the slice's interior (hollow parts, flutes as negative space).
-  `'outside'` needs a boolean-difference helper in `src/cam/clipper.ts`
-  (Clipper2 booleans — already a dependency, MIT).
-- Region contours per level come straight from `sliceAtZ`;
-  `droppedChains` surfaces as a per-op warning ("open mesh edges at this
-  level — slice incomplete").
+- **Region mode**: `'outside'` PROFILES around the section — the tool
+  center rides the outline offset out by the tool radius (+ allowance as
+  wall stock), the profile op's outside pass over the section shape; it
+  never needs to fit between part and stock wall, so a snug stock can't
+  reject the tool. `'inside'` pockets the section's interior (hollow
+  parts, negative-space flutes).
+- The region comes from `sliceAtZ` at the section plane only — never
+  from the cut band; `droppedChains` surfaces in the summary.
 - No feature selection is needed for the region — the model is the
-  input (the face-cylinder precedent); the floor comes from the ⇩ pick
-  (§5). Honest limit: features that curve *within* a step-down band
-  come out stair-stepped — smooth draft walls stay the Phase-3
-  drop-cutter argument.
+  input (the face-cylinder precedent). Honest limit: features that
+  change inside the band keep the section's silhouette — a true
+  per-level waterline and smooth draft walls stay Phase-3 arguments.
 
 ## 3. Markup and selection
 
@@ -249,21 +249,24 @@ dangling id fails with the standard "no longer exist — reselect"
 message. This decouples region definition from depth definition — one
 selection no longer has to guess at both.
 
-**Cut-plane overlay (slice pocket only).** While the slice-pocket op
-is expanded, the viewport draws, in a dedicated slice color (violet —
-distinct from every existing overlay), two things: (a) the CUT PLANE —
-a translucent quad at the slice Z spanning the model's XY bounds — and
-(b) the contour outline at that slice (the `sliceAtZ` loops as a
-polyline, same color, full opacity). It refreshes live: depth-box
-edits, the plane handle, and model moves all redraw it (slicing is a
-single mesh pass; recomputed at most once per frame).
+**Section-plane overlay (slice pocket only).** While the slice-pocket
+op is expanded, the viewport draws, in a dedicated slice color (violet —
+distinct from every existing overlay), two things: (a) the SECTION
+PLANE — a translucent quad at `crown − sliceDepth` spanning the model's
+XY bounds — and (b) the contour outline at that plane (the `sliceAtZ`
+loops as a polyline, same color, full opacity). It refreshes live:
+slice-depth edits, the plane handle, and model moves all redraw it
+(slicing is a single mesh pass; recomputed at most once per frame).
 
-**Plane handle.** A grab pill on the cut plane's near edge: drag
-vertically to slide the slice Z. During the drag the orbit controls
+**Plane handle.** A small grab ball on the section plane's near edge: drag
+vertically to slide `sliceDepth` (the cut band is untouched). During the drag the orbit controls
 disable, pointer Δy maps to ΔZ at the handle's depth (the same
-px-per-mm the snap logic uses), the overlay and the start-depth box
-follow live, and releasing commits. One handle = the slice plane; the
-floor stays a feature pick, not a second handle.
+px-per-mm the snap logic uses), the overlay and the Slice-depth box
+follow live, and releasing commits. The drag state lives in a ref so
+the mid-drag prop updates (the live box) never kill it — the effect
+cleanup on prop changes must not touch it; only the unmount-only
+cleanup does. One handle = the section plane; the floor stays a feature
+pick, not a second handle.
 
 ## Data model (src/core/types.ts additions)
 

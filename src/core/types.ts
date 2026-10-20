@@ -531,20 +531,26 @@ export type JobOp =
   | (JobOpBase & {
       kind: 'slicePocket';
       /**
-       * The waterline pocket (edge-tracing §2): the region is the model's
-       * Z cross-section, sliced fresh at every depth level — start = end
-       * cuts one simple pocket, a step-down walks a waterline through the
-       * band. No feature selection; the floor comes from the ⇩ pick.
+       * Cut from the model's cross-section (edge-tracing §2): the region
+       * comes from ONE slice plane (`sliceDepth`) — put it where the
+       * section is clean, away from rounded/chamfered tops — and the op
+       * cuts the `startDepth`…`endDepth` band with that region. 'outside'
+       * profiles around the section (the tool rides the outline, offset
+       * out by the tool radius + allowance — fins/buttresses keep their
+       * shape through the band); 'inside' pockets the section interior.
+       * No feature selection; the floor comes from the ⇩ pick; the
+       * viewport cut-plane handle drags `sliceDepth`.
        */
-      /** 'outside' clears the stock around the slice (leaves the
-       * cross-section standing — outer shaping); 'inside' clears the
-       * slice's interior (hollow parts, negative-space flutes) */
       regionMode: 'outside' | 'inside';
-      /** the slice Z / cut start, mm below the stock crown */
+      /** the section plane: where the cross-section comes from, mm below
+       * the stock crown — independent of the cut band below */
+      sliceDepth: number;
+      /** cut start, mm below the stock crown (0 = the crown) */
       startDepth: number;
-      /** cut floor, mm below the stock crown (start = end → single level) */
+      /** cut floor, mm below the stock crown (start = end → single pass) */
       endDepth: number;
-      /** roughing stock left on the part walls and the floor, mm */
+      /** wall stock left outside the tool path (outside mode) / on the
+       * interior walls and floor (inside mode), mm */
       allowance: number;
       stepDown: number;
       stepOver: number;

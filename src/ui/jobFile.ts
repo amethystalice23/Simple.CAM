@@ -53,7 +53,16 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
   return ops.map((op) => {
     // pre-⇩ saves carry no floorFeatureId — detached is the null default
     if (isDepthBearingJobOp(op)) {
-      return op.floorFeatureId === undefined ? { ...op, floorFeatureId: null } : op;
+      const normalized = op.floorFeatureId === undefined ? { ...op, floorFeatureId: null } : op;
+      // pre-sliceDepth slice pockets kept the section plane in startDepth
+      // (runtime data from an interim build — probe without narrowing)
+      if (normalized.kind === 'slicePocket') {
+        const rawSlice = (normalized as { sliceDepth?: unknown }).sliceDepth;
+        if (typeof rawSlice !== 'number') {
+          return { ...normalized, sliceDepth: normalized.startDepth } as JobOp;
+        }
+      }
+      return normalized;
     }
     if (op.kind === 'chamfer') {
       // ops saved before all four fields existed (or by a mid-build dev

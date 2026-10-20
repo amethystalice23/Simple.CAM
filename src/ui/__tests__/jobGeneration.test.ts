@@ -870,7 +870,7 @@ describe('⇩ floor pick (floorFeatureId)', () => {
   });
 });
 
-describe('slice pocket (waterline)', () => {
+describe('slice pocket (section plane + band)', () => {
   // a stepped model: 20×20 base (z −6…−4) under a 8×8 boss (z −4…0) —
   // slicing it at different Z levels yields different cross-sections
   const stepped = (() => {
@@ -898,82 +898,95 @@ describe('slice pocket (waterline)', () => {
     featureIds: [],
     kind: 'slicePocket',
     regionMode: 'outside',
+    sliceDepth: 2, // z −2: inside the boss → the 8×8 section
     startDepth: 0, // the crown
-    endDepth: 2, // down to z −2 (still inside the boss → same 8×8 section)
+    endDepth: 2,
     allowance: 0,
     stepDown: 1,
     stepOver: 2,
     floorFeatureId: null,
   };
 
-  it('new ops default to outside mode with tool-derived steps', () => {
+  it('new ops default: section 2 below the crown, band from the crown down', () => {
     const op = newJobOp('slicePocket', smallTool, boxStock.materialId, boxStock);
     if (op.kind !== 'slicePocket') throw new Error('kind');
     expect(op.regionMode).toBe('outside');
+    expect(op.sliceDepth).toBe(2);
+    expect(op.startDepth).toBe(0);
     expect(op.floorFeatureId).toBeNull();
     expect(op.stepDown).toBeGreaterThan(0);
-    expect(op.stepOver).toBeGreaterThan(0);
   });
 
-  it('outside: clears around the cross-section, leaving it standing', () => {
+  it('outside PROFILES around the section: the tool never enters it', () => {
     const res = generateJobOp(sliceOp, steppedCtx);
     expect(res.error).toBeNull();
-    // cut moves exist and never enter the 8×8 boss footprint
-    const feed = res.moves.filter((m) => !m.rapid);
+    const feed = res.moves.filter((m) => !m.rapid && (m.words.x !== undefined || m.words.y !== undefined));
     expect(feed.length).toBeGreaterThan(0);
-    const insideBoss = feed.some((m) => Math.abs(m.words.x!) < 3.9 && Math.abs(m.words.y!) < 3.9);
-    expect(insideBoss, 'a cut entered the part cross-section').toBe(false);
-    // two levels (step-down 1 over a 2mm band) → level count in the summary
-    expect(res.summary).toContain('2 level(s)');
+    // tool center rides ≥ the tool radius outside the 8×8 section (half 4)
+    for (const m of feed) {
+      expect(Math.max(Math.abs(m.words.x ?? 0), Math.abs(m.words.y ?? 0))).toBeGreaterThan(3.9);
+    }
+    // the cut band start→end is stepped by the step-down
+    expect(res.moves.some((m) => !m.rapid && m.words.z !== undefined && m.words.z < -0.5)).toBe(true);
   });
 
-  it('outside with allowance leaves wall stock: no cut within allowance of the section', () => {
+/** distance from a point to a centered square section of half-width h */
+  const distToSquare = (x: number, y: number, h: number) =>
+    Math.hypot(Math.max(Math.abs(x) - h, 0), Math.max(Math.abs(y) - h, 0));
+
+  it('outside + allowance keeps the tool center a full radius + allowance off the part', () => {
     const res = generateJobOp({ ...sliceOp, allowance: 1 }, steppedCtx);
     expect(res.error).toBeNull();
-    const feed = res.moves.filter((m) => !m.rapid);
-    // 4mm boss half + 1mm allowance; 0.9 keeps float slack, tool radius 1
-    const tooClose = feed.some(
-      (m) => Math.abs(m.words.x!) < 4 + 0.9 - 1 && Math.abs(m.words.y!) < 4 + 0.9 - 1,
-    );
-    expect(tooClose, 'a cut came within the allowance of the part').toBe(false);
+    const xy = res.moves.filter((x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined));
+    expect(xy.length).toBeGreaterThan(0);
+    for (const m of xy) {
+      // Euclidean distance to the 8×8 section ≥ tool radius + allowance
+      // (the round-join corner arcs sit at that radius from the corner
+      // point, so a max-coordinate bound would be geometrically wrong)
+      expect(distToSquare(m.words.x ?? 0, m.words.y ?? 0, 4)).toBeGreaterThan(1.9);
+    }
   });
 
-  it('inside: clears the cross-section interior only', () => {
+  it('the section comes from the SLICE depth, not the cut band (the clean-body case)', () => {
+    // slice plane at −5.5 → the 20×20 base section; the band 0…2 never
+    // reaches it, but the profile must still ride the WIDE section —
+    // exactly the "avoid the rounded top, cut from a clean body" flow
+    const res = generateJobOp({ ...sliceOp, sliceDepth: 5.5 }, steppedCtx);
+    expect(res.error).toBeNull();
+    const xy = res.moves.filter((x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined));
+    expect(xy.length).toBeGreaterThan(0);
+    for (const m of xy) {
+      // rides the 20×20 base section: at least the tool radius off it
+      expect(distToSquare(m.words.x ?? 0, m.words.y ?? 0, 10)).toBeGreaterThan(0.9);
+    }
+    // and the straight sides sit out at half 10 + tool radius — the 8×8
+    // boss band was never used for the section
+    expect(xy.some((m) => Math.abs(m.words.x ?? 0) > 10.9 || Math.abs(m.words.y ?? 0) > 10.9)).toBe(true);
+  });
+
+  it('inside pockets the section interior over the band', () => {
     const res = generateJobOp({ ...sliceOp, regionMode: 'inside' }, steppedCtx);
     expect(res.error).toBeNull();
     const feed = res.moves.filter((m) => !m.rapid);
-    // every cut is inside the 8×8 section (tool radius 1 → |x|,|y| < 3.9)
     expect(feed.length).toBeGreaterThan(0);
-    const outside = feed.some(
-      (m) => Math.abs(m.words.x!) > 4 + 0.1 || Math.abs(m.words.y!) > 4 + 0.1,
-    );
-    expect(outside, 'an inside cut escaped the cross-section').toBe(false);
+    // tool center stays inside the 8×8 section (inset by the tool radius)
+    for (const m of feed) {
+      expect(Math.abs(m.words.x ?? 0)).toBeLessThan(4 + 0.1);
+      expect(Math.abs(m.words.y ?? 0)).toBeLessThan(4 + 0.1);
+    }
   });
 
-  it('start = end cuts exactly one level', () => {
-    const res = generateJobOp({ ...sliceOp, endDepth: 0 }, steppedCtx);
-    expect(res.error).toBeNull();
-    expect(res.summary).toContain('1 level(s)');
-  });
-
-  it('a deeper band follows the wider base section (the waterline shape change)', () => {
-    // cut to z −4.5: level 1 at −0.5 slices the 8×8 boss, level 2 at −1.5... 
-    // end depth 5.5 → levels reach below −4 → the 20×20 base section
-    const res = generateJobOp({ ...sliceOp, endDepth: 5.5, stepDown: 1.5 }, steppedCtx);
-    expect(res.error).toBeNull();
-    // base level (z −5, section 20×20): cuts spread beyond the boss extent
-    const maxX = Math.max(...res.moves.filter((m) => !m.rapid).map((m) => Math.abs(m.words.x ?? 0)));
-    expect(maxX).toBeGreaterThan(8); // outside the 8×8 boss, inside the 20×20 stock
-  });
-
-  it('fails visibly without a model and under an index datum', () => {
+  it('fails visibly: no model, index datum, empty section plane', () => {
     const noModel = generateJobOp(sliceOp, { ...steppedCtx, geometry: null, features: null, sources: [] });
     expect(noModel.error).toContain('needs a loaded model');
     const indexed = generateJobOp(sliceOp, { ...steppedCtx, datumAngle: 90 });
     expect(indexed.error).toContain('flat frame');
+    // the plane below the model's body slices empty
+    const empty = generateJobOp({ ...sliceOp, sliceDepth: 10 }, steppedCtx);
+    expect(empty.error).toContain('section plane');
   });
 
-  it('the ⚡ floor pick applies to slice pockets too', () => {
+  it('the ⇩ floor pick applies to slice pockets too', () => {
     const faceId = steppedFeatures.planes.find((p) => Math.abs(p.normal.z) > 0.99)!.id;
     const linked = generateJobOp({ ...sliceOp, floorFeatureId: faceId }, steppedCtx);
     expect(linked.error).toBeNull();

@@ -800,7 +800,8 @@ export function Viewport({
     );
     outline.renderOrder = 9;
     const handle = new THREE.Mesh(
-      new THREE.SphereGeometry(2.4, 16, 12),
+      // small — it sits ON the plane edge, not a blob over the part
+      new THREE.SphereGeometry(1.2, 16, 12),
       new THREE.MeshBasicMaterial({ color: SLICE_COLOR, depthTest: false }),
     );
     handle.renderOrder = 10;
@@ -940,13 +941,25 @@ export function Viewport({
       dom.removeEventListener('pointermove', onMove);
       dom.removeEventListener('pointerup', onUp);
       dom.removeEventListener('pointercancel', onUp);
-      // an unmount mid-drag must not leave the controls disabled
-      controls.enabled = true;
-      sliceDragRef.current = null;
+      // A prop change (the live box update an active drag CAUSES) re-runs
+      // this cleanup — it must NOT kill the drag or re-enable the orbit
+      // mid-gesture: the fresh effect re-adds listeners that continue via
+      // sliceDragRef, and onUp restores the controls when the user lets
+      // go. Only a true unmount has no fresh run (the unmount-only effect
+      // below handles that).
       group.remove(g);
       disposeGroup(g);
     };
   }, [slicePreview, geometry, transform, stock]);
+
+  // unmount only: no fresh effect run follows, so end any drag and give
+  // the controls back
+  useEffect(() => {
+    return () => {
+      sliceDragRef.current = null;
+      if (controlsRef.current) controlsRef.current.enabled = true;
+    };
+  }, []);
 
   // user primitives (roughing volumes, tabs): translucent orange volumes.
   // Non-indexed meshes from primitiveGeometry (same construction the feature

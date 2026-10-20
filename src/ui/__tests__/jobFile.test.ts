@@ -179,6 +179,40 @@ describe('parseJobFile', () => {
     expect(reloaded.floorFeatureId).toBe('circle-ff');
   });
 
+  it('migrates pre-sliceDepth slice pockets: the section plane lived in startDepth', () => {
+    const sliceOp = {
+      id: 'jobop-s',
+      toolId: 't-used',
+      featureIds: [],
+      kind: 'slicePocket',
+      regionMode: 'outside',
+      sliceDepth: 3,
+      startDepth: 3, // the interim format: the section plane
+      endDepth: 6,
+      allowance: 0,
+      stepDown: 1,
+      stepOver: 2,
+      floorFeatureId: null,
+    } as JobOp;
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops: [sliceOp],
+      tools,
+      modelName: 'part.stl',
+      modelBytes: new Uint8Array([9, 9]),
+    });
+    const raw = JSON.parse(JSON.stringify(file)) as { ops: JobOp[] };
+    delete (raw.ops[0] as { sliceDepth?: number }).sliceDepth;
+    const parsed = parseJobFile(JSON.stringify(raw));
+    const p0 = parsed.ops[0];
+    if (p0.kind !== 'slicePocket') throw new Error('kind');
+    expect(p0.sliceDepth).toBe(3); // from the old startDepth
+    // and a current file round-trips untouched
+    expect(parseJobFile(JSON.stringify(file)).ops[0]).toEqual(sliceOp);
+  });
+
   it('normalizes legacy face patterns: zigzag and missing both map to spiral', () => {
     const legacyFace = {
       id: 'jobop-9',

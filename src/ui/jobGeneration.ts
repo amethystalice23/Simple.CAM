@@ -11,7 +11,7 @@ import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
-import { offsetInward, offsetOutward, difference } from '../cam/clipper';
+import { offsetInward } from '../cam/clipper';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
@@ -33,7 +33,7 @@ import type {
 import { isDepthBearingJobOp, rotaryCalibrationOf, round2 } from '../core/types';
 import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
 import { resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
-import { stockFootprint, stockSpan, stockTopZ } from './placement';
+import { stockSpan, stockTopZ } from './placement';
 
 export interface GeneratedOp {
   moves: Move[];
@@ -146,7 +146,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         ...base,
         kind,
         regionMode: 'outside',
-        startDepth: 0,
+        sliceDepth: 2, // into the body by default — away from small tops
+        startDepth: 0, // the cut starts at the crown
         endDepth: 2,
         allowance: 0,
         stepDown,
@@ -175,6 +176,24 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
 }
 
 const fail = (error: string): GeneratedOp => ({ moves: [], minutes: 0, error, summary: null });
+
+/** One-line summary for a slice-pocket result, shared by both modes. */
+function sliceSummary(
+  op: Extract<JobOp, { kind: 'slicePocket' }>,
+  range: { topZ: number; floorZ: number },
+  passes: number,
+  minutes: number,
+  dropped: number,
+  mode: 'pocket' | 'profile',
+): string {
+  return (
+    `${passes} passes around the section ${op.sliceDepth.toFixed(1)} below the crown (${mode}), ` +
+    `z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
+    (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+    `, ~${minutes.toFixed(1)} min` +
+    (dropped > 0 ? ` · ${dropped} open chain(s) dropped — slice incomplete` : '')
+  );
+}
 
 /**
  * The indexed cutting frame for an op: null for flat work (datum 0 or 3-axis
@@ -490,8 +509,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
       }
 
       case 'slicePocket': {
-        // the region is the model's cross-section (edge-tracing §2) —
-        // no selection at all; the slice comes fresh from the mesh
+        // the region is the model's cross-section (edge-tracing §2) — no
+        // selection at all; the slice comes from the mesh at ONE plane
         if (!ctx.geometry) return fail('needs a loaded model — the slice comes from it');
         if (ctx.datumAngle !== 0) {
           return fail('slice pockets run in the flat frame — no Index op above them (tilted slicing comes later)');
@@ -503,42 +522,31 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             'end depth must be at or below start depth, and the allowance must leave something to cut',
           );
         }
-        // one slice per depth level — start = end → the single level itself
-        const levels: number[] = [];
-        for (let z = range.topZ; z > range.floorZ + 1e-9; z = Math.max(z - op.stepDown, range.floorZ)) {
-          levels.push(z);
-        }
-        if (levels.length === 0) levels.push(range.floorZ);
         const positions = transformedPositions(ctx.geometry, ctx.transform);
-        const footprint = op.regionMode === 'outside' ? stockFootprint(ctx.stock) : null;
-        const moves: Move[] = [];
-        let minutes = 0;
-        let passes = 0;
-        let slicedLevels = 0;
-        let dropped = 0;
-        for (const z of levels) {
-          const slice = sliceAtZ(positions, z);
-          dropped += slice.droppedChains;
-          if (slice.contours.length === 0) continue; // model absent at this level
-          let regions: Vec2[][];
-          if (op.regionMode === 'inside') {
-            regions =
-              op.allowance > 0 ? offsetInward(slice.contours, op.allowance) : slice.contours;
-          } else {
-            // wall stock grows the part; the cut region is everything else
-            const part =
-              op.allowance > 0 ? offsetOutward(slice.contours, op.allowance) : slice.contours;
-            regions = difference(footprint!, part);
+        const slice = sliceAtZ(positions, crown - op.sliceDepth);
+        if (slice.contours.length === 0) {
+          return fail(
+            'the section plane at this slice depth is empty — move it (the viewport handle ' +
+              'or the Slice depth box) to where the model has a clean body',
+          );
+        }
+        const dropped = slice.droppedChains;
+
+        if (op.regionMode === 'inside') {
+          // pocket the section's interior over the whole band
+          const regions =
+            op.allowance > 0 ? offsetInward(slice.contours, op.allowance) : slice.contours;
+          if (regions.length === 0) {
+            return fail('the side allowance exceeds the section — nothing left to clear');
           }
-          if (regions.length === 0) continue;
           const res = pocket2d(
             {
               kind: 'pocket',
               id: op.id,
               toolId: tool.id,
               regions,
-              topZ: z,
-              floorZ: z,
+              topZ: range.topZ,
+              floorZ: range.floorZ,
               stepDown: op.stepDown,
               stepOver: op.stepOver,
               feed,
@@ -547,24 +555,41 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             },
             tool,
           );
-          moves.push(...res.moves);
-          minutes += res.estimatedMinutes;
-          passes += res.passes;
-          slicedLevels++;
+          return {
+            moves: res.moves,
+            minutes: res.estimatedMinutes,
+            error: null,
+            summary: sliceSummary(op, range, res.passes, res.estimatedMinutes, dropped, 'pocket'),
+          };
         }
-        if (slicedLevels === 0) {
-          return fail('every level sliced empty — the model sits outside the cut range');
-        }
+
+        // 'outside': PROFILE around the section — the tool rides the
+        // outline offset out by the tool radius (+allowance as wall stock),
+        // exactly the profile op's outside pass but over the section
+        // shape from the slice plane. Never needs to fit between the part
+        // and the stock wall, so a snug stock can't reject the tool.
+        const res = profile2d(
+          {
+            kind: 'profile',
+            id: op.id,
+            toolId: tool.id,
+            contours: slice.contours,
+            side: 'outside',
+            allowance: op.allowance,
+            topZ: range.topZ,
+            floorZ: range.floorZ,
+            stepDown: op.stepDown,
+            feed,
+            plungeFeed,
+            safeClearance: 5,
+          },
+          tool,
+        );
         return {
-          moves,
-          minutes,
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
           error: null,
-          summary:
-            `${passes} passes / ${levels.length} level(s) (${op.regionMode}), ` +
-            `z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
-            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
-            `, ~${minutes.toFixed(1)} min` +
-            (dropped > 0 ? ` · ${dropped} open chain(s) dropped — slice incomplete` : ''),
+          summary: sliceSummary(op, range, res.passes, res.estimatedMinutes, dropped, 'profile'),
         };
       }
       case 'drill': {
