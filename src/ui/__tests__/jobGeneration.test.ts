@@ -116,6 +116,7 @@ const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   stepDown: 0.5,
   side: 'online',
   floorFeatureId: null,
+  clearToStock: false,
 };
 
 describe('newJobOp / defaults', () => {
@@ -905,6 +906,7 @@ describe('slice pocket (section plane + band)', () => {
     stepDown: 1,
     stepOver: 2,
     floorFeatureId: null,
+    clearToStock: false,
   };
 
   it('new ops default: section 2 below the crown, band from the crown down', () => {
@@ -984,6 +986,73 @@ describe('slice pocket (section plane + band)', () => {
     // the plane below the model's body slices empty
     const empty = generateJobOp({ ...sliceOp, sliceDepth: 10 }, steppedCtx);
     expect(empty.error).toContain('section plane');
+  });
+
+  it('the waste-stock toggle clears the excess out to the stock edge', () => {
+    // boxStock spans X −30…30, Y −20…20 — the 8×8 section leaves a wide
+    // frame that the tool (Ø2) fits: full clearance, all the way out
+    const res = generateJobOp({ ...sliceOp, clearToStock: true }, steppedCtx);
+    expect(res.error).toBeNull();
+    const xy = res.moves.filter((x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined));
+    expect(xy.length).toBeGreaterThan(0);
+    // stays off the section (≥ tool radius) AND reaches far toward the
+    // stock wall (a profile ring never would)
+    for (const m of xy) {
+      expect(distToSquare(m.words.x ?? 0, m.words.y ?? 0, 4)).toBeGreaterThan(0.9);
+    }
+    expect(xy.some((m) => Math.abs(m.words.x ?? 0) > 15 || Math.abs(m.words.y ?? 0) > 15)).toBe(true);
+    expect(res.summary).toContain('to the stock edge');
+  });
+
+  it('the toggle falls back to the outline ring on a frame thinner than the tool', () => {
+    // a stock only 1mm bigger than the 8×8 section per side, centered
+    // on it: the frame is 1mm, thinner than the Ø2 tool — ring + a
+    // note, not an error
+    const tightStock = {
+      ...boxStock,
+      sizeX: 10,
+      sizeY: 10,
+      origin: { x: 'mid' as const, y: 'mid' as const, z: 'max' as const },
+    } as typeof boxStock;
+    const tightCtx = { ...steppedCtx, stock: tightStock };
+    const res = generateJobOp({ ...sliceOp, clearToStock: true }, tightCtx);
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('outline ring only');
+    const xy = res.moves.filter((x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined));
+    for (const m of xy) {
+      // the ring: at the tool radius off the section, never near 6 (the
+      // stock wall) — a clearance pocket would have reached it
+      expect(distToSquare(m.words.x ?? 0, m.words.y ?? 0, 4)).toBeGreaterThan(0.9);
+      expect(Math.abs(m.words.x ?? 0)).toBeLessThan(5.1);
+      expect(Math.abs(m.words.y ?? 0)).toBeLessThan(5.1);
+    }
+  });
+
+  it('profile outside + the toggle clears to the stock edge too', () => {
+    // the boss's top face (z 0) on the stepped model: profile outside
+    const bossTop = steppedFeatures.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && p.point.z > -0.01,
+    )!;
+    expect(bossTop).toBeDefined();
+    const op: Extract<JobOp, { kind: 'profile' }> = {
+      id: 'opP',
+      toolId: 't3',
+      featureIds: [bossTop.id],
+      kind: 'profile',
+      selectionIs: 'floor',
+      startDepth: 0,
+      endDepth: 1,
+      allowance: 0,
+      stepDown: 1,
+      side: 'outside',
+      floorFeatureId: null,
+      clearToStock: true,
+    };
+    const res = generateJobOp(op, steppedCtx);
+    expect(res.error).toBeNull();
+    const xy = res.moves.filter((x) => !x.rapid && (x.words.x !== undefined || x.words.y !== undefined));
+    expect(xy.some((m) => Math.abs(m.words.x ?? 0) > 15)).toBe(true);
+    expect(res.summary).toContain('cleared to the stock edge');
   });
 
   it('the ⇩ floor pick applies to slice pockets too', () => {

@@ -193,6 +193,7 @@ describe('parseJobFile', () => {
       stepDown: 1,
       stepOver: 2,
       floorFeatureId: null,
+      clearToStock: false,
     } as JobOp;
     const file = saveJobFile({
       stock: boxStock,

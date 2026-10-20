@@ -62,6 +62,13 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
           return { ...normalized, sliceDepth: normalized.startDepth } as JobOp;
         }
       }
+      // pre-clearToStock profile/slicePocket saves: the toggle is off
+      if (normalized.kind === 'profile' || normalized.kind === 'slicePocket') {
+        const rawClear = (normalized as { clearToStock?: unknown }).clearToStock;
+        if (rawClear !== true && rawClear !== false) {
+          return { ...normalized, clearToStock: false } as JobOp;
+        }
+      }
       return normalized;
     }
     if (op.kind === 'chamfer') {

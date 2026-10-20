@@ -366,6 +366,16 @@ function ParamFields(props: {
               <option value="inside">inside — pocket the section interior</option>
             </select>
           </label>
+          {op.regionMode === 'outside' && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={op.clearToStock}
+                onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
+              />
+              <span>clear excess stock to the stock edge</span>
+            </label>
+          )}
           <DepthFields
             op={op}
             onChange={props.onChange}
@@ -405,6 +415,16 @@ function ParamFields(props: {
               <option value="online">on line</option>
             </select>
           </label>
+          {op.side === 'outside' && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={op.clearToStock}
+                onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
+              />
+              <span>clear excess stock to the stock edge</span>
+            </label>
+          )}
           <DepthFields
             op={op}
             onChange={props.onChange}

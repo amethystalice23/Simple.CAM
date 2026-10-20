@@ -527,6 +527,11 @@ export type JobOp =
       side: 'outside' | 'inside' | 'online';
       /** the ⇩ floor pick — see the pocket variant */
       floorFeatureId: string | null;
+      /** side=outside only: also clear the excess between the contour
+       * and the stock wall (the waste-stock toggle, edge-tracing §2) —
+       * falls back to the outline ring when the frame is thinner than
+       * the tool */
+      clearToStock: boolean;
     })
   | (JobOpBase & {
       kind: 'slicePocket';
@@ -556,6 +561,11 @@ export type JobOp =
       stepOver: number;
       /** the ⇩ floor pick — see the pocket variant */
       floorFeatureId: string | null;
+      /** regionMode=outside only: also clear the excess between the
+       * section and the stock wall (the waste-stock toggle, edge-tracing
+       * §2) — falls back to the outline ring when the frame is thinner
+       * than the tool */
+      clearToStock: boolean;
     });
 
 /** Ops with depth boxes and the ⇩ floor pick (edge-tracing §5). */

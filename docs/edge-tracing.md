@@ -156,14 +156,16 @@ one region.
   change inside the band keep the section's silhouette — a true
   per-level waterline and smooth draft walls stay Phase-3 arguments.
 
-**Future enhancement (noted 2026-10-20, Alice — build when a real part
-demands it):** a per-op **waste-stock toggle**. ON: paths may run off
-the stock edge — clean exits on tight stocks (an outside profile whose
-offset ring crosses the boundary), and the slice pocket's outside mode
-could additionally clear to the stock wall when the frame fits the tool
-(falling back to the profile ring when it doesn't). OFF (default):
-generation clamps regions rigidly within the stock footprint. One
-knob, shared by the ops it applies to — no third region mode.
+**The waste-stock toggle** (`clearToStock`, implemented 2026-10-20
+after Alice's cross-part needed it): a per-op checkbox "clear excess
+stock to the stock edge", on profile (side=outside) and slice pocket
+(regionMode=outside). ON: the excess between the contour/section and
+the stock footprint is pocketed with step-over passes over the whole
+band (region = stock − allowance-grown part); when the frame is
+thinner than the tool the op falls back to the outline ring and says
+so in the summary — an error is never the price of the toggle. OFF
+(default): the outline ring only. One knob, shared by both ops — no
+third region mode.
 
 ## 3. Markup and selection
 
