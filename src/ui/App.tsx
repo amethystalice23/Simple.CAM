@@ -280,6 +280,25 @@ export function App() {
     );
   };
 
+  /** the expanded slice-pocket op's cut plane (edge-tracing §5): machine Z
+   * from its start depth, and the drag-handle commit back into the op */
+  const slicePreview = useMemo(() => {
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!geometry || !op || op.kind !== 'slicePocket') return null;
+    const crown = stockTopZ(stock);
+    return {
+      z: crown - op.startDepth,
+      onZChange: (z: number) =>
+        setOps((prev) =>
+          prev.map((o) =>
+            o.id === op.id && o.kind === 'slicePocket'
+              ? { ...o, startDepth: Math.max(crown - z, 0) }
+              : o,
+          ),
+        ),
+    };
+  }, [ops, expandedOpId, geometry, stock]);
+
   /** show/hide one op's toolpath — display only, the g-code keeps every op */
   const toggleOpVisible = (id: string) => {
     const next = new Set(hiddenOps);
@@ -676,6 +695,7 @@ export function App() {
             primitives={primitives}
             previewMoves={previewMoves}
             showPreview={showPreview}
+            slicePreview={slicePreview}
             onToggleSelect={toggleSelect}
             onClearSelection={clearSelection}
           />

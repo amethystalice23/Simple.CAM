@@ -214,6 +214,8 @@ export const HOLE_HOVER = 0x99eeff;
 export const PLANE_SELECT = 0xf0c050;
 /** operation-selection highlight (distinct from measure picks) */
 export const SELECT_COLOR = 0x7fdfff;
+/** slice-pocket cut plane + contour overlay (edge-tracing §5) */
+export const SLICE_COLOR = 0xcc66dd;
 
 const RING_SEGMENTS = 72;
 const RING_SAMPLES = 24; // hover-snap sampling density

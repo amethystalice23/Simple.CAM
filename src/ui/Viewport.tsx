@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { originSpan, rotaryCalibrationOf } from '../core/types';
 import type { ModelTransform, Move, Primitive, Stock } from '../core/types';
 import { movesToSegments } from './toolpathPreview';
+import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import type { FeatureSource } from './featureSources';
 import { primitiveGeometry, primitivePose } from './featureSources';
 import { NavCube } from './navcube';
@@ -18,12 +19,23 @@ import {
   planePick,
   PLANE_SELECT,
   SELECT_COLOR,
+  SLICE_COLOR,
   type FeatureOverlayData,
   type MeasurePick,
   type NearestFeature,
 } from './featureOverlays';
 
 const D2R = Math.PI / 180;
+
+/** dispose a small overlay group's geometries and materials. */
+function disposeGroup(g: THREE.Group): void {
+  g.traverse((o) => {
+    if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+      o.geometry.dispose();
+      (o.material as THREE.Material).dispose();
+    }
+  });
+}
 
 /** A selected feature resolved to its kind and index for highlighting. */
 export interface ResolvedSelection {
@@ -89,6 +101,10 @@ interface Props {
   /** generated moves to draw (PLAN.md "Toolpath preview") */
   previewMoves: Move[] | null;
   showPreview: boolean;
+  /** the expanded slice-pocket op's cut plane (edge-tracing §5): the
+   * machine Z to draw the plane + contour at, and the callback a drag of
+   * the plane handle commits through (updates the op's start depth) */
+  slicePreview: { z: number; onZChange: (z: number) => void } | null;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
 }
@@ -114,12 +130,21 @@ export function Viewport({
   primitives,
   previewMoves,
   showPreview,
+  slicePreview,
   onToggleSelect,
   onClearSelection,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
   const featureGroupRef = useRef<THREE.Group | null>(null);
+  /** renderer/camera/controls of the scene effect — shared with the
+   * slice-plane effect below */
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  /** live slice-plane drag state — a ref so effect re-runs (the live box
+   * update changes props mid-drag) never kill an active drag */
+  const sliceDragRef = useRef<{ startClientY: number; startZ: number; z: number; raf: number } | null>(null);
   /** per-source overlay data — null-entry = no sources (nothing selectable) */
   const overlaysRef = useRef<SourceOverlay[]>([]);
   /** primitive meshes (non-indexed, source-aligned) for plane raycast picks */
@@ -159,6 +184,9 @@ export function Viewport({
     el.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    rendererRef.current = renderer;
+    cameraRef.current = camera;
+    controlsRef.current = controls;
 
     // view-orientation cube: click a face to tween the camera to that view
     const navCube = new NavCube();
@@ -557,6 +585,9 @@ export function Viewport({
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       navCube.dispose();
       featureGroupRef.current = null;
+      rendererRef.current = null;
+      cameraRef.current = null;
+      controlsRef.current = null;
       overlaysRef.current = [];
       hoverLineRef.current = null;
       hoverPlaneRef.current = null;
@@ -738,6 +769,184 @@ export function Viewport({
       }
     };
   }, [previewMoves, showPreview, stock]);
+
+  // slice-pocket cut plane (edge-tracing §5): a translucent violet quad at
+  // the slice Z + the contour outline there, and a grab pill on the plane's
+  // near edge that drags it up/down — the orbit pauses for the drag, the
+  // op's start-depth box follows live (one re-slice per frame at most)
+  useEffect(() => {
+    const group = featureGroupRef.current;
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!group || !renderer || !camera || !controls) return;
+    if (!slicePreview || !geometry) return;
+
+    const dom = renderer.domElement;
+    const plane = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: SLICE_COLOR,
+        transparent: true,
+        opacity: 0.12,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    plane.renderOrder = 1;
+    const outline = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: SLICE_COLOR, transparent: true, depthTest: false }),
+    );
+    outline.renderOrder = 9;
+    const handle = new THREE.Mesh(
+      new THREE.SphereGeometry(2.4, 16, 12),
+      new THREE.MeshBasicMaterial({ color: SLICE_COLOR, depthTest: false }),
+    );
+    handle.renderOrder = 10;
+    const g = new THREE.Group();
+    g.add(plane, outline, handle);
+    group.add(g);
+
+    // the placed model's machine-space bounds: the quad spans its XY
+    // extent, the drag clamps to its Z range
+    const pos = transformedPositions(geometry, transform);
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    for (let i = 0; i < pos.length; i += 3) {
+      if (pos[i] < x0) x0 = pos[i];
+      if (pos[i] > x1) x1 = pos[i];
+      if (pos[i + 1] < y0) y0 = pos[i + 1];
+      if (pos[i + 1] > y1) y1 = pos[i + 1];
+      if (pos[i + 2] < z0) z0 = pos[i + 2];
+      if (pos[i + 2] > z1) z1 = pos[i + 2];
+    }
+    if (!Number.isFinite(x0)) {
+      // a geometry with no positions: nothing to draw or to drag against
+      group.remove(g);
+      disposeGroup(g);
+      return () => {};
+    }
+
+    const rebuild = (z: number) => {
+      const quad = new THREE.BufferGeometry();
+      quad.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute([x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z], 3),
+      );
+      quad.setIndex([0, 1, 2, 0, 2, 3]);
+      plane.geometry.dispose();
+      plane.geometry = quad;
+      const pts: number[] = [];
+      for (const c of sliceAtZ(pos, z).contours) {
+        for (let i = 0; i < c.length; i++) {
+          const a = c[i];
+          const b = c[(i + 1) % c.length];
+          pts.push(a.x, a.y, z, b.x, b.y, z);
+        }
+      }
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      outline.geometry.dispose();
+      outline.geometry = lg;
+    };
+    const placeHandle = (z: number) => {
+      // the quad edge midpoint nearest the camera
+      const mids: [number, number, number][] = [
+        [(x0 + x1) / 2, y0, z],
+        [x1, (y0 + y1) / 2, z],
+        [(x0 + x1) / 2, y1, z],
+        [x0, (y0 + y1) / 2, z],
+      ];
+      let best = mids[0];
+      let bestD = Infinity;
+      for (const m of mids) {
+        const d = new THREE.Vector3(...m).distanceTo(camera.position);
+        if (d < bestD) {
+          bestD = d;
+          best = m;
+        }
+      }
+      handle.position.set(...best);
+    };
+    if (!sliceDragRef.current) rebuild(slicePreview.z);
+    placeHandle(sliceDragRef.current?.z ?? slicePreview.z);
+
+    // ---- the drag ----
+    const raycaster = new THREE.Raycaster();
+    const hoverHandle = (e: PointerEvent): boolean => {
+      const rect = dom.getBoundingClientRect();
+      raycaster.setFromCamera(
+        new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          -((e.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        camera,
+      );
+      return raycaster.intersectObject(handle, false).length > 0;
+    };
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0 || sliceDragRef.current || !hoverHandle(e)) return;
+      controls.enabled = false; // the drag owns the pointer, not the orbit
+      sliceDragRef.current = {
+        startClientY: e.clientY,
+        startZ: slicePreview.z,
+        z: slicePreview.z,
+        raf: 0,
+      };
+      dom.setPointerCapture(e.pointerId);
+      dom.style.cursor = 'ns-resize';
+    };
+    const onMove = (e: PointerEvent) => {
+      const d = sliceDragRef.current;
+      if (!d) {
+        const over = hoverHandle(e);
+        if (over) dom.style.cursor = 'grab';
+        else if (dom.style.cursor === 'grab') dom.style.cursor = '';
+        return;
+      }
+      const depth = Math.max(handle.position.distanceTo(camera.position), 0.01);
+      const h = dom.clientHeight || 1;
+      const mmPerPx = (2 * Math.tan(((camera.fov / 2) * Math.PI) / 180) * depth) / h;
+      d.z = Math.min(Math.max(d.startZ - (e.clientY - d.startClientY) * mmPerPx, z0), z1);
+      if (d.raf === 0) {
+        d.raf = requestAnimationFrame(() => {
+          d.raf = 0;
+          rebuild(d.z);
+          placeHandle(d.z);
+          slicePreview.onZChange(d.z);
+        });
+      }
+    };
+    const onUp = () => {
+      const d = sliceDragRef.current;
+      if (!d) return;
+      if (d.raf !== 0) cancelAnimationFrame(d.raf);
+      sliceDragRef.current = null;
+      controls.enabled = true;
+      dom.style.cursor = '';
+    };
+    dom.addEventListener('pointerdown', onDown);
+    dom.addEventListener('pointermove', onMove);
+    dom.addEventListener('pointerup', onUp);
+    dom.addEventListener('pointercancel', onUp);
+
+    return () => {
+      dom.removeEventListener('pointerdown', onDown);
+      dom.removeEventListener('pointermove', onMove);
+      dom.removeEventListener('pointerup', onUp);
+      dom.removeEventListener('pointercancel', onUp);
+      // an unmount mid-drag must not leave the controls disabled
+      controls.enabled = true;
+      sliceDragRef.current = null;
+      group.remove(g);
+      disposeGroup(g);
+    };
+  }, [slicePreview, geometry, transform, stock]);
 
   // user primitives (roughing volumes, tabs): translucent orange volumes.
   // Non-indexed meshes from primitiveGeometry (same construction the feature
