@@ -865,23 +865,28 @@ export function Viewport({
       outline.geometry = lg;
     };
     const placeHandle = (z: number) => {
-      // the quad edge midpoint nearest the camera
-      const mids: [number, number, number][] = [
-        [(x0 + x1) / 2, y0, z],
-        [x1, (y0 + y1) / 2, z],
-        [(x0 + x1) / 2, y1, z],
-        [x0, (y0 + y1) / 2, z],
+      // the quad edge midpoints nearest the camera — pushed OUT along
+      // the edge normal so the arrows clear the model with a small gap
+      // instead of overlapping its edge
+      const OUT = 1.3; // cone radius 0.5 + a visible gap
+      const mids: { x: number; y: number; nx: number; ny: number }[] = [
+        { x: (x0 + x1) / 2, y: y0, nx: 0, ny: -1 },
+        { x: x1, y: (y0 + y1) / 2, nx: 1, ny: 0 },
+        { x: (x0 + x1) / 2, y: y1, nx: 0, ny: 1 },
+        { x: x0, y: (y0 + y1) / 2, nx: -1, ny: 0 },
       ];
       let best = mids[0];
       let bestD = Infinity;
       for (const m of mids) {
-        const d = new THREE.Vector3(...m).distanceTo(camera.position);
+        const d = new THREE.Vector3(m.x + m.nx * OUT, m.y + m.ny * OUT, z).distanceTo(
+          camera.position,
+        );
         if (d < bestD) {
           bestD = d;
           best = m;
         }
       }
-      handle.position.set(...best);
+      handle.position.set(best.x + best.nx * OUT, best.y + best.ny * OUT, z);
     };
     // always draw at the CURRENT plane height — during a drag that's the
     // drag's z (the live box update re-runs this effect, and a skipped
