@@ -225,7 +225,6 @@ describe('newJobOp / defaults', () => {
       finishAllowance: 0.2,
       rotation: 'cw',
       pattern: 'vertical',
-      primitiveId: null,
     });
     // ring cuts are the A-only feed moves — their count is what stepOver drives
     const rings = (res: ReturnType<typeof generateJobOp>) =>

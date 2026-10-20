@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { isDepthBearingJobOp, type DepthBearingJobOp } from '../core/types';
+import { isDepthBearingJobOp, type DepthBearingJobOp, type FeaturePickKind } from '../core/types';
 import type { AxisMode, JobOp, OpRates, Primitive, Stock, Tool } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import {
@@ -37,10 +37,10 @@ interface Props {
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   /** compute the index angle that brings the op's selection to face the cutter */
   onIndexToSelection: (op: JobOp) => void;
-  /** ⇩ floor pick (edge-tracing §5): the op in floor-picking mode (its ⇩
-   * is lit, the panel banners it, the next viewport click sets the floor) */
-  floorPickingOpId: string | null;
-  onFloorPick: (op: JobOp) => void;
+  /** the active one-shot "adjust to face" pick (edge-tracing §5): the
+   * op's ⇩ is lit, the panel banners it, the next viewport click applies */
+  picking: { opId: string; kind: FeaturePickKind } | null;
+  onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   /** ops whose toolpath is hidden from the preview (the g-code keeps them) */
   hiddenOps: ReadonlySet<string>;
   onToggleVisible: (id: string) => void;
@@ -70,9 +70,9 @@ function DepthFields(props: {
   op: DepthBearingJobOp;
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
-  /** this op is in floor-picking mode — the ⇩ is lit */
-  floorPicking: boolean;
-  onFloorPick: (op: JobOp) => void;
+  /** the active one-shot pick — the floor ⇩ lights when it's this op's */
+  picking: { opId: string; kind: FeaturePickKind } | null;
+  onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   /** the linked floor feature's short label, for the provenance hint */
   floorLabel: string | null;
 }) {
@@ -112,9 +112,9 @@ function DepthFields(props: {
         />
         <button
           type="button"
-          className={`icon-btn${props.floorPicking ? ' active' : ''}`}
+          className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'floor' ? ' active' : ''}`}
           title="Pick the cut floor — click, then select a face or circle in the viewport; its Z drives the end depth until you edit the box"
-          onClick={() => props.onFloorPick(op)}
+          onClick={() => props.onFeaturePick(op, 'floor')}
         >
           ⇩
         </button>
@@ -171,6 +171,15 @@ function IndexFields(props: {
     </>
   );
 }
+
+/** The one-shot pick-mode banners (edge-tracing §5) — the panel shows
+ * the active one; clicking it (or its ⇩ again) cancels. */
+const PICK_BANNERS: Record<FeaturePickKind, string> = {
+  floor: 'Selecting floor — click a feature in the viewport',
+  targetDiameter: 'Selecting target Ø — click a circular feature',
+  startX: 'Selecting start X — click a feature in the viewport',
+  endX: 'Selecting end X — click a feature in the viewport',
+};
 
 /** Cutting-rate overrides for one op — the optional popup behind the ⚡
  * button. The boxes show the effective values (an override, else the tool +
@@ -241,9 +250,9 @@ function ParamFields(props: {
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
   onIndexToSelection: (op: JobOp) => void;
-  /** ⇩ floor pick (edge-tracing §5) — see DepthFields */
-  floorPickingOpId: string | null;
-  onFloorPick: (op: JobOp) => void;
+  /** one-shot feature picks (edge-tracing §5) — see DepthFields */
+  picking: { opId: string; kind: FeaturePickKind } | null;
+  onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   floorLabel: string | null;
 }) {
   const { op, onChange } = props;
@@ -261,42 +270,39 @@ function ParamFields(props: {
     case 'faceCylinder':
       return (
         <>
-          <label className="field">
-            <span>Target primitive</span>
-            <select
-              value={op.primitiveId ?? ''}
-              onChange={(e) => {
-                const id = e.target.value || null;
-                const prim = props.primitives.find(
-                    (p): p is Extract<Primitive, { kind: 'cylinder' }> => p.id === id && p.kind === 'cylinder',
-                  );
-                if (prim) {
-                  // the primitive drives extent and diameter; fields follow it
-                  props.onChange({
-                    ...op,
-                    primitiveId: id,
-                    xStart: prim.transform.position.x - prim.length / 2,
-                    xEnd: prim.transform.position.x + prim.length / 2,
-                    targetDiameter: prim.diameter,
-                  } as JobOp);
-                } else {
-                  props.onChange({ ...op, primitiveId: id } as JobOp);
-                }
-              }}
+          <div className="floor-row">
+            <NumberField label="Start X (mm)" value={op.xStart} step={0.5} onCommit={(v) => upd({ xStart: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'startX' ? ' active' : ''}`}
+              title="Pick start X from a feature — click, then select one in the viewport"
+              onClick={() => props.onFeaturePick(op, 'startX')}
             >
-              <option value="">none — use the X range below</option>
-              {props.primitives
-                .filter((p): p is Extract<Primitive, { kind: 'cylinder' }> => p.kind === 'cylinder')
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    cylinder Ø{p.diameter.toFixed(1)} × {p.length.toFixed(1)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <NumberField label="Start X (mm)" value={op.xStart} step={0.5} onCommit={(v) => upd({ xStart: v } as Partial<JobOp>)} />
-          <NumberField label="End X (mm)" value={op.xEnd} step={0.5} onCommit={(v) => upd({ xEnd: v } as Partial<JobOp>)} />
-          <NumberField label="Target Ø (mm)" value={op.targetDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ targetDiameter: v } as Partial<JobOp>)} />
+              ⇩
+            </button>
+          </div>
+          <div className="floor-row">
+            <NumberField label="End X (mm)" value={op.xEnd} step={0.5} onCommit={(v) => upd({ xEnd: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'endX' ? ' active' : ''}`}
+              title="Pick end X from a feature — click, then select one in the viewport"
+              onClick={() => props.onFeaturePick(op, 'endX')}
+            >
+              ⇩
+            </button>
+          </div>
+          <div className="floor-row">
+            <NumberField label="Target Ø (mm)" value={op.targetDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ targetDiameter: v } as Partial<JobOp>)} />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'targetDiameter' ? ' active' : ''}`}
+              title="Pick the target diameter from a circular feature — click, then select the circle"
+              onClick={() => props.onFeaturePick(op, 'targetDiameter')}
+            >
+              ⇩
+            </button>
+          </div>
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField
             label="Step over (mm)"
@@ -338,8 +344,8 @@ function ParamFields(props: {
             op={op}
             onChange={props.onChange}
             onSelectionIsChange={props.onSelectionIsChange}
-            floorPicking={props.floorPickingOpId === op.id}
-            onFloorPick={props.onFloorPick}
+            picking={props.picking}
+            onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
@@ -380,8 +386,8 @@ function ParamFields(props: {
             op={op}
             onChange={props.onChange}
             onSelectionIsChange={props.onSelectionIsChange}
-            floorPicking={props.floorPickingOpId === op.id}
-            onFloorPick={props.onFloorPick}
+            picking={props.picking}
+            onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
@@ -429,8 +435,8 @@ function ParamFields(props: {
             op={op}
             onChange={props.onChange}
             onSelectionIsChange={props.onSelectionIsChange}
-            floorPicking={props.floorPickingOpId === op.id}
-            onFloorPick={props.onFloorPick}
+            picking={props.picking}
+            onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
@@ -619,16 +625,16 @@ export function OpsPanel(props: Props) {
                 <div className="op-body">
                   {op.kind !== 'index' && (
                     <div className="buttons">
-                      {props.floorPickingOpId === op.id ? (
-                        /* the floor-picking mode banners the whole row — the
-                         * next viewport click is the floor; clicking the
-                         * banner cancels back to the normal panel */
+                      {props.picking?.opId === op.id ? (
+                        /* the pick mode banners the whole row — the next
+                         * viewport click applies it; clicking the banner
+                         * cancels back to the normal panel */
                         <button
                           type="button"
-                          onClick={() => props.onFloorPick(op)}
-                          title="Click a face or circle in the viewport to set this op's floor — click here to cancel"
+                          onClick={() => props.onFeaturePick(op, props.picking!.kind)}
+                          title="Click a feature in the viewport to apply the pick — click here to cancel"
                         >
-                          Selecting floor — click a feature in the viewport
+                          {PICK_BANNERS[props.picking!.kind]}
                         </button>
                       ) : (
                         ['pocket', 'profile', 'drill', 'chamfer'].includes(op.kind) && (
@@ -685,8 +691,8 @@ export function OpsPanel(props: Props) {
                     onChange={props.onChangeOp}
                     onSelectionIsChange={props.onSelectionIsChange}
                     onIndexToSelection={props.onIndexToSelection}
-                    floorPickingOpId={props.floorPickingOpId}
-                    onFloorPick={props.onFloorPick}
+                    picking={props.picking}
+                    onFeaturePick={props.onFeaturePick}
                     floorLabel={
                       isDepthBearingJobOp(op) && op.floorFeatureId !== null
                         ? (props.featureLabels[op.floorFeatureId] ?? null)

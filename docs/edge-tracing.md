@@ -252,6 +252,15 @@ Types for v1:
 
 ## 5. Slice-pocket UI: cut-plane overlay, ⇩ floor pick, plane handle
 
+**The ⇩ pick modes** generalize beyond floors: the face-cylinder op
+carries ⇩s on **Start X**, **End X** (the next click's feature X
+position) and **Target Ø** (a circular feature's diameter) — defaults for
+all three come from the stock size. The old "target primitive" select
+is gone (it never worked well; the pick modes position a face on the
+model faster). Banners per kind: "Selecting floor/target Ø/start X/
+end X — click a feature in the viewport"; a non-circle click in Ø mode
+stays waiting.
+
 **⇩ Floor pick (every depth-bearing op: pocket, profile, slice
 pocket).** A small ⇩ icon button (an arrow pointing down at a floor
 line; tooltip: "Set the cut floor from the selected face") beside the

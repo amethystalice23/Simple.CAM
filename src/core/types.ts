@@ -447,9 +447,6 @@ export type JobOp =
        * it to avoid vice jaws / mounted fixtures */
       xStart: number;
       xEnd: number;
-      /** optional cylinder primitive as the facing target: its axial extent
-       * and diameter override the fields above (kept in sync on select) */
-      primitiveId: string | null;
       stepDown: number;
       /** step-over mm (ring spacing / pass arc / per-rev advance); null = derive (0.5·tool Ø) */
       stepOver: number | null;
@@ -567,6 +564,14 @@ export type JobOp =
        * than the tool */
       clearToStock: boolean;
     });
+
+/**
+ * The one-shot "adjust to face" pick kinds (edge-tracing §5): the ops
+ * panel banners the mode, the next viewport click applies it to that op.
+ * 'floor' drives end depth; the face-cylinder kinds take Start/End X and
+ * the target diameter straight off a selected feature.
+ */
+export type FeaturePickKind = 'floor' | 'targetDiameter' | 'startX' | 'endX';
 
 /** Ops with depth boxes and the ⇩ floor pick (edge-tracing §5). */
 export type DepthBearingJobOp = Extract<

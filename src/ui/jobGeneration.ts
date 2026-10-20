@@ -120,7 +120,6 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
           : 40,
         xStart,
         xEnd,
-        primitiveId: null,
         stepDown,
         /** null = derive 0.5·tool Ø at generation (job files stay tool-agnostic) */
         stepOver: null,
@@ -447,26 +446,16 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
       }
       case 'faceCylinder': {
         if (ctx.stock.axisMode !== '4-axis') return fail('face cylinder needs 4-axis mode (Stock tab)');
-        // a target primitive overrides the X range and target diameter;
-        // otherwise the op's explicit fields (avoiding vice jaws etc.)
-        const prim =
-          op.primitiveId !== null
-            ? ctx.primitives.find(
-                (p): p is Extract<Primitive, { kind: 'cylinder' }> =>
-                  p.id === op.primitiveId && p.kind === 'cylinder',
-              )
-            : undefined;
-        if (op.primitiveId !== null && !prim) return fail('the target primitive no longer exists');
-        const xStart = prim ? prim.transform.position.x - prim.length / 2 : op.xStart;
-        const xEnd = prim ? prim.transform.position.x + prim.length / 2 : op.xEnd;
+        // the op's own explicit fields: Start/End X and the target Ø,
+        // hand-set or filled by the ⇩ pick-from-feature modes
         const res = faceCylinder(
           {
             kind: 'faceCylinder',
             id: op.id,
             toolId: tool.id,
-            targetDiameter: prim ? prim.diameter : op.targetDiameter,
-            xStart,
-            xEnd,
+            targetDiameter: op.targetDiameter,
+            xStart: op.xStart,
+            xEnd: op.xEnd,
             stepDown: op.stepDown,
             stepOver: op.stepOver ?? defaultFaceStepOver(tool),
             finishAllowance: op.finishAllowance,
@@ -482,7 +471,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes (${op.pattern}) → Ø${(prim ? prim.diameter : op.targetDiameter).toFixed(1)}mm, X ${xStart.toFixed(0)}…${xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${res.passes} passes (${op.pattern}) → Ø${op.targetDiameter.toFixed(1)}mm, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 

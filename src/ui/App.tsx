@@ -11,6 +11,7 @@ import {
   isDepthBearingJobOp,
   rotaryCalibrationOf,
   round2,
+  type FeaturePickKind,
 } from '../core/types';
 import type {
   CircleFeature,
@@ -189,39 +190,76 @@ export function App() {
   /** viewport feature clicks: edit the active op's selection, or the global
    * one (primitives / measuring) when no op is being edited. The first
    * feature into an op prefills its depth boxes. */
-  // ---- the ⇩ floor pick (edge-tracing §5) ----
+  // ---- the one-shot feature picks (edge-tracing §5: the ⇩ modes) ----
 
-  /** the op whose floor-picking mode is active: the NEXT viewport click on
-   * a plane/circle becomes its cut floor (one-shot; the panel banners it) */
-  const [floorPickOpId, setFloorPickOpId] = useState<string | null>(null);
+  /** the active pick: the NEXT viewport click applies it to that op
+   * (floors for the depth-bearing ops; Start/End X and target Ø for the
+   * face cylinder) — one-shot, bannered in the panel */
+  const [featurePick, setFeaturePick] = useState<{ opId: string; kind: FeaturePickKind } | null>(
+    null,
+  );
 
-  /** ⇩ toggles the op's floor-picking mode (measure mode on for the pick) */
-  const toggleFloorPick = (op: JobOp) => {
-    if (!isDepthBearingJobOp(op)) return;
-    setFloorPickOpId((cur) => (cur === op.id ? null : op.id));
+  /** a ⇩ toggles its op's pick mode (measure mode on for the pick) */
+  const toggleFeaturePick = (op: JobOp, kind: FeaturePickKind) => {
+    if (kind === 'floor' ? !isDepthBearingJobOp(op) : op.kind !== 'faceCylinder') return;
+    setFeaturePick((cur) =>
+      cur?.opId === op.id && cur.kind === kind ? null : { opId: op.id, kind },
+    );
     setMeasureMode(true);
   };
 
-  /** a viewport click sets the floor for an op in floor-picking mode */
-  const applyFloorPick = (opId: string, featureId: string) => {
+  /** a viewport click applies the active pick; unclickable features (an
+   * edge, a non-circle for the Ø) keep the mode waiting */
+  const applyFeaturePick = (
+    pick: { opId: string; kind: FeaturePickKind },
+    featureId: string,
+  ) => {
+    if (pick.kind === 'targetDiameter') {
+      const r = resolveFeature(sources, featureId);
+      if (!r || r.kind !== 'circle') return; // Ø comes off a circle only
+      setOps((prev) =>
+        prev.map((o) =>
+          o.id === pick.opId && o.kind === 'faceCylinder'
+            ? { ...o, targetDiameter: round2((r.feature as CircleFeature).radius * 2) }
+            : o,
+        ),
+      );
+      setFeaturePick(null);
+      return;
+    }
+    if (pick.kind === 'startX' || pick.kind === 'endX') {
+      const p = featureMachinePoint(featureId);
+      if (!p) return; // an edge carries no facing point — stay in the mode
+      setOps((prev) =>
+        prev.map((o) => {
+          if (o.id !== pick.opId || o.kind !== 'faceCylinder') return o;
+          return pick.kind === 'startX'
+            ? { ...o, xStart: round2(p.x) }
+            : { ...o, xEnd: round2(p.x) };
+        }),
+      );
+      setFeaturePick(null);
+      return;
+    }
+    // 'floor': the feature's depth-in-frame drives end depth, live-linked
     const p = featureMachinePoint(featureId);
-    if (!p) return; // an edge carries no facing point — stay in the mode
+    if (!p) return;
     setOps((prev) =>
       prev.map((o) => {
-        if (o.id !== opId || !isDepthBearingJobOp(o)) return o;
+        if (o.id !== pick.opId || !isDepthBearingJobOp(o)) return o;
         const endDepth = round2(
           Math.max(stockTopZ(stock) - featureDepthInFrame(o, p), 0.3),
         );
         return { ...o, endDepth, floorFeatureId: featureId } as JobOp;
       }),
     );
-    setFloorPickOpId(null);
+    setFeaturePick(null);
   };
 
 
   const toggleSelect = (id: string) => {
-    if (floorPickOpId) {
-      applyFloorPick(floorPickOpId, id);
+    if (featurePick) {
+      applyFeaturePick(featurePick, id);
       return;
     }
     if (editingOpId) {
@@ -434,7 +472,7 @@ export function App() {
     setEditingOpId(id);
     if (id !== null) {
       setMeasureMode(true);
-      setFloorPickOpId(null); // one picking mode at a time
+      setFeaturePick(null); // one picking mode at a time
     }
   };
 
@@ -828,8 +866,8 @@ export function App() {
                 }}
                 onSelectionIsChange={changeSelectionIs}
                 onIndexToSelection={indexToSelection}
-                floorPickingOpId={floorPickOpId}
-                onFloorPick={toggleFloorPick}
+                picking={featurePick}
+                onFeaturePick={toggleFeaturePick}
                 onDeleteOp={(id) => {
                   const nextOps = ops.filter((o) => o.id !== id);
                   const nextGen = { ...generated };
