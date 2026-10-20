@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { originSpan, rotaryCalibrationOf } from '../core/types';
-import type { ModelTransform, Move, Primitive, Stock } from '../core/types';
+import type { FeaturePickKind, ModelTransform, Move, Primitive, Stock } from '../core/types';
 import { movesToSegments } from './toolpathPreview';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import type { FeatureSource } from './featureSources';
@@ -115,6 +115,14 @@ interface Props {
    * (stock, model, overlays, preview) rotates together; the grid and axes
    * stay machine. */
   viewDatum: { angle: number; axisZ: number } | null;
+  /** the active one-shot pick kind (edge-tracing §5): during a pick only
+   * the pickable feature kinds highlight — edges never flash, and the Ø
+   * pick shows circles alone. Null = normal measure mode. */
+  pickKind: FeaturePickKind | null;
+  /** the expanded face-cylinder op's intended result (edge-tracing §5):
+   * the violet ghost cylinder about the stock axis. Null when the open
+   * op is not a face cylinder. */
+  facePreview: { xStart: number; xEnd: number; diameter: number; axisZ: number } | null;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
 }
@@ -142,6 +150,8 @@ export function Viewport({
   showPreview,
   slicePreview,
   viewDatum,
+  pickKind,
+  facePreview,
   onToggleSelect,
   onClearSelection,
 }: Props) {
@@ -174,6 +184,8 @@ export function Viewport({
   measureRef.current = measureMode;
   const edgePickingRef = useRef(edgePickingEnabled);
   edgePickingRef.current = edgePickingEnabled;
+  const pickKindRef = useRef(pickKind);
+  pickKindRef.current = pickKind;
   const onToggleSelectRef = useRef(onToggleSelect);
   onToggleSelectRef.current = onToggleSelect;
   const onClearSelectionRef = useRef(onClearSelection);
@@ -288,6 +300,18 @@ export function Viewport({
         }
       }
     };
+    /** highlightable/clickable during the active one-shot pick
+     * (edge-tracing §5): edges never flash (they carry no facing
+     * point); the Ø pick wants circles alone — planes would flash and
+     * then bounce anyway. Normal measure mode allows everything. */
+    const pickAllows = (kind: 'edge' | 'circle' | 'plane'): boolean => {
+      const pk = pickKindRef.current;
+      if (!pk) return true;
+      if (kind === 'edge') return false;
+      if (pk === 'targetDiameter') return kind === 'circle';
+      return true;
+    };
+
     /** click target: the nearest feature across ALL sources, else the plane
      * under the face (model or primitive mesh) */
     const measurePickAt = (mx: number, my: number, w: number, h: number): SourcedPick | null => {
@@ -296,7 +320,13 @@ export function Viewport({
         let bestD = Infinity;
         for (const entry of overlaysRef.current) {
           const nearest = findNearestFeature(entry.data, mx, my, camera, w, h);
-          if (!nearest || (!edgePickingRef.current && nearest.kind === 'edge')) continue;
+          if (
+            !nearest ||
+            !pickAllows(nearest.kind) ||
+            (!edgePickingRef.current && nearest.kind === 'edge')
+          ) {
+            continue;
+          }
           if (nearest.d < bestD) {
             bestD = nearest.d;
             best = { ...pickFromNearest(entry.data, nearest), sourceId: entry.source.id };
@@ -305,7 +335,9 @@ export function Viewport({
         if (best) return best;
       }
       // plane fallback: raycast the model mesh and the primitive meshes,
-      // resolving the hit face through the OWNING source's faceToPlane
+      // resolving the hit face through the OWNING source's faceToPlane —
+      // suppressed for the Ø pick (circles only)
+      if (!pickAllows('plane')) return null;
       const model = modelRef.current;
       const meshes: THREE.Object3D[] = [
         ...(model && model.visible ? [model] : []),
@@ -361,7 +393,13 @@ export function Viewport({
           rect.width,
           rect.height,
         );
-        if (!nearest || (!edgePickingRef.current && nearest.kind === 'edge')) continue;
+        if (
+          !nearest ||
+          !pickAllows(nearest.kind) ||
+          (!edgePickingRef.current && nearest.kind === 'edge')
+        ) {
+          continue;
+        }
         if (!usable || nearest.d < usable.nearest.d) usable = { entry, nearest };
       }
       if (usable) {
@@ -381,7 +419,14 @@ export function Viewport({
       setLabel(null);
 
       // no feature nearby: transiently wash the face under the cursor (model
-      // or primitive) so faces are hoverable like edges and circles are
+      // or primitive) so faces are hoverable like edges and circles are —
+      // but not during the Ø pick (circles only, no plane flashing)
+      if (!pickAllows('plane')) {
+        hoverLine.visible = false;
+        setLabel(null);
+        hideHoverPlane();
+        return;
+      }
       const model = modelRef.current;
       const meshes: THREE.Object3D[] = [
         ...(model && model.visible ? [model] : []),
@@ -1072,6 +1117,45 @@ export function Viewport({
       disposeGroup(g);
     };
   }, [slicePreview, geometry, transform, stock]);
+
+  // the face-cylinder op's intended result (edge-tracing §5): a violet
+  // ghost cylinder of the target diameter spanning Start→End X about the
+  // stock axis, while that op's panel is open. Machine space (the faced
+  // cylinder is coaxial with the rotation axis, so the datum view leaves
+  // it untouched); live-updates as the ⇩ picks fill the fields.
+  useEffect(() => {
+    const group = sliceGroupRef.current;
+    if (!group) return;
+    if (!facePreview || facePreview.xEnd <= facePreview.xStart) return;
+    const len = facePreview.xEnd - facePreview.xStart;
+    const geo = new THREE.CylinderGeometry(
+      facePreview.diameter / 2,
+      facePreview.diameter / 2,
+      len,
+      48,
+    );
+    geo.rotateZ(Math.PI / 2); // geometry Y axis → machine X (the stock axis)
+    const mat = new THREE.MeshBasicMaterial({
+      color: SLICE_COLOR,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(
+      (facePreview.xStart + facePreview.xEnd) / 2,
+      0,
+      facePreview.axisZ,
+    );
+    mesh.renderOrder = 1;
+    group.add(mesh);
+    return () => {
+      group.remove(mesh);
+      geo.dispose();
+      mat.dispose();
+    };
+  }, [facePreview]);
 
   // unmount only: no fresh effect run follows, so end any drag and give
   // the controls back

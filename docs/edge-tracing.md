@@ -261,6 +261,19 @@ model faster). Banners per kind: "Selecting floor/target Ø/start X/
 end X — click a feature in the viewport"; a non-circle click in Ø mode
 stays waiting.
 
+**Pick-aware highlighting**: while any pick is active the viewport
+highlights ONLY pickable features (`pickAllows` in the Viewport) — edges
+never flash (they carry no facing point, so they'd just steal clicks),
+and the Ø pick shows circles alone, planes included in neither hover nor
+click. Normal measure mode is unchanged.
+
+**The face ghost**: while a face-cylinder panel is open the viewport
+draws the INTENDED result — a translucent violet cylinder of the target
+diameter spanning Start→End X about the stock axis (SLICE_COLOR, in the
+machine-space overlay group; the faced result is rotationally symmetric
+about the axis, so the datum view leaves it alone). It live-updates as
+the ⇩ picks fill the fields.
+
 **⇩ Floor pick (every depth-bearing op: pocket, profile, slice
 pocket).** A small ⇩ icon button (an arrow pointing down at a floor
 line; tooltip: "Set the cut floor from the selected face") beside the

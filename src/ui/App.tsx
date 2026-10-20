@@ -393,6 +393,19 @@ export function App() {
     };
   }, [ops, expandedOpId, geometry, stock]);
 
+  /** the expanded face-cylinder op's intended result (edge-tracing §5):
+   * the violet ghost cylinder about the stock axis for the viewport */
+  const facePreview = useMemo(() => {
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!op || op.kind !== 'faceCylinder' || stock.axisMode !== '4-axis') return null;
+    return {
+      xStart: op.xStart,
+      xEnd: op.xEnd,
+      diameter: op.targetDiameter,
+      axisZ: rotaryCalibrationOf(stock).axisZ,
+    };
+  }, [ops, expandedOpId, stock]);
+
   /** the open op's cutting frame: the viewport shows the part rotated to
    * the index datum established above that op — A0 when nothing is open
    * (edge-tracing §5 "view follows the datum") */
@@ -788,6 +801,8 @@ export function App() {
             showPreview={showPreview}
             slicePreview={slicePreview}
             viewDatum={viewDatum}
+            pickKind={featurePick?.kind ?? null}
+            facePreview={facePreview}
             onToggleSelect={toggleSelect}
             onClearSelection={clearSelection}
           />
