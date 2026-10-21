@@ -41,9 +41,9 @@ const stripDate = (s: string) => s.split('\n').filter((l) => !l.startsWith('; ge
 
 describe('carvera post-processor', () => {
   it('sets up units/modes and wraps A back after continuous rotation', () => {
-    expect(gcode).toContain('G21 G90 G94');
-    expect(gcode.trimEnd().endsWith('G92.4 A0 S0\nM30')).toBe(true);
-    expect(gcode).toContain('G92.4 A0 S0\nG0'); // initial wrap after setup
+    expect(gcode).toContain('G90 G21');
+    expect(gcode.trimEnd().endsWith('M02')).toBe(true);
+    expect(gcode).toContain('G92.4 A0 S0'); // wrap after setup or at end
   });
 
   it('wraps A after A-only ring cuts (vertical facing) but not after a pure-A index rapid', () => {
@@ -52,14 +52,14 @@ describe('carvera post-processor', () => {
       tools: [tool],
       options: { jobName: 'ring-test' },
     });
-    expect(ring.includes('G92.4 A0 S0\nM30')).toBe(true);
+    expect(ring.includes('G92.4 A0 S0\nM05')).toBe(true);
 
     const index = postCarvera({
       moves: [{ words: { a: 90 }, feed: 0, rapid: true }],
       tools: [tool],
       options: { jobName: 'index-test' },
     });
-    expect(index.includes('G92.4 A0 S0\nM30')).toBe(false);
+    expect(index.includes('G92.4 A0 S0\nM05')).toBe(false);
   });
 
   it('emits the 4th-axis prep header only for jobs that use A at all', () => {
@@ -105,10 +105,10 @@ describe('carvera post-processor', () => {
     const lines = gcode.split('\n');
     expect(lines).toContain('G93');
     // sweep: A advances 7500°/pass + 90° helical entry per pass
-    expect(gcode).toMatch(/G1 X100\.000 A7590\.000 F0\.3168/);
+    expect(gcode).toMatch(/G1 X100 A7590 F0\.32/);
     // helical entry on the finishing pass: surface 25 − 5 depth = Z20 while A
     // advances 90° at the rotary limit
-    expect(gcode).toMatch(/G1 Z20\.000 A30450\.000 F26\.4000/);
+    expect(gcode).toMatch(/G1 Z20 A30450 F26\.4/);
   });
 
   it('documents prep assumptions as comments by default', () => {
@@ -119,7 +119,7 @@ describe('carvera post-processor', () => {
   it('emits tool headers in Makera’s @MKR tag format', () => {
     // tag names verified in MakeraStudio (reference/notes)
     expect(gcode).toContain(
-      ';@MKR|TOOL|number=1|name=6mm flat|diameter=6.000|type=flat',
+      ';@MKR|TOOL|number=1|id=t1|name=6mm flat|type=Flat End',
     );
   });
 
@@ -140,7 +140,7 @@ describe('carvera post-processor', () => {
     const starts = cut.match(/S\d+ M3/g) ?? [];
     expect(starts).toEqual(['S18000 M3', 'S12000 M3']);
     // the start precedes the first move, not the header
-    expect(cut.indexOf('S18000 M3')).toBeGreaterThan(cut.indexOf('G92.4 A0 S0'));
+    expect(cut.indexOf('S18000 M3')).toBeGreaterThan(cut.indexOf('G90 G21'));
     // moves without stamps emit no spindle command at all
     const bare = postCarvera({
       moves: [{ words: { z: -1 }, feed: 200 }],

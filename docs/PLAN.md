@@ -12,10 +12,17 @@ exchange files and conventions with it, never code.
 
 - 4th axis is parallel to X: cylinder axis = X, circumference = A, cutter in Z.
 - Community firmware: G93 inverse-time feed (modeled on LinuxCNC, intended for
-  simultaneous XYZ+A); **every G1 line must carry F while G93 is active**;
-  `G92.4 A0 S0` wraps A back to 0–360 for continuous rotation; A-axis is
-  rotation-rate limited (~6.6 RPM sustained on C1 harmonic drive, 12.5 at
-  operator's risk); G94 surface-speed compensation is radius-aware.
+  simultaneous XYZ+A); **every G1 line must carry F while G93 is active**
+  (firmware halts otherwise); A-axis surface-speed compensation is disabled
+  under G93. `G92.4 A<deg> R<any>` = rotate A to its mod-360 equivalent and
+  set the work-A datum (R's value is ignored); `G92.4 A0 S0` = shrink
+  work-coordinate A back into ±360 — that's the wrap command, and both forms
+  are verified in firmware source and machined examples (see
+  docs/makera-dialect.md and examples/); A-axis is
+  rotation-rate limited (firmware config max: C1 1800°/min ≈ 5 RPM, Z1
+  3600°/min = 10 RPM; the older 6.6/12.5 RPM figures are community
+  operational guidance); G94 surface-speed compensation is radius-aware
+  (radius = √(Y²+Z²) of the move target, G94/G1-3 only).
 - Probe-based 4th-axis calibration lives in the controller/firmware
   (M465.1 stock leveling/twist, M469.4/.5/.6 center offsets). We *consume*
   the outcome: a job's stock carries A-origin, axis Z, effective radius.

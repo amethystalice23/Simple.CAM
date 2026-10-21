@@ -1,12 +1,14 @@
 /**
  * Carvera dialect post-processor: Move[] IR -> G-code text.
  *
- * Rules from the community firmware (docs/PLAN.md):
+ * Rules from the community firmware (docs/PLAN.md and docs/makera-dialect.md):
  *  - G93 (inverse time) for any move coordinating A with a linear axis;
  *    while G93 is active EVERY G1 line must carry F or the machine halts.
- *  - A accumulates past 360 for continuous rotation; emit `G92.4 A0` after
- *    an A-using sequence to wrap the axis back to 0-360.
- *  - G94 (mm/min) otherwise; M2/M30 restore G94.
+ *  - A accumulates past 360 for continuous rotation; emit `G92.4 A0 S0` after
+ *    an A-using sequence to shrink the axis back to ±360.
+ *  - G94 (mm/min) otherwise; M02 restores G94.
+ *  - Header datum for 4th axis jobs uses `G92.4 A<deg> R0` to physically rotate
+ *    and set the work-datum.
  */
 
 import type { FeedMode, Move, Tool } from '../core/types';
@@ -27,26 +29,43 @@ export interface PostInput {
 }
 
 const fmt = (v: number, digits: number): string => {
+  // MakeraStudio formatting: ≤ 2 decimals, trailing zeros trimmed.
+  // Negative zero is preserved (e.g., Z-0).
   const s = v.toFixed(digits);
-  return s === '-' + (0).toFixed(digits) ? (0).toFixed(digits) : s;
+  const trimmed = s.replace(/(\.\d*?[1-9])0+$/g, '$1').replace(/\.0+$/, '');
+  return trimmed === '-0' ? '-0' : trimmed === '0' ? '0' : trimmed;
 };
 
 function toolComments(tools: Tool[]): string[] {
-  // Makera's own tag format, verified in MakeraStudio
-  // (reference/s-makera-mkr-tags.json + s-makera-tool-comments.json):
-  // tool lines are `;@MKR|TOOL|number=…` with `|name=`, `|diameter=`,
-  // `|type=`, `|tipdiameter=`, `|flutelength=` fields (the binary shows
-  // `Ball Nose` as a `type=` value — our vocabulary is the tool-library
-  // enum instead; field order is not pinned by the strings alone).
+  // Community Controller builds 3D tool meshes and M6 popups from 13 fields.
+  // Order: number, id, name, type, handlediameter, sticklength, shoulderlength,
+  // flutelength, diameter, tipdiameter, cornerradius, angle, halfAngle.
   return tools.map((t, i) => {
+    const typeMap: Record<Tool['type'], string> = {
+      flat: 'Flat End',
+      ball: 'Ball Nose',
+      bull: 'Bull Nose',
+      vbit: 'V-Bit',
+      drill: 'Drill',
+      threadmill: 'Thread',
+      corn: 'V-Bit', // Chamfer-style cutter
+    };
+
     const parts = [
       `;@MKR|TOOL|number=${i + 1}`,
+      `id=${t.id}`,
       `name=${t.name}`,
-      `diameter=${t.diameter.toFixed(3)}`,
-      `type=${t.type}`,
+      `type=${typeMap[t.type]}`,
+      `handlediameter=${fmt(t.shaftDiameter ?? t.diameter, 2)}`,
+      `sticklength=0`,
+      `shoulderlength=${fmt(t.fluteLength ?? 0, 2)}`,
+      `flutelength=${fmt(t.fluteLength ?? 0, 2)}`,
+      `diameter=${fmt(t.diameter, 2)}`,
+      `tipdiameter=${fmt(t.tipDiameter ?? t.diameter, 2)}`,
+      `cornerradius=${fmt(t.cornerRadius ?? 0, 2)}`,
+      `angle=${fmt(t.vAngle ?? 0, 2)}`,
+      `halfAngle=${fmt((t.vAngle ?? 0) / 2, 2)}`,
     ];
-    if (t.tipDiameter !== undefined) parts.push(`tipdiameter=${t.tipDiameter.toFixed(3)}`);
-    if (t.fluteLength !== undefined) parts.push(`flutelength=${t.fluteLength.toFixed(3)}`);
     return parts.join('|');
   });
 }
@@ -54,11 +73,11 @@ function toolComments(tools: Tool[]): string[] {
 function wordsLine(m: Move, withFeed: boolean): string {
   const w = m.words;
   const parts: string[] = [];
-  if (w.x !== undefined) parts.push(`X${fmt(w.x, 3)}`);
-  if (w.y !== undefined) parts.push(`Y${fmt(w.y, 3)}`);
-  if (w.z !== undefined) parts.push(`Z${fmt(w.z, 3)}`);
-  if (w.a !== undefined) parts.push(`A${fmt(w.a, 3)}`);
-  if (withFeed) parts.push(`F${fmt(m.feed, 4)}`);
+  if (w.x !== undefined) parts.push(`X${fmt(w.x, 2)}`);
+  if (w.y !== undefined) parts.push(`Y${fmt(w.y, 2)}`);
+  if (w.z !== undefined) parts.push(`Z${fmt(w.z, 2)}`);
+  if (w.a !== undefined) parts.push(`A${fmt(w.a, 2)}`);
+  if (withFeed) parts.push(`F${fmt(m.feed, 2)}`);
   return parts.join(' ');
 }
 
@@ -98,8 +117,11 @@ export function postCarvera(input: PostInput): string {
     lines.push(active('G10 L20 P0 A0      ; establish angular zero'));
     lines.push(active('verify 4th-axis Z datum (stock-center, Z1-probed) matches the job stock calibration'));
   }
-  lines.push('G21 G90 G94');
-  lines.push('G92.4 A0 S0');
+  // TODO: Emit ;@MKR|TOOLPATH_START markers and per-op boundaries when IR supports them.
+  lines.push('G90 G21');
+  if (anyA) {
+    lines.push('G92.4 A0 R0');
+  }
 
   // ---- moves ----
   // holder object: TS narrowing of closure-mutated lets is unsound here
@@ -121,9 +143,6 @@ export function postCarvera(input: PostInput): string {
     // spindle (re)start at the op boundary — Makera's own start syntax
     // `S<rpm> M3`, verified as the literal format string `S{0} M3` in
     // MakeraStudio (reference/s-makera-spindle-emission.json).
-    // No stop command: M30 ends the program and the controller stops the
-    // spindle there (no `M5` string exists in the binary; the `M3 S0`
-    // literal's semantics are unconfirmed, so we don't emit it).
     if (m.spindleRpm !== undefined && m.spindleRpm !== st.lastSpindle) {
       lines.push(`S${m.spindleRpm} M3`);
       st.lastSpindle = m.spindleRpm;
@@ -146,8 +165,13 @@ export function postCarvera(input: PostInput): string {
 
   // ---- footer ----
   if (st.mode === 'G93') lines.push('G94');
-  if (opts.wrapA && usedA) lines.push('G92.4 A0 S0');
-  lines.push('M30');
+  if (opts.wrapA && usedA) {
+    lines.push('; shrink work-coordinate A back to ±360');
+    lines.push('G92.4 A0 S0');
+  }
+  lines.push('M05');
+  lines.push('G28');
+  lines.push('M02');
 
   return lines.join('\n') + '\n';
 }
