@@ -15,9 +15,12 @@ import {
   newJobOp,
   OP_KINDS,
   presetRates,
+  toolPresetFor,
 } from './jobGeneration';
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
 import { NumberField } from './fields';
+import { SAFE_CLEARANCE } from '../cam/faceCylinder';
+import { getMaterial } from '../core/materials';
 
 interface Props {
   ops: JobOp[];
@@ -207,11 +210,19 @@ function RatesPopup(props: {
   const rates = op.rates ?? {};
   const setRate = (patch: Partial<OpRates>) =>
     props.onChange({ ...op, rates: { ...rates, ...patch } });
+  // where the numbers below come from: the tool's own Makera preset row for
+  // the stock material, or the built-in fallback table
+  const preset = toolPresetFor(tool, props.materialId);
+  const materialName = getMaterial(props.materialId).name;
   return (
     <div className="op-rates">
       <p className="hint">
-        defaults come from the tool + stock material presets — edit only what this one op
-        needs; an edited box overrides the tool default until reset
+        defaults for {materialName}
+        {preset ? ` — tool’s Makera “${preset.material}” preset` : ' — simple.cam fallback table'}
+      </p>
+      <p className="hint">
+        edit only what this one op needs; an edited box overrides the
+        default until reset
       </p>
       <NumberField
         label="Feed (mm/min)"
@@ -233,6 +244,13 @@ function RatesPopup(props: {
         min={100}
         step={1000}
         onCommit={(v) => setRate({ spindleRpm: v })}
+      />
+      <NumberField
+        label="Clearance (mm)"
+        value={rates.clearance ?? SAFE_CLEARANCE}
+        min={1}
+        step={1}
+        onCommit={(v) => setRate({ clearance: v })}
       />
       <div className="buttons">
         <button
@@ -446,7 +464,7 @@ function ParamFields(props: {
             </button>
           </div>
           <div className="floor-row">
-            <NumberField label="Surface Ø (mm)" value={op.surfaceDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ surfaceDiameter: v } as Partial<JobOp>)} />
+            <NumberField label="Surface Ø (mm)" title="The actual outer Ø of the surface being carved — blank = the stock surface; set it after a facing/turning pass so the tool starts at the real surface" value={op.surfaceDiameter} min={0.1} step={0.1} onCommit={(v) => upd({ surfaceDiameter: v } as Partial<JobOp>)} />
             <button
               type="button"
               className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'targetDiameter' ? ' active' : ''}`}
@@ -531,6 +549,7 @@ function ParamFields(props: {
             value={op.surfaceDiameter ?? rotaryCalibrationOf(props.stock).effectiveRadius * 2}
             min={0.1}
             step={0.1}
+            title="The actual outer Ø of the part at the thread — grooves start at this surface. Not a depth: blank = the stock surface (the default); set it when a facing/turning pass has turned the diameter down, so the tool skips the empty air between stock and surface"
             onCommit={(v) => upd({ surfaceDiameter: v } as Partial<JobOp>)}
           />
           <label className="field">

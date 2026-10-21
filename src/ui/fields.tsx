@@ -19,6 +19,8 @@ export function NumberField(props: {
   value: number;
   min?: number;
   step?: number;
+  /** tooltip on the input explaining what the value means */
+  title?: string;
   /** extra classes on the wrapping label (e.g. layout tweaks) */
   className?: string;
   onCommit: (v: number) => void;
@@ -37,6 +39,7 @@ export function NumberField(props: {
       <input
         type="number"
         step={props.step ?? 1}
+        title={props.title}
         value={text}
         onChange={(e) => commit(e.target.value)}
       />

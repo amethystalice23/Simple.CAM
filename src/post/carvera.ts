@@ -25,6 +25,7 @@ export interface PostOptions {
 export interface PostInput {
   moves: Move[];
   tools: Tool[];
+  toolNumbers?: number[];
   options?: Partial<PostOptions>;
 }
 
@@ -36,7 +37,7 @@ const fmt = (v: number, digits: number): string => {
   return trimmed === '-0' ? '-0' : trimmed === '0' ? '0' : trimmed;
 };
 
-function toolComments(tools: Tool[]): string[] {
+function toolComments(tools: Tool[], toolNumbers?: number[]): string[] {
   // Community Controller builds 3D tool meshes and M6 popups from 13 fields.
   // Order: number, id, name, type, handlediameter, sticklength, shoulderlength,
   // flutelength, diameter, tipdiameter, cornerradius, angle, halfAngle.
@@ -52,7 +53,7 @@ function toolComments(tools: Tool[]): string[] {
     };
 
     const parts = [
-      `;@MKR|TOOL|number=${i + 1}`,
+      `;@MKR|TOOL|number=${toolNumbers?.[i] ?? i + 1}`,
       `id=${t.id}`,
       `name=${t.name}`,
       `type=${typeMap[t.type]}`,
@@ -110,7 +111,7 @@ export function postCarvera(input: PostInput): string {
   // ---- header ----
   lines.push(`; simple.cam v0.0.1 — job "${opts.jobName}"`);
   lines.push(`; generated ${new Date().toISOString()}`);
-  lines.push(...toolComments(input.tools));
+  lines.push(...toolComments(input.tools, input.toolNumbers));
   if (opts.prepHeader !== 'none' && anyA) {
     lines.push('; ---- prep assumptions (run in controller before this job) ----');
     lines.push(active('M465.1            ; 4th-axis stock leveling/twist via probe'));
@@ -125,7 +126,7 @@ export function postCarvera(input: PostInput): string {
 
   // ---- moves ----
   // holder object: TS narrowing of closure-mutated lets is unsound here
-  const st: { mode: FeedMode; lastFeed: number; lastSpindle: number } = {
+  const st: { mode: FeedMode; lastFeed: number; lastSpindle: number; lastOp?: Move['op'] } = {
     mode: 'G94',
     lastFeed: -1,
     lastSpindle: -1,
@@ -140,6 +141,44 @@ export function postCarvera(input: PostInput): string {
   };
 
   for (const m of input.moves) {
+    // Handle toolpath transition markers and tool changes
+    if (m.op) {
+      const prevOp = st.lastOp;
+      if (!prevOp || m.op.number !== prevOp.number) {
+        // Op boundary
+        lines.push(`;@MKR|TOOLPATH_START|toolpath_number=${m.op.number}`);
+        lines.push('');
+
+        // Tool change?
+        const prevToolNum = prevOp?.toolNumber;
+        const currentToolNum = m.op.toolNumber;
+
+        if (!prevToolNum || currentToolNum !== prevToolNum) {
+          // New tool. Spindle check for M5.
+          if (st.lastSpindle !== -1) {
+            lines.push('M5');
+            lines.push('');
+          }
+
+          // Tool comment and T M6 block
+          // Tool name is the one whose controller tool number matches m.op.toolNumber
+          const toolIdx = input.tools.findIndex((_, i) => (input.toolNumbers?.[i] ?? i + 1) === currentToolNum);
+          const toolName = toolIdx !== -1 ? input.tools[toolIdx].name : `T${currentToolNum}`;
+
+          lines.push(`; T${currentToolNum}-${toolName}`);
+          lines.push('');
+          lines.push(`T${currentToolNum} M6`);
+          lines.push('');
+
+          // Reset spindle state to force S M3 re-emission even if RPM is unchanged
+          st.lastSpindle = -1;
+        }
+
+        // m.op.name is reserved for future BEGIN..END header block
+        st.lastOp = m.op;
+      }
+    }
+
     // spindle (re)start at the op boundary — Makera's own start syntax
     // `S<rpm> M3`, verified as the literal format string `S{0} M3` in
     // MakeraStudio (reference/s-makera-spindle-emission.json).

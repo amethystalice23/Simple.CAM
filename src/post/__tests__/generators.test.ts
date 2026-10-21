@@ -188,6 +188,27 @@ describe('generator post goldens', () => {
     }),
   );
 
+  // two face ops back to back: the second CONTINUES from the first's final
+  // A (cross-op threading). Before this, every op restarted at absolute 0 —
+  // the machine unwound the entire accumulated pile between ops, winding
+  // round and round. The golden pins the continuation.
+  const faceA = faceCylinder(spiralFaceOp, faceStock.calibration, tool);
+  const finalA = [...faceA.moves].reverse().find((m) => m.words.a !== undefined)!.words.a!;
+  const faceB = faceCylinder(
+    { ...spiralFaceOp, id: 'op4b' },
+    faceStock.calibration,
+    tool,
+    finalA,
+  );
+  checkGolden(
+    'face-pair.nc',
+    postCarvera({
+      moves: [...faceA.moves, ...faceB.moves],
+      tools: [tool],
+      options: { jobName: 'face-pair' },
+    }),
+  );
+
   // V-bit chamfer on one hole rim: auto side (material outside the loop →
   // tool rides inside it), tip 0.5mm below the anchor plane, one closed pass
   const chamferOp: ChamferOp = {

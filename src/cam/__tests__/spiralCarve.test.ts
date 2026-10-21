@@ -57,7 +57,8 @@ describe('spiralCarve', () => {
     const res = spiralCarve({ ...op, width: 15 }, cal, 6, 0);
     // ceil(15/6) = 3 fan passes per strand → 2 strands × 3 × 2 levels
     expect(res.passes).toBe(12);
-    const starts = res.moves.filter((m) => m.rapid && m.words.a !== undefined).map((m) => m.words.x);
+    // axis-separate entries: the fan-pass start Xs live on the X-only travels
+    const starts = res.moves.filter((m) => m.rapid && m.words.x !== undefined).map((m) => m.words.x);
     // per strand: the fan pass start Xs spread across (width − toolØ) = 9mm
     const firstStrand = starts.slice(0, 3).sort((a, b) => a! - b!);
     expect(firstStrand[1]! - firstStrand[0]!).toBeCloseTo(4.5, 5);
@@ -92,5 +93,25 @@ describe('spiralCarve', () => {
     }
     // the helix advances along X with the angle
     expect(pts[pts.length - 1].x).toBeCloseTo(50, 5);
+  });
+});
+
+describe('spiralCarve: clearance override', () => {
+  it('lifts the approach to the ⚡ clearance above the groove surface', () => {
+    // surface R25 at Z25: default clearance 5 → Z30, override 8 → Z33
+    const res = spiralCarve({ ...op, clearance: 8 }, cal, 6, 0);
+    const zs = res.moves.filter((m) => m.rapid && m.words.z !== undefined).map((m) => m.words.z);
+    expect(zs.length).toBeGreaterThan(0);
+    for (const z of zs) expect(z).toBeCloseTo(33, 6);
+  });
+});
+
+describe('spiralCarve A continuity', () => {
+  it('positions strands by the SHORTEST rotation from the machine A', () => {
+    // axis at 350, strand phase 0 → +10° to 360, not −350 back to 0
+    const res = spiralCarve(op, cal, 6, 0, 350);
+    const rotate = res.moves.find((m) => m.rapid && m.words.a !== undefined)!;
+    expect(rotate.words.a).toBeCloseTo(360, 6);
+    expect(Math.abs(rotate.words.a! - 350)).toBeLessThanOrEqual(180);
   });
 });

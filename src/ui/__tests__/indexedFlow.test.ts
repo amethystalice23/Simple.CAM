@@ -51,7 +51,7 @@ describe('indexed job flow: top pocket, index 180, bottom pocket', () => {
     tools: [tool],
     primitives: [],
     sources: sourcesFor(geo, features, identityTransform(), []),
-    datumAngle: 0,
+    datumAngle: 0, startA: 0,
   };
 
   const topFaceId = features.planes.find(

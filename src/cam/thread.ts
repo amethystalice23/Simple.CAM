@@ -20,7 +20,7 @@
  */
 
 import type { Move, RotaryCalibration, ThreadOp, Tool } from '../core/types';
-import { MAX_ROTARY_RPM, SAFE_CLEARANCE } from './faceCylinder';
+import { MAX_ROTARY_RPM, SAFE_CLEARANCE, shortestATo } from './faceCylinder';
 
 /** Groove depth below the crest surface, mm. */
 export function threadDepth(pitch: number, vAngle: number, tolerance: number): number {
@@ -49,6 +49,10 @@ export function thread(
   calibration: RotaryCalibration,
   tool: Tool,
   datumAngle: number,
+  /** the machine's accumulated A when this op starts — phase positioning
+   * takes the shortest rotation from it, never unwinding the previous
+   * ops' pile to reach a small absolute target */
+  startA: number = 0,
 ): ThreadResult {
   if (op.xEnd === op.xStart) throw new Error('xStart and xEnd must differ');
   if (op.pitch <= 0) throw new Error('pitch must be positive');
@@ -77,7 +81,7 @@ export function thread(
 
   const moves: Move[] = [];
   let minutes = 0;
-  let a = 0; // accumulated machine A; the post wraps with G92.4
+  let a = startA; // accumulated machine A; the post wraps with G92.4
 
   // ---- the grooves: phase-locked retrace levels + spring passes ----
   const span = Math.abs(op.xEnd - op.xStart);
@@ -89,7 +93,7 @@ export function thread(
   // ops' 'cw' (iron-tested by Alice): a cw-perceived thread cuts with A
   // decreasing as X advances
   const aSign = op.rotation === 'cw' ? -1 : 1;
-  const safeZ = axisZ + startR + SAFE_CLEARANCE;
+  const safeZ = axisZ + startR + (op.clearance ?? SAFE_CLEARANCE);
 
   // depth ladder from the working surface down to the root, last at it
   const total = startR - rootR;
@@ -102,8 +106,20 @@ export function thread(
   for (let s = 0; s < op.starts; s++) {
     // the start's pattern phase: datum + its share of the circle
     const phase = datumAngle + s * (360 / op.starts);
-    a += (((phase - a) % 360) + 360) % 360; // positive positioning delta
-    moves.push({ words: { x: op.xStart, z: safeZ, a }, feed: 0, rapid: true, comment: `start ${s + 1}/${op.starts}` });
+    a += shortestATo(phase, a); // shortest rotation to the phase spoke
+    // Position by SEPARATE axis rapids: one coordinated X+Z+A rapid runs at
+    // the slowest axis' rate — the rotary clamp crawls the X traverse
+    // across the stock at clearance. Lift (first start only — later ones
+    // already sit at safeZ), rotate in place, then travel to Start X, each
+    // at its own full rapid rate.
+    if (s === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    moves.push({
+      words: { a },
+      feed: 0,
+      rapid: true,
+      comment: `start ${s + 1}/${op.starts}`,
+    });
+    moves.push({ words: { x: op.xStart }, feed: 0, rapid: true });
 
     // levels + one spring pass retrace the same helix at full depth
     const runs = [...levels, total]; // the spring: the final depth again

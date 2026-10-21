@@ -57,8 +57,8 @@ describe('faceCylinder: spiral', () => {
   it('schedules roughing levels plus one finishing level', () => {
     expect(res.passes).toBe(5);
     expect(res.radialDepth).toBeCloseTo(5, 9);
-    // approach + (step-down + sweep) × 5 levels + final retract
-    expect(res.moves.length).toBe(12);
+    // lift + travel + (step-down + sweep) × 5 levels + final retract
+    expect(res.moves.length).toBe(13);
   });
 
   it('steps down in the cut: one Z+A move per level at surface - depth', () => {
@@ -76,19 +76,43 @@ describe('faceCylinder: spiral', () => {
     for (const s of sweeps) expect(s.feed).toBeCloseTo(1 / passMinutes, 4);
   });
 
-  it('accumulates A continuously past 360 degrees, alternating sweep direction', () => {
-    const perLevel = (100 / 4.8) * 360 + 90; // 7500° sweep + 90° entry
-    expect(sweeps[0].words.a).toBeCloseTo(perLevel, 3);
-    expect(sweeps[4].words.a).toBeCloseTo(5 * perLevel, 3); // 37950
+  it('retraces the helix: return sweeps rotate BACK, A stays bounded', () => {
+    // each level: +90° step, then ±7500° following the sweep direction —
+    // the return sweep comes back ALONG the groove instead of piling on
+    // another 7500 (which wound the axis to levels×(7500+90) by the end)
+    const advance = (100 / 4.8) * 360;
+    expect(sweeps.map((s) => s.words.a)).toEqual([
+      90 + advance, // forward
+      180, // back along the helix
+      270 + advance,
+      360,
+      450 + advance, // finish sweep forward
+    ]);
     expect(sweeps.map((s) => s.words.x)).toEqual([100, 0, 100, 0, 100]);
   });
 
-  it('approaches once and retracts once', () => {
-    const safeRetracts = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.x === undefined);
-    expect(safeRetracts.length).toBe(1);
-    expect(safeRetracts[0].words.z).toBe(25 + SAFE_CLEARANCE);
-    const entryRapids = res.moves.filter((m) => m.rapid && m.words.x !== undefined);
-    expect(entryRapids.length).toBe(1);
+  it('approaches with axis-separate rapids and retracts once', () => {
+    // lift (Z only) → travel (X only) — the spiral has no pattern phase, so
+    // there is no positioning rotation at all; never a coordinated X+A rapid
+    const zRapids = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.x === undefined);
+    expect(zRapids.length).toBe(2); // entry lift + final retract
+    for (const m of zRapids) expect(m.words.z).toBe(25 + SAFE_CLEARANCE);
+    const xRapids = res.moves.filter((m) => m.rapid && m.words.x !== undefined);
+    expect(xRapids).toHaveLength(1);
+    expect(xRapids[0].words.x).toBe(op.xStart);
+    expect(zRapids[0].comment).toMatch(/pass 1\/5/); // the pass label rides the lift
+    expect(
+      res.moves.some((m) => m.rapid && m.words.a !== undefined && m.words.x !== undefined),
+    ).toBe(false);
+  });
+
+  it('continues from the machine\'s A (startA) — never unwinds the pile', () => {
+    // a face op after 4680° of prior work: sweeps continue from there,
+    // no G0 A0 dragging the axis back through 13 revolutions
+    const res = faceCylinder(op, calibration, tool, 4680);
+    const first = res.moves.find((m) => !m.rapid && m.words.a !== undefined)!;
+    expect(first.words.a).toBeCloseTo(4680 + 90, 3);
+    expect(res.moves.some((m) => m.rapid && m.words.a !== undefined)).toBe(false);
   });
 
   it('estimates rotation-rate-limited time honestly', () => {
@@ -202,7 +226,6 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
   const sweeps = res.moves.filter((m) => !m.rapid && m.words.x !== undefined);
   const plunges = res.moves.filter((m) => !m.rapid && m.words.z !== undefined);
   const indexRapids = res.moves.filter((m) => m.rapid && m.words.a !== undefined);
-  const retracts = res.moves.filter((m) => m.rapid && m.words.a === undefined);
 
   it('indexes the full 360° per level at a step-over arc on the cut radius', () => {
     // level arcs at r = 24,23,22,21,20 => 32+31+29+28+27 = 147 passes
@@ -229,7 +252,8 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
     }
     expect(sweeps.every((s) => s.feed === 600 && s.words.a === undefined)).toBe(true);
     // no coordinated A cutting moves — the whole pattern runs in G94
-    // (the approach rapids do carry X+Z+A, but rapids ignore feed modes)
+    // (positioning rapids are axis-separate too: the rotary step is its
+    // own A-only rapid, the return travel its own X-only rapid)
     expect(res.moves.filter((m) => isSimultaneous(m) && !m.rapid)).toHaveLength(0);
     // depth per level: 32×z24, 31×z23, 29×z22, 28×z21, 27×z20
     const zs = plunges.map((p) => p.words.z);
@@ -239,9 +263,16 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
     expect(zs[146]).toBe(20);
   });
 
-  it('retracts between passes', () => {
-    expect(retracts.length).toBe(147);
-    expect(retracts.every((m) => m.words.z === 25 + SAFE_CLEARANCE)).toBe(true);
+  it('retracts between passes and repositions on axis-separate rapids', () => {
+    // every pass ends lifted to the clearance height (plus one entry lift)
+    const zRapids = res.moves.filter((m) => m.rapid && m.words.z !== undefined);
+    expect(zRapids.length).toBe(148);
+    expect(zRapids.every((m) => m.words.z === 25 + SAFE_CLEARANCE)).toBe(true);
+    // the pass-to-pass step arc is an A-only rapid, the return an X-only one
+    const travels = res.moves.filter((m) => m.rapid && m.words.x !== undefined && m.words.a === undefined);
+    expect(travels).toHaveLength(147);
+    expect(travels.every((m) => m.words.z === undefined)).toBe(true);
+    expect(res.moves.some((m) => m.rapid && m.words.a !== undefined && (m.words.x !== undefined || m.words.z !== undefined))).toBe(false);
   });
 
   it('estimates time from plunge + sweep feeds', () => {
@@ -310,5 +341,17 @@ describe('faceCylinder: 4-axis box stock (derived diagonal calibration)', () => 
     // are lower still, so this pass cuts air over them — never a gouge
     const firstZ = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
     expect(firstZ?.words.z).toBeCloseTo(15 + r0 - op.stepDown, 6);
+  });
+});
+describe('faceCylinder: clearance override', () => {
+  it('lifts the approach to the ⚡ clearance above the stock surface', () => {
+    // stock R25 surface at Z25: default clearance 5 → safe Z30, override 9 → Z34
+    const res = faceCylinder({ ...op, clearance: 9 }, calibration, tool);
+    const zs = res.moves.filter((m) => m.rapid && m.words.z !== undefined).map((m) => m.words.z);
+    expect(zs.length).toBeGreaterThan(0);
+    for (const z of zs) expect(z).toBeCloseTo(34, 6);
+    const plain = faceCylinder(op, calibration, tool);
+    const plainZ = plain.moves.find((m) => m.rapid && m.words.z !== undefined)?.words.z;
+    expect(plainZ).toBeCloseTo(30, 6);
   });
 });

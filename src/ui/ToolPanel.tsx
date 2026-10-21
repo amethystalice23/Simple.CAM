@@ -1,15 +1,143 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Tool } from '../core/types';
 import { mergeImportedTools, parseFusionToolCsv } from '../core/toolImport';
+import { getMaterial, MATERIALS } from '../core/materials';
+import { toolPresetFor } from './jobGeneration';
 import { NumberField, TextField } from './fields';
 import { Toasts, useToasts } from './Toasts';
 
 interface Props {
   tools: Tool[];
   selectedId: string;
+  /** the stock material — highlights which preset row its rates come from */
+  materialId: string;
   onSelect: (id: string) => void;
   onChange: (tools: Tool[]) => void;
   onRestorePresets: () => void;
+}
+
+/**
+ * Every rate this tool carries, one column per material: its own Makera
+ * preset rows (as imported — Aluminum/Brass/Copper/Hardwood/Softwood/Plastic)
+ * plus the built-in simple.cam fallback table for the current stock
+ * material, with the column the generation actually reads highlighted.
+ */
+function PresetTablePopup(props: { tool: Tool; materialId: string; onClose: () => void }) {
+  const { tool, materialId } = props;
+  const material = getMaterial(materialId);
+  const active = toolPresetFor(tool, materialId);
+  const rows = tool.presets ?? [];
+  // one column per known rate set: the tool's own Makera preset rows, then
+  // the whole built-in simple.cam table (every material, this tool's type —
+  // spindle there is the tool's singular Tools-tab value)
+  const builtin = MATERIALS.map((m) => ({
+    source: 'builtin' as const,
+    id: m.id,
+    name: m.name,
+    spindleRpm: tool.spindleRpm,
+    feed: m.feedByTool[tool.type],
+    plungeFeed: Math.round(m.feedByTool[tool.type] * m.plungeFraction),
+    stepDown: m.stepDownByTool[tool.type],
+    rampFeed: undefined,
+  }));
+  type RateColumn = {
+    source: 'preset' | 'builtin';
+    id: string;
+    name: string;
+    spindleRpm?: number;
+    feed?: number;
+    plungeFeed?: number;
+    stepDown?: number;
+    rampFeed?: number;
+  };
+  const columns: RateColumn[] = [
+    ...(rows ?? []).map((p) => ({
+      source: 'preset' as const,
+      id: `preset:${p.material}`,
+      name: p.material,
+      ...p,
+    })),
+    ...builtin,
+  ];
+  // which column generation reads: the tool's matching preset row, else the
+  // built-in column of the stock material
+  const activeColumn =
+    active !== null
+      ? columns.find((c) => c.source === 'preset' && c.id === `preset:${active.material}`)!
+      : columns.find((c) => c.source === 'builtin' && c.id === materialId)!;
+  const PARAMS: [string, (p: (typeof columns)[number]) => string | undefined][] = [
+    ['Spindle (rpm)', (p) => p.spindleRpm?.toString()],
+    ['Feed (mm/min)', (p) => p.feed?.toString()],
+    ['Plunge (mm/min)', (p) => p.plungeFeed?.toString()],
+    ['Ramp (mm/min)', (p) => p.rampFeed?.toString()],
+    ['Depth of cut (mm)', (p) => p.stepDown?.toString()],
+  ];
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [props.onClose]);
+  return (
+    <div className="modal-overlay">
+      <div className="modal preset-modal" role="dialog" aria-modal="true" aria-label="Tool material presets">
+        <h2>
+          {tool.name} — material rates
+          <button type="button" className="icon-btn" title="Close (Esc)" onClick={props.onClose}>
+            ✕
+          </button>
+        </h2>
+        <p className="hint">
+          stock: <strong>{material.name}</strong> →{' '}
+          {active ? (
+            <>this tool&rsquo;s <strong>“{active.material}”</strong> preset row</>
+          ) : (
+            <>
+              no matching preset row — the <strong>simple.cam fallback table</strong> applies
+            </>
+          )}
+        </p>
+        {rows.length === 0 && (
+          <p className="hint">
+            this tool carries no preset rows (imported without them, or hand-entered) —
+            generation uses the fallback column
+          </p>
+        )}
+        <div className="table-wrap">
+          <table className="preset-table">
+            <thead>
+              <tr>
+                <th />
+                {columns.map((c) => (
+                  <th key={c.id} className={c === activeColumn ? ' active' : ''}>
+                    {c.name}
+                    {c.source === 'builtin' && <span className="col-src"> built-in</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {PARAMS.map(([label, get]) => (
+                <tr key={label}>
+                  <th>{label}</th>
+                  {columns.map((c) => (
+                    <td key={c.id} className={c === activeColumn ? 'active' : ''}>
+                      {get(c) ?? '—'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="hint">
+          the highlighted column is what ops use for this stock; the ⚡ popup on an op
+          shows the same source and overrides it per op
+        </p>
+      </div>
+    </div>
+  );
 }
 
 const TOOL_TYPES: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill', 'corn'];
@@ -41,7 +169,7 @@ function groupTools(tools: Tool[]) {
 }
 
 /** Pick, edit, add, and delete tools in the library. */
-export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePresets }: Props) {
+export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, onRestorePresets }: Props) {
   // only a genuine click selects — no first-tool fallback, so the edit form
   // stays hidden until the user picks something from the list
   const selected = tools.find((t) => t.id === selectedId);
@@ -51,6 +179,7 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
   const [typeFilter, setTypeFilter] = useState<Tool['type'] | 'all'>('all');
   const [shankFilter, setShankFilter] = useState<string>('all');
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [showPresets, setShowPresets] = useState(false);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
   /** distinct shank sizes in the library, ascending */
@@ -214,7 +343,17 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
       </section>
       {editing && (
         <section>
-        <h2>{isNew ? 'New Tool' : 'Edit Tool'}</h2>
+        <h2 className="panel-head">
+          {isNew ? 'New Tool' : 'Edit Tool'}
+          <button
+            type="button"
+            className="icon-btn"
+            title="Show this tool's per-material rates — where each figure comes from"
+            onClick={() => setShowPresets(true)}
+          >
+            🔧
+          </button>
+        </h2>
         <TextField label="Name" value={editing?.name ?? ''} onCommit={(v) => upd({ name: v })} />
         <TextField label="Sub-type" value={editing?.subtype ?? ''} onCommit={(v) => upd({ subtype: v })} />
         <label className="field">
@@ -288,6 +427,9 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
         }}
       />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      {showPresets && editing && (
+        <PresetTablePopup tool={editing} materialId={materialId} onClose={() => setShowPresets(false)} />
+      )}
     </>
   );
 }

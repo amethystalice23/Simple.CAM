@@ -84,6 +84,15 @@ export interface Move {
    * the post emits Makera's own `S<rpm> M3` line when it changes.
    */
   spindleRpm?: number;
+  /**
+   * Set on an op's FIRST move by the export pipeline: the op's 1-based
+   * position in the exported job, its display name, and the controller
+   * tool number (user-editable; the controller shows it on the T<n> M6
+   * prompt). The post emits `;@MKR|TOOLPATH_START` markers and tool-change
+   * blocks (`M5` / `; T<n>-<name>` / `T<n> M6`) from these. Untagged move
+   * lists — e.g. bare post tests — emit none of that.
+   */
+  op?: { number: number; name: string; toolNumber: number };
 }
 
 /** True when a move coordinates A with a linear axis (needs G93). */
@@ -217,6 +226,8 @@ export interface FaceCylinderOp {
   pattern: 'vertical' | 'horizontal' | 'spiral';
   /** cut feed for pure-linear cutting moves (G94 mm/min): horizontal X sweeps */
   feed: number;
+  /** rapid clearance above the stock surface, mm — ⚡ override, else the default */
+  clearance?: number;
 }
 
 /**
@@ -252,6 +263,8 @@ export interface SpiralCarveOp {
   feed: number;
   /** G94 plunge feed at the strand starts */
   plungeFeed: number;
+  /** rapid clearance above the stock surface, mm — ⚡ override, else the default */
+  clearance?: number;
 }
 
 /**
@@ -285,6 +298,8 @@ export interface ThreadOp {
   /** the surface the depth ladder starts from, mm Ø — the faced crest
    * Ø when a facing op precedes; null = the stock surface */
   surfaceDiameter: number | null;
+  /** rapid clearance above the stock surface, mm — ⚡ override, else the default */
+  clearance?: number;
 }
 
 export interface Vec2 {
@@ -505,6 +520,10 @@ export interface OpRates {
   /** spindle speed, RPM — emitted as an active `S<rpm> M3` line at the op
    * boundary (Makera's own format, verified in MakeraStudio) */
   spindleRpm?: number;
+  /** rapid clearance above the cut surface, mm — approach/retract height;
+   * unset = the shared default (SAFE_CLEARANCE, 5mm). Rarely changed, so it
+   * lives here in the ⚡ popup rather than as a panel field */
+  clearance?: number;
 }
 
 export type JobOp =

@@ -127,7 +127,7 @@ describe('the Delrin coupon job', () => {
       tools: parsed.tools,
       primitives: [],
       sources: [],
-      datumAngle: 0,
+      datumAngle: 0, startA: 0,
     };
     let minutes = 0;
     for (const op of parsed.ops) {

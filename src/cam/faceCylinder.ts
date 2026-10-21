@@ -49,6 +49,18 @@ export const SAFE_CLEARANCE = 5;
 /** A rotation during a radial plunge (helical entry), degrees. */
 export const PLUNGE_SWEEP_DEG = 90;
 
+/**
+ * Shortest signed rotation from `a` to an angle equivalent to `phase`
+ * (mod 360): the delta in (−180, 180] that lands on the phase's spoke.
+ * Used for every A positioning between ops and strands — never wind the
+ * whole accumulated pile back to a small absolute target.
+ */
+export function shortestATo(phase: number, a: number): number {
+  let delta = (((phase - a) % 360) + 360) % 360; // 0..360
+  if (delta > 180) delta -= 360;
+  return delta;
+}
+
 export interface FaceCylinderResult {
   moves: Move[];
   /** depth-level count including the finishing level */
@@ -74,6 +86,10 @@ export function faceCylinder(
   op: FaceCylinderOp,
   calibration: RotaryCalibration,
   tool: Tool,
+  /** the machine's accumulated A when this op starts — the sweeps continue
+   * from it, so the op never drags the axis back to a small absolute
+   * target through the whole previous pile */
+  startA: number = 0,
 ): FaceCylinderResult {
   if (op.targetDiameter <= 0) throw new Error('targetDiameter must be positive');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
@@ -112,9 +128,9 @@ export function faceCylinder(
 
   // Z0 is the stock center (axis datum); the surface sits at axisZ + r0
   const surfaceZ = axisZ + r0;
-  const safeZ = surfaceZ + SAFE_CLEARANCE;
+  const safeZ = surfaceZ + (op.clearance ?? SAFE_CLEARANCE);
   const moves: Move[] = [];
-  let a = 0; // accumulated machine A, degrees (post emits G92.4 A0 afterwards)
+  let a = startA; // accumulated machine A, degrees (post emits G92.4 A0 afterwards)
   let minutes = 0;
   let passIndex = 0; // global: horizontal X zigzags across levels
   const rings = ringPositions(op.xStart, op.xEnd, stepOver);
@@ -138,16 +154,20 @@ export function faceCylinder(
       const sweepEnd = i % 2 === 0 ? op.xEnd : op.xStart;
 
       // approach once; afterwards depth steps happen in the cut at the
-      // sweep ends, retracting only after the final level
+      // sweep ends, retracting only after the final level. Axis-separate
+      // rapids (see thread) — and the spiral has no pattern phase: it just
+      // starts turning from wherever the axis sits (startA), so there is
+      // no positioning rotation to make.
       if (i === 0) {
-        moves.push({
-          words: { x: sweepStart, z: safeZ, a },
-          feed: 0,
-          rapid: true,
-          comment: passComment,
-        });
+        moves.push({ words: { z: safeZ }, feed: 0, rapid: true, comment: passComment });
+        moves.push({ words: { x: sweepStart }, feed: 0, rapid: true });
       }
 
+      // helical entry / in-cut step down, then the sweep. The sweep RETRACES
+      // the helix: the return sweep rotates BACK along the groove (like the
+      // thread and spiral-carve levels), so A oscillates around the phase
+      // instead of piling up another aAdvance per level — the machine never
+      // winds up to levels×(aAdvance+90) and has to unwind it afterwards.
       a += aSign * PLUNGE_SWEEP_DEG;
       moves.push({
         words: { z: passZ, a },
@@ -158,7 +178,8 @@ export function faceCylinder(
             : `spiral step down ${increment.toFixed(3)}mm radial`,
       });
 
-      a += aSign * aAdvance;
+      const forward = i % 2 === 0;
+      a += forward ? aSign * aAdvance : -aSign * aAdvance;
       moves.push({
         words: { x: sweepEnd, a },
         feed: 1 / passMinutes, // G93 inverse time
@@ -214,12 +235,17 @@ export function faceCylinder(
         const forward = passIndex % 2 === 0;
         const sweepStart = forward ? op.xStart : op.xEnd;
         const sweepEnd = forward ? op.xEnd : op.xStart;
+        // axis-separate repositioning (see thread): retract, rotate the
+        // step arc in place, then travel — a coordinated X+Z+A rapid runs
+        // the whole traverse at the rotary clamp rate
+        if (passIndex === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         moves.push({
-          words: { x: sweepStart, z: safeZ, a },
+          words: { a },
           feed: 0,
           rapid: true,
           comment: k === 0 ? `${passComment} — ${n} indexed passes` : undefined,
         });
+        moves.push({ words: { x: sweepStart }, feed: 0, rapid: true });
         moves.push({
           words: { z: passZ },
           feed: op.plungeFeed, // G94 mm/min, A stationary

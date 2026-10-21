@@ -101,3 +101,65 @@ describe('thread', () => {
     expect(() => thread({ ...op, nominalDiameter: 60 }, cal, vbit, 0)).toThrowError(/root/);
   });
 });
+
+describe('thread positioning', () => {
+  it('positions each start with axis-separate rapids — never a coordinated X+A rapid', () => {
+    // a coordinated X+Z+A rapid runs at the slowest axis' rate — the rotary
+    // clamp crawls the X traverse across the stock at clearance height
+    const res = thread({ ...op, xStart: 5 }, cal, vbit, 0);
+    expect(res.moves.filter((m) => m.rapid && m.words.a !== undefined && m.words.x !== undefined))
+      .toHaveLength(0);
+    // lift (Z only) → rotate in place (A only) → travel (X only), then plunge
+    expect(res.moves[0]).toEqual({ words: { z: 17 }, feed: 0, rapid: true });
+    expect(res.moves[1]).toEqual({ words: { a: 0 }, feed: 0, rapid: true, comment: 'start 1/1' });
+    expect(res.moves[2]).toEqual({ words: { x: 5 }, feed: 0, rapid: true });
+    expect(res.moves[3].words.z).toBeDefined(); // the plunge begins
+    expect(res.moves[3].rapid).toBeFalsy();
+  });
+
+  it('later starts rotate and travel from the shared clearance height (no re-lift)', () => {
+    const res = thread({ ...op, starts: 2, xStart: 5 }, cal, vbit, 0);
+    // the entry lifts: z-only rapids that PRECEDE a start's rotate. The
+    // closing {z} retract after each start's runs is its own move — the
+    // second start must go straight rotate → travel, no extra lift between.
+    const rotates = res.moves
+      .map((m, i) => ({ m, i }))
+      .filter(({ m }) => m.rapid && m.words.a !== undefined && m.words.x === undefined);
+    expect(rotates).toHaveLength(2);
+    expect(rotates[1].m.comment).toBe('start 2/2');
+    // what sits between the first start's closing retract and the second
+    // start's rotate: nothing (the retract already parked Z at safeZ)
+    const beforeSecond = res.moves[rotates[1].i - 1];
+    expect(beforeSecond.rapid).toBe(true);
+    expect(beforeSecond.words.z).toBeCloseTo(17, 6); // the closing retract
+    // second start's entry: rotate → X travel → plunge, no Z word in between
+    expect(res.moves[rotates[1].i + 1]).toEqual({ words: { x: 5 }, feed: 0, rapid: true });
+    expect(res.moves[rotates[1].i + 2].words.z).toBeDefined();
+  });
+
+  it('honors the ⚡ clearance override for the approach height', () => {
+    const res = thread({ ...op, clearance: 12 }, cal, vbit, 0);
+    // axisZ 0 + stock R12 + override 12
+    expect(res.moves[0].words.z).toBeCloseTo(24, 6);
+    const plain = thread(op, cal, vbit, 0);
+    expect(plain.moves[0].words.z).toBeCloseTo(17, 6); // default SAFE_CLEARANCE 5
+  });
+});
+
+describe('thread A continuity', () => {
+  it('positions to the phase by the SHORTEST rotation from the machine A', () => {
+    // axis sits at 4600° (12.8 revs of prior work): the nearest phase-0
+    // spoke is +80° at 4680 — not 4600° of unwinding back to absolute 0
+    const res = thread(op, cal, vbit, 0, 4600);
+    const lift = res.moves[0];
+    expect(lift).toEqual({ words: { z: 17 }, feed: 0, rapid: true });
+    const rot = res.moves[1];
+    expect(rot.words.a).toBeCloseTo(4680, 6);
+    expect(Math.abs(rot.words.a! - 4600)).toBeLessThanOrEqual(180);
+  });
+
+  it('startA=350 positions forward 10° to the phase-0 spoke at 360', () => {
+    const res = thread(op, cal, vbit, 0, 350);
+    expect(res.moves[1].words.a).toBeCloseTo(360, 6);
+  });
+});

@@ -15,6 +15,7 @@ import {
   newJobOp,
   prefillDepths,
   presetRates,
+  toolPresetFor,
   seedJobOpIds,
   type GenContext,
 } from '../jobGeneration';
@@ -80,7 +81,7 @@ const ctx: GenContext = {
   tools: [tool, drillTool, smallTool, tinyTool],
   primitives: [],
   sources: sourcesFor(geometry, features, identityTransform(), []),
-  datumAngle: 0,
+  datumAngle: 0, startA: 0,
 };
 
 /** literal fixtures with narrowed branch types */
@@ -406,7 +407,7 @@ describe('generateJobOp', () => {
     // in the rotated frame — pure XYZ moves, target brought to face up
     const res = generateJobOp(op, {
       ...ctx,
-      datumAngle: 90,
+      datumAngle: 90, startA: 0,
       stock: cylStock,
       geometry: geo,
       features: f,
@@ -999,7 +1000,7 @@ describe('slice pocket (section plane + band)', () => {
       geometry: bar,
       features: barFeatures,
       sources: sourcesFor(bar, barFeatures, identityTransform(), []),
-      datumAngle: 90,
+      datumAngle: 90, startA: 0,
     };
     const indexed: Extract<JobOp, { kind: 'slicePocket' }> = {
       ...sliceOp,
@@ -1135,5 +1136,101 @@ describe('slice pocket (section plane + band)', () => {
     expect(linked.error).toBeNull();
     const dangling = generateJobOp({ ...sliceOp, floorFeatureId: 'p:gone:plane-x' }, steppedCtx);
     expect(dangling.error).toContain('no longer exist');
+  });
+});
+
+describe('per-material spindle RPM (Makera tool presets)', () => {
+  const engraver: Tool = {
+    id: 't-eng', name: '60deg Engraver', type: 'vbit', diameter: 3.175,
+    vAngle: 60, tipDiameter: 0.1, spindleRpm: 18000, // the metal row's RPM
+    presets: [
+      { material: 'Aluminum', spindleRpm: 18000, feed: 600, plungeFeed: 240, stepDown: 0.4, rampFeed: 360 },
+      { material: 'Plastic', spindleRpm: 9000, feed: 1000, plungeFeed: 500, stepDown: 0.8, rampFeed: 600 },
+    ],
+  };
+
+  it('the stock material picks the tool preset row — RPM included', () => {
+    expect(presetRates('pocket', engraver, 'delrin').spindleRpm).toBe(9000);
+    expect(presetRates('pocket', engraver, 'aluminum-6061').spindleRpm).toBe(18000);
+    // feed and plunge already came from the row; RPM now does too
+    expect(presetRates('pocket', engraver, 'delrin')).toEqual({
+      feed: 1000, plungeFeed: 500, spindleRpm: 9000,
+    });
+  });
+
+  it('a tool with no material-matched preset keeps its singular RPM', () => {
+    expect(presetRates('pocket', smallTool, 'delrin').spindleRpm).toBe(smallTool.spindleRpm);
+  });
+
+  it('generation stamps the material-matched RPM onto the first move', () => {
+    // spiral carve with the delrin stock: S9000 rides the first move, not S18000
+    const spiralCtx = {
+      ...ctx,
+      tools: [...ctx.tools, engraver],
+      stock: { ...ctx.stock, materialId: 'delrin', axisMode: '4-axis' } as Stock,
+    };
+    const res = generateJobOp(
+      {
+        kind: 'spiralCarve', id: 'op-sc', toolId: engraver.id,
+        surfaceDiameter: 40, xStart: 0, xEnd: 10, spiralAngle: 45,
+        count: 1, depth: 1, width: 1, stepDown: 0.5, rotation: 'cw',
+        featureIds: [],
+      },
+      spiralCtx,
+    );
+    expect(res.error).toBeNull();
+    expect(res.moves[0].spindleRpm).toBe(9000);
+  });
+
+  it('the ⚡ spindle override still wins over the preset row', () => {
+    const res = generateJobOp(
+      {
+        kind: 'spiralCarve', id: 'op-sc2', toolId: engraver.id,
+        surfaceDiameter: 40, xStart: 0, xEnd: 10, spiralAngle: 45,
+        count: 1, depth: 1, width: 1, stepDown: 0.5, rotation: 'cw',
+        featureIds: [], rates: { spindleRpm: 12000 },
+      },
+      {
+        ...ctx,
+        tools: [...ctx.tools, engraver],
+        stock: { ...ctx.stock, materialId: 'delrin', axisMode: '4-axis' } as Stock,
+      },
+    );
+    expect(res.moves[0].spindleRpm).toBe(12000);
+  });
+});
+
+describe('toolPresetFor material aliases', () => {
+  // Makera's tool library has six rows: Aluminum, Brass, Copper, Hardwood,
+  // Softwood, Plastic — no dedicated Delrin/acetal or acrylic rows
+  const makeraTool: Tool = {
+    id: 't-mk', name: 'Makera Metal endmill', type: 'flat', diameter: 6,
+    spindleRpm: 18000, // the metal row's RPM — what the singular value carries
+    presets: [
+      { material: 'Aluminum', spindleRpm: 18000, feed: 420, plungeFeed: 180, stepDown: 0.8, rampFeed: 250 },
+      { material: 'Plastic', spindleRpm: 10000, feed: 900, plungeFeed: 300, stepDown: 2, rampFeed: 550 },
+    ],
+  };
+
+  it("delrin stock reads Makera's Plastic row — RPM and plunge included", () => {
+    const p = toolPresetFor(makeraTool, 'delrin')!;
+    expect(p.material).toBe('Plastic');
+    expect(p.spindleRpm).toBe(10000); // not the tool's singular metal S18000
+    expect(p.plungeFeed).toBe(300); // the figure MakeraStudio shows for it
+    // acrylic is Makera's other plastic
+    expect(toolPresetFor(makeraTool, 'acrylic-cast')!.spindleRpm).toBe(10000);
+    expect(toolPresetFor(makeraTool, 'aluminum-6061')!.material).toBe('Aluminum');
+  });
+
+  it('feeds through generation: a delrin job gets the Plastic row rates', () => {
+    expect(presetRates('pocket', makeraTool, 'delrin')).toEqual({
+      feed: 900,
+      plungeFeed: 300,
+      spindleRpm: 10000,
+    });
+  });
+
+  it('no matching row → null (callers fall back to the built-in table)', () => {
+    expect(toolPresetFor({ ...makeraTool, presets: undefined }, 'delrin')).toBeNull();
   });
 });

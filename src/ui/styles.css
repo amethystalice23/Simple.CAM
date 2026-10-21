@@ -33,6 +33,8 @@ header {
 .header-actions {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap; /* wrap instead of clipping the last buttons when the row grows */
+  justify-content: flex-end;
   gap: 8px;
   align-self: center;
   align-items: center;
@@ -337,3 +339,118 @@ pre {
 }
 .toast:hover { background: #262c32; }
 .toast.warn { border-left-color: #e0785a; }
+
+/* panel heading with a trailing icon button */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.panel-head .icon-btn { flex: none; }
+
+/* tool material-rates table (🔧 in the Tool edit pane) */
+.preset-modal .table-wrap { overflow-x: auto; margin: 8px 0; }
+.preset-table { border-collapse: collapse; font-size: 12px; color: #b8c0c8; }
+.preset-table th,
+.preset-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid #262b30;
+  text-align: right;
+  white-space: nowrap;
+}
+.preset-table th { font-weight: 600; color: #d8dde2; }
+.preset-table thead th { color: #7d8891; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.preset-table tbody th { text-align: left; font-weight: 400; color: #7d8891; }
+.preset-table th.active,
+.preset-table td.active {
+  color: #9fd4ff;
+  background: #16222d;
+  border-bottom-color: #2e6f9e;
+}
+.preset-table .col-src { color: #5d6871; font-size: 9px; }
+
+/* export g-code dialog: a centered modal over everything */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(8, 10, 12, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.modal {
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 8px;
+  width: 640px;
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+}
+.modal h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.export-summary p { margin: 2px 0; font-size: 12px; }
+.export-rows {
+  margin: 10px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.export-totals { margin-top: 8px; }
+.export-row {
+  display: grid;
+  grid-template-columns: 22px 28px 1fr 74px 110px 1fr 24px; /* last = per-row ↻ */
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: #b8c0c8;
+  padding: 4px 6px;
+  border-radius: 5px;
+}
+.export-row.head {
+  color: #7d8891;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.export-row.dim { opacity: 0.55; }
+.export-row input[type='checkbox'] { accent-color: #2e6f9e; }
+.export-row .export-seq { color: #d8dde2; font-weight: 600; }
+.export-row .export-kind { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.export-row .export-no-tool { color: #7d8891; }
+.export-row .export-tooltype { color: #9aa4ad; font-size: 11px; }
+.export-row .export-error {
+  color: #e0785a;
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.export-filename {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #b8c0c8;
+}
+.export-filename span { flex: none; }
+.export-filename input {
+  flex: 1;
+  min-width: 0;
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 4px;
+  color: #d8dde2;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.export-filename input:focus { outline: 1px solid #2e6f9e; }

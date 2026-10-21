@@ -6,7 +6,7 @@
  */
 
 import type * as THREE from 'three';
-import { DEFAULT_STEP_OVER_FACTOR, faceCylinder } from '../cam/faceCylinder';
+import { DEFAULT_STEP_OVER_FACTOR, faceCylinder, SAFE_CLEARANCE, shortestATo } from '../cam/faceCylinder';
 import { spiralCarve } from '../cam/spiralCarve';
 import { thread } from '../cam/thread';
 import { chamfer } from '../cam/chamfer';
@@ -45,9 +45,16 @@ export interface GeneratedOp {
   error: string | null;
   /** one-line summary for the op panel */
   summary: string | null;
+  /** the machine's accumulated A after this op — the next op's startA, so
+   * rotary ops continue from the axis' real position and never unwind the
+   * previous pile to reach a small absolute target */
+  finalA: number;
 }
 
 export interface GenContext {
+  /** the machine's accumulated A when generating this op (the previous
+   * op's finalA; 0 for the first) */
+  startA: number;
   stock: Stock;
   geometry: THREE.BufferGeometry | null;
   features: DetectedFeatures | null;
@@ -232,7 +239,10 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
   }
 }
 
-const fail = (error: string): GeneratedOp => ({ moves: [], minutes: 0, error, summary: null });
+/** an op result before the finalA stamp (generateJobOp adds it) */
+type OpResult = Omit<GeneratedOp, 'finalA'>;
+
+const fail = (error: string): OpResult => ({ moves: [], minutes: 0, error, summary: null });
 
 /**
  * The waste-stock toggle (edge-tracing §2): clear the excess between the
@@ -268,7 +278,7 @@ function clearanceResult(
         stepOver,
         feed,
         plungeFeed,
-        safeClearance: 5,
+        safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
       },
       tool,
     );
@@ -314,10 +324,27 @@ function indexFrame(
   return { rotate: indexedPointRotation(datumAngle, rotaryCalibrationOf(stock).axisZ) };
 }
 
+/**
+ * Our stock material → the Makera preset ROW name that carries its
+ * recommended rates. Makera's tool library has six material rows —
+ * Aluminum, Brass, Copper, Hardwood, Softwood, Plastic — and no dedicated
+ * acetal/Delrin or acrylic rows: both ride the Plastic row. A wrong or
+ * missing alias silently falls back to the built-in material table, which
+ * is how a Delrin job ended up running a metal-row S18000.
+ */
+const PRESET_MATERIAL_KEYS: Record<string, string> = {
+  'aluminum-6061': 'aluminum',
+  'brass-360': 'brass',
+  delrin: 'plastic',
+  hardwood: 'hardwood',
+  'acrylic-cast': 'plastic',
+};
+
 /** The tool's own Makera preset for the stock material, if one matches
- * ('aluminum-6061' matches preset 'Aluminum'; unmatched falls back). */
+ * ('aluminum-6061' → preset 'Aluminum', 'delrin' → preset 'Plastic');
+ * unmatched falls back to the built-in material table. */
 export function toolPresetFor(tool: Tool, materialId: string): ToolPreset | null {
-  const key = materialId.split('-')[0].toLowerCase();
+  const key = PRESET_MATERIAL_KEYS[materialId] ?? materialId.split('-')[0].toLowerCase();
   return tool.presets?.find((p) => p.material.toLowerCase().includes(key)) ?? null;
 }
 
@@ -334,10 +361,22 @@ function feedsFor(tool: Tool, material: MaterialPreset, rates?: OpRates) {
 }
 
 /**
+ * Effective spindle RPM for an op: the ⚡ override, else the tool's own
+ * Makera preset for the stock material (their per-material recommended
+ * speed — an acetal job should not run the metal row's RPM), else the
+ * tool's singular Tools-tab RPM.
+ */
+function rpmFor(tool: Tool | undefined, materialId: string, rates?: OpRates): number | undefined {
+  if (rates?.spindleRpm !== undefined) return rates.spindleRpm;
+  if (!tool) return undefined;
+  return toolPresetFor(tool, materialId)?.spindleRpm ?? tool.spindleRpm;
+}
+
+/**
  * The rates the ops-panel popup shows as this op's defaults — EXACTLY what
  * generation uses when the op has no `rates` overrides. Drill plunges at
- * the preset drill feed (no plunge fraction); spindle comes from the
- * tool's Tools-tab value.
+ * the preset drill feed (no plunge fraction); spindle is the tool's
+ * material-matched preset RPM, else its Tools-tab value.
  */
 export function presetRates(
   kind: JobOp['kind'],
@@ -352,7 +391,7 @@ export function presetRates(
       kind === 'drill'
         ? (toolPresetFor(tool, material.id)?.plungeFeed ?? material.feedByTool.drill)
         : plungeFeed,
-    spindleRpm: tool.spindleRpm,
+    spindleRpm: rpmFor(tool, materialId) ?? tool.spindleRpm,
   };
 }
 
@@ -464,19 +503,31 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
     op.floorFeatureId !== null &&
     !resolveFeature(ctx.sources, op.floorFeatureId)
   ) {
-    return fail('the floor feature no longer exists — reselect');
+    // the axis never moved: the failure keeps the incoming A position
+    return { ...fail('the floor feature no longer exists — reselect'), finalA: ctx.startA };
   }
   const res = generateJobOpInner(op, ctx);
-  if (op.kind === 'index' || res.moves.length === 0) return res;
-  const rpm = op.rates?.spindleRpm ?? ctx.tools.find((t) => t.id === op.toolId)?.spindleRpm;
-  if (rpm === undefined) return res;
+  // the machine's A after the op: the last A word emitted (the op continued
+  // from ctx.startA), or startA itself when the op never touched A
+  let finalA = ctx.startA;
+  for (let i = res.moves.length - 1; i >= 0; i--) {
+    const a = res.moves[i].words.a;
+    if (a !== undefined) {
+      finalA = a;
+      break;
+    }
+  }
+  const stamped = { ...res, finalA } satisfies GeneratedOp;
+  if (op.kind === 'index' || stamped.moves.length === 0) return stamped;
+  const rpm = rpmFor(ctx.tools.find((t) => t.id === op.toolId), ctx.stock.materialId, op.rates);
+  if (rpm === undefined) return stamped;
   return {
-    ...res,
-    moves: [{ ...res.moves[0], spindleRpm: rpm }, ...res.moves.slice(1)],
+    ...stamped,
+    moves: [{ ...stamped.moves[0], spindleRpm: rpm }, ...stamped.moves.slice(1)],
   };
 }
 
-function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
+function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
   try {
     const tool = ctx.tools.find((t) => t.id === op.toolId);
     if (!tool) return fail('tool missing from library');
@@ -486,10 +537,13 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
     switch (op.kind) {
       case 'index': {
         if (ctx.stock.axisMode !== '4-axis') return fail('indexing needs 4-axis mode (Stock tab)');
+        // shortest rotation to the datum spoke from wherever the axis sits —
+        // never unwind the previous ops' accumulated pile
+        const target = ctx.startA + shortestATo(op.angle, ctx.startA);
         return {
           moves: [
             {
-              words: { a: op.angle },
+              words: { a: target },
               feed: 0,
               rapid: true,
               comment: `index stock to A${op.angle}° — datum for following ops`,
@@ -519,9 +573,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             feed,
             rotation: op.rotation,
             pattern: op.pattern,
+            clearance: op.rates?.clearance,
           },
           rotaryCalibrationOf(ctx.stock),
           tool,
+          ctx.startA,
         );
         return {
           moves: res.moves,
@@ -550,10 +606,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
               rotation: op.rotation,
               feed,
               plungeFeed,
+              clearance: op.rates?.clearance,
             },
             rotaryCalibrationOf(ctx.stock),
             tool.diameter,
             ctx.datumAngle,
+            ctx.startA,
           );
           return {
             moves: res.moves,
@@ -587,10 +645,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
               rotation: op.rotation,
               plungeFeed,
               surfaceDiameter: op.surfaceDiameter,
+              clearance: op.rates?.clearance,
             },
             rotaryCalibrationOf(ctx.stock),
             tool,
             ctx.datumAngle,
+            ctx.startA,
           );
           return {
             moves: res.moves,
@@ -666,7 +726,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             stepOver: op.stepOver,
             feed,
             plungeFeed,
-            safeClearance: 5,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
           },
           tool,
         );
@@ -738,7 +798,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
               stepOver: op.stepOver,
               feed,
               plungeFeed,
-              safeClearance: 5,
+              safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
             },
             tool,
           );
@@ -769,7 +829,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             stepDown: op.stepDown,
             feed,
             plungeFeed,
-            safeClearance: 5,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
           },
           tool,
         );
@@ -826,7 +886,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
               op.rates?.plungeFeed ??
               toolPresetFor(tool, material.id)?.plungeFeed ??
               material.feedByTool.drill,
-            safeClearance: 5,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
           },
           tool,
         );
@@ -891,7 +951,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             stepDown: op.stepDown,
             feed,
             plungeFeed,
-            safeClearance: 5,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
           },
           tool,
         );
@@ -957,7 +1017,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): GeneratedOp {
             depth: op.depth,
             feed,
             plungeFeed,
-            safeClearance: 5,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
           },
           tool,
         );

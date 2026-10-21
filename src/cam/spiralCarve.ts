@@ -19,7 +19,7 @@
  */
 
 import type { Move, RotaryCalibration, SpiralCarveOp } from '../core/types';
-import { MAX_ROTARY_RPM, SAFE_CLEARANCE } from './faceCylinder';
+import { MAX_ROTARY_RPM, SAFE_CLEARANCE, shortestATo } from './faceCylinder';
 
 export interface SpiralCarveResult {
   moves: Move[];
@@ -58,6 +58,10 @@ export function spiralCarve(
   calibration: RotaryCalibration,
   toolDiameter: number,
   datumAngle: number,
+  /** the machine's accumulated A when this op starts — phase positioning
+   * takes the shortest rotation from it, never unwinding the previous
+   * ops' pile to reach a small absolute target */
+  startA: number = 0,
 ): SpiralCarveResult {
   if (op.xEnd === op.xStart) throw new Error('xStart and xEnd must differ');
   if (op.spiralAngle <= 0 || op.spiralAngle > 90) {
@@ -79,7 +83,7 @@ export function spiralCarve(
   }
   const span = Math.abs(op.xEnd - op.xStart);
   const surfaceZ = axisZ + r;
-  const safeZ = surfaceZ + SAFE_CLEARANCE;
+  const safeZ = surfaceZ + (op.clearance ?? SAFE_CLEARANCE);
   const aAdvance = sweepAdvance(span, r, op.spiralAngle);
   const aSign = op.rotation === 'cw' ? 1 : -1;
   const helical = aAdvance > 1e-9; // else: pure axial lines at fixed A
@@ -91,26 +95,32 @@ export function spiralCarve(
   const fans = fanOffsets(op.width, toolDiameter);
 
   const moves: Move[] = [];
-  let a = 0; // accumulated machine A; the post wraps with G92.4
+  let a = startA; // accumulated machine A; the post wraps with G92.4
   let minutes = 0;
   let passes = 0;
 
   for (let s = 0; s < op.count; s++) {
     // the strand's pattern phase: datum + its share of the circle. Each
     // strand ends where it started (levels retrace), so the phase is set
-    // once per strand by a positive positioning delta.
+    // once per strand by the shortest rotation to its spoke.
     const phase = datumAngle + s * (360 / op.count);
-    a += ((phase - a) % 360 + 360) % 360; // positive positioning delta
+    a += shortestATo(phase, a);
 
     for (const off of fans) {
       const xs = op.xStart + off;
       const xe = op.xEnd + off;
+      // axis-separate positioning (see thread/faceCylinder): a coordinated
+      // X+Z+A rapid runs the traverse at the rotary clamp rate — the very
+      // first entry lifts, every strand/fan pass rotates in place then
+      // travels (later passes already sit at the clearance height)
+      if (moves.length === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
       moves.push({
-        words: { x: xs, z: safeZ, a },
+        words: { a },
         feed: 0,
         rapid: true,
         comment: `strand ${s + 1}/${op.count}${fans.length > 1 ? `, pass ${off.toFixed(2)}mm off-center` : ''}`,
       });
+      moves.push({ words: { x: xs }, feed: 0, rapid: true });
       levels.forEach((depth, li) => {
         const passZ = surfaceZ - depth;
         const increment = li === 0 ? depth : depth - levels[li - 1];

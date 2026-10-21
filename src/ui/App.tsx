@@ -7,7 +7,6 @@ import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { sampleSpiralMarks } from '../cam/spiralCarve';
 import { threadDepth, threadFaceDiameter } from '../cam/thread';
-import { postCarvera } from '../post/carvera';
 import {
   identityTransform,
   isDepthBearingJobOp,
@@ -49,6 +48,7 @@ import {
 import { decodeStl, downloadJobFile, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
+import { ExportDialog } from './ExportDialog';
 import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -92,9 +92,10 @@ const TAB_LABELS: Record<Tab, string> = {
 
 export function App() {
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
-  const [gcode, setGcode] = useState<string | null>(null);
-  const [showGcode, setShowGcode] = useState(false);
-  /** ops whose toolpath is hidden from the preview (g-code keeps every op) */
+  /** the "Export g-code" dialog is open */
+  const [showExport, setShowExport] = useState(false);
+  /** ops whose toolpath is hidden from the preview (the export dialog
+   * selects the ops that go into the .nc separately) */
   const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [stock, setStock] = useState<Stock>(initialStock);
@@ -365,8 +366,9 @@ export function App() {
     [stock, geometry, features, transform, tools, primitives, sources],
   );
 
-  /** combined preview + gcode for the whole job, from per-op results; the
-   * preview shows only ops not hidden, the g-code includes everything */
+  /** the whole-job preview, from per-op results: it shows only ops not
+   * hidden. (The .nc itself is built on demand by the export dialog —
+   * the preview pipeline never posts g-code.) */
   const updateJobOutput = (
     results: Record<string, GeneratedOp>,
     hidden: ReadonlySet<string> = hiddenOps,
@@ -374,25 +376,10 @@ export function App() {
      * change ops in the same tick (delete) pass the next list explicitly */
     opList: JobOp[] = ops,
   ) => {
-    const allMoves = opList.flatMap((o) => results[o.id]?.moves ?? []);
     const shownMoves = opList
       .filter((o) => !hidden.has(o.id))
       .flatMap((o) => results[o.id]?.moves ?? []);
     setPreviewMoves(shownMoves.length > 0 ? shownMoves : null);
-    if (allMoves.length === 0) {
-      setGcode(null);
-      return;
-    }
-    const usedTools = [
-      ...new Set(opList.filter((o) => (results[o.id]?.moves.length ?? 0) > 0).map((o) => o.toolId)),
-    ]
-      .map((id) => tools.find((t) => t.id === id))
-      .filter((t): t is Tool => t !== undefined);
-    const minutes = opList.reduce((sum, o) => sum + (results[o.id]?.minutes ?? 0), 0);
-    const nc = postCarvera({ moves: allMoves, tools: usedTools, options: { jobName: 'job' } });
-    setGcode(
-      `; job: ${ops.length} op(s), ~${minutes.toFixed(1)} min cut time\n` + nc,
-    );
   };
 
   /** the expanded slice-pocket op's section plane (edge-tracing §5):
@@ -523,7 +510,8 @@ export function App() {
     return { angle, axisZ: rotaryCalibrationOf(stock).axisZ };
   }, [ops, expandedOpId, stock]);
 
-  /** show/hide one op's toolpath — display only, the g-code keeps every op */
+  /** show/hide one op's toolpath — display only, the export dialog decides
+   * what goes into the .nc */
   const toggleOpVisible = (id: string) => {
     const next = new Set(hiddenOps);
     if (next.has(id)) next.delete(id);
@@ -535,8 +523,10 @@ export function App() {
   const recalcAll = () => {
     const next: Record<string, GeneratedOp> = {};
     let datum = 0; // Index ops establish the datum for the ops after them
+    let a = 0; // the machine's accumulated A — ops continue from the last
     for (const o of ops) {
-      next[o.id] = generateJobOp(o, { ...genCtx, datumAngle: datum });
+      next[o.id] = generateJobOp(o, { ...genCtx, datumAngle: datum, startA: a });
+      a = next[o.id].finalA;
       if (o.kind === 'index') datum = o.angle;
     }
     for (const o of ops) {
@@ -551,7 +541,17 @@ export function App() {
   const recalcOne = (id: string) => {
     const op = ops.find((o) => o.id === id);
     if (!op) return;
-    const result = generateJobOp(op, { ...genCtx, datumAngle: datumAngleBefore(ops, id) });
+    // continue from the nearest previously-generated op's A, so a lone
+    // recalculation lands where the machine would actually be
+    let startA = 0;
+    for (let i = ops.findIndex((o) => o.id === id) - 1; i >= 0; i--) {
+      const g = generated[ops[i].id];
+      if (g) {
+        startA = g.finalA;
+        break;
+      }
+    }
+    const result = generateJobOp(op, { ...genCtx, datumAngle: datumAngleBefore(ops, id), startA });
     if (result.error) console.warn(`[simple.cam] op "${op.kind}" failed: ${result.error}`);
     const next = { ...generated, [id]: result };
     setGenerated(next);
@@ -693,22 +693,11 @@ export function App() {
       setEditingOpId(null);
       setSelectedObjectId('model');
       setPreviewMoves(null);
-      setGcode(null);
       setTab('model');
       setError(null);
     } catch (e) {
       setError(`could not parse STL: ${String(e)}`);
     }
-  };
-
-  const download = () => {
-    if (!gcode) return;
-    const url = URL.createObjectURL(new Blob([gcode], { type: 'text/plain' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'job.nc';
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   /** Save the whole working state as one self-contained .cam.json file. */
@@ -750,7 +739,6 @@ export function App() {
     setExpandedOpId(null);
     setSelection([]);
     setSelectedObjectId(job.model ? 'model' : (job.primitives[0]?.id ?? null));
-    setGcode(null);
     setPreviewMoves(null);
     if (job.model) {
       const bytes = decodeStl(job.model.stlBase64);
@@ -805,7 +793,6 @@ export function App() {
     setExpandedOpId(null);
     setSelection([]);
     setSelectedObjectId(null); // no model, no primitives yet
-    setGcode(null);
     setPreviewMoves(null);
     lastSavedRef.current = jobFingerprint(
       saveJobFile({
@@ -887,6 +874,9 @@ export function App() {
           </button>
           <button type="button" onClick={() => openJobInputRef.current?.click()}>
             Open job…
+          </button>
+          <button type="button" onClick={() => setShowExport(true)}>
+            Export g-code
           </button>
           <input
             ref={openJobInputRef}
@@ -979,6 +969,7 @@ export function App() {
             <ToolPanel
               tools={tools}
               selectedId={tool.id}
+              materialId={stock.materialId}
               onSelect={setToolId}
               onChange={setTools}
               onRestorePresets={() => {
@@ -988,76 +979,70 @@ export function App() {
             />
           )}
           {tab === 'ops' && (
-            <>
-              <OpsPanel
-                ops={ops}
-                tools={tools}
-                generated={generated}
-                editingOpId={editingOpId}
-                expandedOpId={expandedOpId}
-                showPreview={showPreview}
-                hasModel={!!geometry}
-                axisMode={stock.axisMode}
-                stock={stock}
-                materialId={stock.materialId}
-                primitives={primitives}
-                featureLabels={featureLabels}
-                onAddOp={addOp}
-                onChangeOp={(op) => {
-                  setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)));
-                  const before = ops.find((o) => o.id === op.id);
-                  if (before && before.toolId !== op.toolId) setLastToolId(op.toolId);
-                }}
-                onSelectionIsChange={changeSelectionIs}
-                onIndexToSelection={indexToSelection}
-                picking={featurePick}
-                onFeaturePick={toggleFeaturePick}
-                onInsertFacingOp={insertFacingOp}
-                onDeleteOp={(id) => {
-                  const nextOps = ops.filter((o) => o.id !== id);
-                  const nextGen = { ...generated };
-                  delete nextGen[id];
-                  const nextHidden = new Set(hiddenOps);
-                  nextHidden.delete(id);
-                  setOps(nextOps);
-                  setGenerated(nextGen);
-                  setHiddenOps(nextHidden);
-                  if (editingOpId === id) setEditingOpId(null);
-                  if (expandedOpId === id) setExpandedOpId(null);
-                  // drop the deleted op's preview and g-code NOW, not at
-                  // the next recalc (updateJobOutput defaults to the stale
-                  // closure ops, so pass the next list explicitly)
-                  updateJobOutput(nextGen, nextHidden, nextOps);
-                }}
-                onReorder={reorderOps}
-                onSelectFeatures={toggleOpFeatures}
-                onRecalcOne={recalcOne}
-                onRecalcAll={recalcAll}
-                onToggleExpanded={(id) => setExpandedOpId(expandedOpId === id ? null : id)}
-                onTogglePreview={setShowPreview}
-                hiddenOps={hiddenOps}
-                onToggleVisible={toggleOpVisible}
-              />
-              {gcode && (
-                <section>
-                  <h2>G-code</h2>
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={showGcode}
-                      onChange={(e) => setShowGcode(e.target.checked)}
-                    />
-                    <span>View g-code</span>
-                  </label>
-                  {showGcode && <pre>{gcode.slice(0, 4000)}</pre>}
-                  <button onClick={download}>Download .nc</button>
-                </section>
-              )}
-            </>
+            <OpsPanel
+              ops={ops}
+              tools={tools}
+              generated={generated}
+              editingOpId={editingOpId}
+              expandedOpId={expandedOpId}
+              showPreview={showPreview}
+              hasModel={!!geometry}
+              axisMode={stock.axisMode}
+              stock={stock}
+              materialId={stock.materialId}
+              primitives={primitives}
+              featureLabels={featureLabels}
+              onAddOp={addOp}
+              onChangeOp={(op) => {
+                setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)));
+                const before = ops.find((o) => o.id === op.id);
+                if (before && before.toolId !== op.toolId) setLastToolId(op.toolId);
+              }}
+              onSelectionIsChange={changeSelectionIs}
+              onIndexToSelection={indexToSelection}
+              picking={featurePick}
+              onFeaturePick={toggleFeaturePick}
+              onInsertFacingOp={insertFacingOp}
+              onDeleteOp={(id) => {
+                const nextOps = ops.filter((o) => o.id !== id);
+                const nextGen = { ...generated };
+                delete nextGen[id];
+                const nextHidden = new Set(hiddenOps);
+                nextHidden.delete(id);
+                setOps(nextOps);
+                setGenerated(nextGen);
+                setHiddenOps(nextHidden);
+                if (editingOpId === id) setEditingOpId(null);
+                if (expandedOpId === id) setExpandedOpId(null);
+                // drop the deleted op's preview NOW, not at the next recalc
+                // (updateJobOutput defaults to the stale closure ops, so pass
+                // the next list explicitly)
+                updateJobOutput(nextGen, nextHidden, nextOps);
+              }}
+              onReorder={reorderOps}
+              onSelectFeatures={toggleOpFeatures}
+              onRecalcOne={recalcOne}
+              onRecalcAll={recalcAll}
+              onToggleExpanded={(id) => setExpandedOpId(expandedOpId === id ? null : id)}
+              onTogglePreview={setShowPreview}
+              hiddenOps={hiddenOps}
+              onToggleVisible={toggleOpVisible}
+            />
           )}
           {error && <p className="error">{error}</p>}
         </aside>
       </main>
+      {showExport && (
+        <ExportDialog
+          ops={ops}
+          tools={tools}
+          generated={generated}
+          stock={stock}
+          modelName={geometry ? modelName : null}
+          onRecalcOne={recalcOne}
+          onClose={() => setShowExport(false)}
+        />
+      )}
     </div>
   );
 }
