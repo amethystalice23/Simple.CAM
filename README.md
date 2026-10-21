@@ -1,9 +1,9 @@
 # simple.cam
 
 Open-source CAM for the [Carvera CNC](https://www.makera.com/). Load a model,
-build toolpath operations, export G-code — the [Carvera Community
-Controller](https://github.com/Carvera-Community/Carvera_Controller) handles
-the machine.
+build toolpath operations, export G-code — then use the [Carvera Community
+Controller](https://github.com/Carvera-Community/Carvera_Controller) to
+upload the g-code and run the job.
 
 simple.cam is an independent project, not affiliated with or endorsed by
 Makera. G-code output targets the Carvera dialect as observed in Makera

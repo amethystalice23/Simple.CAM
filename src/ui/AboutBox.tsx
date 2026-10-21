@@ -31,7 +31,7 @@ export function AboutBox(props: { onClose: () => void }) {
         <div className="about-text">
           <p>
             Open-source CAM for the Carvera CNC: load a model, build toolpath
-            operations, export G-code — the{' '}
+            operations, export G-code — then use the{' '}
             <a
               href="https://github.com/Carvera-Community/Carvera_Controller"
               target="_blank"
@@ -39,7 +39,7 @@ export function AboutBox(props: { onClose: () => void }) {
             >
               Carvera Community Controller
             </a>{' '}
-            runs the machine.
+            to upload the g-code and run the job.
           </p>
           <p>
             © 2026 Alice Mitchell. Released under the MIT License — see
