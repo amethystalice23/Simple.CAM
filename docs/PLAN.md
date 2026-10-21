@@ -180,9 +180,10 @@ Golden-file tests pin the post-processor output for every op against the
 4. Axis-Z / radius calibration accuracy drives everything — guided touch-off.
 5. Firmware dialect drift — thin post, golden files, track community docs.
 
-## Reference state retained in this repo
+## Reference state kept OUT of this repo
 
-`reference/` — binary analysis of MakeraStudio from the
-planning phase: evidence JSONs (xrefs, decompiles, string searches proving
-there is no plugin API), the local analysis tooling (`tools/ghidra`) and
-`env.sh` for running further queries. See `docs/analysis notes.md`.
+`reference/` is gitignored and stays local: checkouts of the community
+controller/firmware/profiles (for reference only — their licenses do not
+permit redistribution here) and the planning-phase analysis notes.
+Published ground truth for the dialect lives in `examples/` (mill-tested
+MakeraStudio exports) and `docs/makera-dialect.md`.

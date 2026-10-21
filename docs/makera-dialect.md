@@ -3,7 +3,7 @@
 Ground truth: `examples/*.nc` — 22 real MakeraStudio exports (3-axis `*_TOP`,
 4-axis `*_MULT`, one laser job, one v1.0.0-header job), all cut successfully
 on the user's mill. This doc records what the controller demonstrably accepts;
-where it disagrees with earlier earlier working notes, these files win. Companion
+where it disagrees with earlier working notes, these files win. Companion
 to `docs/PLAN.md` § "Machine assumptions (verified)".
 
 Corpus at a glance: 22 files, every one ends `M05` → `G28` → `M02`; every one
@@ -349,7 +349,7 @@ controller section).
 | 6 | 3-decimal coords, 4-decimal F | ≤2-decimal trimmed, integer F | cosmetic |
 | 7 | trailing `; comment` on motion lines | none (only `; Tn-…` tool comments) | verified harmless — controller strips inline comments before tokenizing (`CNC.py:382-386`); keep or drop for Studio parity |
 | 8 | LF endings | CRLF in all 22 files | cosmetic — controller normalizes newlines; Studio always writes CRLF |
-| 9 | analysis note: "no `M5` string in the binary" | both `M5` (mid-file) and `M05` (final) emitted | comment in carvera.ts is factually wrong — correct it |
+| 9 | earlier note: "no `M5` string in the output" | both `M5` (mid-file) and `M05` (final) emitted | comment in carvera.ts is factually wrong — correct it |
 
 Firmware-verdict on the G93 design: **implemented and safe to use** —
 coordinated XYZ+A blocks are accepted (no rejection anywhere in the

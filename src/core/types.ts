@@ -518,7 +518,7 @@ export interface OpRates {
   /** plunge feed, mm/min (G94) */
   plungeFeed?: number;
   /** spindle speed, RPM — emitted as an active `S<rpm> M3` line at the op
-   * boundary (Makera's own format, verified in MakeraStudio) */
+   * boundary (Makera's own format, verified against their emitted programs) */
   spindleRpm?: number;
   /** rapid clearance above the cut surface, mm — approach/retract height;
    * unset = the shared default (SAFE_CLEARANCE, 5mm). Rarely changed, so it

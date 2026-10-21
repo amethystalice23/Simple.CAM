@@ -180,8 +180,7 @@ export function postCarvera(input: PostInput): string {
     }
 
     // spindle (re)start at the op boundary — Makera's own start syntax
-    // `S<rpm> M3`, verified as the literal format string `S{0} M3` in
-    // MakeraStudio (reference/s-makera-spindle-emission.json).
+    // `S<rpm> M3`, verified against their emitted programs (examples/).
     if (m.spindleRpm !== undefined && m.spindleRpm !== st.lastSpindle) {
       lines.push(`S${m.spindleRpm} M3`);
       st.lastSpindle = m.spindleRpm;

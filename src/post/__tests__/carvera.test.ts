@@ -118,7 +118,7 @@ describe('carvera post-processor', () => {
   });
 
   it('emits tool headers in Makera’s @MKR tag format', () => {
-    // tag names verified in MakeraStudio (reference/notes)
+    // tag names verified against MakeraStudio's emitted programs (examples/)
     expect(gcode).toContain(
       ';@MKR|TOOL|number=1|id=t1|name=6mm flat|type=Flat End',
     );

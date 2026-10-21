@@ -4,6 +4,6 @@ dist/
 .DS_Store
 llmfit.json
 tsconfig.tsbuildinfo
-# Reference checkouts and reference material (unpublished — never commit;
-# history cleanup tracked in the pre-publish audit)
+# Local reference material — repo checkouts and analysis notes that are
+# deliberately unpublished (licensing / not ours to distribute)
 reference/

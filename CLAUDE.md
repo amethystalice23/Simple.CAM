@@ -27,16 +27,12 @@ npm test           # vitest run (generators + post golden files)
   AGPL/GPL code (PrusaSlicer/OrcaSlicer Measure, jscut, Blender CAM, PyCAM,
   the community controller). Reimplement from descriptions; LGPL kernels stay
   separate swappable modules.
-- Reference material from the planning phase (binary analysis of
-  MakeraStudio proving there is no plugin API) is in `reference/`
-  with notes in `docs/analysis notes.md`. Use the local notes kept alongside it.
 
 ## Project agents
 
 - `cam-kernel` — CAM math, generators, cylinder-canvas transform (`src/cam`)
 - `post-processor` — Carvera dialect, G93/G92.4 rules, golden tests (`src/post`)
 - `viewport-ui` — React + three.js front end (`src/ui`)
-- 
 - `runner` — cheap model (haiku). Mechanical verification only: run the
   unit tests, the build, or golden regeneration and relay the output.
   **Delegate to it whenever you need a test/build result and nothing
