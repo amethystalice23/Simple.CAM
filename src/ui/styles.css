@@ -9,6 +9,23 @@
 body { margin: 0; }
 h1, h2 { font-weight: 600; margin: 0 0 8px; }
 h1 { font-size: 18px; }
+/* the clickable product name in the header (opens the about box) */
+.brand {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.brand-name { font-size: 18px; font-weight: 700; letter-spacing: 0.01em; color: #d8dde2; }
+.brand-name .cam { color: #4d94c9; }
+.brand:hover .cam { color: #66b1e4; }
+/* the about box */
+.about-modal { width: 460px; }
+.about-modal h2 { text-transform: none; letter-spacing: 0; margin-bottom: 2px; }
+.about-modal h2 .brand-name { font-size: 15px; }
+.about-text p { margin: 6px 0; font-size: 12px; color: #b8c0c8; }
+.about-text a { color: #4d94c9; text-decoration: none; }
+.about-text a:hover { text-decoration: underline; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: #9aa4ad; }
 button {
   background: #2e6f9e;

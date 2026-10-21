@@ -48,6 +48,7 @@ import {
 import { decodeStl, downloadJobFile, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
+import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
 import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
@@ -94,6 +95,8 @@ export function App() {
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
   /** the "Export g-code" dialog is open */
   const [showExport, setShowExport] = useState(false);
+  /** the about box is open (click the product name in the header) */
+  const [showAbout, setShowAbout] = useState(false);
   /** ops whose toolpath is hidden from the preview (the export dialog
    * selects the ops that go into the .nc separately) */
   const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
@@ -854,7 +857,16 @@ export function App() {
   return (
     <div className="app">
       <header>
-        <h1>simple.cam</h1>
+        <button
+          type="button"
+          className="brand"
+          title="About Simple.CAM"
+          onClick={() => setShowAbout(true)}
+        >
+          <span className="brand-name">
+            Simple<span className="cam">.CAM</span>
+          </span>
+        </button>
         <span className="tag">Carvera · open CAM</span>
         <div className="header-actions">
           {dirty && (
@@ -1032,6 +1044,7 @@ export function App() {
           {error && <p className="error">{error}</p>}
         </aside>
       </main>
+      {showAbout && <AboutBox onClose={() => setShowAbout(false)} />}
       {showExport && (
         <ExportDialog
           ops={ops}
