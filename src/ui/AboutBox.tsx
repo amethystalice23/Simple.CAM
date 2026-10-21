@@ -51,6 +51,11 @@ export function AboutBox(props: { onClose: () => void }) {
             Makera. “Carvera” and “Makera” are trademarks of their
             respective owners.
           </p>
+          <p className="about-source">
+            <a href="https://github.com/amethystalice23/Simple.CAM" target="_blank" rel="noreferrer">
+              github.com/amethystalice23/Simple.CAM
+            </a>
+          </p>
         </div>
       </div>
     </div>
