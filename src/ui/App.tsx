@@ -128,6 +128,21 @@ export function App() {
 
   // feature detection is model-space only: reruns on model load, not moves
   const features = useMemo(() => (geometry ? detectFeatures(geometry) : null), [geometry]);
+  /**
+   * Model size as displayed — bounding box × per-axis model scale, same
+   * computation and formatting as the Model tab's "loaded · X × Y × Z mm"
+   * line, so the two never disagree.
+   */
+  const modelDims = useMemo(() => {
+    if (!geometry) return null;
+    geometry.computeBoundingBox();
+    const bb = geometry.boundingBox!;
+    return new Vector3(
+      (bb.max.x - bb.min.x) * transform.scale.x,
+      (bb.max.y - bb.min.y) * transform.scale.y,
+      (bb.max.z - bb.min.z) * transform.scale.z,
+    );
+  }, [geometry, transform]);
 
   /** every selectable-feature provider: the model plus one source per
    * primitive (its features detected in local space, ids namespaced
@@ -916,7 +931,11 @@ export function App() {
             onToggleSelect={toggleSelect}
             onClearSelection={clearSelection}
           />
-          <div className="drop-hint">{geometry ? 'STL loaded' : 'drop an STL here (Phase 1: feature tracing)'}</div>
+          <div className="drop-hint">
+            {geometry
+              ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
+              : 'drop an STL here'}
+          </div>
         </div>
         <aside>
           <nav className="tabs">

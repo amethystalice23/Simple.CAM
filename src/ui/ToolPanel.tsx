@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Tool } from '../core/types';
+import { mergeImportedTools, parseFusionToolCsv } from '../core/toolImport';
 import { NumberField, TextField } from './fields';
+import { Toasts, useToasts } from './Toasts';
 
 interface Props {
   tools: Tool[];
@@ -40,12 +42,16 @@ function groupTools(tools: Tool[]) {
 
 /** Pick, edit, add, and delete tools in the library. */
 export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePresets }: Props) {
-  const selected = tools.find((t) => t.id === selectedId) ?? tools[0];
+  // only a genuine click selects — no first-tool fallback, so the edit form
+  // stays hidden until the user picks something from the list
+  const selected = tools.find((t) => t.id === selectedId);
   const [draft, setDraft] = useState<Tool | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<Tool['type'] | 'all'>('all');
   const [shankFilter, setShankFilter] = useState<string>('all');
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
   /** distinct shank sizes in the library, ascending */
   const shankSizes = [
@@ -53,7 +59,11 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
   ].sort((a, b) => a - b);
 
   const editing = draft ?? selected;
-  const upd = (p: Partial<Tool>) => setDraft({ ...(draft ?? selected), ...p });
+  const upd = (p: Partial<Tool>) => {
+    const base = draft ?? selected;
+    if (!base) return; // unreachable from the form — it renders only when editing exists
+    setDraft({ ...base, ...p });
+  };
 
   const save = () => {
     if (!draft) return;
@@ -75,6 +85,40 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
   const remove = () => {
     if (!selected || tools.length <= 1) return; // never leave the op without a tool
     onChange(tools.filter((t) => t.id !== selected.id));
+  };
+
+  /**
+   * Import Fusion 360 tool-library CSV exports: parse each picked file,
+   * merge its tools into the library (ids suffixed on collision, existing
+   * entries untouched), select the first new tool, and toast the outcome.
+   * Zero tools across all files leaves the library alone.
+   */
+  const importFiles = async (files: File[]) => {
+    const imported: Tool[] = [];
+    const warnings: string[] = [];
+    for (const file of files) {
+      try {
+        const result = parseFusionToolCsv(await file.text());
+        imported.push(...result.tools);
+        warnings.push(...result.warnings);
+      } catch (e) {
+        warnings.push(`${file.name}: could not read file (${String(e)})`);
+      }
+    }
+    if (imported.length === 0) {
+      if (warnings.length === 0) warnings.push('No tools found in the selected file(s)');
+      for (const w of warnings) pushToast(w, 'warn');
+      return;
+    }
+    const merged = mergeImportedTools(tools, imported);
+    onChange(merged);
+    setDraft(null);
+    setIsNew(false);
+    const firstNewId = merged[tools.length]?.id;
+    if (firstNewId) onSelect(firstNewId);
+    const n = imported.length === 1 ? '1 tool' : `${imported.length} tools`;
+    pushToast(warnings.length > 0 ? `Imported ${n}, skipped ${warnings.length}` : `Imported ${n}`);
+    for (const w of warnings) pushToast(w, 'warn');
   };
 
   const filtered = tools.filter(
@@ -151,8 +195,25 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
           ))}
           {filtered.length === 0 && <p className="hint">no tools match the filters</p>}
         </div>
+        <div className="buttons">
+          <button type="button" onClick={newTool}>
+            New
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Add tools from a Fusion 360 tool-library CSV export (mm tools)"
+            onClick={() => importInputRef.current?.click()}
+          >
+            Import CSV…
+          </button>
+          <button type="button" className="secondary" onClick={onRestorePresets}>
+            Restore Makera presets
+          </button>
+        </div>
       </section>
-      <section>
+      {editing && (
+        <section>
         <h2>{isNew ? 'New Tool' : 'Edit Tool'}</h2>
         <TextField label="Name" value={editing?.name ?? ''} onCommit={(v) => upd({ name: v })} />
         <TextField label="Sub-type" value={editing?.subtype ?? ''} onCommit={(v) => upd({ subtype: v })} />
@@ -191,9 +252,6 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
           <button type="button" disabled={!draft} onClick={save}>
             {isNew ? 'Add tool' : 'Save'}
           </button>
-          <button type="button" onClick={newTool}>
-            New
-          </button>
           <button
             type="button"
             className="secondary"
@@ -201,11 +259,6 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
             onClick={remove}
           >
             Delete
-          </button>
-        </div>
-        <div className="buttons">
-          <button type="button" className="secondary" onClick={onRestorePresets}>
-            Restore Makera presets
           </button>
           {draft && (
             <button
@@ -220,7 +273,21 @@ export function ToolPanel({ tools, selectedId, onSelect, onChange, onRestorePres
             </button>
           )}
         </div>
-      </section>
+        </section>
+      )}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".csv"
+        multiple
+        hidden
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = ''; // allow re-importing the same file
+          if (files.length > 0) void importFiles(files);
+        }}
+      />
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </>
   );
 }

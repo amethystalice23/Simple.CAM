@@ -4,7 +4,6 @@ dist/
 .DS_Store
 llmfit.json
 tsconfig.tsbuildinfo
-# Reference checkouts (GPL/AGPL, read-only — see docs/PLAN.md license policy)
-reference/community-firmware/
-reference/community-controller/
-examples
+# Reference checkouts and reference material (unpublished — never commit;
+# history cleanup tracked in the pre-publish audit)
+reference/

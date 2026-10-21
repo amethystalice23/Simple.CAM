@@ -313,3 +313,27 @@ pre {
   margin: 8px 0;
 }
 .error { color: #e0785a; font-size: 13px; }
+
+/* transient notices (tool import): stacked bottom-right, auto-dismiss */
+.toasts {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 50;
+  max-width: 340px;
+}
+.toast {
+  background: #1f2429;
+  border: 1px solid #31373e;
+  border-left: 3px solid #2e6f9e;
+  color: #d8dde2;
+  text-align: left;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+.toast:hover { background: #262c32; }
+.toast.warn { border-left-color: #e0785a; }
