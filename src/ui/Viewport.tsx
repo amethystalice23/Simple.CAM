@@ -17,6 +17,7 @@ import {
   pickFromNearest,
   planeHighlightMesh,
   planePick,
+  sampleVisibleAt,
   PLANE_SELECT,
   SELECT_COLOR,
   SLICE_COLOR,
@@ -319,27 +320,68 @@ export function Viewport({
       return true;
     };
 
-    /** click target: the nearest feature across ALL sources, else the plane
-     * under the face (model or primitive mesh) */
+    /** Feature snap gated by VISIBILITY: candidates ranked by snap
+     * distance, and the first whose nearest sample isn't hidden behind
+     * the surface under the cursor wins — a feature on the far side of
+     * the model must not steal the pick from the face actually hovered.
+     * When every snapped candidate is hidden the caller falls through to
+     * the plane wash/pick under the cursor. */
+    const firstVisibleFeature = (
+      mx: number,
+      my: number,
+      w: number,
+      h: number,
+    ): { entry: SourceOverlay; nearest: NearestFeature } | null => {
+      const ranked: { entry: SourceOverlay; nearest: NearestFeature }[] = [];
+      for (const entry of overlaysRef.current) {
+        const nearest = findNearestFeature(entry.data, mx, my, camera, w, h);
+        if (
+          !nearest ||
+          !pickAllows(nearest.kind) ||
+          (!edgePickingRef.current && nearest.kind === 'edge')
+        ) {
+          continue;
+        }
+        ranked.push({ entry, nearest });
+      }
+      if (ranked.length === 0) return null;
+      ranked.sort((a, b) => a.nearest.d - b.nearest.d);
+      const model = modelRef.current;
+      const meshes: THREE.Object3D[] = [
+        ...(model && model.visible ? [model] : []),
+        ...primMeshesRef.current,
+      ];
+      raycaster.setFromCamera(new THREE.Vector2((mx / w) * 2 - 1, -(my / h) * 2 + 1), camera);
+      const first =
+        meshes.length > 0 ? (raycaster.intersectObjects(meshes, false)[0] ?? null) : null;
+      for (const cand of ranked) {
+        if (
+          sampleVisibleAt(
+            first?.distance ?? null,
+            raycaster.ray.origin,
+            raycaster.ray.direction,
+            cand.nearest.point,
+          )
+        ) {
+          return cand;
+        }
+      }
+      return null;
+    };
+
+    /** click target: the nearest VISIBLE feature across ALL sources, else
+     * the plane under the face (model or primitive mesh) */
     const measurePickAt = (mx: number, my: number, w: number, h: number): SourcedPick | null => {
       if (measureRef.current) {
-        let best: SourcedPick | null = null;
-        let bestD = Infinity;
-        for (const entry of overlaysRef.current) {
-          const nearest = findNearestFeature(entry.data, mx, my, camera, w, h);
-          if (
-            !nearest ||
-            !pickAllows(nearest.kind) ||
-            (!edgePickingRef.current && nearest.kind === 'edge')
-          ) {
-            continue;
-          }
-          if (nearest.d < bestD) {
-            bestD = nearest.d;
-            best = { ...pickFromNearest(entry.data, nearest), sourceId: entry.source.id };
-          }
+        const visible = firstVisibleFeature(mx, my, w, h);
+        if (visible) {
+          return {
+            ...pickFromNearest(visible.entry.data, visible.nearest),
+            sourceId: visible.entry.source.id,
+          };
         }
-        if (best) return best;
+        // everything that snapped is hidden behind the surface — the
+        // plane under the cursor wins below
       }
       // plane fallback: raycast the model mesh and the primitive meshes,
       // resolving the hit face through the OWNING source's faceToPlane —
@@ -387,28 +429,15 @@ export function Viewport({
         setLabel(null);
         return;
       }
-      // nearest feature across all sources; while editing an op, lines are
-      // not targets — don't hover them, so the pointer falls through to the
-      // face behind
-      let usable: { entry: SourceOverlay; nearest: NearestFeature } | null = null;
-      for (const entry of overlays) {
-        const nearest = findNearestFeature(
-          entry.data,
-          e.clientX - rect.left,
-          e.clientY - rect.top,
-          camera,
-          rect.width,
-          rect.height,
-        );
-        if (
-          !nearest ||
-          !pickAllows(nearest.kind) ||
-          (!edgePickingRef.current && nearest.kind === 'edge')
-        ) {
-          continue;
-        }
-        if (!usable || nearest.d < usable.nearest.d) usable = { entry, nearest };
-      }
+      // nearest VISIBLE feature across all sources; while editing an op,
+      // lines are not targets — don't hover them, so the pointer falls
+      // through to the face behind
+      const usable = firstVisibleFeature(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        rect.width,
+        rect.height,
+      );
       if (usable) {
         hoverLine.geometry.dispose();
         hoverLine.geometry = hoverLineGeometry(usable.entry.data, usable.nearest.kind, usable.nearest.index);

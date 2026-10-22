@@ -383,9 +383,36 @@ export interface NearestFeature {
   color: number;
   /** px anchor for the floating label (near the feature's representative point) */
   anchor: { x: number; y: number };
+  /** the 3D sample the snap landed on — the visibility gate's probe */
+  point: THREE.Vector3;
   /** screen-space distance of the snap, px — lets a caller pick the
    * winner across several sources' overlay data */
   d: number;
+}
+
+/** Occlusion slack, mm: a sample may sit a hair behind the visible
+ * surface (welding tolerance, a rim grazing the silhouette) and still
+ * count as visible. */
+const OCCLUSION_EPS_MM = 0.25;
+
+/**
+ * Visibility gate for feature snapping: the face under the cursor must
+ * not hide the feature. `firstHitDistance` is the cursor ray's first
+ * mesh hit (null when the ray hits nothing — background, or a grazing
+ * silhouette); the sample is hidden when the visible surface is
+ * meaningfully in front of its depth along the same ray. Without this,
+ * features on the far side of the model project onto the front view
+ * and steal the pick from the face actually being hovered.
+ */
+export function sampleVisibleAt(
+  firstHitDistance: number | null,
+  rayOrigin: THREE.Vector3,
+  rayDirection: THREE.Vector3,
+  sample: THREE.Vector3,
+): boolean {
+  if (firstHitDistance === null) return true;
+  const depth = sample.clone().sub(rayOrigin).dot(rayDirection);
+  return depth <= firstHitDistance + OCCLUSION_EPS_MM;
 }
 
 /**
@@ -444,6 +471,7 @@ export function findNearestFeature(
           text: it.text,
           color: it.color,
           anchor: { x: px + 12, y: py - 14 },
+          point: at.clone(),
           d,
         };
       }

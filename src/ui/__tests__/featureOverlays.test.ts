@@ -9,6 +9,7 @@ import {
   pickFromNearest,
   planeHighlightMesh,
   planePick,
+  sampleVisibleAt,
 } from '../featureOverlays';
 
 function tubeAlongX(): THREE.BufferGeometry {
@@ -42,6 +43,9 @@ describe('findNearestFeature (measure-mode snap)', () => {
     expect(nearest?.kind).toBe('circle');
     expect(nearest?.index).toBe(capIdx);
     expect(nearest?.text).toContain('Ø 6.00');
+    // the snap carries the 3D sample it landed on — the visibility
+    // gate's probe
+    expect(nearest?.point.distanceTo(sample)).toBeLessThan(0.01);
   });
 
   it('returns nothing when the mouse is far from every feature', () => {
@@ -123,7 +127,15 @@ describe('manual measuring', () => {
     const f = detectFeatures(tubeAlongX());
     const data = buildFeatureOverlayData(f, identityTransform());
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
-    const nearest = { kind: 'circle' as const, index: capIdx, text: '', color: 0, anchor: { x: 0, y: 0 }, d: 0 };
+    const nearest = {
+      kind: 'circle' as const,
+      index: capIdx,
+      text: '',
+      color: 0,
+      anchor: { x: 0, y: 0 },
+      point: new THREE.Vector3(),
+      d: 0,
+    };
     const pick = pickFromNearest(data, nearest);
     expect(pick.kind).toBe('circle');
     expect(pick.center.x).toBeCloseTo(5);
@@ -165,5 +177,28 @@ describe('manual measuring', () => {
     expect(mesh).not.toBeNull();
     // one face = 2 triangles = 6 vertices
     expect((mesh!.geometry.getAttribute('position') as THREE.BufferAttribute).count).toBe(6);
+  });
+});
+
+describe('sampleVisibleAt (far-side occlusion gate)', () => {
+  // a camera ray looking down +Y from 30mm away: a surface at y=10 is
+  // hit at ray distance 40
+  const origin = new THREE.Vector3(0, -30, 0);
+  const dir = new THREE.Vector3(0, 1, 0);
+  const surface = 40;
+
+  it('accepts a sample at or in front of the visible surface', () => {
+    expect(sampleVisibleAt(surface, origin, dir, new THREE.Vector3(0, 5, 0))).toBe(true); // in front
+    expect(sampleVisibleAt(surface, origin, dir, new THREE.Vector3(0, 10, 0))).toBe(true); // on it
+    expect(sampleVisibleAt(surface, origin, dir, new THREE.Vector3(0, 10.2, 0))).toBe(true); // slack
+  });
+
+  it('rejects a sample hidden behind the visible surface', () => {
+    // a far-side rim 2mm behind the face the cursor is actually over
+    expect(sampleVisibleAt(surface, origin, dir, new THREE.Vector3(0, 12, 0))).toBe(false);
+  });
+
+  it('accepts everything when the cursor ray hits no mesh (background/silhouette)', () => {
+    expect(sampleVisibleAt(null, origin, dir, new THREE.Vector3(0, 12, 0))).toBe(true);
   });
 });
