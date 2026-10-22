@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sampleSpiralMarks, spiralCarve } from '../spiralCarve';
+import { sampleSpiralMarks, spiralCarve, type SpiralCarveResult } from '../spiralCarve';
 import type { RotaryCalibration, SpiralCarveOp } from '../../core/types';
 
 const cal: RotaryCalibration = { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 };
@@ -63,6 +63,24 @@ describe('spiralCarve', () => {
     const firstStrand = starts.slice(0, 3).sort((a, b) => a! - b!);
     expect(firstStrand[1]! - firstStrand[0]!).toBeCloseTo(4.5, 5);
     expect(firstStrand[2]! - firstStrand[1]!).toBeCloseTo(4.5, 5);
+  });
+
+  it('width 0 just follows the lines: one pass per strand, no fan', () => {
+    const zero = spiralCarve({ ...op, width: 0 }, cal, 6, 0);
+    expect(zero.passes).toBe(4); // 2 strands × 1 fan pass × 2 levels
+    // the path is identical to any sub-tool width (a 1mm width with the
+    // Ø6 tool) — only the panel's warning distinguishes them
+    const narrow = spiralCarve({ ...op, width: 1 }, cal, 6, 0);
+    const xTravels = (r: SpiralCarveResult) =>
+      r.moves.filter((m) => m.rapid && m.words.x !== undefined).map((m) => m.words.x);
+    expect(xTravels(zero)).toEqual(xTravels(narrow));
+    // negative width is still rejected
+    expect(() => spiralCarve({ ...op, width: -1 }, cal, 6, 0)).toThrowError(/cannot be negative/);
+  });
+
+  it('samples a single groove line per strand at width 0 (knurling preview)', () => {
+    const marks = sampleSpiralMarks({ ...op, width: 0 }, cal, 6, 0);
+    expect(marks).toHaveLength(2); // strands only — no fan lines
   });
 
   it('a 90° spiral is a pure axial line: X-only G94 sweeps at fixed A', () => {

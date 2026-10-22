@@ -619,7 +619,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             error: null,
             summary:
               `${op.count} strand(s) × ${res.passes / op.count} sweep(s), ${op.spiralAngle}° helix, ` +
-              `${op.depth}mm deep × ${op.width}mm wide, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ` +
+              `${op.depth}mm deep × ${op.width === 0 ? 'following the lines' : `${op.width}mm wide`}, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ` +
               `~${res.estimatedMinutes.toFixed(1)} min`,
           };
         } catch (e) {

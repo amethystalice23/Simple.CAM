@@ -6,6 +6,7 @@ import {
   type FeaturePickKind,
 } from '../core/types';
 import type { AxisMode, JobOp, OpRates, Primitive, Stock, Tool } from '../core/types';
+import { round2 } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import {
   defaultFaceStepOver,
@@ -477,7 +478,22 @@ function ParamFields(props: {
           <NumberField label="Spiral angle (°)" value={op.spiralAngle} min={0.1} step={5} onCommit={(v) => upd({ spiralAngle: Math.min(Math.max(v, 0.1), 90) } as Partial<JobOp>)} />
           <NumberField label="Strands (around 360°)" value={op.count} min={1} step={1} onCommit={(v) => upd({ count: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
           <NumberField label="Depth (mm)" value={op.depth} min={0.1} step={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
-          <NumberField label="Width (mm)" value={op.width} min={0.1} step={0.1} onCommit={(v) => upd({ width: v } as Partial<JobOp>)} />
+          <NumberField label="Width (mm)" title="0 = just follow the lines — no width fan, the groove is the tool's own cut (V-bit knurling)" value={op.width} min={0} step={0.1} onCommit={(v) => upd({ width: v } as Partial<JobOp>)} />
+          {props.tool && op.width > 0 && op.width < props.tool.diameter - 1e-9 && (
+            <p className="hint warn">
+              a {round2(props.tool.diameter)}mm tool can't follow a {round2(op.width)}mm line —
+              the groove comes out ~{round2(props.tool.diameter)}mm wide. Set 0 if you mean to
+              just follow the lines
+            </p>
+          )}
+          {op.width === 0 && (
+            <p className="hint">
+              width 0: just following the lines —{' '}
+              {props.tool?.type === 'vbit'
+                ? 'the groove width comes from the depth and the bit angle'
+                : `the groove is the tool's own ${round2(props.tool?.diameter ?? 0)}mm width`}
+            </p>
+          )}
           <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <label className="field">
             <span>Rotation</span>
@@ -489,7 +505,8 @@ function ParamFields(props: {
           <p className="hint">
             helical grooves about the stock axis — angle off the circumferential direction
             (90° = axial lines), strands evenly around 360°, depth per step-down ladder whose
-            levels retrace the same groove. Width wider than the tool Ø fans parallel passes.
+            levels retrace the same groove. Width wider than the tool Ø fans parallel passes;
+            width 0 just follows the lines (the tool cuts its own width — knurling).
             Defaults from the stock; the ⇩ picks fill the area off the model
           </p>
         </>

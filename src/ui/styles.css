@@ -178,6 +178,7 @@ button.secondary:disabled:hover { background: #31373e; }
   padding: 5px 2px 1px;
 }
 .hint { font-size: 12px; color: #7d8891; }
+.hint.warn { color: #e0785a; }
 
 .check {
   display: flex;

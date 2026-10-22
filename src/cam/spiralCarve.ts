@@ -7,7 +7,10 @@
  * (span / (2πR·tan(angle)))·360°. `count` strands sit evenly around
  * 360° (multi-start, like the thread spec); `width` wider than the tool
  * fans adjacent parallel helices axially to cover it (each at full
- * depth); `depth` is reached through a step-down ladder whose levels
+ * depth); `width` 0 means no fan at all — the pass just follows the
+ * lines and the groove is whatever the tool cuts (knurling with a
+ * V-bit, where the real width knob is depth); `depth` is reached
+ * through a step-down ladder whose levels
  * RETRACE the same helix — level sweeps alternate direction with A
  * returning along the groove, so every level deepens the identical 3D
  * curve, never a mirror of it.
@@ -69,7 +72,12 @@ export function spiralCarve(
   }
   if (!Number.isInteger(op.count) || op.count < 1) throw new Error('count must be a whole number ≥ 1');
   if (op.depth <= 0) throw new Error('depth must be positive');
-  if (op.width <= 0) throw new Error('width must be positive');
+  if (op.width < 0) {
+    // 0 is legitimate: "just follow the lines" — one pass, the groove
+    // being whatever the tool cuts (V-bit knurling). The panel warns only
+    // on the unintentional narrow case: 0 < width < tool Ø.
+    throw new Error('width cannot be negative (0 = just follow the lines)');
+  }
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
   if (toolDiameter <= 0) throw new Error('tool diameter must be positive');
   if (op.plungeFeed <= 0) throw new Error('plungeFeed must be positive');
