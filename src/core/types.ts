@@ -324,6 +324,13 @@ export interface CircleFeature {
   radius: number;
   /** true when the loop bounds material outside it — an interior hole */
   inner: boolean;
+  /** Present only on PARTIAL circles — a circle reconstructed from broken
+   * rim fragments (a cylinder with flats or flutes cut in): the surviving
+   * vertex chains, model space, in loop order. Absent = a full circle.
+   * The Ø picks and snapping treat fragments exactly like full circles;
+   * the path-following ops (chamfer/pocket/drill) refuse them — a broken
+   * rim bounds neither a disc nor a 360° path. */
+  arcs?: Vec3[][];
 }
 
 export interface EdgeFeature {

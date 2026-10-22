@@ -322,14 +322,29 @@ export function buildFeatureOverlayData(
   const circleText: string[] = [];
   const circleInner: boolean[] = [];
   for (const c of features.circles) {
-    const pts = ringPoints(c, xf, RING_SEGMENTS);
     const target = c.inner ? holePos : circlePos;
-    for (let i = 0; i < RING_SEGMENTS; i++) {
-      target.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
+    if (c.arcs) {
+      // idle rings show only the surviving fragments — the real geometry;
+      // the hover highlight (circleSamples below) still draws the full
+      // reconstructed circle, which is the point of the feature
+      for (const chain of c.arcs) {
+        for (let i = 0; i < chain.length - 1; i++) {
+          const a = xf(chain[i]);
+          const b = xf(chain[i + 1]);
+          target.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+      }
+    } else {
+      const pts = ringPoints(c, xf, RING_SEGMENTS);
+      for (let i = 0; i < RING_SEGMENTS; i++) {
+        target.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
+      }
     }
     circleSamples.push(ringPoints(c, xf, RING_SAMPLES));
     circleCenter.push(xf(c.center));
-    circleText.push(`Ø ${(c.radius * 2).toFixed(2)} mm${c.inner ? ' · hole' : ''}`);
+    circleText.push(
+      `Ø ${(c.radius * 2).toFixed(2)} mm${c.inner ? ' · hole' : ''}${c.arcs ? ' · partial' : ''}`,
+    );
     circleInner.push(c.inner);
   }
 
@@ -412,12 +427,17 @@ export function findNearestFeature(
       const pxPerMm = h / (2 * halfTanFov * Math.max(depth, 0.01));
       const tol = Math.max(SNAP_PX_FLOOR * tolScale, SNAP_MM * tolScale * pxPerMm);
       let d = Infinity;
+      let at: THREE.Vector3 | null = null;
       for (const s of it.samples) {
         const sp = s.clone().project(camera);
         if (sp.z > 1) continue;
-        d = Math.min(d, Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY));
+        const sd = Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY);
+        if (sd < d) {
+          d = sd;
+          at = s;
+        }
       }
-      if (d <= tol && (best === null || d < best.d)) {
+      if (at && d <= tol && (best === null || d < best.d)) {
         best = {
           kind,
           index: it.index,

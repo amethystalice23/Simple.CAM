@@ -18,6 +18,28 @@ function plateWithHole(): THREE.BufferGeometry {
   return new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
 }
 
+const rad = (d: number) => (d * Math.PI) / 180;
+
+/** A plate with a HOLE whose rim survives as three 40° arcs (80° chord
+ * gaps — off the 60° bridge threshold, unlike a hexagon cap's real
+ * chords) — a broken bore. The outer outline stays a full circle. */
+function plateWithBrokenHoleRim(): THREE.BufferGeometry {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, 5, 0, Math.PI * 2, false);
+  const hole = new THREE.Path();
+  for (let k = 0; k < 3; k++) {
+    // wound CW overall (a hole, opposite the CCW outer shape): visit the
+    // arcs in DECREASING angle order, each arc traversed a0+40 → a0,
+    // bridging 80° gaps to the next arc's start
+    const a0 = 240 - k * 120; // arcs at [240,280], [120,160], [0,40]
+    hole.absarc(0, 0, 2, rad(a0 + 40), rad(a0), true);
+    const next = a0 - 80;
+    hole.lineTo(Math.cos(rad(next)) * 2, Math.sin(rad(next)) * 2);
+  }
+  shape.holes.push(hole);
+  return new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
+}
+
 describe('detectFeatures', () => {
   it('finds 6 planes, 12 edges, and no circles on a cube', () => {
     const f = detectFeatures(box());
@@ -183,6 +205,112 @@ describe('holesFromCircles', () => {
     const t = { ...identityTransform(), rotationDeg: { x: 90, y: 0, z: 0 } };
     const f = detectFeatures(plateWithHole());
     expect(holesFromCircles(f.circles, t)).toHaveLength(0);
+  });
+
+  it('refuses partial circles — a broken hole rim bounds no bore', () => {
+    const f = detectFeatures(plateWithBrokenHoleRim());
+    const partial = f.circles.filter((c) => c.arcs);
+    expect(partial.length).toBeGreaterThanOrEqual(2); // per cap
+    for (const c of partial) {
+      expect(c.inner).toBe(true);
+      expect(c.arcs).toHaveLength(3); // one chain per surviving arc
+    }
+    expect(holesFromCircles(f.circles, identityTransform())).toHaveLength(0);
+  });
+});
+
+describe('detectFeatures: partial circles (broken rims)', () => {
+  /** A flat plate whose outline is a circle of radius R broken into
+   * `fragments` arcs of `spanDeg`, chords closing the gaps — the
+   * flutes/flats-cut-into-a-cylinder shape family, extruded. */
+  function plateWithBrokenRim(R: number, fragments: number, spanDeg: number): THREE.BufferGeometry {
+    const shape = new THREE.Shape();
+    for (let k = 0; k < fragments; k++) {
+      const a0 = (k * 360) / fragments;
+      shape.absarc(0, 0, R, rad(a0), rad(a0 + spanDeg), false);
+      const aNext = ((k + 1) * 360) / fragments;
+      shape.lineTo(Math.cos(rad(aNext)) * R, Math.sin(rad(aNext)) * R);
+    }
+    return new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
+  }
+
+  it('recognizes a D-shape rim as a circle carried by its semicircle', () => {
+    const shape = new THREE.Shape();
+    shape.absarc(0, 0, 5, 0, Math.PI, false); // semicircle, CCW
+    shape.lineTo(5, 0); // the chord
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
+    const f = detectFeatures(geo);
+    const r5 = f.circles.filter((c) => Math.abs(c.radius - 5) < 0.05);
+    expect(r5.length).toBeGreaterThanOrEqual(1); // one per cap
+    for (const c of r5) {
+      expect(c.arcs).toBeDefined();
+      expect(c.arcs).toHaveLength(1); // one surviving arc
+      expect(c.inner).toBe(false);
+    }
+  });
+
+  it('assembles a fluted rim from evenly spaced slivers (envelope rule)', () => {
+    // four 15° survivors of a Ø10 rim: the arcs SUM to 60° but SPAN 285°
+    const f = detectFeatures(plateWithBrokenRim(5, 4, 15));
+    const r5 = f.circles.filter((c) => Math.abs(c.radius - 5) < 0.1);
+    expect(r5.length).toBeGreaterThanOrEqual(1);
+    for (const c of r5) {
+      expect(c.arcs).toBeDefined();
+      expect(c.arcs).toHaveLength(4); // one chain per surviving sliver
+      for (const chain of c.arcs!) expect(chain.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('rejects slivers clustered in one wedge — envelope under 120°', () => {
+    // two 15° survivors inside a 45° wedge of a Ø10 rim
+    const shape = new THREE.Shape();
+    shape.absarc(0, 0, 5, 0, rad(15), false);
+    shape.lineTo(Math.cos(rad(30)) * 5, Math.sin(rad(30)) * 5);
+    shape.absarc(0, 0, 5, rad(30), rad(45), false);
+    shape.lineTo(5, 0);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
+    const f = detectFeatures(geo);
+    expect(f.circles.some((c) => Math.abs(c.radius - 5) < 0.1 && c.arcs)).toBe(false);
+  });
+
+  it('merges rim arcs split across SEPARATE border loops of one plane', () => {
+    // Alice's cross-core cylinder: a base cap whose circular rim survives
+    // as arcs separated by solid wall, one loop per section — the arcs
+    // are still one circle. Modelled as 4 wedge holes with rounded outer
+    // edges: 80° arcs at Ø9.8 with 10° gaps, one arc per hole loop.
+    const shape = new THREE.Shape();
+    shape.absarc(0, 0, 5, 0, Math.PI * 2, false);
+    for (let k = 0; k < 4; k++) {
+      const a0 = k * 90;
+      const hole = new THREE.Path();
+      hole.absarc(0, 0, 4.9, rad(a0 + 80), rad(a0), true); // 80° arc, CW
+      const apex = rad(a0 + 40);
+      hole.lineTo(Math.cos(apex) * 0.5, Math.sin(apex) * 0.5);
+      const start = rad(a0 + 80);
+      hole.lineTo(Math.cos(start) * 4.9, Math.sin(start) * 4.9);
+      shape.holes.push(hole);
+    }
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
+    const f = detectFeatures(geo);
+    const rim = f.circles.filter((c) => Math.abs(c.radius - 4.9) < 0.1 && c.arcs);
+    expect(rim.length).toBeGreaterThanOrEqual(1); // the merged base rim
+    for (const c of rim) {
+      expect(c.arcs).toHaveLength(4); // one chain per wedge loop
+      for (const chain of c.arcs!) expect(chain.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('treats an all-vertex fit as a FULL circle — no arcs field', () => {
+    // an octagonal prism's caps: 8 border vertices, below fitCircle's
+    // n ≥ 9 gate, but every vertex sits on the circle
+    const geo = new THREE.CylinderGeometry(1, 1, 2, 8).toNonIndexed();
+    const f = detectFeatures(geo);
+    const caps = f.circles.filter((c) => Math.abs(c.axis.y) > 0.99);
+    expect(caps.length).toBeGreaterThanOrEqual(2);
+    for (const c of caps) {
+      expect(c.radius).toBeCloseTo(1, 5);
+      expect(c.arcs).toBeUndefined(); // complete — every op may use it
+    }
   });
 });
 

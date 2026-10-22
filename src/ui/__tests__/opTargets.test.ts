@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
+import type { CircleFeature } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
+import type { DetectedFeatures } from '../../cam/features';
 import { indexedPointRotation } from '../../cam/indexing';
 import { drillTargetsFromSelection, pocketRegionsFromSelection, chamferTargetsFromSelection } from '../opTargets';
 
@@ -373,4 +375,39 @@ describe('chamferTargetsFromSelection', () => {
     expect(chamferTargetsFromSelection(f, [], identityTransform())).toBeNull();
   });
 
+});
+
+describe('partial circles: the path-following ops refuse broken rims', () => {
+  const partial: CircleFeature = {
+    kind: 'circle',
+    id: 'circle:partial',
+    center: { x: 0, y: 0, z: 0 },
+    axis: { x: 0, y: 0, z: 1 },
+    radius: 5,
+    inner: true,
+    arcs: [[{ x: 5, y: 0, z: 0 }, { x: 4.98, y: 0.44, z: 0 }, { x: 4.92, y: 0.87, z: 0 }]],
+  };
+  const feats: DetectedFeatures = {
+    planes: [],
+    circles: [partial],
+    edges: [],
+    faceToPlane: new Int32Array(0),
+    planeLoops: [],
+  };
+
+  it('pocket: refuses with a clear message instead of a phantom disc', () => {
+    expect(() => pocketRegionsFromSelection(feats, [partial.id], identityTransform())).toThrowError(
+      /partial circle/,
+    );
+  });
+
+  it('drill: a broken hole rim yields no targets', () => {
+    expect(drillTargetsFromSelection(feats, [partial.id], identityTransform(), 1)).toBeNull();
+  });
+
+  it('chamfer: refuses a partial circle loudly', () => {
+    expect(() =>
+      chamferTargetsFromSelection(feats, [partial.id], identityTransform()),
+    ).toThrowError(/partial circle/);
+  });
 });

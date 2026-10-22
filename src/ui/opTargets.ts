@@ -63,9 +63,16 @@ export function pocketRegionsFromSelection(
     : xf0;
   const circleRegions: Vec2[][] = [];
   let rimZ = -Infinity;
+  /** a selected partial circle doesn't bound a disc — say so instead of
+   * falling through to the misleading frame-gate error */
+  let sawPartial = false;
 
   for (const c of features.circles) {
     if (!selection.includes(c.id)) continue;
+    if (c.arcs) {
+      sawPartial = true;
+      continue;
+    }
     if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < Z_TOL) continue;
     const center = xf(c.center);
     const contour: Vec2[] = [];
@@ -125,6 +132,12 @@ export function pocketRegionsFromSelection(
   if (circleRegions.length > 0) {
     return { regions: circleRegions, selectionZ: rimZ };
   }
+  if (sawPartial) {
+    throw new Error(
+      'a partial circle (a broken rim) cannot bound a pocket — select flat ' +
+        'faces for the outline, or use its Ø in a facing operation',
+    );
+  }
   // features are selected but none survived the frame gate: say so —
   // "select features…" here reads as if the click never registered
   if (selection.length > 0) {
@@ -156,7 +169,8 @@ export function drillTargetsFromSelection(
     : xf0;
   const targets: DrillOp['targets'] = [];
   for (const c of features.circles) {
-    if (!c.inner || !selection.includes(c.id)) continue;
+    // a broken hole rim doesn't bound a drillable center
+    if (!c.inner || c.arcs || !selection.includes(c.id)) continue;
     if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < DRILL_Z_TOL) continue;
     const center = xf(c.center);
     targets.push({ x: center.x, y: center.y, topZ: center.z, depth });
@@ -242,6 +256,14 @@ export function chamferTargetsFromSelection(
 
   for (const c of features.circles) {
     if (!selection.includes(c.id)) continue;
+    if (c.arcs) {
+      // a broken rim has no 360° path — refuse loudly rather than
+      // chamfering a circle that isn't there
+      throw new Error(
+        'a partial circle (a broken rim) cannot be chamfered — select a full ' +
+          'circle, or a flat face to follow its outline',
+      );
+    }
     if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < Z_TOL) continue;
     const center = xf(c.center);
     loops.push({

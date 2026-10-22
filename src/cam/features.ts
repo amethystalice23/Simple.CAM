@@ -348,6 +348,214 @@ function fitCircle(pts: Vec2[]): Circle2 | null {
   return kasaFit(inlierPts) ?? best.c;
 }
 
+// ---------------------------------------------- partial-circle recognition
+
+/** Minimum angular envelope for fragment arcs to count as a circle: the
+ * span from the start of the first fragment to the end of the last,
+ * measured the short way through the largest gap between them (Alice's
+ * "at least a third of a circle" rule). Slivers clustered inside a
+ * smaller wedge are rejected — which is also where spurious fits live. */
+const MIN_CIRCLE_ENVELOPE_DEG = 120;
+/** A fragment needs at least one full chord of arc evidence. */
+const MIN_FRAGMENT_VERTS = 2;
+/** And the whole set needs at least this many vertices on the circle. */
+const MIN_FRAGMENT_TOTAL_VERTS = 6;
+
+interface CircleChain {
+  /** which border loop (cycle) the chain lives in */
+  cycle: number;
+  /** vertex indices within that cycle, in walk order */
+  verts: number[];
+}
+
+interface CircleFragments {
+  c: Circle2;
+  chains: CircleChain[];
+  /** every vertex on the circle and one unbroken chain — a complete
+   * circle too small for fitCircle's n ≥ 9 gate (no arcs field) */
+  full: boolean;
+}
+
+/** A chord spanning more than this many degrees of the candidate circle is
+ * a straight bridge across a gap, not tessellation — real arc chords are
+ * smaller even on coarse meshes (a hexagon cap's chords are exactly 60°).
+ * A D-shape's closing chord spans 180°, a fluted rim's gap bridges ~75°. */
+const BRIDGE_STEP_MAX_DEG = 60;
+
+/**
+ * PARTIAL circles: a circle carried by surviving arc fragments of ONE
+ * plane's border loops — fragments of a single broken loop (flutes cut
+ * into a rim) or fragments split across SEVERAL loops (a cross-shaped
+ * core rising from a base cap leaves one quadrant loop per surviving
+ * rim arc, the gaps between them filled with solid wall instead of open
+ * air — the rim is still one circle). RANSAC candidates from all the
+ * cycles' points, then inliers are stitched into chains that break at
+ * off-circle vertices, at chord steps too large to be tessellation of
+ * THIS circle (a straight bridge across a gap — its endpoints sit on
+ * the circle, so vertex inlierness alone can't split them), and at
+ * cycle boundaries. The candidate is accepted when the chains' angular
+ * ENVELOPE — 360° minus the largest gap between neighbouring chains —
+ * reaches MIN_CIRCLE_ENVELOPE_DEG: four 15° slivers evenly spaced
+ * (envelope 285°) qualify, the same slivers bunched in one 45° wedge do
+ * not. Returns the Kasa-refined fit plus the chains.
+ */
+function fitCircleFragments(cycles: Vec2[][]): CircleFragments | null {
+  const flat = cycles.flat();
+  const n = flat.length;
+  if (n < MIN_FRAGMENT_TOTAL_VERTS) return null;
+  const angleOf = (p: Vec2, c: Circle2): number =>
+    ((Math.atan2(p.y - c.cy, p.x - c.cx) * 180) / Math.PI + 360) % 360;
+  const cycleOffset: number[] = [];
+  {
+    let o = 0;
+    for (const cy of cycles) {
+      cycleOffset.push(o);
+      o += cy.length;
+    }
+  }
+
+  const rand = mulberry32(43);
+  let best: { c: Circle2; tol: number; chains: CircleChain[]; total: number; full: boolean } | null =
+    null;
+  const iters = Math.min(2000, n * 20);
+  for (let it = 0; it < iters; it++) {
+    const i = Math.floor(rand() * n);
+    const j = Math.floor(rand() * n);
+    const k = Math.floor(rand() * n);
+    if (i === j || j === k || i === k) continue;
+    const c = circleFrom3(flat[i], flat[j], flat[k]);
+    if (!c || c.r <= 0) continue;
+    const tol = Math.max(0.01, c.r * 0.005);
+    const inlier = flat.map((p) => Math.abs(Math.hypot(p.x - c.cx, p.y - c.cy) - c.r) <= tol);
+
+    let allInlier = true;
+    let wrapStep = 0;
+    const chains: CircleChain[] = [];
+    for (let ci = 0; ci < cycles.length; ci++) {
+      const m = cycles[ci].length;
+      const offset = cycleOffset[ci];
+      const loc = (s: number) => offset + (((s % m) + m) % m);
+      const angleRaw = (s: number) => angleOf(flat[loc(s)], c);
+      const inl = (s: number) => inlier[loc(s)];
+      // the angular gap between neighbours, as the SMALL delta — a loop
+      // may traverse its arcs forward and its bridges backward (a broken
+      // hole rim's net winding is the bridges' sign, opposite the arcs'),
+      // so chain splitting must be direction-free
+      const stepDeg = (fromA: number, toA: number) => {
+        const d = Math.abs(toA - fromA);
+        return Math.min(d, 360 - d);
+      };
+      const stepRaw = (s: number) => stepDeg(angleRaw(s), angleRaw(s + 1));
+
+      // start the walk at a chain BREAK so no chain crosses the walk's
+      // seam and splits in two: just after an off-circle vertex when one
+      // exists; for all-inlier cycles (every vertex on the circle — the
+      // D-shape's chord endpoints included) just after a gap bridge, or
+      // anywhere when there is none (a complete circle)
+      let seed = 0;
+      let outlierAt = -1;
+      for (let s = 0; s < m; s++) {
+        if (!inl(s)) {
+          outlierAt = s;
+          break;
+        }
+      }
+      if (outlierAt !== -1) {
+        seed = outlierAt;
+        allInlier = false;
+      } else {
+        for (let s = 0; s < m; s++) {
+          if (stepRaw(s) > BRIDGE_STEP_MAX_DEG) {
+            seed = (s + 1) % m;
+            break;
+          }
+        }
+      }
+      const at = (s: number) => (seed + s) % m;
+      // the step closing the walk ring, from the last vertex back to the
+      // first — the one the walk below never examines (single-cycle
+      // loops only: it decides whether an all-inlier fit is complete)
+      if (cycles.length === 1) wrapStep = stepRaw(at(m - 1));
+      const mkChain = (s0: number, s1: number): CircleChain => {
+        const verts: number[] = [];
+        for (let s = s0; s <= s1; s++) verts.push(at(s));
+        return { cycle: ci, verts };
+      };
+
+      let runStart = -1;
+      let prevInlier = inl(at(m - 1));
+      let prevA = angleRaw(at(m - 1));
+      for (let s = 0; s < m; s++) {
+        const curInlier = inl(at(s));
+        const a = angleRaw(at(s));
+        // chains break at off-circle vertices and at gap bridges; a
+        // bridge endpoint OPENS the next chain (it is that fragment's
+        // first vertex)
+        const step = curInlier && prevInlier ? stepDeg(prevA, a) : Infinity;
+        if (!curInlier) {
+          if (runStart !== -1) {
+            chains.push(mkChain(runStart, s - 1));
+            runStart = -1;
+          }
+        } else if (runStart === -1 || step > BRIDGE_STEP_MAX_DEG) {
+          if (runStart !== -1) chains.push(mkChain(runStart, s - 1));
+          runStart = s;
+        }
+        prevA = a;
+        prevInlier = curInlier;
+      }
+      if (runStart !== -1) chains.push(mkChain(runStart, m - 1));
+    }
+
+    // stray single vertices are not arc evidence — drop their chains,
+    // then gate on total coverage and the angular envelope: the chains'
+    // CCW intervals about the fitted center, 360° minus the largest gap
+    // between neighbours, measured in each chain's own direction
+    const kept = chains.filter((ch) => ch.verts.length >= MIN_FRAGMENT_VERTS);
+    const t = kept.reduce((acc, ch) => acc + ch.verts.length, 0);
+    let accepted = t >= MIN_FRAGMENT_TOTAL_VERTS;
+    if (accepted && kept.length > 0) {
+      const bounds = kept
+        .map((ch) => {
+          const base = cycleOffset[ch.cycle];
+          const p0 = flat[base + ch.verts[0]];
+          const p1 = flat[base + ch.verts[1]];
+          const pN = flat[base + ch.verts[ch.verts.length - 1]];
+          const ccw = (angleOf(p1, c) - angleOf(p0, c) + 360) % 360 < 180;
+          return {
+            from: angleOf(ccw ? p0 : pN, c),
+            to: angleOf(ccw ? pN : p0, c),
+          };
+        })
+        .sort((a, b) => a.from - b.from);
+      let maxGap = 0;
+      for (let r = 0; r < bounds.length; r++) {
+        const next = bounds[(r + 1) % bounds.length];
+        maxGap = Math.max(maxGap, (next.from - bounds[r].to + 720) % 360);
+      }
+      accepted = 360 - maxGap >= MIN_CIRCLE_ENVELOPE_DEG;
+    }
+    if (accepted && (!best || t > best.total)) {
+      best = {
+        c,
+        tol,
+        chains: kept,
+        total: t,
+        // every vertex on the circle AND one unbroken chain around it —
+        // a full circle that was just too small for fitCircle's n ≥ 9
+        full: allInlier && cycles.length === 1 && kept.length === 1 && wrapStep <= BRIDGE_STEP_MAX_DEG,
+      };
+    }
+  }
+  if (!best) return null;
+  const inlierPts: Vec2[] = [];
+  for (const ch of best.chains) {
+    const base = cycleOffset[ch.cycle];
+    for (const vi of ch.verts) inlierPts.push(flat[base + vi]);
+  }
+  return { c: kasaFit(inlierPts) ?? best.c, chains: best.chains, full: best.full };
+}
+
 // ---------------------------------------------------------------- detection
 
 export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures {
@@ -444,51 +652,135 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     });
   };
 
-  // Pass 1: circle recognition on every loop. The fitted center comes from
-  // the plane equation (u·cx + v·cy + n·h with h = centroid·n) — the 2D fit
-  // is measured from the origin, so adding it to the centroid would double
-  // the in-plane offset on off-origin planes.
+  // Pass 1: circle recognition, per PLANE: whole circles per loop, then
+  // the plane's failed loops TOGETHER — co-circular rim fragments can be
+  // split across several border loops of one plane (a cross-shaped core
+  // rising from a base cap leaves one quadrant loop per surviving rim
+  // arc, the gaps filled with solid wall instead of open air; the rim is
+  // still one circle). The fitted center comes from the plane equation
+  // (u·cx + v·cy + n·h with h = centroid·n) — the 2D fit is measured
+  // from the origin, so adding it to the centroid would double the
+  // in-plane offset on off-origin planes.
   const straightLoops: { pts3: Vec3[]; idx: number[] }[] = [];
+  const loopsByPlane = new Map<number, number[][]>();
   for (const { plane: p, verts: loop } of loops) {
-    const lp = loopPlane(verts, loop);
-    const { u, v } = basis(lp.normal);
-    const pts2: Vec2[] = loop.map((vi) => {
-      const w = verts[vi];
-      return { x: dot(w, u), y: dot(w, v) };
-    });
-
-    const circ = fitCircle(pts2);
-    if (circ) {
-      const h = dot(lp.point, lp.normal); // plane offset along its normal
-      const center = {
-        x: u.x * circ.cx + v.x * circ.cy + lp.normal.x * h,
-        y: u.y * circ.cx + v.y * circ.cy + lp.normal.y * h,
-        z: u.z * circ.cx + v.z * circ.cy + lp.normal.z * h,
-      };
-      circles.push({
-        kind: 'circle',
-        id: featureId('circle', [
-          center.x,
-          center.y,
-          center.z,
-          lp.normal.x,
-          lp.normal.y,
-          lp.normal.z,
-          circ.r,
-        ]),
-        center,
-        axis: lp.normal,
-        radius: circ.r,
-        inner: dot(lp.normal, normals[p]) < 0,
+    const arr = loopsByPlane.get(p);
+    if (arr) arr.push(loop);
+    else loopsByPlane.set(p, [loop]);
+  }
+  for (const [p, planeLoops] of loopsByPlane) {
+    // loops that carry no whole circle — candidates for the plane's
+    // fragment merge, and their winding normals for the inner vote
+    const failed: number[][] = [];
+    const failedNormals: Vec3[] = [];
+    for (const loop of planeLoops) {
+      const lp = loopPlane(verts, loop);
+      const { u, v } = basis(lp.normal);
+      const pts2: Vec2[] = loop.map((vi) => {
+        const w = verts[vi];
+        return { x: dot(w, u), y: dot(w, v) };
       });
-      for (let i = 0; i < loop.length; i++) {
-        const a = loop[i];
-        const b = loop[(i + 1) % loop.length];
+
+      const circ = fitCircle(pts2);
+      if (circ) {
+        const h = dot(lp.point, lp.normal); // plane offset along its normal
+        const center = {
+          x: u.x * circ.cx + v.x * circ.cy + lp.normal.x * h,
+          y: u.y * circ.cx + v.y * circ.cy + lp.normal.y * h,
+          z: u.z * circ.cx + v.z * circ.cy + lp.normal.z * h,
+        };
+        circles.push({
+          kind: 'circle',
+          id: featureId('circle', [
+            center.x,
+            center.y,
+            center.z,
+            lp.normal.x,
+            lp.normal.y,
+            lp.normal.z,
+            circ.r,
+          ]),
+          center,
+          axis: lp.normal,
+          radius: circ.r,
+          inner: dot(lp.normal, normals[p]) < 0,
+        });
+        for (let i = 0; i < loop.length; i++) {
+          const a = loop[i];
+          const b = loop[(i + 1) % loop.length];
+          circleEdges.add(a < b ? `${a}_${b}` : `${b}_${a}`);
+        }
+        continue;
+      }
+
+      failed.push(loop);
+      failedNormals.push(lp.normal);
+      // the loop's non-arc runs still become edges below; its arc
+      // chords are suppressed as circle tessellation when the fragment
+      // merge below claims them
+      straightLoops.push({ pts3: loop.map((vi) => verts[vi]), idx: loop });
+    }
+
+    if (failed.length === 0) continue;
+    // the plane's own frame: one basis for every failed loop
+    const { u, v } = basis(normals[p]);
+    const cycles: Vec2[][] = failed.map((loop) =>
+      loop.map((vi) => {
+        const w = verts[vi];
+        return { x: dot(w, u), y: dot(w, v) };
+      }),
+    );
+    const frag = fitCircleFragments(cycles);
+    if (!frag) continue;
+    const h = dot(planes[p].point, normals[p]);
+    const center = {
+      x: u.x * frag.c.cx + v.x * frag.c.cy + normals[p].x * h,
+      y: u.y * frag.c.cx + v.y * frag.c.cy + normals[p].y * h,
+      z: u.z * frag.c.cx + v.z * frag.c.cy + normals[p].z * h,
+    };
+    // inner vote across the merged loops, weighted by arc evidence: a
+    // chain whose loop winds against the plane's faces is a hole rim
+    let innerCount = 0;
+    for (const ch of frag.chains) {
+      if (dot(failedNormals[ch.cycle], normals[p]) < 0) innerCount += ch.verts.length;
+    }
+    const circle: CircleFeature = {
+      kind: 'circle',
+      id: featureId('circle', [
+        center.x,
+        center.y,
+        center.z,
+        normals[p].x,
+        normals[p].y,
+        normals[p].z,
+        frag.c.r,
+      ]),
+      center,
+      axis: normals[p],
+      radius: frag.c.r,
+      inner: innerCount * 2 > frag.chains.reduce((acc, ch) => acc + ch.verts.length, 0),
+      // every vertex on the circle = a full circle that was just too
+      // small for fitCircle's n ≥ 9 gate — no arcs field, so every
+      // downstream op treats it as complete
+      ...(frag.full
+        ? {}
+        : {
+            arcs: frag.chains.map((ch) =>
+              ch.verts.map((vi) => verts[failed[ch.cycle][vi]]),
+            ),
+          }),
+    };
+    if (circles.some((c) => sameCircle(c, circle))) continue;
+    circles.push(circle);
+    for (const ch of frag.chains) {
+      const loop = failed[ch.cycle];
+      const pairs = ch.verts.length - (frag.full ? 0 : 1); // full: wrap chord too
+      for (let i = 0; i < pairs; i++) {
+        const a = loop[ch.verts[i]];
+        const b = loop[(ch.verts[i] + 1) % loop.length];
         circleEdges.add(a < b ? `${a}_${b}` : `${b}_${a}`);
       }
-      continue;
     }
-    straightLoops.push({ pts3: loop.map((vi) => verts[vi]), idx: loop });
   }
 
   // Pass 2: straight-edge runs on the remaining loops: split at direction
@@ -681,7 +973,9 @@ export function holesFromCircles(
   );
   const holes: HoleFeature[] = [];
   for (const c of circles) {
-    if (!c.inner) continue;
+    // partial circles carry no bore: a broken hole rim doesn't bound a
+    // drillable center — refuse rather than guess
+    if (!c.inner || c.arcs) continue;
     const axis = new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z).applyQuaternion(rot);
     if (Math.abs(axis.z) < 0.999) continue;
     const center = new THREE.Vector3(c.center.x, c.center.y, c.center.z)
