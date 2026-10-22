@@ -13,12 +13,21 @@ import type { GenContext } from '../jobGeneration';
  * Ø16 rod (jobs/coupon-delrin-m14x1.cam.json). Everything fits a 50mm
  * section of rod. 3.175 shank bits only — Alice's everyday set: the
  * Spiral O Metal 3.175×12 flat, and a 60° engraving bit (metric threads
- * cut 60° flanks, not the chamfer bit's 90°). Four segments: three
- * M14×1 ccw threads at tolerance 0 / 0.1 / 0.2 (fit tuned against a nut
- * on the machine — PLAN risk 3), each faced to its crest Ø first (the
- * thread's surfaceDiameter says so — no air levels), then a 3-strand
- * spiral carve on the raw rod, cw — the other hand, both on one bar.
- * Regenerate deliberately with UPDATE_GOLDEN=1.
+ * cut 60° flanks, not the chamfer bit's 90°).
+ *
+ * Coupon v3 (Alice's spec 2026-10-22, the day before the cut): ONE M14×1
+ * ccw thread at tolerance 0.1 — the middle of v1's sweep, the one that
+ * worked — at the BAR'S END (X 15…25) so a fitting screws straight on,
+ * no sawing the coupon apart, faced to its crest Ø 13.9 first; a
+ * 4-strand 30° spiral groove section at 3mm width (v2's five at 4mm was
+ * too much) with the facing bit; and a knurling section opposite the
+ * thread: a CROSSED pair of width-0 V-bit ops — 60° off the
+ * circumferential (30° off the axis, the lathe diagonal-knurl angle),
+ * one cw one ccw, 24 strands each, 0.4mm deep — the two helix families
+ * cross into the diamond grid. Op order groups by tool — flat face +
+ * spiral, one swap, V-bit thread + knurl. Regenerate deliberately with
+ * UPDATE_GOLDEN=1 — that rewrites the job file, so never run it over
+ * hand edits.
  */
 
 const couponPath = join(import.meta.dirname, '..', '..', '..', 'jobs', 'coupon-delrin-m14x1.cam.json');
@@ -36,65 +45,87 @@ function coupon(): { stock: Stock; ops: JobOp[]; tools: Tool[] } {
     axisMode: '4-axis',
     materialId: 'delrin',
   };
-  // tolerance sweep → crest Ø 14 / 13.9 / 13.8 (nominal − 2·tol);
-  // 10mm threads with 3mm gaps, spiral behind — all within ±24mm
-  const threads: [string, number, number, number, number][] = [
-    // [id, xStart, xEnd, tolerance, crest Ø]
-    ['jobop-1', -24, -14, 0.0, 14.0],
-    ['jobop-2', -11, -1, 0.1, 13.9],
-    ['jobop-3', 2, 12, 0.2, 13.8],
-  ];
-  const ops: JobOp[] = [];
-  threads.forEach(([id, xStart, xEnd, tolerance, crest], i) => {
-    ops.push({
-      id: `${id}-face`,
+  const ops: JobOp[] = [
+    // flat bit first: face the thread's crest at the bar's end…
+    {
+      id: 'jobop-1-face',
       toolId: flat.id,
       featureIds: [],
       kind: 'faceCylinder',
-      targetDiameter: crest,
-      xStart,
-      xEnd,
+      targetDiameter: 13.9, // the crest the thread's surfaceDiameter claims
+      xStart: 15,
+      xEnd: 25, // the bar's end — the thread screws straight into a fitting
       stepDown: 0.5,
-      stepOver: null,
+      stepOver: 1,
       finishAllowance: 0,
       rotation: 'cw',
       pattern: 'spiral',
-    });
-    ops.push({
-      id: `${id}-thread`,
+    },
+    // …then the spiral grooves on the raw rod behind it
+    {
+      id: 'jobop-2-spiral',
+      toolId: flat.id,
+      featureIds: [],
+      kind: 'spiralCarve',
+      surfaceDiameter: 16, // the raw rod
+      xStart: -11,
+      xEnd: -1,
+      spiralAngle: 30,
+      count: 4, // v2's five at 4mm wide was too much — four at 3mm
+      depth: 0.5,
+      width: 3,
+      stepDown: 0.25,
+      rotation: 'cw', // the other hand than the thread — both on one bar
+    },
+    // one tool swap: the V-bit thread on the faced end…
+    {
+      id: 'jobop-3-thread',
       toolId: vbit.id,
       featureIds: [],
       kind: 'thread',
       nominalDiameter: 14,
-      xStart,
-      xEnd,
+      xStart: 15,
+      xEnd: 25,
       pitch: 1,
       starts: 1,
-      tolerance,
+      tolerance: 0.1, // the middle of v1's tolerance sweep
       stepDown: 0.25,
       rotation: 'ccw',
-      surfaceDiameter: crest, // the facing op just made it so
-    });
-    if (i === threads.length - 1) {
-      ops.push({
-        id: 'jobop-4-spiral',
-        toolId: flat.id,
-        featureIds: [],
-        kind: 'spiralCarve',
-        surfaceDiameter: 16, // the raw rod behind the threads
-        xStart: 15,
-        xEnd: 24,
-        // width 4 > the Ø3.175 tool fans two parallel passes — the fan
-        // path gets iron time too
-        spiralAngle: 30,
-        count: 3,
-        depth: 0.5,
-        width: 4,
-        stepDown: 0.25,
-        rotation: 'cw', // the other hand than the threads — both on one bar
-      });
-    }
-  });
+      surfaceDiameter: 13.9, // the facing op just made it so
+    },
+    // …then the knurling opposite: two crossed helix families, one per
+    // hand, width 0 — each groove is the V-bit's own ~0.46mm cut
+    {
+      id: 'jobop-4-knurl-cw',
+      toolId: vbit.id,
+      featureIds: [],
+      kind: 'spiralCarve',
+      surfaceDiameter: 16, // the raw rod
+      xStart: -24,
+      xEnd: -14,
+      spiralAngle: 60, // 30° off the axis — the diagonal-knurl angle
+      count: 24, // ~2.1mm pitch around the Ø16 rod
+      depth: 0.4,
+      width: 0, // just follow the lines — no width fan
+      stepDown: 0.2,
+      rotation: 'cw',
+    },
+    {
+      id: 'jobop-5-knurl-ccw',
+      toolId: vbit.id,
+      featureIds: [],
+      kind: 'spiralCarve',
+      surfaceDiameter: 16,
+      xStart: -24,
+      xEnd: -14,
+      spiralAngle: 60, // the mirror family — the two cross into diamonds
+      count: 24,
+      depth: 0.4,
+      width: 0,
+      stepDown: 0.2,
+      rotation: 'ccw',
+    },
+  ];
   return { stock, ops, tools: [flat, vbit] };
 }
 
@@ -137,8 +168,8 @@ describe('the Delrin coupon job', () => {
       expect(res.moves[0].spindleRpm).toBeDefined();
       minutes += res.minutes;
     }
-    // sanity: 3 facings + 3 threads + 1 spiral = 7 ops
-    expect(parsed.ops).toHaveLength(7);
+    // sanity: face + spiral + thread + knurl pair = 5 ops
+    expect(parsed.ops).toHaveLength(5);
     // honest time estimate at the rotary limit — printed for the run sheet
     console.log(`coupon cut time ≈ ${minutes.toFixed(1)} min`);
   });
