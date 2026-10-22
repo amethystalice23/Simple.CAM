@@ -10,6 +10,7 @@ import type { CircleFeature, ModelTransform, Primitive, Stock, Vec3 } from '../c
 import type { DetectedFeatures } from '../cam/features';
 import { stockSpan } from './placement';
 import { planeExtent, transformFn } from './featureOverlays';
+import type { ImportedArtwork } from '../core/vectorImport';
 
 let counter = 0;
 export function nextPrimitiveId(): string {
@@ -66,6 +67,7 @@ export function resizePrimitive(
   value: number,
   uniform: boolean,
 ): Primitive {
+  if (p.kind === 'artwork') return p; // line work: no box dimensions to resize
   if (p.kind === 'cylinder') {
     const dims = scaledDims({ x: p.diameter, y: p.length, z: 0 }, axis, value, uniform);
     return { ...p, diameter: dims.x, length: dims.y };
@@ -75,6 +77,7 @@ export function resizePrimitive(
 
 /** Revert a primitive dimension to its creation value; uniform reverts all. */
 export function revertPrimitive(p: Primitive, axis: 'x' | 'y' | 'z', uniform = false): Primitive {
+  if (p.kind === 'artwork') return p; // line work: nothing to revert
   if (p.kind === 'cylinder') {
     if (uniform) return { ...p, diameter: p.original.diameter, length: p.original.length };
     return axis === 'x' ? { ...p, diameter: p.original.diameter } : { ...p, length: p.original.length };
@@ -160,6 +163,44 @@ export function defaultCylinder(stock: Stock): Primitive {
     length: len,
     original: { diameter: d, length: len },
     transform: unitTransform({ x: (x0 + x1) / 2, y: (y0 + y1) / 2, z: (z0 + z1) / 2 }),
+  };
+}
+
+/**
+ * Artwork from a dropped SVG, PRE-FILLED from the stock (the
+ * primary-job convenience — engraving IS the job), then independent
+ * (docs/PLAN.md "Engrave + artwork import"): 4-axis wraps onto the
+ * stock cylinder at its effective Ø with a 1mm-per-unit scale (clamped
+ * to one turn); 3-axis lands flat on the stock crown. The wrapped
+ * angular picture survives later Ø edits — the wrap angle is the
+ * invariant, mm/unit derives.
+ */
+export function artworkFromSvg(art: ImportedArtwork, stock: Stock): Primitive {
+  const [x0, x1] = stockSpan(stock, 'x');
+  const [y0, y1] = stockSpan(stock, 'y');
+  const [z0, z1] = stockSpan(stock, 'z');
+  const diameter =
+    stock.kind === 'cylinder'
+      ? stock.calibration.effectiveRadius * 2
+      : Math.hypot(y1 - y0, z1 - z0); // box-on-rotary: the Y-Z diagonal
+  const d = Math.max(1, diameter);
+  const width = Math.max(art.width, 1e-6);
+  const rotary = stock.axisMode === '4-axis';
+  return {
+    kind: 'artwork',
+    id: nextPrimitiveId(),
+    paths: art.paths,
+    width: art.width || 1,
+    height: art.height || 1,
+    presentation: rotary ? 'wrapped' : 'flat',
+    wrapDiameter: d,
+    // scale 1 mm per artwork unit, clamped to a single turn
+    wrapAngle: Math.max(1, Math.min(360, (width / (Math.PI * d)) * 360)),
+    transform: unitTransform({
+      x: (x0 + x1) / 2,
+      y: (y0 + y1) / 2,
+      z: rotary ? (z0 + z1) / 2 : z1, // wrapped: the axis; flat: the crown
+    }),
   };
 }
 

@@ -30,12 +30,14 @@ import { planeExtent, transformFn } from './featureOverlays';
 import { resolveFeature, sourcesFor } from './featureSources';
 import { ModelPanel } from './ModelPanel';
 import {
+  artworkFromSvg,
   boxFromPlane,
   cylinderFromCircle,
   defaultBox,
   defaultCylinder,
   seedPrimitiveIds,
 } from './primitives';
+import { parseSvgPaths } from '../core/vectorImport';
 import {
   datumAngleBefore,
   generateJobOp,
@@ -321,6 +323,23 @@ export function App() {
       return;
     }
     setSelection([]);
+  };
+
+  /** Drop-an-SVG: parse the line work and create the artwork primitive,
+   * stock-prefilled (docs/PLAN.md "Engrave + artwork import"). Text and
+   * shapes are the editor's job — Inkscape "object to path" first. */
+  const addArtworkFromFile = async (f: File) => {
+    const text = await f.text();
+    const art = parseSvgPaths(text);
+    if (art.paths.length === 0) {
+      window.alert(
+        'no paths found in the SVG — convert text and shapes to paths in Inkscape first (Object → Path)',
+      );
+      return;
+    }
+    const p = artworkFromSvg(art, stock);
+    setPrimitives((prev) => [...prev, p]);
+    setSelectedObjectId(p.id);
   };
 
   /** Create a primitive, sized from the selection when it matches the kind. */
@@ -911,7 +930,16 @@ export function App() {
           onDrop={(e) => {
             e.preventDefault();
             const f = e.dataTransfer.files[0];
-            if (f) void loadStl(f);
+            if (!f) return;
+            if (/\.svg$/i.test(f.name)) {
+              void addArtworkFromFile(f);
+              return;
+            }
+            if (/\.cam\.json$/i.test(f.name)) {
+              void openJob(f);
+              return;
+            }
+            void loadStl(f);
           }}
         >
           <Viewport
@@ -936,7 +964,7 @@ export function App() {
           <div className="drop-hint">
             {geometry
               ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-              : 'drop an STL here'}
+              : 'drop an STL, an SVG (artwork), or a .cam.json job here'}
           </div>
         </div>
         <aside>

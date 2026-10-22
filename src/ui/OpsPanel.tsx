@@ -693,6 +693,30 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'engrave':
+      return (
+        <>
+          <NumberField
+            label="Depth (mm)"
+            value={op.depth}
+            min={0.05}
+            step={0.1}
+            onCommit={(v) => upd({ depth: v })}
+          />
+          <NumberField
+            label="Step down (mm)"
+            value={op.stepDown}
+            min={0.05}
+            onCommit={(v) => upd({ stepDown: v })}
+          />
+          <p className="hint">
+            follows the selected artwork paths at depth — no tool offset, the centerline IS the
+            path. The frame comes from the artwork itself: flat artwork cuts in its plane, wrapped
+            artwork cuts around its own Ø (point that at the faced surface — the Model tab). Drop
+            an SVG on the viewport to add artwork; a V-bit or small flat bit is usual
+          </p>
+        </>
+      );
   }
 }
 
@@ -832,7 +856,7 @@ export function OpsPanel(props: Props) {
                           {PICK_BANNERS[props.picking!.kind]}
                         </button>
                       ) : (
-                        ['pocket', 'profile', 'drill', 'chamfer'].includes(op.kind) && (
+                        ['pocket', 'profile', 'drill', 'chamfer', 'engrave'].includes(op.kind) && (
                           <button
                             type="button"
                             className={editing ? '' : 'secondary'}

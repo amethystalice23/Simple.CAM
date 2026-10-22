@@ -11,6 +11,7 @@ import type {
   EdgeFeature,
   HoleFeature,
   ModelTransform,
+  PathFeature,
   PlaneFeature,
   Vec2,
   Vec3,
@@ -20,6 +21,9 @@ export interface DetectedFeatures {
   planes: PlaneFeature[];
   circles: CircleFeature[];
   edges: EdgeFeature[];
+  /** artwork line work — only artwork sources carry any (empty for
+   * meshes; the detector never emits paths) */
+  paths: PathFeature[];
   /** raw-geometry triangle index → plane index (−1 for degenerate drops) */
   faceToPlane: Int32Array;
   /**
@@ -950,7 +954,7 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     points: lv.map((vi) => verts[vi]),
   }));
 
-  return { planes, circles, edges, faceToPlane, planeLoops };
+  return { planes, circles, edges, paths: [], faceToPlane, planeLoops };
 }
 
 // ------------------------------------------------- machine-space derivation

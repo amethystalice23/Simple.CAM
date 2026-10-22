@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform, rotaryCalibrationOf } from '../../core/types';
+import { ROTARY_FEED_DEG_MIN } from '../../cam/faceCylinder';
 import type { JobOp, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import { sourcesFor } from '../featureSources';
@@ -1232,5 +1233,88 @@ describe('toolPresetFor material aliases', () => {
 
   it('no matching row → null (callers fall back to the built-in table)', () => {
     expect(toolPresetFor({ ...makeraTool, presets: undefined }, 'delrin')).toBeNull();
+  });
+});
+
+describe('engrave generation', () => {
+  const art: Primitive = {
+    kind: 'artwork',
+    id: 'prim-art',
+    paths: [[{ x: 0, y: 0 }, { x: 100, y: 0 }]],
+    width: 100,
+    height: 50,
+    presentation: 'flat',
+    wrapDiameter: 16,
+    wrapAngle: 90,
+    transform: identityTransform(),
+  };
+  const ctxFor = (primitive: Primitive, stock: Stock): GenContext => ({
+    stock,
+    geometry: null,
+    features: null,
+    transform: identityTransform(),
+    tools: [tool],
+    primitives: [primitive],
+    sources: sourcesFor(null, null, identityTransform(), [primitive]),
+    datumAngle: 0,
+    startA: 0,
+  });
+  const op = (featureIds: string[]): JobOp => ({
+    kind: 'engrave',
+    id: 'engrave-1',
+    toolId: 't1',
+    featureIds,
+    depth: 1,
+    stepDown: 1,
+  });
+
+  it('flat artwork: follows the transformed paths at the cut feed (G94)', () => {
+    const flat = { ...art, transform: { ...identityTransform(), position: { x: 0, y: 0, z: 10 } } };
+    const res = generateJobOp(op(['p:prim-art:path:0']), ctxFor(flat, cylStock));
+    expect(res.error).toBeNull();
+    const cut = res.moves.filter((m) => !m.rapid);
+    expect(cut[0].words.z).toBeCloseTo(9, 6); // surface 10 − 1 deep
+    const trace = cut[1];
+    // doc line v=0 → local y +25 (centered, v-up); u=100 → local x +50
+    expect(trace.words.x).toBeCloseTo(50, 6);
+    expect(trace.words.y).toBeCloseTo(25, 6);
+    expect(trace.feed).toBeGreaterThan(0); // preset-derived cut feed
+    expect(trace.words.a).toBeUndefined();
+    expect(res.moves[0].spindleRpm).toBeDefined();
+    expect(res.summary).toContain('1 path');
+  });
+
+  it('wrapped artwork: circumferential path cuts at the rotary limit', () => {
+    const wrapped = { ...art, presentation: 'wrapped' as const };
+    const res = generateJobOp(op(['p:prim-art:path:0']), ctxFor(wrapped, {
+      ...cylStock,
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+    }));
+    expect(res.error).toBeNull();
+    const cut = res.moves.filter((m) => !m.rapid);
+    // the doc's 100-unit path over wrapAngle 90° at Ø16: one A sweep.
+    // A is ABSOLUTE accumulated: positioned at the datum + u0 = −45°,
+    // the quarter-turn sweep ends at +45°.
+    const position = res.moves.find((m) => m.rapid && m.words.a !== undefined)!;
+    expect(position.words.a).toBeCloseTo(-45, 3);
+    const sweep = cut[1];
+    expect(sweep.words.a).toBeCloseTo(45, 3);
+    expect(sweep.words.x).toBeUndefined();
+    expect(sweep.feed).toBeCloseTo(ROTARY_FEED_DEG_MIN, 3); // G94 deg/min at the limit
+    expect(res.summary).toContain('1 path');
+  });
+
+  it('refuses mixed frames and non-artwork selections', () => {
+    const flatRes = generateJobOp(
+      op(['p:prim-art:path:0']),
+      ctxFor(art, cylStock),
+    );
+    expect(flatRes.error).toBeNull();
+    // a model/primitive feature id resolves in no artwork source
+    const modelPick = generateJobOp(
+      op(['p:nope:circle:xx']),
+      ctxFor(art, cylStock),
+    );
+    expect(modelPick.error).toMatch(/artwork|no longer exist|select artwork/);
   });
 });

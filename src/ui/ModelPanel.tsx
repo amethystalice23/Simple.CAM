@@ -147,7 +147,9 @@ export function ModelPanel(props: Props) {
                 <span className="tool-name">
                   {p.kind === 'cylinder'
                     ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
-                    : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`}
+                    : p.kind === 'artwork'
+                      ? `artwork · ${p.paths.length} path(s)`
+                      : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`}
                 </span>
                 <span className="tool-meta">primitive</span>
               </button>
@@ -223,6 +225,61 @@ export function ModelPanel(props: Props) {
                 props.onPrimitiveChange(revertPrimitive(selectedPrimitive, 'y', uniform))
               }
             />
+          </>
+        ) : selectedPrimitive && selectedPrimitive.kind === 'artwork' ? (
+          <>
+            <label className="field">
+              <span>Presentation</span>
+              <select
+                value={selectedPrimitive.presentation}
+                onChange={(e) =>
+                  props.onPrimitiveChange({
+                    ...selectedPrimitive,
+                    presentation: e.target.value as 'flat' | 'wrapped',
+                  })
+                }
+              >
+                <option value="flat">flat</option>
+                <option value="wrapped">wrapped</option>
+              </select>
+            </label>
+            {selectedPrimitive.presentation === 'wrapped' ? (
+              <>
+                <div className="axis-row">
+                  <span className="axis-label">Ø</span>
+                  <NumInput
+                    value={selectedPrimitive.wrapDiameter}
+                    step={0.5}
+                    onCommit={(v) =>
+                      props.onPrimitiveChange({ ...selectedPrimitive, wrapDiameter: v })
+                    }
+                  />
+                  <span className="axis-label">wrap°</span>
+                  <NumInput
+                    value={selectedPrimitive.wrapAngle}
+                    step={5}
+                    onCommit={(v) =>
+                      props.onPrimitiveChange({
+                        ...selectedPrimitive,
+                        wrapAngle: Math.max(1, Math.min(360, v)),
+                      })
+                    }
+                  />
+                </div>
+                <p className="hint">
+                  wraps {selectedPrimitive.wrapAngle.toFixed(0)}° of Ø
+                  {selectedPrimitive.wrapDiameter.toFixed(1)} —{' '}
+                  {(
+                    ((selectedPrimitive.wrapAngle / 360) *
+                      Math.PI *
+                      selectedPrimitive.wrapDiameter) /
+                    Math.max(selectedPrimitive.width, 1e-9)
+                  ).toFixed(2)}{' '}
+                  mm per artwork unit (the Ø is the artwork's own — point it at
+                  the faced surface, not the stock)
+                </p>
+              </>
+            ) : null}
           </>
         ) : selectedPrimitive ? (
           AXES.map((a) => (

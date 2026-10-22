@@ -7,6 +7,7 @@
 
 import type * as THREE from 'three';
 import { DEFAULT_STEP_OVER_FACTOR, faceCylinder, SAFE_CLEARANCE, shortestATo } from '../cam/faceCylinder';
+import { engrave } from '../cam/engrave';
 import { spiralCarve } from '../cam/spiralCarve';
 import { thread } from '../cam/thread';
 import { chamfer } from '../cam/chamfer';
@@ -34,6 +35,7 @@ import type {
 } from '../core/types';
 import { isDepthBearingJobOp, rotaryCalibrationOf, round2 } from '../core/types';
 import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
+import { transformFn } from './featureOverlays';
 import { resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
 
@@ -79,6 +81,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'index', label: 'Index (4-axis)', rotaryOnly: true },
   { kind: 'faceCylinder', label: 'Face cylinder (4-axis)', rotaryOnly: true },
   { kind: 'spiralCarve', label: 'Spiral carve (4-axis)', rotaryOnly: true },
+  { kind: 'engrave', label: 'Engrave (artwork paths)' },
   { kind: 'thread', label: 'Thread (4-axis)', rotaryOnly: true },
 ];
 
@@ -221,6 +224,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       return { ...base, kind, depth: 5, peckDepth: 2 };
     case 'chamfer':
       return { ...base, kind, mode: 'add', side: 'auto', direction: 'down', depth: 0.5 };
+    case 'engrave':
+      return { ...base, kind, depth: 0.5, stepDown: 0.25 };
     case 'index':
       return { ...base, kind, angle: 90 };
     case 'profile':
@@ -1026,6 +1031,107 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           minutes: res.estimatedMinutes,
           error: null,
           summary: `${loops.length} loop(s), ${op.depth}mm chamfer, ~${res.estimatedMinutes.toFixed(1)} min`,
+        };
+      }
+
+      case 'engrave': {
+        const SEL = 'select artwork paths (drop an SVG onto the viewport to create one)';
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
+        // the frame is the ARTWORK's own, inherited per source — and one
+        // op cuts in one frame. Flat paths land in the indexed cutting
+        // frame (rotated like every flat op); wrapped paths stay
+        // PART-LOCAL — the generator's datum phase positioning handles
+        // the index rotation, exactly like the spiral ops.
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const axisZ = rotaryCalibrationOf(ctx.stock).axisZ;
+        const flatPaths: { x: number; y: number }[][] = [];
+        const wrappedPaths: { x: number; y: number }[][] = [];
+        let flatZ = 0;
+        let wrapD = 0;
+        for (const part of parts) {
+          const aw = part.source.artworkFrame;
+          if (!aw) {
+            return fail(
+              'engrave cuts artwork paths — the selection holds model or primitive features',
+            );
+          }
+          const xf0 = transformFn(part.source.transform);
+          const sel = new Set(part.ids);
+          for (const path of part.source.features.paths) {
+            if (!sel.has(path.id)) continue;
+            if (aw.kind === 'flat') {
+              const pts = path.points.map((pt) => (rotate ? rotate(xf0(pt)) : xf0(pt)));
+              const z = pts[0].z;
+              if (pts.some((p) => Math.abs(p.z - z) > 0.05)) {
+                return fail(
+                  "the artwork's plane must be horizontal to engrave — rotate it flat, " +
+                    'or use the wrapped presentation',
+                );
+              }
+              flatZ = z;
+              flatPaths.push(pts.map((p) => ({ x: p.x, y: p.y })));
+            } else {
+              wrapD = aw.diameter;
+              const r = aw.diameter / 2;
+              const circ = Math.PI * aw.diameter;
+              const uv: { x: number; y: number }[] = [];
+              path.points.forEach((pt, i) => {
+                const p = xf0(pt);
+                if (Math.abs(Math.hypot(p.y, p.z - axisZ) - r) > 0.05) {
+                  throw new Error(
+                    'the wrapped artwork must sit ON the stock axis — move it back ' +
+                      'onto the axis before engraving',
+                  );
+                }
+                const th = (Math.atan2(p.y, p.z - axisZ) * 180) / Math.PI;
+                const u = (th / 360) * circ;
+                if (i > 0 && Math.abs(u - uv[i - 1].x) > circ / 2) {
+                  throw new Error(
+                    'the artwork crosses the A seam — rotate its angular origin ' +
+                      '(or split the op) so it does not straddle ±180°',
+                  );
+                }
+                uv.push({ x: u, y: p.x });
+              });
+              wrappedPaths.push(uv);
+            }
+          }
+        }
+        if (flatPaths.length > 0 && wrappedPaths.length > 0) {
+          return fail('one engrave op cuts in one frame — split flat and wrapped artwork into separate ops');
+        }
+        const paths = flatPaths.length > 0 ? flatPaths : wrappedPaths;
+        if (paths.length === 0) return fail(SEL);
+        const res = engrave({
+          id: op.id,
+          toolId: tool.id,
+          paths,
+          depth: op.depth,
+          stepDown: op.stepDown,
+          feed,
+          plungeFeed,
+          clearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+          frame:
+            flatPaths.length > 0
+              ? { kind: 'flat', surfaceZ: flatZ }
+              : {
+                  kind: 'wrapped',
+                  radius: wrapD / 2,
+                  surfaceZ: axisZ + wrapD / 2,
+                  datumAngle: ctx.datumAngle,
+                  startA: ctx.startA,
+                },
+        });
+        const limited =
+          wrapD > 0 && res.effectiveFeed < feed - 1e-9
+            ? ` — rotary-limited to ~${res.effectiveFeed.toFixed(0)} mm/min on the surface`
+            : '';
+        return {
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
+          error: null,
+          summary: `${paths.length} path(s), ${op.depth}mm deep${limited}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

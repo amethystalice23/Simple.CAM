@@ -42,7 +42,7 @@ function disposeGroup(g: THREE.Group): void {
 export interface ResolvedSelection {
   /** owning feature source: 'model' or a primitive id */
   sourceId: string;
-  kind: 'plane' | 'circle' | 'edge';
+  kind: 'plane' | 'circle' | 'edge' | 'path';
   index: number;
 }
 
@@ -73,6 +73,11 @@ function picksFromSelection(sel: ResolvedSelection[], overlays: SourceOverlay[])
         color: SELECT_COLOR,
         text: entry.data.circleText[s.index],
       });
+      continue;
+    }
+    if (s.kind === 'path') {
+      // artwork: highlighted (via the selection line walk), but not a
+      // measurement pick — distances between artwork strokes are noise
       continue;
     }
     out.push({
@@ -303,7 +308,9 @@ export function Viewport({
               ? feats?.planes[pick.index]?.id
               : pick.kind === 'circle'
                 ? feats?.circles[pick.index]?.id
-                : feats?.edges[pick.index]?.id;
+                : pick.kind === 'path'
+                  ? feats?.paths[pick.index]?.id
+                  : feats?.edges[pick.index]?.id;
           if (id) onToggleSelectRef.current(id);
         }
       }
@@ -312,7 +319,7 @@ export function Viewport({
      * (edge-tracing §5): edges never flash (they carry no facing
      * point); the Ø pick wants circles alone — planes would flash and
      * then bounce anyway. Normal measure mode allows everything. */
-    const pickAllows = (kind: 'edge' | 'circle' | 'plane'): boolean => {
+    const pickAllows = (kind: 'edge' | 'circle' | 'plane' | 'path'): boolean => {
       const pk = pickKindRef.current;
       if (!pk) return true;
       if (kind === 'edge') return false;
@@ -804,11 +811,16 @@ export function Viewport({
       source,
       data: buildFeatureOverlayData(source.features, source.transform),
     }));
-    for (const { data } of entries) {
+    for (const entry of entries) {
+      const { data } = entry;
       data.edgeLines.visible = showFeatures;
       data.circleLines.visible = showFeatures;
       data.holeLines.visible = showFeatures;
-      group.add(data.edgeLines, data.circleLines, data.holeLines);
+      // artwork line work is the OBJECT's body — an authored primitive
+      // must not vanish with the features toggle (there is no volume to
+      // render; the amber lines are it)
+      data.pathLines.visible = showFeatures || entry.source.artworkFrame !== undefined;
+      group.add(data.edgeLines, data.circleLines, data.holeLines, data.pathLines);
     }
 
     const hoverLine = new THREE.LineSegments(
@@ -877,7 +889,7 @@ export function Viewport({
 
     return () => {
       for (const { data } of entries) {
-        for (const l of [data.edgeLines, data.circleLines, data.holeLines]) {
+        for (const l of [data.edgeLines, data.circleLines, data.holeLines, data.pathLines]) {
           group.remove(l);
           l.geometry.dispose();
           (l.material as THREE.Material).dispose();
@@ -1240,6 +1252,12 @@ export function Viewport({
     if (!group) return;
     const objs: THREE.Mesh[] = [];
     for (const p of primitives) {
+      if (p.kind === 'artwork') {
+        // line work, not a volume: it renders as its amber path overlay
+        // (buildFeatureOverlayData), and neither occludes the raycast
+        // pickers nor is face-pickable — no solid mesh to build here
+        continue;
+      }
       const indexed = primitiveGeometry(p);
       const geo = indexed.toNonIndexed(); // faces align with the source detection
       indexed.dispose();

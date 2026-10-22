@@ -14,7 +14,15 @@
 
 import * as THREE from 'three';
 import { detectFeatures, type DetectedFeatures } from '../cam/features';
-import type { CircleFeature, EdgeFeature, ModelTransform, PlaneFeature, Primitive } from '../core/types';
+import type {
+  CircleFeature,
+  EdgeFeature,
+  ModelTransform,
+  PathFeature,
+  PlaneFeature,
+  Primitive,
+  Vec3,
+} from '../core/types';
 
 export interface FeatureSource {
   /** 'model' for the loaded STL; the primitive id for primitives */
@@ -25,6 +33,10 @@ export interface FeatureSource {
   features: DetectedFeatures;
   /** local → machine transform (the model's ModelTransform / p.transform) */
   transform: ModelTransform;
+  /** ARTWORK sources only: the frame their paths cut in. Absent for
+   * meshes — an engrave op selecting non-artwork features fails. The
+   * wrapped frame names the artwork's own Ø (the cutting surface). */
+  artworkFrame?: { kind: 'flat' } | { kind: 'wrapped'; diameter: number };
 }
 
 /**
@@ -36,6 +48,12 @@ export interface FeatureSource {
 export function primitiveGeometry(p: Primitive): THREE.BufferGeometry {
   if (p.kind === 'box') {
     return new THREE.BoxGeometry(p.size.x, p.size.y, p.size.z);
+  }
+  if (p.kind === 'artwork') {
+    // line work, not a solid: the Viewport draws the paths as lines
+    // (artworkLocalPoints); an empty mesh keeps the raycast pipelines
+    // (plane picks, the occlusion gate) from ever hitting it
+    return new THREE.BufferGeometry();
   }
   const g = new THREE.CylinderGeometry(p.diameter / 2, p.diameter / 2, p.length, 48);
   g.rotateZ(Math.PI / 2); // geometry Y axis → local/machine X
@@ -74,7 +92,9 @@ function primitiveDetection(p: Primitive): DetectedFeatures {
   const key =
     p.kind === 'box'
       ? `box|${p.size.x}|${p.size.y}|${p.size.z}`
-      : `cylinder|${p.diameter}|${p.length}`;
+      : p.kind === 'artwork'
+        ? `artwork|${p.id}` // artwork sources build features directly — never cached
+        : `cylinder|${p.diameter}|${p.length}`;
   let features = detectionCache.get(key);
   if (!features) {
     features = detectFeatures(primitiveGeometry(p).toNonIndexed());
@@ -92,8 +112,59 @@ function namespaceIds(features: DetectedFeatures, primId: string): DetectedFeatu
     planes: features.planes.map((f: PlaneFeature) => ({ ...f, id: ns(f.id) })),
     circles: features.circles.map((f: CircleFeature) => ({ ...f, id: ns(f.id) })),
     edges: features.edges.map((f: EdgeFeature) => ({ ...f, id: ns(f.id) })),
+    paths: features.paths.map((f: PathFeature) => ({ ...f, id: ns(f.id) })),
     planeLoops: features.planeLoops,
     faceToPlane: features.faceToPlane,
+  };
+}
+
+/**
+ * Artwork → local-space 3D polylines. FLAT: the document plane at z=0,
+ * centered (u −w/2 right, v UP — SVG's v-down flipped), and the standard
+ * ModelTransform then places it like any other primitive. WRAPPED: bent
+ * onto the artwork's OWN cylinder, axis ∥ local X (the primitive
+ * convention), the wrap centered at local angle 0 (the +Z "top"); the
+ * bend is baked into local geometry because no rigid transform can
+ * express it. The scale is UNIFORM in both directions — mm/unit derives
+ * from the wrap angle (arc(width) = wrapAngle), so the logo never
+ * shears and shrinking the Ø never rescales the angular picture.
+ */
+export function artworkLocalPoints(p: Extract<Primitive, { kind: 'artwork' }>): Vec3[][] {
+  const flipV = (v: number) => p.height - v; // SVG's v-down → up
+  if (p.presentation === 'flat') {
+    return p.paths.map((path) =>
+      path.map((q) => ({ x: q.x - p.width / 2, y: flipV(q.y) - p.height / 2, z: 0 })),
+    );
+  }
+  const r = p.wrapDiameter / 2;
+  const mmPerUnit =
+    ((p.wrapAngle / 360) * Math.PI * p.wrapDiameter) / Math.max(p.width, 1e-9);
+  const rad = (p.wrapAngle * Math.PI) / 180;
+  return p.paths.map((path) =>
+    path.map((q) => {
+      const th = (q.x / p.width - 0.5) * rad; // centered on local angle 0
+      const x = (flipV(q.y) - p.height / 2) * mmPerUnit;
+      return { x, y: r * Math.sin(th), z: r * Math.cos(th) };
+    }),
+  );
+}
+
+/** Artwork features: each path is one selectable feature, ids namespaced
+ * like every primitive's. No detection runs — line work has no planes
+ * or circles, so the features are constructed directly. */
+function artworkFeatures(p: Extract<Primitive, { kind: 'artwork' }>): DetectedFeatures {
+  const pts = artworkLocalPoints(p);
+  return {
+    planes: [],
+    circles: [],
+    edges: [],
+    paths: pts.map((points, i): PathFeature => ({
+      kind: 'path',
+      id: `p:${p.id}:path:${i}`,
+      points,
+    })),
+    faceToPlane: new Int32Array(0),
+    planeLoops: [],
   };
 }
 
@@ -111,6 +182,19 @@ export function sourcesFor(
     sources.push({ id: 'model', geometry, features: modelFeatures, transform: modelTransform });
   }
   for (const p of primitives) {
+    if (p.kind === 'artwork') {
+      sources.push({
+        id: p.id,
+        geometry: new THREE.BufferGeometry(),
+        features: artworkFeatures(p),
+        transform: p.transform,
+        artworkFrame:
+          p.presentation === 'wrapped'
+            ? { kind: 'wrapped', diameter: p.wrapDiameter }
+            : { kind: 'flat' },
+      });
+      continue;
+    }
     sources.push({
       id: p.id,
       geometry: primitiveGeometry(p).toNonIndexed(),
@@ -131,9 +215,9 @@ export function parseNamespacedId(id: string): { primId: string; featureId: stri
  * resolution, labels, depth prefills, and generation. */
 export interface ResolvedFeature {
   source: FeatureSource;
-  kind: 'plane' | 'circle' | 'edge';
+  kind: 'plane' | 'circle' | 'edge' | 'path';
   index: number;
-  feature: PlaneFeature | CircleFeature | EdgeFeature;
+  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature;
 }
 
 export function resolveFeature(
@@ -152,6 +236,8 @@ export function resolveFeature(
   if (ci >= 0) return { source, kind: 'circle', index: ci, feature: source.features.circles[ci] };
   const ei = source.features.edges.findIndex((f) => f.id === id);
   if (ei >= 0) return { source, kind: 'edge', index: ei, feature: source.features.edges[ei] };
+  const pa = source.features.paths.findIndex((f) => f.id === id);
+  if (pa >= 0) return { source, kind: 'path', index: pa, feature: source.features.paths[pa] };
   return null;
 }
 

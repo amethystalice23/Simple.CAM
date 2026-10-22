@@ -82,7 +82,7 @@ export function planeExtent(
 
 /** One manually selected item in measure mode (right-click). */
 export interface MeasurePick {
-  kind: 'edge' | 'circle' | 'plane';
+  kind: 'edge' | 'circle' | 'plane' | 'path';
   index: number;
   /** machine-space center used for distance computation */
   center: THREE.Vector3;
@@ -94,7 +94,7 @@ export interface MeasurePick {
   text: string;
 }
 
-/** A hovered edge/circle promoted to a measurement pick. */
+/** A hovered edge/circle/path promoted to a measurement pick. */
 export function pickFromNearest(data: FeatureOverlayData, nearest: NearestFeature): MeasurePick {
   if (nearest.kind === 'edge') {
     return {
@@ -103,6 +103,15 @@ export function pickFromNearest(data: FeatureOverlayData, nearest: NearestFeatur
       center: data.edgeMid[nearest.index].clone(),
       color: nearest.color,
       text: data.edgeText[nearest.index],
+    };
+  }
+  if (nearest.kind === 'path') {
+    return {
+      kind: 'path',
+      index: nearest.index,
+      center: data.pathMid[nearest.index].clone(),
+      color: nearest.color,
+      text: data.pathText[nearest.index],
     };
   }
   return {
@@ -206,10 +215,12 @@ export function connectorLine(a: MeasurePick, b: MeasurePick): THREE.Line {
 export const EDGE_COLOR = 0xff5555;
 export const CIRCLE_COLOR = 0x44cc66;
 export const HOLE_COLOR = 0x55ccee;
+export const PATH_COLOR = 0xddaa33; // artwork line work — amber
 /** brighter tints for the hovered feature */
 export const EDGE_HOVER = 0xff9999;
 export const CIRCLE_HOVER = 0x88ffbb;
 export const HOLE_HOVER = 0x99eeff;
+export const PATH_HOVER = 0xffdd88;
 /** face/plane selection highlight */
 export const PLANE_SELECT = 0xf0c050;
 /** operation-selection highlight (distinct from measure picks) */
@@ -236,13 +247,17 @@ export interface FeatureOverlayData {
   edgeLines: THREE.LineSegments;
   circleLines: THREE.LineSegments;
   holeLines: THREE.LineSegments; // inner loops (drill candidates) in cyan
+  pathLines: THREE.LineSegments; // artwork line work in amber
   /** machine-space hover samples, parallel to the feature arrays */
   edgeSamples: THREE.Vector3[][];
   circleSamples: THREE.Vector3[][];
+  pathSamples: THREE.Vector3[][];
   edgeMid: THREE.Vector3[];
   circleCenter: THREE.Vector3[];
+  pathMid: THREE.Vector3[];
   edgeText: string[];
   circleText: string[];
+  pathText: string[];
   circleInner: boolean[];
 }
 
@@ -348,6 +363,24 @@ export function buildFeatureOverlayData(
     circleInner.push(c.inner);
   }
 
+  // artwork line work: dense samples along each polyline (the same shape
+  // as edge samples, so the snap and occlusion machinery is shared)
+  const pathPos: number[] = [];
+  const pathSamples: THREE.Vector3[][] = [];
+  const pathMid: THREE.Vector3[] = [];
+  const pathText: string[] = [];
+  for (const p of features.paths) {
+    const pts = p.points.map((q) => xf(q));
+    let len = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      pathPos.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
+      len += pts[i].distanceTo(pts[i + 1]);
+    }
+    pathSamples.push(pts);
+    pathMid.push(pts[Math.floor(pts.length / 2)].clone());
+    pathText.push(`artwork · L ${len.toFixed(2)} mm`);
+  }
+
   const mk = (positions: number[], color: number) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -366,18 +399,22 @@ export function buildFeatureOverlayData(
     edgeLines: mk(edgePos, EDGE_COLOR),
     circleLines: mk(circlePos, CIRCLE_COLOR),
     holeLines: mk(holePos, HOLE_COLOR),
+    pathLines: mk(pathPos, PATH_COLOR),
     edgeSamples,
     circleSamples,
+    pathSamples,
     edgeMid,
     circleCenter,
+    pathMid,
     edgeText,
     circleText,
+    pathText,
     circleInner,
   };
 }
 
 export interface NearestFeature {
-  kind: 'edge' | 'circle';
+  kind: 'edge' | 'circle' | 'path';
   index: number;
   text: string;
   color: number;
@@ -440,7 +477,7 @@ export function findNearestFeature(
   }
 
   const scan = (
-    kind: 'edge' | 'circle',
+    kind: 'edge' | 'circle' | 'path',
     items: Candidate[],
     tolScale: number,
   ): (NearestFeature & { d: number }) | null => {
@@ -489,6 +526,19 @@ export function findNearestFeature(
   const circleHit = scan('circle', circles, CIRCLE_PRIORITY);
   if (circleHit) return circleHit; // key dimensions take precedence
 
+  // artwork paths snap like edges (they ride surfaces) but stay
+  // hoverable during op editing — a different kind, not gated with
+  // mesh edges
+  const paths: Candidate[] = data.pathSamples.map((samples, i) => ({
+    index: i,
+    samples,
+    text: data.pathText[i],
+    color: PATH_HOVER,
+    rep: data.pathMid[i],
+  }));
+  const pathHit = scan('path', paths, 1);
+  if (pathHit) return pathHit;
+
   const edges: Candidate[] = data.edgeSamples.map((samples, i) => ({
     index: i,
     samples,
@@ -502,13 +552,19 @@ export function findNearestFeature(
 /** A crisp single-feature outline for the hovered feature. */
 export function hoverLineGeometry(
   data: FeatureOverlayData,
-  kind: 'edge' | 'circle',
+  kind: 'edge' | 'circle' | 'path',
   index: number,
 ): THREE.BufferGeometry {
   const positions: number[] = [];
   if (kind === 'edge') {
     const s = data.edgeSamples[index];
     positions.push(s[0].x, s[0].y, s[0].z, s[s.length - 1].x, s[s.length - 1].y, s[s.length - 1].z);
+  } else if (kind === 'path') {
+    // the whole polyline — artwork hover shows the full stroke
+    const s = data.pathSamples[index];
+    for (let i = 0; i < s.length - 1; i++) {
+      positions.push(s[i].x, s[i].y, s[i].z, s[i + 1].x, s[i + 1].y, s[i + 1].z);
+    }
   } else {
     const s = data.circleSamples[index];
     const n = s.length - 1;

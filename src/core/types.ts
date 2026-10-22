@@ -340,6 +340,14 @@ export interface EdgeFeature {
   b: Vec3;
 }
 
+/** Artwork line work: one flattened polyline from an imported SVG, in
+ * the SOURCE's local space like every other feature kind. */
+export interface PathFeature {
+  kind: 'path';
+  id: string;
+  points: Vec3[];
+}
+
 /** A circle whose loop is an interior hole aligned to the machine drill axis. */
 export interface HoleFeature {
   kind: 'hole';
@@ -372,6 +380,27 @@ export type Primitive =
       size: Vec3;
       /** creation-time dimensions, for the revert buttons */
       original: Vec3;
+      transform: ModelTransform;
+    }
+  | {
+      kind: 'artwork';
+      id: string;
+      /** flattened line work, user units, SVG orientation (u right, v
+       * DOWN) — the import parse output, kept raw so the scale knob
+       * stays live */
+      paths: Vec2[][];
+      /** document extent, user units (centering + the scale math) */
+      width: number;
+      height: number;
+      presentation: 'flat' | 'wrapped';
+      /** wrapped: the artwork's OWN cylinder Ø — the cutting surface
+       * declaration. Pre-filled from the stock at drop time, then
+       * independent: face first, then point this at the new surface. */
+      wrapDiameter: number;
+      /** wrapped: the TOTAL angle the document width wraps — the
+       * angular picture is the invariant, so changing the Ø never
+       * rescales the logo (mm/unit derives: arc(width) = wrapAngle) */
+      wrapAngle: number;
       transform: ModelTransform;
     };
 
@@ -651,6 +680,13 @@ export type JobOp =
       direction: 'down' | 'up';
       /** chamfer reach along the wall, mm */
       depth: number;
+    })
+  | (JobOpBase & {
+      kind: 'engrave';
+      /** cut depth below the artwork's surface, mm */
+      depth: number;
+      /** depth-per-level ladder, mm */
+      stepDown: number;
     })
   | (JobOpBase & {
       kind: 'profile';

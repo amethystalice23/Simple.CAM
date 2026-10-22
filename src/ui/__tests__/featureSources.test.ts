@@ -4,6 +4,7 @@ import { identityTransform } from '../../core/types';
 import type { Primitive } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import {
+  artworkLocalPoints,
   parseNamespacedId,
   primitiveGeometry,
   primitivePose,
@@ -227,5 +228,53 @@ describe('id resolution', () => {
     expect(parts.find((p) => p.source.id === 'prim-9')?.ids).toEqual([sources[1].features.circles[0].id]);
     expect(unmatchedIds(sources, ids)).toEqual(['p:prim-gone:circle-xx']);
     expect(unmatchedIds(sources, [modelFeatures.planes[0].id])).toEqual([]);
+  });
+});
+describe('artwork sources', () => {
+  const art: Primitive = {
+    kind: 'artwork',
+    id: 'prim-art',
+    paths: [[{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 50 }]],
+    width: 100,
+    height: 50,
+    presentation: 'flat',
+    wrapDiameter: 16,
+    wrapAngle: 90,
+    transform: identityTransform(),
+  };
+
+  it('flat: local points center the document and flip v (SVG v-down)', () => {
+    const pts = artworkLocalPoints(art)[0];
+    expect(pts[0]).toEqual({ x: -50, y: 25, z: 0 }); // doc top-left
+    expect(pts[1]).toEqual({ x: 50, y: 25, z: 0 });
+    expect(pts[2]).toEqual({ x: 50, y: -25, z: 0 }); // doc bottom-right
+  });
+
+  it('wrapped: bends onto its own cylinder, uniform scale, centered span', () => {
+    const pts = artworkLocalPoints({ ...art, presentation: 'wrapped' })[0];
+    const r = 8;
+    for (const p of pts) expect(Math.hypot(p.y, p.z)).toBeCloseTo(r, 5);
+    // wrap 90° centered on local angle 0: u=0 → θ=−45°, u=100 → +45°
+    expect(pts[0].y).toBeCloseTo(-r * Math.SQRT1_2, 4);
+    expect(pts[1].y).toBeCloseTo(r * Math.SQRT1_2, 4);
+    // uniform mm/unit in BOTH directions — the logo never shears:
+    // s = (wrapAngle/360)·π·Ø / width; v extent 50 units → 50·s
+    const s = ((90 / 360) * Math.PI * 16) / 100;
+    expect(pts[1].x - pts[0].x).toBeCloseTo(0, 9); // same v
+    expect(pts[2].x - pts[1].x).toBeCloseTo(-50 * s, 9); // v grew DOWN in doc → −x
+  });
+
+  it('sourcesFor: path features namespaced, frame declared, empty mesh', () => {
+    const sources = sourcesFor(null, null, identityTransform(), [
+      { ...art, presentation: 'wrapped' },
+    ]);
+    expect(sources).toHaveLength(1);
+    const src = sources[0];
+    expect(src.artworkFrame).toEqual({ kind: 'wrapped', diameter: 16 });
+    expect(src.features.paths).toHaveLength(1);
+    expect(src.features.paths[0].id).toBe('p:prim-art:path:0');
+    expect(src.features.paths[0].points.length).toBe(3);
+    // line work, not a solid: nothing for the raycast pipelines to hit
+    expect(src.geometry.getAttribute('position')).toBeUndefined();
   });
 });

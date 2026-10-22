@@ -95,6 +95,7 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 | Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection |
 | Slice pocket (3-axis) | 2.5D | one `sliceAtZ` cross-section at the op's slice plane → `'outside'` profiles around it (tool-center path offset out by tool Ø/2 + allowance) / `'inside'` pockets its interior, over the start→end band; floor via the ⇩ pick; violet section-plane overlay + drag handle (docs/edge-tracing.md §2, §5) |
 | Flat chamfer (V-bit) | single-pass flank | two modes. **add**: the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path) — a new chamfer through a sharp edge. **existing**: the model already has the chamfer — the bit rides the modelled face, and direction selects which end was clicked: **up** = the bottom edge, traced exactly (depth ignored — the bit cuts up and out from there); **down** = the top edge, the tip slides down-and-in by depth·tan(angle/2) along the modelled face, landing on the bottom edge when depth matches the model. User side option (inside/outside — geometry can't always tell) and depth along the wall |
+| Engrave (artwork line work, SPEC 2026-10-22) | path-following | `engrave.ts`: follow selected artwork paths at depth, no tool offset (see the full spec below) |
 
 Later (v2+): 3-axis custom roughing/finishing via opencamlib WASM
 (drop-cutter/push-cutter). Parked: dexel 3D relief on cylinder.
@@ -103,6 +104,68 @@ paths run off the stock edge (clean exits on tight stocks; the slice
 pocket's outside mode could clear to the stock wall when the frame fits
 the tool), OFF clamps regions within the stock footprint
 (docs/edge-tracing.md §2).
+
+### Engrave + artwork import (spec, 2026-10-22)
+
+Logo/drawing work from imported vectors — the one deferred Phase-1 op.
+
+**Artwork is a primitive.** SVG (Inkscape, "object to path" first — NO text
+engine in-app, fonts are the editor's job) or DXF, parsed by hand-rolled
+from-spec parsers (license policy: no GPL/AGPL vector libraries). Curves
+flatten to polylines at import (chord tolerance ~0.05mm), giving the app
+one canonical form: **paths**. Each path is a selectable feature
+(`p:<primId>:path:<i>`), so selection, snapping, and the occlusion gate
+come free from the existing machinery.
+
+**One op: Engrave** — follow selected line work at depth, no tool offset
+(the centerline IS the path; that's what makes it engraving rather than
+profiling). Depth ladder like the spiral ops (levels retrace, sweeps
+alternate). Filled logo areas are NOT a new op: Pocket on the artwork's
+closed loops (a small region-resolver hookup, deferred until a filled
+logo actually shows up — outline tracing is the scope). Chamfer on a
+closed artwork loop = beveled outline.
+
+**Two frames, one generator core** — walk the flattened segments, emit
+moves through a pluggable frame mapper:
+
+- **flat** (a drawing in a wooden plane): (U,V) → (X,Y), plain G94 at
+  the cut feed. Placement uses the existing primitive transform.
+- **wrapped** (a logo on a cylinder): the cylinder canvas made concrete —
+  (U,V) = (mm around, mm axial) → (A, X), θ = U/R. The wrap is a
+  MAPPING onto the stock, not a transform of the artwork: the target Ø
+  defaults to the stock surface (`surfaceDiameter` convention — set it
+  after a facing pass; the ⇩ pick reads it off circle features,
+  including partial rims). Scale is one number — mm of surface per
+  artwork unit — with a live coverage readout (wraps
+  `U_extent/(π·Ø)·360°`), editable from either side. The angular
+  origin follows the index datum; A continuity threads across ops.
+
+**Wrapped segment timing (the real math).** Per segment with surface
+length L and angular advance ΔA:
+
+    time (min) = max( L / feed,  (ΔA/360) / MAX_ROTARY_RPM )
+    G93 F = 1 / time            (F on every G1 line — post rules)
+
+The binding constraint wins per segment: pure-circumferential moves cap
+at `MAX_ROTARY_RPM × π·Ø` mm/min of surface speed (Ø16 ≈ 330 mm/min —
+the measured spiral-groove regime; acetal fluff → ⚡ spindle override),
+axial moves run the full feed, diagonals in between. A-only segments
+run G94 at ROTARY_FEED_DEG_MIN; ΔA=0 segments G94 at the cut feed.
+The op summary states the effective surface speed honestly
+("rotary-limited: ~330 mm/min on the surface").
+
+Phasing: (1) SVG import + artwork primitive + flat engrave + tests,
+(2) wrapped engrave, (3) DXF import + pocket-region hookup for fills.
+STATUS 2026-10-22: the full phase-1/2 core has landed —
+`src/core/vectorImport.ts` (SVG parser), `src/cam/engrave.ts` (generator,
+both frames, segment timing), the artwork PRIMITIVE (drop an SVG on the
+viewport: stock-prefilled, flat/wrapped flip in the Model tab, own wrap
+Ø with the angle-invariant scale + mm/unit readout), path FEATURES
+through the shared overlay/snap/occlusion pipeline (amber, hoverable
+during op editing), and the Engrave OP (panel, generation, rotary-
+limited summary). Preview of engrave moves rides the general toolpath
+preview. Remaining: DXF import, pocket-region hookup for fills, and a
+browser eyeball of the wrapped artwork before first metal.
 
 ### Stock: shape vs mode
 

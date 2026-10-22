@@ -391,6 +391,7 @@ describe('partial circles: the path-following ops refuse broken rims', () => {
     planes: [],
     circles: [partial],
     edges: [],
+    paths: [],
     faceToPlane: new Int32Array(0),
     planeLoops: [],
   };
