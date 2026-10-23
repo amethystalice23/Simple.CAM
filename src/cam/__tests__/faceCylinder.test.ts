@@ -92,15 +92,21 @@ describe('faceCylinder: spiral', () => {
   });
 
   it('approaches with axis-separate rapids and retracts once', () => {
-    // lift (Z only) → travel (X only) — the spiral has no pattern phase, so
-    // there is no positioning rotation at all; never a coordinated X+A rapid
+    // travel (X only) → descend (Z only) — the travel runs at the machine's
+    // existing height (after a tool change, the swap macro's high park),
+    // the descent happens over the destination. The spiral has no pattern
+    // phase, so there is no positioning rotation at all; never a
+    // coordinated X+A rapid
     const zRapids = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.x === undefined);
-    expect(zRapids.length).toBe(2); // entry lift + final retract
+    expect(zRapids.length).toBe(2); // entry descent + final retract
     for (const m of zRapids) expect(m.words.z).toBe(25 + SAFE_CLEARANCE);
     const xRapids = res.moves.filter((m) => m.rapid && m.words.x !== undefined);
     expect(xRapids).toHaveLength(1);
     expect(xRapids[0].words.x).toBe(op.xStart);
-    expect(zRapids[0].comment).toMatch(/pass 1\/5/); // the pass label rides the lift
+    expect(xRapids[0].comment).toMatch(/pass 1\/5/); // the pass label rides the travel
+    // the travel PRECEDES the descent
+    expect(res.moves[0].words.x).toBe(op.xStart);
+    expect(res.moves[1].words.z).toBe(25 + SAFE_CLEARANCE);
     expect(
       res.moves.some((m) => m.rapid && m.words.a !== undefined && m.words.x !== undefined),
     ).toBe(false);
@@ -168,13 +174,16 @@ describe('faceCylinder: vertical (rings)', () => {
     expect(xSteps[41].words.x).toBeCloseTo(0, 9);
   });
 
-  it('retracts only twice: the initial approach and after the final level', () => {
-    // approach rapid + final retract — nothing between rings or levels
-    expect(rapids.length).toBe(2);
+  it('retracts only at the entry and after the final level', () => {
+    // travel → descent → rings → final retract — no rapids between rings
+    // or levels (the combined old X+Z entry is now split in two, travel
+    // first, descend at the destination)
+    expect(rapids.length).toBe(3);
     expect(rapids[0].words.x).toBeCloseTo(0, 9);
-    expect(rapids[0].words.z).toBe(25 + SAFE_CLEARANCE);
-    expect(rapids[1].words.z).toBe(25 + SAFE_CLEARANCE);
-    expect(res.moves.length).toBe(45 + 4 * 44 + 1); // 222
+    expect(rapids[0].words.z).toBeUndefined(); // the travel carries no Z word
+    expect(rapids[1].words.z).toBe(25 + SAFE_CLEARANCE); // the descent
+    expect(rapids[2].words.z).toBe(25 + SAFE_CLEARANCE); // the final retract
+    expect(res.moves.length).toBe(45 + 4 * 44 + 2); // 223
   });
 
   it('runs full revolutions as A-only moves at the rotary limit (G94 deg/min)', () => {

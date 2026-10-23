@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { postCarvera } from '../carvera';
+import { faceCylinder } from '../../cam/faceCylinder';
+import { cylChamfer } from '../../cam/cylChamfer';
 import type { Tool } from '../../core/types';
 
 const tools: Tool[] = [
   { id: 't1', name: '6mm Flat End', type: 'flat', diameter: 6, spindleRpm: 18000 },
-  { id: 't2', name: '3mm V-Bit', type: 'vbit', diameter: 3, spindleRpm: 12000 },
+  { id: 't2', name: '3mm V-Bit', type: 'vbit', diameter: 3, vAngle: 60, spindleRpm: 12000 },
 ];
 
 describe('Carvera multi-op post', () => {
@@ -95,5 +97,84 @@ describe('Carvera multi-op post', () => {
     });
     expect(gcode).toContain(';@MKR|TOOL|number=10');
     expect(gcode).toContain('T10 M6');
+  });
+
+  // SAFETY (Alice, 2026-10-23): with the 4th axis fitted, a diagonal
+  // descent during the return travel after a tool swap can clip the
+  // rotary hardware. The convention every generator now follows —
+  // Makera's own ordering (examples/MakeraStudioSpindle_top…): travel at
+  // the machine's existing height (the swap macro parks it high), THEN
+  // descend over the destination. Pinned here across a real two-tool job.
+  it('returns from a tool change safely: travel first, descend at the destination', () => {
+    const cal = { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 };
+    const faceMoves = faceCylinder(
+      {
+        kind: 'faceCylinder',
+        id: 'f1',
+        toolId: 't1',
+        targetDiameter: 40,
+        xStart: 0,
+        xEnd: 50,
+        stepDown: 2,
+        stepOver: 5,
+        finishAllowance: 0.2,
+        plungeFeed: 100,
+        feed: 400,
+        rotation: 'cw',
+        pattern: 'spiral',
+      },
+      cal,
+      tools[0],
+      0,
+    ).moves.map((m, i) =>
+      i === 0 ? { ...m, op: { number: 1, name: 'Face', toolNumber: 1 }, spindleRpm: 18000 } : m,
+    );
+    const chamMoves = cylChamfer(
+      {
+        kind: 'cylChamfer',
+        id: 'c1',
+        toolId: 't2',
+        edges: [{ x: 25, diameter: 20 }],
+        depth: 0,
+        stepDown: 1,
+        rotation: 'cw',
+        plungeFeed: 100,
+      },
+      cal,
+      tools[1],
+      720,
+    ).moves.map((m, i) =>
+      i === 0 ? { ...m, op: { number: 2, name: 'Chamfer', toolNumber: 2 }, spindleRpm: 12000 } : m,
+    );
+    const gcode = postCarvera({
+      moves: [...faceMoves, ...chamMoves],
+      tools,
+      toolNumbers: [1, 2],
+      options: { jobName: 'toolchange-safety' },
+    });
+    const code = (l: string) => l.split(';')[0]; // comments never carry facts
+
+    // after every T M6, the first motion line carries NO Z word: the
+    // positioning travel (X/Y/A) runs at the swap macro's high park
+    for (const m of gcode.matchAll(/^T\d+ M6$/gm)) {
+      const after = gcode
+        .slice(m.index! + m[0].length)
+        .split('\n')
+        .map(code);
+      const firstMotion = after.find((l) => /^G[01][^0-9]/.test(l.trim()));
+      expect(firstMotion, 'no motion found after a tool change').toBeDefined();
+      expect(firstMotion, 'the return travel must not descend — travel first, descend at the destination')
+        .not.toMatch(/\bZ[-\d.]/);
+    }
+
+    // and no rapid anywhere runs diagonal: a Z rapid never shares its
+    // line with an X, Y, or A word (in-cut helical ENTRY moves are G1s,
+    // deliberate — this pins the rapids only)
+    const diagonals = gcode
+      .split('\n')
+      .map(code)
+      .filter((l) => /^G0 /.test(l.trim()))
+      .filter((l) => /\bZ[-\d.]/.test(l) && /\b[XYA][-.\d]/.test(l));
+    expect(diagonals).toEqual([]);
   });
 });

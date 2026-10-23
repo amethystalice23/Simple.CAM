@@ -6,8 +6,8 @@
 ; verify 4th-axis Z datum (stock-center, Z1-probed) matches the job stock calibration
 G90 G21
 G92.4 A0 R0
-G0 Z30 ; pass 1/5 depth 1.000mm radial
-G0 X0
+G0 X0 ; pass 1/5 depth 1.000mm radial
+G0 Z30
 G93
 G1 Z24 A90 F26.4 ; helical entry 1.000mm radial
 G1 X100 A22590 F0.11 ; rough to r=24.000

@@ -29,12 +29,16 @@ export function drill(op: DrillOp, tool: Tool): DrillResult {
     const safeZ = t.topZ + op.safeClearance;
     const peck = op.peckDepth > 0 ? op.peckDepth : t.depth;
 
+    // travel first at the machine's existing height (after a tool change
+    // that is the swap macro's high park — never a diagonal descent
+    // across the table), then descend at the destination
     moves.push({
-      words: { x: t.x, y: t.y, z: safeZ },
+      words: { x: t.x, y: t.y },
       feed: 0,
       rapid: true,
       comment: `drill (${t.x.toFixed(2)}, ${t.y.toFixed(2)}) depth ${t.depth.toFixed(2)}mm`,
     });
+    moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
     moves.push({ words: { z: retractZ }, feed: 0, rapid: true });
 
     let peckZ = t.topZ;

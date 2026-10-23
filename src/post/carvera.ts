@@ -190,8 +190,9 @@ export function postCarvera(input: PostInput): string {
             // laser module: fitted and length-probed machine-side — no
             // T M6, no tool comment, no TOOL header. M321 enters laser
             // mode (applying the G92.5 offset, so coordinates need no
-            // compensation); M3 follows the op's first move — the
-            // focus-height rapid — never before reaching focus height
+            // compensation); M3 follows the op's focus-height descent
+            // (the first Z-bearing move, after the approach travel) —
+            // never before the head is at focus height
             lines.push('M321');
             lines.push('');
             st.laserMode = true;
@@ -250,9 +251,13 @@ export function postCarvera(input: PostInput): string {
       if (withFeed) st.lastFeed = m.feed;
       lines.push(`G1 ${wordsLine(m, withFeed, sWord)}${m.comment ? ` ; ${m.comment}` : ''}`);
     }
-    // the beam enables after the laser op's first move — the focus-height
-    // rapid — never before the head is at focus height
-    if (st.pendingLaserM3) {
+    // the beam enables only once the head is AT focus height: after the
+    // op's first Z-bearing move (the focus descent — which now FOLLOWS
+    // the approach travel, see engrave.ts), never during it and never
+    // before it. A laser op has exactly one Z move, so this is Makera's
+    // own intent (M3 right after the focus rapid) under the safer
+    // travel-first entry ordering.
+    if (st.pendingLaserM3 && m.words.z !== undefined) {
       lines.push('M3');
       st.pendingLaserM3 = false;
     }

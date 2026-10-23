@@ -4,9 +4,9 @@ G90 G21
 
 M321
 
+G0 X0 Y0
 G0 Z1.5 ; laser focus height
 M3
-G0 X0 Y0
 G1 X10 Y0 S0.2 F100
 G1 S0
 G0 X0 Y5

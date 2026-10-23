@@ -147,12 +147,16 @@ export function chamfer(op: ChamferOp, tool: Tool): ChamferResult {
       const path = rotateToNearest(raw, cur);
       const start = path[0];
 
+      // travel first at the machine's existing height (after a tool change
+      // that is the swap macro's high park — never a diagonal descent
+      // across the table), then descend at the destination
       moves.push({
-        words: { x: start.x, y: start.y, z: safeZ },
+        words: { x: start.x, y: start.y },
         feed: 0,
         rapid: true,
         comment: `chamfer ${op.depth.toFixed(2)}mm deep, ${width.toFixed(2)}mm wide, side ${side}`,
       });
+      moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
       moves.push({ words: { z: tipZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
       moves.push({
         words: { z: tipZ },

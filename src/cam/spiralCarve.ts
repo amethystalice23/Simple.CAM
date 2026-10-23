@@ -121,6 +121,7 @@ export function spiralCarve(
   let a = startA; // accumulated machine A; the post wraps with G92.4
   let minutes = 0;
   let passes = 0;
+  let entered = false; // the descent-after-travel runs on the first entry only
 
   for (let s = 0; s < op.count; s++) {
     // the strand's pattern phase: datum + its share of the circle. Each
@@ -133,10 +134,11 @@ export function spiralCarve(
       const xs = op.xStart + off;
       const xe = op.xEnd + off;
       // axis-separate positioning (see thread/faceCylinder): a coordinated
-      // X+Z+A rapid runs the traverse at the rotary clamp rate — the very
-      // first entry lifts, every strand/fan pass rotates in place then
-      // travels (later passes already sit at the clearance height)
-      if (moves.length === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+      // X+Z+A rapid runs the traverse at the rotary clamp rate — rotate in
+      // place and travel at the machine's existing height (after a tool
+      // change, the swap macro's high park — never a low diagonal
+      // descent), THEN descend to the clearance height. Later passes
+      // already sit there from the previous retract.
       moves.push({
         words: { a },
         feed: 0,
@@ -144,6 +146,10 @@ export function spiralCarve(
         comment: `strand ${s + 1}/${op.count}${fans.length > 1 ? `, pass ${off.toFixed(2)}mm off-center` : ''}`,
       });
       moves.push({ words: { x: xs }, feed: 0, rapid: true });
+      if (!entered) {
+        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+        entered = true;
+      }
       levels.forEach((depth, li) => {
         const passZ = surfaceZ - depth;
         const increment = li === 0 ? depth : depth - levels[li - 1];

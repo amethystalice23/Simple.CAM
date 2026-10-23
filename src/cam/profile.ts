@@ -49,12 +49,16 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
       const loop = rotateToNearest(raw, cur);
       const start = loop[0];
 
+      // travel first at the machine's existing height (after a tool change
+      // that is the swap macro's high park — never a diagonal descent
+      // across the table), then descend at the destination
       moves.push({
-        words: { x: start.x, y: start.y, z: safeZ },
+        words: { x: start.x, y: start.y },
         feed: 0,
         rapid: true,
         comment: `level z${levelZ.toFixed(2)}`,
       });
+      moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
       moves.push({ words: { z: levelZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
       moves.push({
         words: { z: levelZ },

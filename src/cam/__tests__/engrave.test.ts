@@ -256,6 +256,21 @@ describe('engrave: laser', () => {
     expect(res.moves.some((m) => !m.rapid && m.words.z !== undefined)).toBe(false); // no plunge
   });
 
+  it('SAFETY: travels at the existing height first, descends to focus at the destination', () => {
+    // the bulky 5W module barely cleared the 4th-axis tail holding
+    // (coupon #2) — the approach after the module swap must never cross
+    // the work envelope at focus height (Makera's own order does). The
+    // post arms M3 after this descent, so the beam meets only the surface
+    const res = engrave(laserParams);
+    const focusIdx = res.moves.findIndex((m) => m.words.z !== undefined);
+    expect(focusIdx).toBeGreaterThan(0); // not the op's first move
+    const before = res.moves.slice(0, focusIdx);
+    // the first path's positioning travel precedes the descent…
+    expect(before.some((m) => m.words.x !== undefined)).toBe(true);
+    // …and nothing before it descends
+    for (const m of before) expect(m.words.z).toBeUndefined();
+  });
+
   it("stamps power on each path's first cut, extinguishes before travels and at the end", () => {
     const res = engrave(laserParams);
     expect(res.moves.filter((m) => m.power === 0.2)).toHaveLength(2); // one per path

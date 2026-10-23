@@ -145,10 +145,12 @@ describe('thread positioning', () => {
     const res = thread({ ...op, xStart: 5 }, cal, vbit, 0);
     expect(res.moves.filter((m) => m.rapid && m.words.a !== undefined && m.words.x !== undefined))
       .toHaveLength(0);
-    // lift (Z only) → rotate in place (A only) → travel (X only), then plunge
-    expect(res.moves[0]).toEqual({ words: { z: 17 }, feed: 0, rapid: true });
-    expect(res.moves[1]).toEqual({ words: { a: 0 }, feed: 0, rapid: true, comment: 'start 1/1' });
-    expect(res.moves[2]).toEqual({ words: { x: 5 }, feed: 0, rapid: true });
+    // rotate in place (A only) → travel (X only) → descend (Z only), then
+    // plunge: the travel runs at the machine's existing height — after a
+    // tool change, the swap macro's high park, never a low diagonal descent
+    expect(res.moves[0]).toEqual({ words: { a: 0 }, feed: 0, rapid: true, comment: 'start 1/1' });
+    expect(res.moves[1]).toEqual({ words: { x: 5 }, feed: 0, rapid: true });
+    expect(res.moves[2]).toEqual({ words: { z: 17 }, feed: 0, rapid: true });
     expect(res.moves[3].words.z).toBeDefined(); // the plunge begins
     expect(res.moves[3].rapid).toBeFalsy();
   });
@@ -175,27 +177,27 @@ describe('thread positioning', () => {
 
   it('honors the ⚡ clearance override for the approach height', () => {
     const res = thread({ ...op, clearance: 12 }, cal, vbit, 0);
-    // axisZ 0 + stock R12 + override 12
-    expect(res.moves[0].words.z).toBeCloseTo(24, 6);
+    // axisZ 0 + stock R12 + override 12 — the descent is the third entry
+    // move, after the rotate and travel
+    expect(res.moves[2].words.z).toBeCloseTo(24, 6);
     const plain = thread(op, cal, vbit, 0);
-    expect(plain.moves[0].words.z).toBeCloseTo(17, 6); // default SAFE_CLEARANCE 5
+    expect(plain.moves[2].words.z).toBeCloseTo(17, 6); // default SAFE_CLEARANCE 5
   });
 });
 
 describe('thread A continuity', () => {
   it('positions to the phase by the SHORTEST rotation from the machine A', () => {
     // axis sits at 4600° (12.8 revs of prior work): the nearest phase-0
-    // spoke is +80° at 4680 — not 4600° of unwinding back to absolute 0
+    // spoke is +80° at 4680 — not 4600° of unwinding back to absolute 0.
+    // The rotate now LEADS the entry (the descent follows the travel)
     const res = thread(op, cal, vbit, 0, 4600);
-    const lift = res.moves[0];
-    expect(lift).toEqual({ words: { z: 17 }, feed: 0, rapid: true });
-    const rot = res.moves[1];
+    const rot = res.moves[0];
     expect(rot.words.a).toBeCloseTo(4680, 6);
     expect(Math.abs(rot.words.a! - 4600)).toBeLessThanOrEqual(180);
   });
 
   it('startA=350 positions forward 10° to the phase-0 spoke at 360', () => {
     const res = thread(op, cal, vbit, 0, 350);
-    expect(res.moves[1].words.a).toBeCloseTo(360, 6);
+    expect(res.moves[0].words.a).toBeCloseTo(360, 6);
   });
 });

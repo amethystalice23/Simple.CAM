@@ -57,8 +57,11 @@ describe('chamfer generator', () => {
     // tip one depth below the anchor plane
     const plunge = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
     expect(plunge?.words.z).toBeCloseTo(-1, 9);
-    // retract above the anchor plane
-    expect(res.moves[0].words.z).toBeCloseTo(5, 6);
+    // retract above the anchor plane — positioned BEFORE any Z move: the
+    // entry travels at the machine's existing height, then descends
+    // (never a diagonal X+Y+Z rapid from a tool-change park)
+    expect(res.moves[0].words.z).toBeUndefined();
+    expect(res.moves[1].words.z).toBeCloseTo(5, 6);
     expect(res.loops).toBe(1);
     expect(res.width).toBeCloseTo(1, 9); // d·tan45
     expect(res.estimatedMinutes).toBeGreaterThan(0);
@@ -79,7 +82,8 @@ describe('chamfer generator', () => {
     const plunge = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
     expect(plunge?.words.z).toBeCloseTo(1, 9); // z₀ + d
     // retract clears the raised tip, not just the anchor plane
-    expect(res.moves[0].words.z).toBeCloseTo(1 + 5, 6);
+    expect(res.moves[0].words.z).toBeUndefined(); // travel first, descend second
+    expect(res.moves[1].words.z).toBeCloseTo(1 + 5, 6);
   });
 
   it("'auto' rides the void side: into a hole rim, out around a boss", () => {

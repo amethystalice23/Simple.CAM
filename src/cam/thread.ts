@@ -119,10 +119,10 @@ export function thread(
     a += shortestATo(phase, a); // shortest rotation to the phase spoke
     // Position by SEPARATE axis rapids: one coordinated X+Z+A rapid runs at
     // the slowest axis' rate — the rotary clamp crawls the X traverse
-    // across the stock at clearance. Lift (first start only — later ones
-    // already sit at safeZ), rotate in place, then travel to Start X, each
-    // at its own full rapid rate.
-    if (s === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    // across the stock at clearance. Rotate in place, travel to Start X,
+    // THEN descend (first start only — later ones already sit at safeZ):
+    // the travel runs at the machine's existing height — after a tool
+    // change, the swap macro's high park — never a low diagonal descent.
     moves.push({
       words: { a },
       feed: 0,
@@ -130,6 +130,7 @@ export function thread(
       comment: `start ${s + 1}/${op.starts}`,
     });
     moves.push({ words: { x: op.xStart }, feed: 0, rapid: true });
+    if (s === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
 
     // levels + one spring pass retrace the same helix at full depth
     const runs = [...levels, total]; // the spring: the final depth again

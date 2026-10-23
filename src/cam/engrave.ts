@@ -119,10 +119,11 @@ export function engrave(op: EngraveParams): EngraveResult {
 
   for (const path of op.paths) {
     // axis-separate positioning (see thread/spiralCarve): a coordinated
-    // rapid runs at the rotary clamp rate — lift, rotate in place, travel
+    // rapid runs at the rotary clamp rate. Position first at the
+    // machine's existing height (after a tool change that is the swap
+    // macro's high park — never a diagonal descent), then descend
     if (wrapped) {
       const frame = op.frame as EngraveWrappedFrame;
-      lift();
       a += shortestATo(frame.datumAngle + path[0].x * degPerMm, a);
       moves.push({
         words: { a },
@@ -131,9 +132,10 @@ export function engrave(op: EngraveParams): EngraveResult {
         comment: `path start, A${a.toFixed(2)}`,
       });
       moves.push({ words: { x: path[0].y }, feed: 0, rapid: true });
-    } else {
       lift();
+    } else {
       moves.push({ words: { x: path[0].x, y: path[0].y }, feed: 0, rapid: true });
+      lift();
     }
 
     levels.forEach((depth, li) => {
@@ -205,8 +207,16 @@ export function engrave(op: EngraveParams): EngraveResult {
  * ladder, no clearance lifts; the beam is the modal S word on G1s, so
  * each path's first cut stamps the power and a bare G1 (power 0)
  * extinguishes before the travel. The post brackets the op with
- * M321/M322 and emits M3 after the first move (the focus-height rapid)
- * — matching the mill-tested Makera sequence exactly.
+ * M321/M322 and arms the beam (M3) after the focus-height DESCENT.
+ *
+ * DELIBERATE divergence from Makera's example (Alice, 2026-10-23): their
+ * sequence drops to focus height FIRST and then travels at that height;
+ * the 5W module is bulky and barely cleared the 4th-axis tail holding on
+ * coupon #2 — the approach travel runs at the machine's existing height
+ * instead (the module-swap position, or the previous op's retract) and Z
+ * descends to focus only over the first path's start. Makera's intent —
+ * the beam never armed before focus height — is kept: the post arms M3
+ * after the first Z-bearing move, whichever position it lands at.
  */
 function engraveLaser(op: EngraveParams): EngraveResult {
   const { focus, power } = op.laser!;
@@ -222,10 +232,6 @@ function engraveLaser(op: EngraveParams): EngraveResult {
   let minutes = 0;
   let effective = op.feed;
   let a = wrapped ? (op.frame as EngraveWrappedFrame).startA : 0;
-  // the focus-height rapid leads the op (the post emits M3 right after
-  // it), then Z never moves again — travels run at the same Z with the
-  // beam extinguished
-  moves.push({ words: { z: passZ }, feed: 0, rapid: true, comment: 'laser focus height' });
 
   op.paths.forEach((path, pi) => {
     if (pi > 0) {
@@ -233,6 +239,9 @@ function engraveLaser(op: EngraveParams): EngraveResult {
       // the feed is unchanged so no F — the modal state carries)
       moves.push({ words: {}, feed: op.feed, power: 0 });
     }
+    // position at the machine's EXISTING height first — the approach
+    // travel must not cross the work envelope low (the module swap /
+    // previous op left the Z somewhere safe; the head is bulky)
     if (wrapped) {
       const frame = op.frame as EngraveWrappedFrame;
       a += shortestATo(frame.datumAngle + path[0].x * degPerMm, a);
@@ -240,6 +249,12 @@ function engraveLaser(op: EngraveParams): EngraveResult {
       moves.push({ words: { x: path[0].y }, feed: 0, rapid: true });
     } else {
       moves.push({ words: { x: path[0].x, y: path[0].y }, feed: 0, rapid: true });
+    }
+    if (pi === 0) {
+      // the ONE Z move of the op — descend to focus height over the first
+      // path's start, after the travel. The post arms M3 after it; from
+      // here the beam can only meet the surface, never the approach
+      moves.push({ words: { z: passZ }, feed: 0, rapid: true, comment: 'laser focus height' });
     }
     let first = true;
     for (let i = 0; i < path.length - 1; i++) {

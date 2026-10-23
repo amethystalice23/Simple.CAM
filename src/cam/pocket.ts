@@ -52,12 +52,16 @@ export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
         const loop = rotateToNearest(raw, cur);
         const start = loop[0];
 
+        // travel first at the machine's existing height (after a tool
+        // change that is the swap macro's high park — never a diagonal
+        // descent across the table), then descend at the destination
         moves.push({
-          words: { x: start.x, y: start.y, z: safeZ },
+          words: { x: start.x, y: start.y },
           feed: 0,
           rapid: true,
           comment: `level z${levelZ.toFixed(2)} pass ${k + 1}`,
         });
+        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         // rapid down to the approach plane, then feed the last stretch
         moves.push({ words: { z: levelZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
         moves.push({

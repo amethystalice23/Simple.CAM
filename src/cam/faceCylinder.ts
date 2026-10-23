@@ -159,8 +159,11 @@ export function faceCylinder(
       // starts turning from wherever the axis sits (startA), so there is
       // no positioning rotation to make.
       if (i === 0) {
-        moves.push({ words: { z: safeZ }, feed: 0, rapid: true, comment: passComment });
-        moves.push({ words: { x: sweepStart }, feed: 0, rapid: true });
+        // travel first at the machine's existing height (after a tool
+        // change, the swap macro's high park — never a low diagonal
+        // descent), then descend at the destination
+        moves.push({ words: { x: sweepStart }, feed: 0, rapid: true, comment: passComment });
+        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
       }
 
       // helical entry / in-cut step down, then the sweep. The sweep RETRACES
@@ -196,12 +199,16 @@ export function faceCylinder(
       // level retracts.
       const xs = i % 2 === 0 ? rings : [...rings].reverse();
       if (i === 0) {
+        // travel first at the machine's existing height (after a tool
+        // change, the swap macro's high park — never a diagonal descent
+        // across the table), then descend at the destination
         moves.push({
-          words: { x: xs[0], z: safeZ },
+          words: { x: xs[0] },
           feed: 0,
           rapid: true,
           comment: `${passComment} — ${xs.length} rings`,
         });
+        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
       }
 
       // straight plunge at fixed A (G94 plungeFeed): from safe Z on the
@@ -235,10 +242,10 @@ export function faceCylinder(
         const forward = passIndex % 2 === 0;
         const sweepStart = forward ? op.xStart : op.xEnd;
         const sweepEnd = forward ? op.xEnd : op.xStart;
-        // axis-separate repositioning (see thread): retract, rotate the
-        // step arc in place, then travel — a coordinated X+Z+A rapid runs
-        // the whole traverse at the rotary clamp rate
-        if (passIndex === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+        // axis-separate repositioning (see thread): rotate in place and
+        // travel at the machine's existing height (after a tool change,
+        // the swap macro's high park), THEN descend — a coordinated
+        // X+Z+A rapid runs the whole traverse at the rotary clamp rate
         moves.push({
           words: { a },
           feed: 0,
@@ -246,6 +253,7 @@ export function faceCylinder(
           comment: k === 0 ? `${passComment} — ${n} indexed passes` : undefined,
         });
         moves.push({ words: { x: sweepStart }, feed: 0, rapid: true });
+        if (passIndex === 0) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         moves.push({
           words: { z: passZ },
           feed: op.plungeFeed, // G94 mm/min, A stationary

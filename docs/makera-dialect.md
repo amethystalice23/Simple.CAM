@@ -100,6 +100,26 @@ Notes on header fields:
   to repeat the same speed is not done — only on speed change), then new
   positioning `G0`s. No `M5`, no `T M6`.
 
+- **Return travel after a tool change (safety, pinned 2026-10-23).** With
+  the 4th axis fitted, a diagonal descent during the return travel can
+  clip the rotary hardware. Every simple.cam generator follows one entry
+  convention — **position first at the machine's existing height, descend
+  at the destination**: the X/Y/A positioning rapids come before any Z
+  word, the Z descent is a pure vertical over where the cut starts, and
+  no rapid ever shares a Z word with X/Y/A. After a tool change the
+  machine sits at the swap macro's high park, so the return traverse runs
+  at that max height (never a diagonal); inside a job it runs at the
+  previous op's retract height. This is Spindle_top's ordering (`G0 X Y` →
+  `S M3` → `G0 Z15` → `G0 Z3` → plunge) with one deliberate improvement:
+  Studio's mid-file MULT form lifts to a fixed travel height (Z13 =
+  surface + 5) right after `T M6` BEFORE positioning, which DROPS the
+  tool out of the macro's high park before the traverse — simple.cam
+  keeps the high park for the traverse and descends only at the
+  destination, never lower than Studio's own travel height in the worst
+  case (a macro that returned at the previous op's retract). Pinned by
+  the multi-op toolchange-safety test (no Z on the first motion after
+  any `T M6`; no diagonal rapids anywhere) and by every golden.
+
 - Spindle line is exactly `S<rpm> M3` (S first, M3 second; rpm integer,
   seen 10000 and 12000).
 
@@ -154,6 +174,17 @@ Notes on header fields:
   0–1 scale with decimals (`S0.35`, `S0.5`, …). Between vectors:
   `G1 S0`, then `G0 X.. Y..` rapid to the next start.
 - End of file: `G1 S0`, `M05`, `M322` (module off), `M05`, `G28`, `M02`.
+- **Deliberate divergence (Alice, 2026-10-23):** Makera's entry order
+  above drops to focus height FIRST and then travels at that height —
+  the bulky 5W module barely cleared the 4th-axis tail holding on
+  coupon #2, so simple.cam travels at the machine's existing height
+  (the module-swap position / the previous op's retract) and descends
+  to focus only over the first path's start: `M321` → positioning `G0`s
+  → `G0 Z<focus>` → `M3` → cuts. Makera's intent — the beam armed only
+  at focus height, never during the approach — is kept: the post emits
+  M3 after the op's first Z-bearing move. Within-op travels between
+  vectors stay at focus height exactly as Makera emits them (the head
+  is already riding there by design).
 
 ## Air assist (TopClamp.nc, v1.0.0 header)
 
