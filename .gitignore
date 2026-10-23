@@ -7,3 +7,6 @@ tsconfig.tsbuildinfo
 # Local reference material — repo checkouts and analysis notes that are
 # deliberately unpublished (licensing / not ours to distribute)
 reference/
+# Local agent/skill infrastructure — tooling, not part of the software
+.claude/
+.agents/
