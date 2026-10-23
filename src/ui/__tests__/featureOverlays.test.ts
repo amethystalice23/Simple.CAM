@@ -9,6 +9,7 @@ import {
   pickFromNearest,
   planeHighlightMesh,
   planePick,
+  pxPerMmAt,
   sampleVisibleAt,
 } from '../featureOverlays';
 
@@ -200,5 +201,27 @@ describe('sampleVisibleAt (far-side occlusion gate)', () => {
 
   it('accepts everything when the cursor ray hits no mesh (background/silhouette)', () => {
     expect(sampleVisibleAt(null, origin, dir, new THREE.Vector3(0, 12, 0))).toBe(true);
+  });
+});
+describe('pxPerMmAt (shared screen-space scale)', () => {
+  // the shared helper behind BOTH the feature snap tolerances and the
+  // slice-plane drag: perspective scales with depth, orthographic is
+  // constant (zoom scales the frustum, distance does nothing)
+  const persp = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
+  const ortho = new THREE.OrthographicCamera(-50, 50, 25, -25, -5000, 5000);
+
+  it('perspective: halves as the depth doubles', () => {
+    expect(pxPerMmAt(persp, 1000, 100)).toBeCloseTo(pxPerMmAt(persp, 1000, 200) * 2, 6);
+    const halfTan = Math.tan((25 * Math.PI) / 180);
+    expect(pxPerMmAt(persp, 1000, 100)).toBeCloseTo(1000 / (2 * halfTan * 100), 6);
+  });
+
+  it('orthographic: constant with depth, scaled only by zoom', () => {
+    // frustum height 50mm over a 1000px canvas → 20 px/mm at any depth
+    expect(pxPerMmAt(ortho, 1000, 50)).toBeCloseTo(20, 6);
+    expect(pxPerMmAt(ortho, 1000, 500)).toBeCloseTo(20, 6);
+    ortho.zoom = 2;
+    expect(pxPerMmAt(ortho, 1000, 500)).toBeCloseTo(40, 6);
+    ortho.zoom = 1;
   });
 });

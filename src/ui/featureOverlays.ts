@@ -452,6 +452,24 @@ export function sampleVisibleAt(
   return depth <= firstHitDistance + OCCLUSION_EPS_MM;
 }
 
+/** Screen-space scale at a world depth: pixels per mm of world size.
+ * Depth-dependent under perspective, constant under orthographic (zoom
+ * scales the frustum, distance does nothing). The ONE shared source for
+ * the feature snap tolerances and the slice-plane drag handle — the two
+ * must never disagree about how big a pixel is. */
+export function pxPerMmAt(
+  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+  h: number,
+  depth: number,
+): number {
+  if (camera instanceof THREE.PerspectiveCamera) {
+    const halfTanFov = Math.tan(((camera.fov / 2) * Math.PI) / 180);
+    return h / (2 * halfTanFov * Math.max(depth, 0.01));
+  }
+  const frustumH = (camera.top - camera.bottom) / camera.zoom;
+  return h / Math.max(frustumH, 1e-9);
+}
+
 /**
  * Nearest feature to the mouse in screen space. Circles and holes take
  * precedence but snap tightly (CIRCLE_PRIORITY × the tolerance — they win
@@ -462,12 +480,10 @@ export function findNearestFeature(
   data: FeatureOverlayData,
   mouseX: number,
   mouseY: number,
-  camera: THREE.PerspectiveCamera,
+  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
   w: number,
   h: number,
 ): NearestFeature | null {
-  const halfTanFov = Math.tan(((camera.fov / 2) * Math.PI) / 180);
-
   interface Candidate {
     index: number;
     samples: THREE.Vector3[];
@@ -488,8 +504,10 @@ export function findNearestFeature(
       const px = ((proj.x + 1) / 2) * w;
       const py = ((1 - proj.y) / 2) * h;
       const depth = it.rep.distanceTo(camera.position);
-      const pxPerMm = h / (2 * halfTanFov * Math.max(depth, 0.01));
-      const tol = Math.max(SNAP_PX_FLOOR * tolScale, SNAP_MM * tolScale * pxPerMm);
+      const tol = Math.max(
+        SNAP_PX_FLOOR * tolScale,
+        SNAP_MM * tolScale * pxPerMmAt(camera, h, depth),
+      );
       let d = Infinity;
       let at: THREE.Vector3 | null = null;
       for (const s of it.samples) {

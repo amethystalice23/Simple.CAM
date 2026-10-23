@@ -17,6 +17,7 @@ import {
   pickFromNearest,
   planeHighlightMesh,
   planePick,
+  pxPerMmAt,
   sampleVisibleAt,
   PATH_COLOR,
   PLANE_SELECT,
@@ -28,6 +29,21 @@ import {
 } from './featureOverlays';
 
 const D2R = Math.PI / 180;
+
+/** Camera projection of the viewport: perspective (the default) or
+ * orthographic (true widths, no parallax — the CAM alignment view). */
+export type Projection = 'persp' | 'ortho';
+
+/** The persisted projection choice — guarded: storage may be unavailable
+ * (private mode), in which case the view is a session-only choice. */
+function safeStoredProjection(): Projection | null {
+  try {
+    const raw = localStorage.getItem('simple.cam.projection');
+    return raw === 'ortho' || raw === 'persp' ? raw : null;
+  } catch {
+    return null;
+  }
+}
 
 /** dispose a small overlay group's geometries and materials. */
 function disposeGroup(g: THREE.Group): void {
@@ -180,7 +196,7 @@ export function Viewport({
   /** renderer/camera/controls of the scene effect — shared with the
    * slice-plane effect below */
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   /** live slice-plane drag state — a ref so effect re-runs (the live box
    * update changes props mid-drag) never kill an active drag */
@@ -217,15 +233,47 @@ export function Viewport({
   const selLabelsRef = useRef<(HTMLDivElement | null)[]>([]);
   const distLabelRef = useRef<HTMLDivElement | null>(null);
 
+  // ---- projection: perspective (default) or orthographic ----
+  /** persisted per-user like the tool library — whoever asks for ortho
+   * wants it every session */
+  const PROJECTION_KEY = 'simple.cam.projection';
+  const [projection, setProjection] = useState<Projection>(() =>
+    safeStoredProjection() ?? 'persp',
+  );
+  const projectionRef = useRef(projection);
+  projectionRef.current = projection;
+  /** the scene effect's swap function — the two cameras always exist; the
+   * toggle just re-points controls/render at the other one */
+  const swapProjectionRef = useRef<((mode: Projection) => void) | null>(null);
+  const toggleProjection = () => {
+    const next: Projection = projection === 'persp' ? 'ortho' : 'persp';
+    setProjection(next);
+    try {
+      localStorage.setItem(PROJECTION_KEY, next);
+    } catch {
+      /* private mode / cleared storage: a session-only choice then */
+    }
+    swapProjectionRef.current?.(next);
+  };
+
   useEffect(() => {
     const el = host.current;
     if (!el) return;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1d21);
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
-    camera.up.set(0, 0, 1); // machine Z is up
-    camera.position.set(160, -160, 120);
+    // both projections exist up front; the toggle re-points controls,
+    // render, and the snap math at the active one (swapProjection below)
+    const persp = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
+    persp.up.set(0, 0, 1); // machine Z is up
+    persp.position.set(160, -160, 120);
+    // orthographic twin: frustum sized on demand from the perspective
+    // view (swapProjection) so the toggle never jumps what's on screen
+    const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -5000, 5000);
+    ortho.up.set(0, 0, 1);
+    ortho.position.copy(persp.position);
+    let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera =
+      projectionRef.current === 'ortho' ? ortho : persp;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(el.clientWidth, el.clientHeight);
@@ -236,6 +284,44 @@ export function Viewport({
     rendererRef.current = renderer;
     cameraRef.current = camera;
     controlsRef.current = controls;
+
+    /** fit the ortho frustum's height to `viewH` mm of world, width by the
+     * canvas aspect (the height is the zoom invariant on resizes) */
+    const fitOrthoFrustum = (viewH: number) => {
+      const aspect = Math.max(el.clientWidth, 1) / Math.max(el.clientHeight, 1);
+      ortho.top = viewH / 2;
+      ortho.bottom = -viewH / 2;
+      ortho.left = (-viewH / 2) * aspect;
+      ortho.right = (viewH / 2) * aspect;
+      ortho.zoom = 1;
+      ortho.updateProjectionMatrix();
+    };
+    /** swap the active projection, preserving what's on screen: the ortho
+     * frustum takes the perspective view's height at the target distance;
+     * back the other way the perspective distance is chosen to reproduce
+     * the ortho frustum's height. OrbitControls zooms an ortho camera by
+     * scaling `zoom`, so distance stays meaningless — only position (the
+     * view direction) carries over. */
+    const swapProjection = (mode: Projection) => {
+      const target = controls.target;
+      const halfTanFov = Math.tan(((persp.fov / 2) * Math.PI) / 180);
+      if (mode === 'ortho') {
+        const dist = persp.position.distanceTo(target);
+        fitOrthoFrustum(2 * halfTanFov * Math.max(dist, 1));
+        ortho.position.copy(persp.position);
+        camera = ortho;
+      } else {
+        const viewH = (ortho.top - ortho.bottom) / ortho.zoom;
+        const dist = Math.max(viewH / (2 * halfTanFov), 1);
+        const dir = ortho.position.clone().sub(target).normalize();
+        persp.position.copy(target).addScaledVector(dir, dist);
+        camera = persp;
+      }
+      controls.object = camera;
+      cameraRef.current = camera;
+      controls.update();
+    };
+    swapProjectionRef.current = swapProjection;
 
     // view-orientation cube: click a face to tween the camera to that view
     const navCube = new NavCube();
@@ -662,10 +748,21 @@ export function Viewport({
 
     controls.target.copy(center);
 
+    // the persisted ortho choice: fit the frustum now that the target (the
+    // stock center) exists — the perspective default view defines it
+    if (projectionRef.current === 'ortho') swapProjection('ortho');
+
     const onResize = () => {
       if (!el.clientWidth) return;
-      camera.aspect = el.clientWidth / el.clientHeight;
-      camera.updateProjectionMatrix();
+      persp.aspect = el.clientWidth / el.clientHeight;
+      persp.updateProjectionMatrix();
+      // orthographic keeps its world height (zoom is distance here);
+      // only the width refits by the new aspect
+      const viewH = ortho.top - ortho.bottom;
+      const aspect = Math.max(el.clientWidth, 1) / Math.max(el.clientHeight, 1);
+      ortho.left = (-viewH / 2) * aspect;
+      ortho.right = (viewH / 2) * aspect;
+      ortho.updateProjectionMatrix();
       renderer.setSize(el.clientWidth, el.clientHeight);
     };
     const observer = new ResizeObserver(onResize);
@@ -743,6 +840,7 @@ export function Viewport({
       rendererRef.current = null;
       cameraRef.current = null;
       controlsRef.current = null;
+      swapProjectionRef.current = null;
       overlaysRef.current = [];
       hoverLineRef.current = null;
       hoverPlaneRef.current = null;
@@ -980,9 +1078,12 @@ export function Viewport({
     // datum group rotates the PART, this plane stays machine-horizontal)
     const group = sliceGroupRef.current;
     const renderer = rendererRef.current;
-    const camera = cameraRef.current;
+    // cameraRef is read LIVE at the use sites below (a projection toggle
+    // re-points it without re-running this effect) — only its existence
+    // is checked here
+    if (!cameraRef.current) return;
     const controls = controlsRef.current;
-    if (!group || !renderer || !camera || !controls) return;
+    if (!group || !renderer || !controls) return;
     if (!slicePreview || !geometry) return;
 
     const dom = renderer.domElement;
@@ -1094,10 +1195,11 @@ export function Viewport({
       ];
       let best = mids[0];
       let bestD = Infinity;
+      // live camera (the projection may have toggled since this effect
+      // ran); the controls' active object backs it up
+      const camPos = cameraRef.current?.position ?? controls.object.position;
       for (const m of mids) {
-        const d = new THREE.Vector3(m.x + m.nx * OUT, m.y + m.ny * OUT, z).distanceTo(
-          camera.position,
-        );
+        const d = new THREE.Vector3(m.x + m.nx * OUT, m.y + m.ny * OUT, z).distanceTo(camPos);
         if (d < bestD) {
           bestD = d;
           best = m;
@@ -1119,12 +1221,16 @@ export function Viewport({
     const raycaster = new THREE.Raycaster();
     const hoverHandle = (e: PointerEvent): boolean => {
       const rect = dom.getBoundingClientRect();
+      // cameraRef read LIVE: a projection toggle re-points it without
+      // re-running this effect
+      const active = cameraRef.current;
+      if (!active) return false;
       raycaster.setFromCamera(
         new THREE.Vector2(
           ((e.clientX - rect.left) / rect.width) * 2 - 1,
           -((e.clientY - rect.top) / rect.height) * 2 + 1,
         ),
-        camera,
+        active,
       );
       return raycaster.intersectObject(handle, true).length > 0;
     };
@@ -1148,9 +1254,14 @@ export function Viewport({
         else if (dom.style.cursor === 'grab') dom.style.cursor = '';
         return;
       }
-      const depth = Math.max(handle.position.distanceTo(camera.position), 0.01);
+      // live camera: the projection may have toggled since this effect
+      // ran, and the drag math must match the snap math (pxPerMmAt) in
+      // EITHER projection
+      const active = cameraRef.current;
+      if (!active) return;
+      const depth = Math.max(handle.position.distanceTo(active.position), 0.01);
       const h = dom.clientHeight || 1;
-      const mmPerPx = (2 * Math.tan(((camera.fov / 2) * Math.PI) / 180) * depth) / h;
+      const mmPerPx = 1 / pxPerMmAt(active, h, depth);
       d.z = Math.min(Math.max(d.startZ - (e.clientY - d.startClientY) * mmPerPx, z0), z1);
       if (d.raf === 0) {
         d.raf = requestAnimationFrame(() => {
@@ -1343,6 +1454,21 @@ export function Viewport({
   return (
     <>
       <div ref={host} className="viewport-canvas" />
+      {/* projection toggle — the navcube's corner is the view-control
+       * zone (fold, don't add a surface). The pill names the CURRENT
+       * projection; the tooltip says what clicking switches to */}
+      <button
+        type="button"
+        className="projection-pill"
+        title={
+          projection === 'persp'
+            ? 'Perspective view — click to switch to orthographic (true widths and diameters, no parallax)'
+            : 'Orthographic view — click to switch back to perspective'
+        }
+        onClick={toggleProjection}
+      >
+        {projection === 'persp' ? 'Persp' : 'Ortho'}
+      </button>
       {label && (
         <div className="measure-label" style={{ left: label.x, top: label.y }}>
           {label.text}

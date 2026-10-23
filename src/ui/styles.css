@@ -479,3 +479,24 @@ pre {
   font-size: 12px;
 }
 .export-filename input:focus { outline: 1px solid #2e6f9e; }
+/* projection toggle pill: the navcube corner is the view-control zone —
+ * sits just above the navcube (NAV_MARGIN 12 + NAV_SIZE 96 + 8), names the
+ * mode you'll switch TO */
+.projection-pill {
+  position: absolute;
+  /* horizontally centered on the navcube (NAV_MARGIN 12 + NAV_SIZE/2
+   * 48): anchor the right edge there, then shift right by half the pill's
+   * own width — variable label widths stay centered */
+  right: 60px;
+  transform: translateX(50%);
+  bottom: 116px;
+  background: rgba(16, 20, 26, 0.92);
+  border: 1px solid #31373e;
+  border-radius: 8px;
+  color: #9aa4ad;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 3;
+}
+.projection-pill:hover { border-color: #4d94c9; color: #fff; }
