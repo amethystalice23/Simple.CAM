@@ -308,6 +308,11 @@ export interface ThreadOp {
   /** axial depth-per-level ladder for the grooves, mm */
   stepDown: number;
   rotation: 'cw' | 'ccw';
+  /** target surface speed at the CUTTING depth, mm/min along the groove:
+   * per-level G93 timing holds it constant as the grooves deepen (the
+   * cutting radius shrinks, so A runs faster level by level), never above
+   * the machine's rotary ceiling */
+  feed: number;
   /** G94 plunge feed at the start entries */
   plungeFeed: number;
   /** the surface the depth ladder starts from, mm Ø — the faced crest

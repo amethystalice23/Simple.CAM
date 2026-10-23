@@ -59,6 +59,7 @@ export function thread(
   if (!Number.isInteger(op.starts) || op.starts < 1) throw new Error('starts must be a whole number ≥ 1');
   if (op.tolerance < 0) throw new Error('tolerance must be ≥ 0');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
+  if (op.feed <= 0) throw new Error('feed must be positive');
   if (tool.type !== 'vbit') throw new Error('threading needs a V-bit tool (chamfering bit)');
   if (!tool.vAngle || tool.vAngle < 20 || tool.vAngle > 180) {
     throw new Error('the V-bit has no usable tip angle — set one in the tool library');
@@ -88,7 +89,16 @@ export function thread(
   const lead = op.starts * op.pitch;
   const aAdvance = (span / lead) * 360;
   const revs = aAdvance / 360;
-  const passMinutes = revs / MAX_ROTARY_RPM; // G93 from the rotary limit
+  // Per-run G93 timing: the groove's true path length at the CURRENT
+  // cutting radius (startR − depth) — `feed` means the surface speed AT
+  // the cut, held constant as the levels descend toward the root (the
+  // arc shortens, so A runs faster level by level), never above the
+  // rotary ceiling (the floor keeps the machine's A limit)
+  const passMinutesFor = (depthFromSurface: number): number =>
+    Math.max(
+      Math.hypot((aAdvance * Math.PI) / 180 * (startR - depthFromSurface), span) / op.feed,
+      revs / MAX_ROTARY_RPM,
+    );
   // thread handedness runs OPPOSITE the A-advance direction of the face
   // ops' 'cw' (iron-tested by Alice): a cw-perceived thread cuts with A
   // decreasing as X advances
@@ -134,6 +144,7 @@ export function thread(
       minutes += (li === 0 ? levels[0] : depthFromSurface - runs[li - 1]) / op.plungeFeed;
       const forward = li % 2 === 0;
       a += forward ? aSign * aAdvance : -aSign * aAdvance;
+      const passMinutes = passMinutesFor(depthFromSurface);
       moves.push({
         words: { x: forward ? op.xEnd : op.xStart, a },
         feed: 1 / passMinutes, // G93 inverse time

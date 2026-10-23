@@ -98,6 +98,37 @@ describe('spiralCarve', () => {
     expect(() => spiralCarve({ ...op, spiralAngle: 0 }, cal, 6, 0)).toThrowError(/angle/);
     expect(() => spiralCarve({ ...op, count: 1.5 }, cal, 6, 0)).toThrowError(/count/);
     expect(() => spiralCarve({ ...op, surfaceDiameter: 60 }, cal, 6, 0)).toThrowError(/stock radius/);
+    // a groove reaching the axis leaves no material to cut
+    expect(() => spiralCarve({ ...op, depth: 25 }, cal, 6, 0)).toThrowError(/no material/);
+  });
+
+  it('per-level G93 timing holds the surface speed at the cut (depth-aware)', () => {
+    // 45° helix on R25 over 50mm: aAdvance = 2 rad, so the pass's true
+    // length at the cutting radius (25 − depth) is hypot(2·(25−d), 50).
+    // feed 400 binds on every level — the pass time is that length /
+    // 400, so the CUTTING SURFACE sees 400 mm/min no matter the depth:
+    // A accelerates as the arc shortens level by level.
+    const res = spiralCarve(op, cal, 6, 0); // depth 2, stepDown 1 → levels 1, 2
+    const sweeps = res.moves.filter(
+      (m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined,
+    );
+    expect(sweeps).toHaveLength(4); // 2 strands × 2 levels
+    const lenAt = (d: number) => Math.hypot(2 * (25 - d), 50);
+    for (const m of [sweeps[0], sweeps[1]]) {
+      const d = m === sweeps[0] ? 1 : 2;
+      expect(lenAt(d) * m.feed).toBeCloseTo(400, 3);
+    }
+    expect(sweeps[1].feed).toBeGreaterThan(sweeps[0].feed); // deeper = faster A
+  });
+
+  it('never exceeds the rotary ceiling: a big feed caps every level at MAX_ROTARY_RPM', () => {
+    const res = spiralCarve({ ...op, feed: 100000 }, cal, 6, 0);
+    const lead = 2 * Math.PI * 25 * Math.tan(Math.PI / 4);
+    const revs = (50 / lead) / 1; // span / lead turns per sweep
+    const sweeps = res.moves.filter(
+      (m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined,
+    );
+    for (const m of sweeps) expect(m.feed).toBeCloseTo(6.6 / revs, 6);
   });
 
   it('samples groove marks on the part-local cylinder for the preview', () => {

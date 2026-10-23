@@ -156,7 +156,12 @@ export function engrave(op: EngraveParams): EngraveResult {
         if (wrapped) {
           const dA = (p1.x - p0.x) * degPerMm;
           const dX = p1.y - p0.y;
-          const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+          // depth-aware: the segment's true length at the CURRENT cutting
+          // radius (R − depth) — the circumferential part shrinks as the
+          // groove deepens, so `feed` and `effectiveFeed` mean the surface
+          // speed AT the cut, constant across the ladder
+          const rc = R - depth;
+          const len = Math.hypot((rc / R) * (p1.x - p0.x), dX);
           if (Math.abs(dA) < 1e-12 && Math.abs(dX) < 1e-12) continue;
           a += dA;
           if (Math.abs(dA) < 1e-12) {
@@ -164,13 +169,16 @@ export function engrave(op: EngraveParams): EngraveResult {
             moves.push({ words: { x: p1.y }, feed: op.feed });
             minutes += Math.abs(dX) / op.feed;
           } else if (Math.abs(dX) < 1e-12) {
-            // A-only: G94 at the rotary limit, deg/min
+            // A-only: G94 at the rotary limit, deg/min — the machine's A
+            // rate is the constraint here; the honest effective number
+            // still reads at the cutting radius
             moves.push({ words: { a }, feed: ROTARY_FEED_DEG_MIN });
             minutes += Math.abs(dA) / ROTARY_FEED_DEG_MIN;
             effective = Math.min(effective, len / (Math.abs(dA) / ROTARY_FEED_DEG_MIN));
           } else {
             // coordinated X+A: G93 inverse-time from the binding
-            // constraint — surface length at the feed, or the rotary rate
+            // constraint — true length at the cut at the feed, or the
+            // rotary rate
             const t = Math.max(len / op.feed, (Math.abs(dA) / 360) / MAX_ROTARY_RPM);
             moves.push({ words: { x: p1.y, a }, feed: 1 / t });
             minutes += t;

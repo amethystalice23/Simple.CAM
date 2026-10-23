@@ -25,6 +25,7 @@ const op: ThreadOp = {
   tolerance: 0,
   stepDown: 0.5,
   rotation: 'cw',
+  feed: 10000, // high: the rotary ceiling binds (the machine's as-cut rate)
   plungeFeed: 100,
   surfaceDiameter: null,
 };
@@ -99,6 +100,41 @@ describe('thread', () => {
     expect(() => thread({ ...op, starts: 1.5 }, cal, vbit, 0)).toThrowError(/starts/);
     expect(() => thread({ ...op, tolerance: -1 }, cal, vbit, 0)).toThrowError(/tolerance/);
     expect(() => thread({ ...op, nominalDiameter: 60 }, cal, vbit, 0)).toThrowError(/root/);
+  });
+});
+
+describe('thread: depth-aware feed (constant surface speed at the cut)', () => {
+  // the sweep is one helix: 10 turns over 20mm (lead 2mm), so the true
+  // path length at the cutting radius rc is hypot(2π·rc·10, 20)
+  const sweepMoves = (r: ReturnType<typeof thread>) =>
+    r.moves.filter((m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined);
+  const lenAt = (depth: number) => Math.hypot(2 * Math.PI * (12 - depth) * 10, 20);
+
+  it('holds the feed as the surface speed at the cut on every level', () => {
+    // feed 300 binds (never the ceiling): each level's time is its true
+    // length at the CURRENT cutting radius / 300 — A accelerates as the
+    // grooves deepen toward the root, keeping 300 mm/min at the cut
+    const res = thread({ ...op, feed: 300 }, cal, vbit, 0);
+    const sweeps = sweepMoves(res);
+    // ladder from stock R12 to root R9.5: [0.5, 1, 1.5, 2, 2.5] + spring
+    const depths = [0.5, 1, 1.5, 2, 2.5, 2.5];
+    expect(sweeps).toHaveLength(depths.length);
+    for (let i = 0; i < sweeps.length; i++) {
+      expect(lenAt(depths[i]) * sweeps[i].feed).toBeCloseTo(300, 3);
+    }
+    // deeper level = shorter arc at the smaller radius = faster A
+    expect(sweeps[4].feed).toBeGreaterThan(sweeps[0].feed);
+  });
+
+  it('never exceeds the rotary ceiling: a big feed caps every level at MAX_ROTARY_RPM', () => {
+    const res = thread(op, cal, vbit, 0); // feed 10000 — the ceiling binds
+    const sweeps = sweepMoves(res);
+    const revs = 10; // (20mm span / 2mm lead) turns per sweep
+    for (const m of sweeps) expect(m.feed).toBeCloseTo(6.6 / revs, 6);
+  });
+
+  it('rejects a non-positive feed', () => {
+    expect(() => thread({ ...op, feed: 0 }, cal, vbit, 0)).toThrowError(/feed/);
   });
 });
 

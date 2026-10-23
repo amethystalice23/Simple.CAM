@@ -656,6 +656,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               tolerance: op.tolerance,
               stepDown: op.stepDown,
               rotation: op.rotation,
+              feed,
               plungeFeed,
               surfaceDiameter: op.surfaceDiameter,
               clearance: op.rates?.clearance,

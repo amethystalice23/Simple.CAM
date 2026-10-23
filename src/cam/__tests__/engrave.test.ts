@@ -94,8 +94,9 @@ describe('engrave: wrapped frame', () => {
     expect(sweep.words.a).toBeCloseTo(90, 4);
     expect(sweep.words.x).toBeUndefined();
     expect(sweep.feed).toBe(ROTARY_FEED_DEG_MIN); // deg/min at the limit
-    // the honest surface speed: MAX_ROTARY_RPM × π·Ø ≈ 332 mm/min
-    expect(res.effectiveFeed).toBeCloseTo(6.6 * Math.PI * 16, -1);
+    // the honest surface speed AT THE CUT (depth 1: cutting radius 7 —
+    // the tip moves slower than the crest): MAX_ROTARY_RPM × π × Ø14
+    expect(res.effectiveFeed).toBeCloseTo(6.6 * Math.PI * 14, -1);
   });
 
   it('axial segments (V lines) run G94 at the cut feed', () => {
@@ -133,7 +134,9 @@ describe('engrave: wrapped frame', () => {
     const dA = (dU / R) * (180 / Math.PI);
     expect(diag[0].words.a).toBeCloseTo(dA, 4);
     expect(diag[0].words.x).toBeCloseTo(10, 6);
-    const len = Math.hypot(dU, dV);
+    // the true length at the CUT depth 1 (radius 7): the circumferential
+    // part scales by 7/8, the axial part is unchanged
+    const len = Math.hypot((7 / 8) * dU, dV);
     const t = Math.max(len / 1000, (dA / 360) / 6.6);
     expect(diag[0].feed).toBeCloseTo(1 / t, 6); // inverse minutes
     expect(res.effectiveFeed).toBeCloseTo(len / t, 3);
@@ -151,8 +154,35 @@ describe('engrave: wrapped frame', () => {
       ],
     });
     const diag = res.moves.filter((m) => !m.rapid && m.words.x !== undefined);
-    expect(diag[0].feed).toBeCloseTo(1 / (Math.hypot(10, 10) / 100), 6); // G93: 1/minutes — the linear rate rides at the feed
+    // G93: 1/minutes — the linear rate at the cutting surface rides at
+    // the feed (depth 1 → the length reads at radius 7)
+    expect(diag[0].feed).toBeCloseTo(1 / (Math.hypot(8.75, 10) / 100), 6);
     expect(res.effectiveFeed).toBeCloseTo(100, 3);
+  });
+
+  it('coordinated segments hold the surface speed at the cut across the ladder', () => {
+    // two levels (depth 1 and 2): the feed is the surface speed AT the
+    // cutting radius on both — A accelerates as the groove deepens
+    const res = engrave({
+      ...wrapped,
+      depth: 2,
+      stepDown: 1,
+      feed: 200, // slow enough that the feed binds, not the ceiling
+      paths: [
+        [
+          { x: 0, y: 0 },
+          { x: 4, y: 4 },
+        ],
+      ],
+    });
+    const cuts = res.moves.filter(
+      (m) => !m.rapid && m.words.x !== undefined && m.words.a !== undefined,
+    );
+    expect(cuts).toHaveLength(2);
+    const lenAt = (d: number) => Math.hypot(((8 - d) / 8) * 4, 4);
+    expect(lenAt(1) * cuts[0].feed).toBeCloseTo(200, 3);
+    expect(lenAt(2) * cuts[1].feed).toBeCloseTo(200, 3);
+    expect(cuts[1].feed).toBeGreaterThan(cuts[0].feed); // deeper = faster A
   });
 
   it('positions each path from the index datum by the shortest rotation', () => {

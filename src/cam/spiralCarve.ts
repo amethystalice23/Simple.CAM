@@ -89,16 +89,31 @@ export function spiralCarve(
       `surface Ø ${op.surfaceDiameter} is above the stock radius ${stockRadius} — carve into the stock, not above it`,
     );
   }
+  if (op.depth >= r - 0.05) {
+    throw new Error(
+      `groove depth ${op.depth}mm leaves no material at Ø${op.surfaceDiameter} — the cut would reach past the axis`,
+    );
+  }
   const span = Math.abs(op.xEnd - op.xStart);
   const surfaceZ = axisZ + r;
   const safeZ = surfaceZ + (op.clearance ?? SAFE_CLEARANCE);
   const aAdvance = sweepAdvance(span, r, op.spiralAngle);
   const aSign = op.rotation === 'cw' ? 1 : -1;
   const helical = aAdvance > 1e-9; // else: pure axial lines at fixed A
-  // G93 sweep minutes: the A rate is the limit; an axial sweep runs G94
-  // at op.feed (the caller passes a sane cut feed for both)
   const revs = aAdvance / 360;
-  const passMinutes = helical ? revs / MAX_ROTARY_RPM : span / op.feed;
+  // Per-level G93 timing: the groove's true path length at the CURRENT
+  // cutting radius (r − depth) — `feed` means the surface speed AT the
+  // cut, held constant across the ladder (the arc shortens as the groove
+  // deepens, so A runs faster level by level), never above the rotary
+  // ceiling (the ceiling floor keeps the machine's A limit). An axial
+  // sweep has no rotation: plain G94 at op.feed.
+  const passMinutesFor = (depth: number): number =>
+    helical
+      ? Math.max(
+          Math.hypot((aAdvance * Math.PI) / 180 * (r - depth), span) / op.feed,
+          revs / MAX_ROTARY_RPM,
+        )
+      : span / op.feed;
   const levels = depthLadder(op.depth, op.stepDown);
   const fans = fanOffsets(op.width, toolDiameter);
 
@@ -144,6 +159,7 @@ export function spiralCarve(
         // every level retraces the same helix
         const forward = li % 2 === 0;
         a += forward ? aSign * aAdvance : -aSign * aAdvance;
+        const passMinutes = passMinutesFor(depth);
         moves.push({
           words: helical ? { x: forward ? xe : xs, a } : { x: forward ? xe : xs },
           feed: helical ? 1 / passMinutes : op.feed,
