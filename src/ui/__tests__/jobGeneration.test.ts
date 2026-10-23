@@ -1318,3 +1318,62 @@ describe('engrave generation', () => {
     expect(modelPick.error).toMatch(/artwork|no longer exist|select artwork/);
   });
 });
+
+describe('engrave generation: laser tool', () => {
+  const laserTool: Tool = {
+    id: 'tL',
+    name: 'Laser Module',
+    type: 'laser',
+    diameter: 0.1,
+    spindleRpm: 20, // the power% slot (documented reuse)
+    focus: 1.5,
+  };
+  const art: Primitive = {
+    kind: 'artwork',
+    id: 'prim-art',
+    paths: [[{ x: 0, y: 0 }, { x: 100, y: 0 }]],
+    width: 100,
+    height: 50,
+    presentation: 'flat',
+    wrapDiameter: 16,
+    wrapAngle: 90,
+    transform: { ...identityTransform(), position: { x: 0, y: 0, z: 10 } },
+  };
+  const ctx: GenContext = {
+    stock: cylStock,
+    geometry: null,
+    features: null,
+    transform: identityTransform(),
+    tools: [laserTool],
+    primitives: [art],
+    sources: sourcesFor(null, null, identityTransform(), [art]),
+    datumAngle: 0,
+    startA: 0,
+  };
+  const op: JobOp = {
+    kind: 'engrave',
+    id: 'engrave-1',
+    toolId: 'tL',
+    featureIds: ['p:prim-art:path:0'],
+    depth: 0.5,
+    stepDown: 0.25,
+  };
+
+  it('resolves power from the tool slot, stamps focus height, never a spindle line', () => {
+    const res = generateJobOp(op, ctx);
+    expect(res.error).toBeNull();
+    const z = res.moves.find((m) => m.words.z !== undefined)!;
+    expect(z.words.z).toBeCloseTo(11.5, 6); // artwork surface 10 + focus 1.5
+    expect(res.moves.some((m) => m.spindleRpm !== undefined)).toBe(false);
+    expect(res.moves.some((m) => m.power === 0.2)).toBe(true); // 20% → S0.2
+    // feed from the material's laser column (aluminum: Makera's own 100)
+    const cut = res.moves.find((m) => !m.rapid && m.words.x !== undefined && m.power === 0.2)!;
+    expect(cut.feed).toBe(100);
+  });
+
+  it('refuses the laser on cutting ops', () => {
+    const pocket = newJobOp('pocket', laserTool, cylStock.materialId, cylStock);
+    const res = generateJobOp(pocket, ctx);
+    expect(res.error).toMatch(/laser only fits the engrave/);
+  });
+});

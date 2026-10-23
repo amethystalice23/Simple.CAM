@@ -50,17 +50,23 @@ export interface EngraveParams {
   /** line work in frame space, mm ON THE SURFACE: flat = machine XY,
    * wrapped = (U around, V axial). Each path is traced start → end. */
   paths: { x: number; y: number }[][];
-  /** cut depth below the surface, mm */
+  /** cut depth below the surface, mm (ignored when `laser` is set) */
   depth: number;
-  /** depth-per-level ladder, mm */
+  /** depth-per-level ladder, mm (ignored when `laser` is set) */
   stepDown: number;
   /** surface cut feed, mm/min (G94; wrapped segments may run slower) */
   feed: number;
-  /** straight-plunge feed at path starts, mm/min */
+  /** straight-plunge feed at path starts, mm/min (ignored when `laser`) */
   plungeFeed: number;
-  /** rapid clearance above the surface, mm */
+  /** rapid clearance above the surface, mm (ignored when `laser`) */
   clearance: number;
   frame: EngraveFlatFrame | EngraveWrappedFrame;
+  /** LASER (docs/makera-dialect.md "Laser job"): single pass riding at
+   * `focus` above the surface — no plunge, no depth ladder, no clearance
+   * lifts; the beam is the modal S word on G1s, so each path's first cut
+   * stamps `power` (0–1) and a bare-power move extinguishes (S0) before
+   * travels. G0 never fires. */
+  laser?: { focus: number; power: number };
 }
 
 export interface EngraveResult {
@@ -81,14 +87,15 @@ function depthLadder(depth: number, stepDown: number): number[] {
 }
 
 export function engrave(op: EngraveParams): EngraveResult {
-  if (op.depth <= 0) throw new Error('depth must be positive');
-  if (op.stepDown <= 0) throw new Error('stepDown must be positive');
-  if (op.feed <= 0) throw new Error('feed must be positive');
-  if (op.plungeFeed <= 0) throw new Error('plungeFeed must be positive');
   if (op.paths.length === 0) throw new Error('engrave needs at least one path');
   op.paths.forEach((p, i) => {
     if (p.length < 2) throw new Error(`path ${i + 1} needs at least two points`);
   });
+  if (op.feed <= 0) throw new Error('feed must be positive');
+  if (op.laser) return engraveLaser(op);
+  if (op.depth <= 0) throw new Error('depth must be positive');
+  if (op.stepDown <= 0) throw new Error('stepDown must be positive');
+  if (op.plungeFeed <= 0) throw new Error('plungeFeed must be positive');
 
   const wrapped = op.frame.kind === 'wrapped';
   const R = wrapped ? (op.frame as EngraveWrappedFrame).radius : 0;
@@ -182,5 +189,85 @@ export function engrave(op: EngraveParams): EngraveResult {
     lifted = true;
   }
 
+  return { moves, estimatedMinutes: minutes, effectiveFeed: effective };
+}
+/**
+ * The LASER variant (docs/makera-dialect.md "Laser job"): single pass,
+ * the head riding at `focus` above the surface — no plunge, no depth
+ * ladder, no clearance lifts; the beam is the modal S word on G1s, so
+ * each path's first cut stamps the power and a bare G1 (power 0)
+ * extinguishes before the travel. The post brackets the op with
+ * M321/M322 and emits M3 after the first move (the focus-height rapid)
+ * — matching the mill-tested Makera sequence exactly.
+ */
+function engraveLaser(op: EngraveParams): EngraveResult {
+  const { focus, power } = op.laser!;
+  if (focus < 0) throw new Error('laser focus must not be negative');
+  if (power <= 0 || power > 1) throw new Error('laser power must be within (0, 1]');
+  const wrapped = op.frame.kind === 'wrapped';
+  const R = wrapped ? (op.frame as EngraveWrappedFrame).radius : 0;
+  if (wrapped && R <= 0) throw new Error('radius must be positive');
+  const degPerMm = wrapped ? 180 / (Math.PI * R) : 0;
+  const passZ = op.frame.surfaceZ + focus;
+
+  const moves: Move[] = [];
+  let minutes = 0;
+  let effective = op.feed;
+  let a = wrapped ? (op.frame as EngraveWrappedFrame).startA : 0;
+  // the focus-height rapid leads the op (the post emits M3 right after
+  // it), then Z never moves again — travels run at the same Z with the
+  // beam extinguished
+  moves.push({ words: { z: passZ }, feed: 0, rapid: true, comment: 'laser focus height' });
+
+  op.paths.forEach((path, pi) => {
+    if (pi > 0) {
+      // extinguish before the travel: a bare G1 with S0 (no axis words;
+      // the feed is unchanged so no F — the modal state carries)
+      moves.push({ words: {}, feed: op.feed, power: 0 });
+    }
+    if (wrapped) {
+      const frame = op.frame as EngraveWrappedFrame;
+      a += shortestATo(frame.datumAngle + path[0].x * degPerMm, a);
+      moves.push({ words: { a }, feed: 0, rapid: true });
+      moves.push({ words: { x: path[0].y }, feed: 0, rapid: true });
+    } else {
+      moves.push({ words: { x: path[0].x, y: path[0].y }, feed: 0, rapid: true });
+    }
+    let first = true;
+    for (let i = 0; i < path.length - 1; i++) {
+      const p0 = path[i];
+      const p1 = path[i + 1];
+      if (wrapped) {
+        const dA = (p1.x - p0.x) * degPerMm;
+        const dX = p1.y - p0.y;
+        const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+        if (Math.abs(dA) < 1e-12 && Math.abs(dX) < 1e-12) continue;
+        a += dA;
+        const stamp = first ? { power } : {};
+        if (Math.abs(dA) < 1e-12) {
+          moves.push({ words: { x: p1.y }, feed: op.feed, ...stamp });
+          minutes += Math.abs(dX) / op.feed;
+        } else if (Math.abs(dX) < 1e-12) {
+          moves.push({ words: { a }, feed: ROTARY_FEED_DEG_MIN, ...stamp });
+          minutes += Math.abs(dA) / ROTARY_FEED_DEG_MIN;
+          effective = Math.min(effective, len / (Math.abs(dA) / ROTARY_FEED_DEG_MIN));
+        } else {
+          const t = Math.max(len / op.feed, (Math.abs(dA) / 360) / MAX_ROTARY_RPM);
+          moves.push({ words: { x: p1.y, a }, feed: 1 / t, ...stamp });
+          minutes += t;
+          effective = Math.min(effective, len / t);
+        }
+      } else {
+        const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+        if (len < 1e-12) continue;
+        moves.push({ words: { x: p1.x, y: p1.y }, feed: op.feed, ...(first ? { power } : {}) });
+        minutes += len / op.feed;
+      }
+      first = false;
+    }
+  });
+  // the last path ends beam-on: extinguish — the example's `G1 S0`
+  // right before the M05/M322 tail
+  moves.push({ words: {}, feed: op.feed, power: 0 });
   return { moves, estimatedMinutes: minutes, effectiveFeed: effective };
 }

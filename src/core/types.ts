@@ -10,7 +10,7 @@
 export interface Tool {
   id: string;
   name: string;
-  type: 'flat' | 'ball' | 'bull' | 'vbit' | 'drill' | 'threadmill' | 'corn';
+  type: 'flat' | 'ball' | 'bull' | 'vbit' | 'drill' | 'threadmill' | 'corn' | 'laser';
   /** cutting diameter, mm (for vbit: the large end) */
   diameter: number;
   /** included tip angle, degrees (vbit/engraver) */
@@ -34,6 +34,8 @@ export interface Tool {
   drillPointAngle?: number;
   /** thread pitch, mm (threadmill) */
   pitch?: number;
+  /** LASER: focus/standoff height the head rides at above the surface, mm */
+  focus?: number;
   /**
    * Makera's per-tool, per-material cutting presets (imported from the
    * Fusion start-values; see scripts/import-makera-tools.mjs). Generation
@@ -41,6 +43,12 @@ export interface Tool {
    * material-preset tables.
    */
   presets?: ToolPreset[];
+  /**
+   * Spindle speed, RPM — for a LASER tool this slot is the beam POWER
+   * in percent (documented reuse: the whole ⚡→preset→tool resolution
+   * chain is shared, and per-material presets give per-material power).
+   * The post emits it as the 0–1 S fraction, never an `S<rpm> M3` line.
+   */
   spindleRpm: number;
 }
 
@@ -84,6 +92,13 @@ export interface Move {
    * the post emits Makera's own `S<rpm> M3` line when it changes.
    */
   spindleRpm?: number;
+  /**
+   * LASER beam power as a 0–1 fraction (docs/makera-dialect.md "Laser
+   * job"): the modal S word on G1s — G0 never fires the beam. Stamped on
+   * each path's first cut and as 0 to extinguish before travels; the post
+   * emits S on change and brackets the op with M321/M322.
+   */
+  power?: number;
   /**
    * Set on an op's FIRST move by the export pipeline: the op's 1-based
    * position in the exported job, its display name, and the controller

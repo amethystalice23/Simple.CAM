@@ -25,7 +25,7 @@ import type {
   Stock,
   Tool,
 } from '../core/types';
-import { MAKERA_TOOLS } from '../core/makeraTools.generated';
+import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { planeExtent, transformFn } from './featureOverlays';
 import { resolveFeature, sourcesFor } from './featureSources';
 import { ModelPanel } from './ModelPanel';
@@ -76,7 +76,7 @@ function loadToolLibrary(): Tool[] {
   } catch {
     // corrupt or unavailable storage — fall back to presets
   }
-  return MAKERA_TOOLS;
+  return BUILT_IN_TOOLS;
 }
 
 /** Sensible default selection for the demo job: a Ø6 flat cutter. */
@@ -1013,8 +1013,8 @@ export function App() {
               onSelect={setToolId}
               onChange={setTools}
               onRestorePresets={() => {
-                setTools(MAKERA_TOOLS);
-                setToolId(defaultToolId(MAKERA_TOOLS));
+                setTools(BUILT_IN_TOOLS);
+                setToolId(defaultToolId(BUILT_IN_TOOLS));
               }}
             />
           )}

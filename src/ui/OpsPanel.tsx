@@ -239,13 +239,24 @@ function RatesPopup(props: {
         step={10}
         onCommit={(v) => setRate({ plungeFeed: v })}
       />
-      <NumberField
-        label="Spindle (rpm)"
-        value={rates.spindleRpm ?? defaults.spindleRpm}
-        min={100}
-        step={1000}
-        onCommit={(v) => setRate({ spindleRpm: v })}
-      />
+      {tool?.type === 'laser' ? (
+        // the ⚡ override on a laser op is beam power — the slot is shared
+        <NumberField
+          label="Power (%)"
+          value={rates.spindleRpm ?? defaults.spindleRpm}
+          min={1}
+          step={5}
+          onCommit={(v) => setRate({ spindleRpm: Math.min(100, Math.max(1, v)) })}
+        />
+      ) : (
+        <NumberField
+          label="Spindle (rpm)"
+          value={rates.spindleRpm ?? defaults.spindleRpm}
+          min={100}
+          step={1000}
+          onCommit={(v) => setRate({ spindleRpm: v })}
+        />
+      )}
       <NumberField
         label="Clearance (mm)"
         value={rates.clearance ?? SAFE_CLEARANCE}
@@ -696,19 +707,28 @@ function ParamFields(props: {
     case 'engrave':
       return (
         <>
-          <NumberField
-            label="Depth (mm)"
-            value={op.depth}
-            min={0.05}
-            step={0.1}
-            onCommit={(v) => upd({ depth: v })}
-          />
-          <NumberField
-            label="Step down (mm)"
-            value={op.stepDown}
-            min={0.05}
-            onCommit={(v) => upd({ stepDown: v })}
-          />
+          {props.tool?.type === 'laser' ? (
+            <p className="hint">
+              laser: a single pass at the tool's focus height — depth is ignored, power comes from
+              the tool (or the ⚡ override) and lands as the S word on the cut lines
+            </p>
+          ) : (
+            <>
+              <NumberField
+                label="Depth (mm)"
+                value={op.depth}
+                min={0.05}
+                step={0.1}
+                onCommit={(v) => upd({ depth: v })}
+              />
+              <NumberField
+                label="Step down (mm)"
+                value={op.stepDown}
+                min={0.05}
+                onCommit={(v) => upd({ stepDown: v })}
+              />
+            </>
+          )}
           <p className="hint">
             follows the selected artwork paths at depth — no tool offset, the centerline IS the
             path. The frame comes from the artwork itself: flat artwork cuts in its plane, wrapped

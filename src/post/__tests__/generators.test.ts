@@ -7,6 +7,7 @@ import { drill } from '../../cam/drill';
 import { faceCylinder } from '../../cam/faceCylinder';
 import { pocket2d } from '../../cam/pocket';
 import { profile2d } from '../../cam/profile';
+import { engrave } from '../../cam/engrave';
 import type { ChamferOp, DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
 
 const tool: Tool = { id: 't1', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
@@ -84,7 +85,47 @@ function checkGolden(name: string, gcode: string) {
   });
 }
 
+const laserTool: Tool = {
+  id: 'l1',
+  name: 'Laser Module',
+  type: 'laser',
+  diameter: 0.1, // spot
+  spindleRpm: 20, // the power% slot (documented reuse)
+  focus: 1.5,
+};
+
+// the mill-tested Makera sequence (examples/lengrave_TOP): M321, focus
+// rapid, M3 (after the rapid), S per path start, S0 between paths and
+// at the end, M05/M322 tails — no T M6, no TOOL header
+const laserMoves = engrave({
+  id: 'opL',
+  toolId: 'l1',
+  paths: [
+    [{ x: 0, y: 0 }, { x: 10, y: 0 }],
+    [{ x: 0, y: 5 }, { x: 10, y: 5 }],
+  ],
+  depth: 0.5, // ignored by the laser variant
+  stepDown: 0.25,
+  feed: 100, // Makera's own aluminum vector-engrave feed
+  plungeFeed: 50,
+  clearance: 5,
+  frame: { kind: 'flat', surfaceZ: 0 },
+  laser: { focus: 1.5, power: 0.2 }, // the example's S0.2
+}).moves.map((m, i) =>
+  i === 0 ? { ...m, op: { number: 1, name: 'Laser Vector', toolNumber: 1 } } : m,
+);
+
 describe('generator post goldens', () => {
+  checkGolden(
+    'engrave-laser.nc',
+    postCarvera({
+      moves: laserMoves,
+      tools: [laserTool],
+      options: { jobName: 'engrave-laser' },
+    }),
+  );
+
+
   checkGolden(
     'pocket-square.nc',
     postCarvera({

@@ -320,9 +320,16 @@ code copied). Two versions matter:
   Studio emits `M5` before each tool change. On manual machines it enters
   a `tool_waiting` state (controller pops the confirm dialog).
 - Laser: M321 → laser mode (drops current tool, applies `G92.5 Z0` laser
-  offset), M322 → back to CNC (`G92.1`), M323 test. Laser power is the
-  modal S word on G1/G2/G3 only (G0 never fires), and the beam requires
-  M3 while in laser mode — Studio's laser files emit that bare `M3`.
+  offset), M322 → back to CNC (`G92.1`), M323/M324 → laser test on/off.
+  Laser power is the modal S word on G1/G2/G3 only (G0 never fires), and
+  the beam requires M3 while in laser mode — Studio's laser files emit
+  that bare `M3`. Controller source adds: M325 S<n> = laser power scale;
+  the laser is interactive tool number 8888 (`M6 T8888` / `M493.2
+  T8888` — file playback never needs it: the module is fitted and
+  length-probed machine-side, then M321 carries the offset); firmware
+  config keys laser_module_maximum_power / minimum_power are 0–1
+  fractions, matching the S-word scale; M220/M223 = feed/spindle scale
+  (`$F`/`$O` on community firmware ≥ 2.1.0).
 - Probing/4th-axis calibration: M465 (single-axis angle probe), M465.1
   (probe 4th-axis stock, needs Y+H), M465.2 (with offset, X/Y/R);
   M469.1/.2 anchors, M469.4 headstock, M469.5 A-axis Z height,

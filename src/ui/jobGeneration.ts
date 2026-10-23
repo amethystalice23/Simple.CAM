@@ -524,7 +524,11 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
   }
   const stamped = { ...res, finalA } satisfies GeneratedOp;
   if (op.kind === 'index' || stamped.moves.length === 0) return stamped;
-  const rpm = rpmFor(ctx.tools.find((t) => t.id === op.toolId), ctx.stock.materialId, op.rates);
+  const opTool = ctx.tools.find((t) => t.id === op.toolId);
+  // a laser op's S word is the BEAM POWER (stamped per path by the
+  // generator) — an `S<rpm> M3` spindle line would fight it
+  if (opTool?.type === 'laser') return stamped;
+  const rpm = rpmFor(opTool, ctx.stock.materialId, op.rates);
   if (rpm === undefined) return stamped;
   return {
     ...stamped,
@@ -536,6 +540,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
   try {
     const tool = ctx.tools.find((t) => t.id === op.toolId);
     if (!tool) return fail('tool missing from library');
+    if (tool.type === 'laser' && op.kind !== 'engrave') {
+      // the module is a beam, not a cutter: it only fits engrave
+      return fail('the laser only fits the engrave operation — pick a cutting tool for this op');
+    }
     const material = getMaterial(ctx.stock.materialId);
     const { feed, plungeFeed } = feedsFor(tool, material, op.rates);
 
@@ -1122,6 +1130,17 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
                   datumAngle: ctx.datumAngle,
                   startA: ctx.startA,
                 },
+          ...(tool.type === 'laser'
+            ? {
+                // power% rides the spindleRpm slot through the same
+                // ⚡→preset→tool chain; the S word is the 0–1 fraction
+                laser: {
+                  focus: tool.focus ?? 1,
+                  power:
+                    (rpmFor(tool, ctx.stock.materialId, op.rates) ?? tool.spindleRpm) / 100,
+                },
+              }
+            : {}),
         });
         const limited =
           wrapD > 0 && res.effectiveFeed < feed - 1e-9

@@ -207,3 +207,55 @@ describe('engrave: validation', () => {
     ).toThrowError(/two points/);
   });
 });
+describe('engrave: laser', () => {
+  const laserParams: EngraveParams = {
+    ...base,
+    paths: [
+      [{ x: 0, y: 0 }, { x: 10, y: 0 }],
+      [{ x: 0, y: 5 }, { x: 10, y: 5 }],
+    ],
+    laser: { focus: 1.5, power: 0.2 },
+  };
+
+  it('single pass at focus height — no plunge, no ladder, no clearance lifts', () => {
+    const res = engrave(laserParams);
+    const zMoves = res.moves.filter((m) => m.words.z !== undefined);
+    expect(zMoves).toHaveLength(1); // the focus rapid only
+    expect(zMoves[0].words.z).toBeCloseTo(11.5, 6); // surface 10 + focus 1.5
+    expect(zMoves[0].rapid).toBe(true);
+    expect(res.moves.some((m) => !m.rapid && m.words.z !== undefined)).toBe(false); // no plunge
+  });
+
+  it("stamps power on each path's first cut, extinguishes before travels and at the end", () => {
+    const res = engrave(laserParams);
+    expect(res.moves.filter((m) => m.power === 0.2)).toHaveLength(2); // one per path
+    const out = res.moves.filter((m) => m.power === 0);
+    expect(out).toHaveLength(2); // between paths + the final extinguish
+    // the extinguish is a bare G1: no axis words (the post emits `G1 S0`)
+    expect(out[0].words.x).toBeUndefined();
+    expect(out[0].words.y).toBeUndefined();
+    expect(out[0].words.z).toBeUndefined();
+    expect(out[0].rapid).toBeUndefined();
+  });
+
+  it('wrapped laser keeps the G93 binding-constraint timing and stamps the first cut', () => {
+    const res = engrave({
+      ...laserParams,
+      feed: 1000,
+      frame: { kind: 'wrapped', radius: 8, surfaceZ: 8, datumAngle: 0, startA: 0 },
+      paths: [[{ x: 0, y: 0 }, { x: 10, y: 10 }]],
+      laser: { focus: 1, power: 0.65 },
+    });
+    const diag = res.moves.find((m) => !m.rapid && m.words.x !== undefined && m.words.a !== undefined)!;
+    expect(diag.power).toBeCloseTo(0.65, 6);
+    const dA = (10 / 8) * (180 / Math.PI);
+    const t = Math.max(Math.hypot(10, 10) / 1000, (dA / 360) / 6.6);
+    expect(diag.feed).toBeCloseTo(1 / t, 6);
+  });
+
+  it('validates laser fields with diagnosis', () => {
+    expect(() => engrave({ ...laserParams, laser: { focus: -1, power: 0.5 } })).toThrowError(/focus/);
+    expect(() => engrave({ ...laserParams, laser: { focus: 1, power: 1.5 } })).toThrowError(/power/);
+    expect(() => engrave({ ...laserParams, laser: { focus: 1, power: 0 } })).toThrowError(/power/);
+  });
+});

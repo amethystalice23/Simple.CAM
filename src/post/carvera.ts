@@ -41,43 +41,51 @@ function toolComments(tools: Tool[], toolNumbers?: number[]): string[] {
   // Community Controller builds 3D tool meshes and M6 popups from 13 fields.
   // Order: number, id, name, type, handlediameter, sticklength, shoulderlength,
   // flutelength, diameter, tipdiameter, cornerradius, angle, halfAngle.
-  return tools.map((t, i) => {
-    const typeMap: Record<Tool['type'], string> = {
-      flat: 'Flat End',
-      ball: 'Ball Nose',
-      bull: 'Bull Nose',
-      vbit: 'V-Bit',
-      drill: 'Drill',
-      threadmill: 'Thread',
-      corn: 'V-Bit', // Chamfer-style cutter
-    };
+  // LASER tools carry no TOOL header at all — Makera's own laser files
+  // emit none (the module is fitted and length-probed machine-side).
+  return tools
+    .map((t, i) => ({ t, num: toolNumbers?.[i] ?? i + 1 }))
+    .filter(({ t }) => t.type !== 'laser')
+    .map(({ t, num }) => {
+      const typeMap: Record<Tool['type'], string> = {
+        flat: 'Flat End',
+        ball: 'Ball Nose',
+        bull: 'Bull Nose',
+        vbit: 'V-Bit',
+        drill: 'Drill',
+        threadmill: 'Thread',
+        corn: 'V-Bit', // Chamfer-style cutter
+        laser: 'Laser',
+      };
 
-    const parts = [
-      `;@MKR|TOOL|number=${toolNumbers?.[i] ?? i + 1}`,
-      `id=${t.id}`,
-      `name=${t.name}`,
-      `type=${typeMap[t.type]}`,
-      `handlediameter=${fmt(t.shaftDiameter ?? t.diameter, 2)}`,
-      `sticklength=0`,
-      `shoulderlength=${fmt(t.fluteLength ?? 0, 2)}`,
-      `flutelength=${fmt(t.fluteLength ?? 0, 2)}`,
-      `diameter=${fmt(t.diameter, 2)}`,
-      `tipdiameter=${fmt(t.tipDiameter ?? t.diameter, 2)}`,
-      `cornerradius=${fmt(t.cornerRadius ?? 0, 2)}`,
-      `angle=${fmt(t.vAngle ?? 0, 2)}`,
-      `halfAngle=${fmt((t.vAngle ?? 0) / 2, 2)}`,
-    ];
-    return parts.join('|');
-  });
+      const parts = [
+        `;@MKR|TOOL|number=${num}`,
+        `id=${t.id}`,
+        `name=${t.name}`,
+        `type=${typeMap[t.type]}`,
+        `handlediameter=${fmt(t.shaftDiameter ?? t.diameter, 2)}`,
+        `sticklength=0`,
+        `shoulderlength=${fmt(t.fluteLength ?? 0, 2)}`,
+        `flutelength=${fmt(t.fluteLength ?? 0, 2)}`,
+        `diameter=${fmt(t.diameter, 2)}`,
+        `tipdiameter=${fmt(t.tipDiameter ?? t.diameter, 2)}`,
+        `cornerradius=${fmt(t.cornerRadius ?? 0, 2)}`,
+        `angle=${fmt(t.vAngle ?? 0, 2)}`,
+        `halfAngle=${fmt((t.vAngle ?? 0) / 2, 2)}`,
+      ];
+      return parts.join('|');
+    });
 }
 
-function wordsLine(m: Move, withFeed: boolean): string {
+function wordsLine(m: Move, withFeed: boolean, sWord?: string): string {
   const w = m.words;
   const parts: string[] = [];
   if (w.x !== undefined) parts.push(`X${fmt(w.x, 2)}`);
   if (w.y !== undefined) parts.push(`Y${fmt(w.y, 2)}`);
   if (w.z !== undefined) parts.push(`Z${fmt(w.z, 2)}`);
   if (w.a !== undefined) parts.push(`A${fmt(w.a, 2)}`);
+  // the laser's S rides motion lines like Makera's own: `S0.2 F100`
+  if (sWord) parts.push(sWord);
   if (withFeed) parts.push(`F${fmt(m.feed, 2)}`);
   return parts.join(' ');
 }
@@ -126,10 +134,21 @@ export function postCarvera(input: PostInput): string {
 
   // ---- moves ----
   // holder object: TS narrowing of closure-mutated lets is unsound here
-  const st: { mode: FeedMode; lastFeed: number; lastSpindle: number; lastOp?: Move['op'] } = {
+  const st: {
+    mode: FeedMode;
+    lastFeed: number;
+    lastSpindle: number;
+    lastPower: number;
+    laserMode: boolean;
+    pendingLaserM3: boolean;
+    lastOp?: Move['op'];
+  } = {
     mode: 'G94',
     lastFeed: -1,
     lastSpindle: -1,
+    lastPower: -1,
+    laserMode: false,
+    pendingLaserM3: false,
   };
 
   const setMode = (want: FeedMode) => {
@@ -145,6 +164,15 @@ export function postCarvera(input: PostInput): string {
     if (m.op) {
       const prevOp = st.lastOp;
       if (!prevOp || m.op.number !== prevOp.number) {
+        // leaving a laser op: beam off, module off — Makera's own tail
+        // order (the footer's M05 still closes the file)
+        if (st.laserMode) {
+          lines.push('M05');
+          lines.push('M322');
+          lines.push('');
+          st.laserMode = false;
+          st.lastPower = -1;
+        }
         // Op boundary
         lines.push(`;@MKR|TOOLPATH_START|toolpath_number=${m.op.number}`);
         lines.push('');
@@ -152,26 +180,41 @@ export function postCarvera(input: PostInput): string {
         // Tool change?
         const prevToolNum = prevOp?.toolNumber;
         const currentToolNum = m.op.toolNumber;
+        const toolIdx = input.tools.findIndex(
+          (_, i) => (input.toolNumbers?.[i] ?? i + 1) === currentToolNum,
+        );
+        const isLaser = toolIdx !== -1 && input.tools[toolIdx].type === 'laser';
 
         if (!prevToolNum || currentToolNum !== prevToolNum) {
-          // New tool. Spindle check for M5.
-          if (st.lastSpindle !== -1) {
-            lines.push('M5');
+          if (isLaser) {
+            // laser module: fitted and length-probed machine-side — no
+            // T M6, no tool comment, no TOOL header. M321 enters laser
+            // mode (applying the G92.5 offset, so coordinates need no
+            // compensation); M3 follows the op's first move — the
+            // focus-height rapid — never before reaching focus height
+            lines.push('M321');
             lines.push('');
+            st.laserMode = true;
+            st.pendingLaserM3 = true;
+            st.lastPower = -1;
+          } else {
+            // New tool. Spindle check for M5.
+            if (st.lastSpindle !== -1) {
+              lines.push('M5');
+              lines.push('');
+            }
+
+            // Tool comment and T M6 block
+            const toolName = toolIdx !== -1 ? input.tools[toolIdx].name : `T${currentToolNum}`;
+
+            lines.push(`; T${currentToolNum}-${toolName}`);
+            lines.push('');
+            lines.push(`T${currentToolNum} M6`);
+            lines.push('');
+
+            // Reset spindle state to force S M3 re-emission even if RPM is unchanged
+            st.lastSpindle = -1;
           }
-
-          // Tool comment and T M6 block
-          // Tool name is the one whose controller tool number matches m.op.toolNumber
-          const toolIdx = input.tools.findIndex((_, i) => (input.toolNumbers?.[i] ?? i + 1) === currentToolNum);
-          const toolName = toolIdx !== -1 ? input.tools[toolIdx].name : `T${currentToolNum}`;
-
-          lines.push(`; T${currentToolNum}-${toolName}`);
-          lines.push('');
-          lines.push(`T${currentToolNum} M6`);
-          lines.push('');
-
-          // Reset spindle state to force S M3 re-emission even if RPM is unchanged
-          st.lastSpindle = -1;
         }
 
         // m.op.name is reserved for future BEGIN..END header block
@@ -181,6 +224,8 @@ export function postCarvera(input: PostInput): string {
 
     // spindle (re)start at the op boundary — Makera's own start syntax
     // `S<rpm> M3`, verified against their emitted programs (examples/).
+    // Laser ops never carry spindleRpm (generation skips it): their S
+    // word is the beam power on the motion lines below.
     if (m.spindleRpm !== undefined && m.spindleRpm !== st.lastSpindle) {
       lines.push(`S${m.spindleRpm} M3`);
       st.lastSpindle = m.spindleRpm;
@@ -190,18 +235,36 @@ export function postCarvera(input: PostInput): string {
 
     if (m.rapid) {
       lines.push(`G0 ${wordsLine(m, false)}${m.comment ? ` ; ${m.comment}` : ''}`);
-      continue;
+    } else {
+      // laser beam power: the modal S word, on G1s only (G0 never
+      // fires) — `S0.2 F100` rides the line like Makera's own
+      let sWord: string | undefined;
+      if (m.power !== undefined && m.power !== st.lastPower) {
+        sWord = `S${fmt(m.power, 3)}`;
+        st.lastPower = m.power;
+      }
+      setMode(simultaneous ? 'G93' : 'G94');
+      // In G93 the firmware REQUIRES F on every feed line — always emit it
+      // there; in G94 emit on change for readability (harmless either way).
+      const withFeed = st.mode === 'G93' || m.feed !== st.lastFeed;
+      if (withFeed) st.lastFeed = m.feed;
+      lines.push(`G1 ${wordsLine(m, withFeed, sWord)}${m.comment ? ` ; ${m.comment}` : ''}`);
     }
-
-    setMode(simultaneous ? 'G93' : 'G94');
-    // In G93 the firmware REQUIRES F on every feed line — always emit it
-    // there; in G94 emit on change for readability (harmless either way).
-    const withFeed = st.mode === 'G93' || m.feed !== st.lastFeed;
-    if (withFeed) st.lastFeed = m.feed;
-    lines.push(`G1 ${wordsLine(m, withFeed)}${m.comment ? ` ; ${m.comment}` : ''}`);
+    // the beam enables after the laser op's first move — the focus-height
+    // rapid — never before the head is at focus height
+    if (st.pendingLaserM3) {
+      lines.push('M3');
+      st.pendingLaserM3 = false;
+    }
   }
 
   // ---- footer ----
+  if (st.laserMode) {
+    // the job ends inside a laser op: Makera's own tail order — beam
+    // off, module off — then the standard footer below (M05 G28 M02)
+    lines.push('M05');
+    lines.push('M322');
+  }
   if (st.mode === 'G93') lines.push('G94');
   if (opts.wrapA && usedA) {
     lines.push('; shrink work-coordinate A back to ±360');
