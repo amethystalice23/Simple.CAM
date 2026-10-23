@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Tool } from '../core/types';
-import { mergeImportedTools, parseFusionToolCsv } from '../core/toolImport';
+import { exportToolsCsv, mergeImportedTools, parseFusionToolCsv } from '../core/toolImport';
 import { getMaterial, MATERIALS } from '../core/materials';
 import { toolPresetFor } from './jobGeneration';
 import { NumberField, TextField } from './fields';
@@ -140,7 +140,7 @@ function PresetTablePopup(props: { tool: Tool; materialId: string; onClose: () =
   );
 }
 
-const TOOL_TYPES: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill', 'corn'];
+const TOOL_TYPES: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill', 'corn', 'laser'];
 
 /** Nested grouping for the list: shank → subtype → tools by ascending diameter. */
 function groupTools(tools: Tool[]) {
@@ -250,6 +250,19 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
     for (const w of warnings) pushToast(w, 'warn');
   };
 
+  /** the exact inverse of the CSV import — tweaked libraries are worth
+   * backing up: re-importing merges (id collisions get suffixes) */
+  const exportLibrary = () => {
+    const csv = exportToolsCsv(tools);
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'simple.cam-tool-library.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    pushToast(`Exported ${tools.length} tool${tools.length === 1 ? '' : 's'}`);
+  };
+
   const filtered = tools.filter(
     (t) =>
       (typeFilter === 'all' || t.type === typeFilter) &&
@@ -336,6 +349,14 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
           >
             Import CSV…
           </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Save the whole library as the same CSV format the import reads — your tweaks backed up"
+            onClick={exportLibrary}
+          >
+            Export CSV…
+          </button>
           <button type="button" className="secondary" onClick={onRestorePresets}>
             Restore Makera presets
           </button>
@@ -382,7 +403,17 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
         {editing?.type === 'threadmill' && (
           <NumberField label="Pitch (mm)" value={editing.pitch ?? 0.5} min={0.05} step={0.05} onCommit={(v) => upd({ pitch: v })} />
         )}
-        <NumberField label="Spindle RPM" value={editing?.spindleRpm ?? 18000} min={100} step={1000} onCommit={(v) => upd({ spindleRpm: v })} />
+        {editing?.type === 'laser' && (
+          // the beam's standoff: the head rides here above the surface —
+          // engraved as the op's single Z rapid (Makera's own G0 Z<focus>)
+          <NumberField label="Focus height (mm)" value={editing.focus ?? 1} min={0} step={0.1} onCommit={(v) => upd({ focus: v })} />
+        )}
+        {editing?.type === 'laser' ? (
+          // the spindleRpm slot doubles as beam power for laser tools
+          <NumberField label="Power (%)" value={editing?.spindleRpm ?? 20} min={1} step={5} onCommit={(v) => upd({ spindleRpm: Math.min(100, Math.max(1, v)) })} />
+        ) : (
+          <NumberField label="Spindle RPM" value={editing?.spindleRpm ?? 18000} min={100} step={1000} onCommit={(v) => upd({ spindleRpm: v })} />
+        )}
         <NumberField label="Flutes" value={editing?.flutes ?? 2} min={1} step={1} onCommit={(v) => upd({ flutes: v })} />
         <NumberField label="Flute length (mm)" value={editing?.fluteLength ?? 0} min={0} onCommit={(v) => upd({ fluteLength: v })} />
         <NumberField label="Overall length (mm)" value={editing?.overallLength ?? 0} min={0} onCommit={(v) => upd({ overallLength: v })} />

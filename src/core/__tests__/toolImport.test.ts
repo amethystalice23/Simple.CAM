@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '../types';
-import { mergeImportedTools, parseFusionToolCsv, splitCsv } from '../toolImport';
+import { exportToolsCsv, mergeImportedTools, parseFusionToolCsv, splitCsv } from '../toolImport';
 
 /**
  * Fixtures excerpted from the real Carvera community-profile exports
@@ -378,13 +378,15 @@ describe('parseFusionToolCsv', () => {
     });
   });
 
-  it('imports drills with no presets (empty cutting feed) and the default RPM', () => {
+  it('imports drills with no presets (empty cutting feed), keeping the row speed', () => {
     const drill = tools[3];
     expect(drill.type).toBe('drill');
     expect(drill.subtype).toBe('Drill');
     expect(drill.drillPointAngle).toBe(118);
     expect(drill.presets).toBeUndefined(); // feedCutting empty on every row
-    expect(drill.spindleRpm).toBe(18000); // script default
+    // the real rows carry 10000 (verified against the community CSV); the
+    // .tools importer has no field to read, so its drills keep the default
+    expect(drill.spindleRpm).toBe(10000);
   });
 
   it('maps the engraving chamfer mill to a vbit with included angle', () => {
@@ -492,5 +494,73 @@ describe('mergeImportedTools', () => {
   it('returns the existing library unchanged for an empty import', () => {
     const existing = [mill('a'), mill('b')];
     expect(mergeImportedTools(existing, [])).toEqual(existing);
+  });
+});
+describe('exportToolsCsv ↔ parseFusionToolCsv round-trip', () => {
+  const library: Tool[] = [
+    {
+      id: 'custom-flat',
+      name: 'My 3mm flat, tweaked',
+      type: 'flat',
+      diameter: 3,
+      spindleRpm: 12000, // superseded by presets[0] on re-import, as ever
+      flutes: 2,
+      fluteLength: 10,
+      shaftDiameter: 3.175,
+      presets: [
+        { material: 'Aluminum', spindleRpm: 11000, feed: 420, plungeFeed: 140, stepDown: 0.8, rampFeed: 250 },
+        { material: 'Hardwood', spindleRpm: 16000, feed: 1500, plungeFeed: 500, stepDown: 2, rampFeed: 900 },
+      ],
+    },
+    { id: 'custom-vbit', name: '60° engraver', type: 'vbit', diameter: 3.175, vAngle: 60, tipDiameter: 0.1, spindleRpm: 18000 },
+    { id: 'custom-drill', name: '3mm drill', type: 'drill', diameter: 3, drillPointAngle: 118, spindleRpm: 18000 },
+    { id: 'custom-corn', name: '2.175mm corn bit', type: 'corn', diameter: 2.175, spindleRpm: 18000 },
+    { id: 'custom-threadmill', name: 'M6 thread mill', type: 'threadmill', diameter: 5, pitch: 1, spindleRpm: 18000 },
+    {
+      id: 'custom-laser',
+      name: 'Laser Module',
+      type: 'laser',
+      diameter: 0.1,
+      spindleRpm: 20,
+      focus: 1.5,
+      presets: [{ material: 'Aluminum', spindleRpm: 20, feed: 100, plungeFeed: 100, stepDown: 0.5, rampFeed: 100 }],
+    },
+    { id: 'singular', name: 'Preset-less 2mm flat', type: 'flat', diameter: 2, spindleRpm: 15000 },
+  ];
+
+  it('round-trips every field (ids rebuild from the name slug, per the import convention)', () => {
+    const { tools, warnings } = parseFusionToolCsv(exportToolsCsv(library));
+    expect(warnings).toEqual([]);
+    expect(tools.map((t) => t.name)).toEqual(library.map((t) => t.name));
+    const byName = (name: string) => tools.find((t) => t.name === name)!;
+    const flat = byName('My 3mm flat, tweaked');
+    expect(flat.type).toBe('flat');
+    expect(flat.spindleRpm).toBe(11000); // presets[0] wins, as ever
+    expect(flat.presets?.map((p) => p.material)).toEqual(['Aluminum', 'Hardwood']);
+    expect(flat.presets?.[1].feed).toBe(1500);
+    expect(flat.flutes).toBe(2);
+    expect(flat.shaftDiameter).toBeCloseTo(3.175, 6);
+    const vb = byName('60° engraver');
+    expect(vb.type).toBe('vbit');
+    expect(vb.vAngle).toBeCloseTo(60, 6); // half-angle there and back
+    expect(vb.tipDiameter).toBeCloseTo(0.1, 6);
+    expect(byName('3mm drill').drillPointAngle).toBe(118);
+    expect(byName('2.175mm corn bit').type).toBe('corn'); // description rule
+    expect(byName('M6 thread mill').pitch).toBe(1);
+    const laser = byName('Laser Module');
+    expect(laser.type).toBe('laser');
+    expect(laser.focus).toBeCloseTo(1.5, 6);
+    expect(laser.spindleRpm).toBe(20);
+    expect(laser.presets?.[0].feed).toBe(100);
+    expect(byName('Preset-less 2mm flat').spindleRpm).toBe(15000); // singular
+  });
+
+  it("quotes names with commas and quotes (RFC 4180)", () => {
+    const csv = exportToolsCsv([
+      { id: 'x', name: 'Weird "bit", 2mm', type: 'flat', diameter: 2, spindleRpm: 18000 },
+    ]);
+    const { tools, warnings } = parseFusionToolCsv(csv);
+    expect(warnings).toEqual([]);
+    expect(tools[0].name).toBe('Weird "bit", 2mm');
   });
 });

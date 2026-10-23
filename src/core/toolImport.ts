@@ -16,7 +16,10 @@
  * Mapping decisions mirror the build-time importer
  * scripts/import-makera-tools.mjs (type/subtype derivation incl. the corn-bit
  * special case, preset filtering and plunge/ramp fallbacks, the 18000 RPM
- * default) so a CSV import and a .tools import yield the same Tool.
+ * default) so a CSV import and a .tools import yield the same Tool — one
+ * exception: a preset-less tool whose row carries a singular spindle speed
+ * keeps it (Makera's own drill CSVs say 10000; the .tools format has no such
+ * field, so its preset-less tools keep the 18000 default).
  */
 import type { Tool, ToolPreset } from './types';
 
@@ -39,6 +42,8 @@ const TYPE_BY_FUSION_TYPE: Partial<Record<string, Tool['type']>> = {
   engraver: 'vbit',
   drill: 'drill',
   'thread mill': 'threadmill',
+  // OUR extension (exportToolsCsv writes it; Makera CSVs never carry one)
+  laser: 'laser',
 };
 
 /**
@@ -274,6 +279,7 @@ export function parseFusionToolCsv(text: string): ToolImportResult {
     }
     if (type === 'drill') setFinite(tool, 'drillPointAngle', num(first, cols, 'tool_tipAngle'));
     if (type === 'threadmill') setFinite(tool, 'pitch', num(first, cols, 'tool_threadPitch'));
+    if (type === 'laser') setFinite(tool, 'focus', num(first, cols, 'tool_focus'));
 
     const presets: ToolPreset[] = [];
     const seenMaterials = new Set<string>();
@@ -287,6 +293,12 @@ export function parseFusionToolCsv(text: string): ToolImportResult {
     if (presets.length > 0) {
       tool.presets = presets;
       tool.spindleRpm = presets[0].spindleRpm;
+    } else {
+      // no preset rows: a singular spindle speed on the tool's own row —
+      // what exportToolsCsv writes for preset-less tools, and what Makera's
+      // own drill rows carry (verified: 10000) — wins; blank → the default
+      const singular = num(first, cols, 'tool_spindleSpeed');
+      if (singular !== undefined && singular > 0) tool.spindleRpm = Math.round(singular);
     }
 
     // Kebab slug of the description, numeric suffix on collision within
@@ -301,4 +313,103 @@ export function parseFusionToolCsv(text: string): ToolImportResult {
   }
 
   return { tools, warnings };
+}
+// ------------------------------------------------------------------ export
+
+/** our Tool.type → the Fusion `tool_type` token. Corn rides its
+ * description (the import rule detects it, as with Makera's own CSVs);
+ * `laser` is OUR extension — Makera libraries never carry one. */
+const FUSION_TYPE_OF: Record<Tool['type'], string> = {
+  flat: 'flat end mill',
+  ball: 'ball end mill',
+  bull: 'bull end mill',
+  vbit: 'chamfer mill',
+  drill: 'drill',
+  threadmill: 'thread mill',
+  corn: 'flat end mill',
+  laser: 'laser',
+};
+
+/** RFC-4180 cell: quoted when it contains a quote, comma, or newline. */
+function csvCell(v: string | number | undefined | null): string {
+  const s = v === undefined || v === null ? '' : String(v);
+  return /["\n\r,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+const fmtNum = (v: number | undefined): string => (v === undefined ? '' : String(v));
+
+/**
+ * The exact inverse of parseFusionToolCsv, in the Fusion shape Makera's
+ * libraries use: one row per preset, or a single row for a preset-less
+ * tool (carrying its singular spindle speed — the same column the
+ * preset rows use). Round-trips losslessly EXCEPT ids, which the import
+ * convention rebuilds from the description slug (mergeImportedTools
+ * suffixes collisions, so re-importing beside the originals is safe).
+ */
+export function exportToolsCsv(tools: Tool[]): string {
+  const header = [
+    'Tool Index (tool_index)',
+    'Type (tool_type)',
+    'Description (tool_description)',
+    'Unit (tool_unit)',
+    'Diameter (tool_diameter)',
+    'Shaft Diameter (tool_shaftDiameter)',
+    'Flute Length (tool_fluteLength)',
+    'Overall Length (tool_overallLength)',
+    'Number of Flutes (tool_numberOfFlutes)',
+    'Corner Radius (tool_cornerRadius)',
+    'Material (tool_material)',
+    'Taper Angle (tool_taperAngle)',
+    'Tip Diameter (tool_tipDiameter)',
+    'Tip Angle (tool_tipAngle)',
+    'Thread Pitch (tool_threadPitch)',
+    'Focus Height (tool_focus)',
+    'Preset (preset_name)',
+    'Spindle Speed (tool_spindleSpeed)',
+    'Cutting Feedrate (tool_feedCutting)',
+    'Feed Plunge (tool_feedPlunge)',
+    'Feed Ramp (tool_feedRamp)',
+    'Stepdown (tool_stepdown)',
+  ]
+    .map(csvCell)
+    .join(',');
+
+  const rows: string[] = [header];
+  tools.forEach((t, ti) => {
+    const cells = (preset: ToolPreset | undefined): string =>
+      [
+        String(ti + 1),
+        FUSION_TYPE_OF[t.type],
+        t.name,
+        'millimeters',
+        fmtNum(t.diameter),
+        fmtNum(t.shaftDiameter),
+        fmtNum(t.fluteLength),
+        fmtNum(t.overallLength),
+        fmtNum(t.flutes),
+        fmtNum(t.cornerRadius),
+        t.material ?? '',
+        t.type === 'vbit' ? fmtNum(t.vAngle === undefined ? undefined : t.vAngle / 2) : '',
+        t.type === 'vbit' ? fmtNum(t.tipDiameter) : '',
+        t.type === 'drill' ? fmtNum(t.drillPointAngle) : '',
+        t.type === 'threadmill' ? fmtNum(t.pitch) : '',
+        t.type === 'laser' ? fmtNum(t.focus) : '',
+        preset?.material ?? '',
+        // preset rows carry their own speed; a preset-less tool carries
+        // its singular value in the same column
+        fmtNum(preset?.spindleRpm ?? (t.presets?.length ? undefined : t.spindleRpm)),
+        fmtNum(preset?.feed),
+        fmtNum(preset?.plungeFeed),
+        fmtNum(preset?.rampFeed),
+        fmtNum(preset?.stepDown),
+      ]
+        .map(csvCell)
+        .join(',');
+    if (t.presets && t.presets.length > 0) {
+      for (const p of t.presets) rows.push(cells(p));
+    } else {
+      rows.push(cells(undefined));
+    }
+  });
+  return rows.join('\r\n') + '\r\n'; // the corpus is CRLF
 }
