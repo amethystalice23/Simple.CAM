@@ -322,6 +322,45 @@ export interface ThreadOp {
   clearance?: number;
 }
 
+/** One chamferable edge: a circle coaxial with the stock axis. */
+export interface CylChamferEdge {
+  /** machine X of the edge circle — fixed through the whole cut */
+  x: number;
+  /** the circle's Ø, mm — the tip lands at Ø/2 − depth */
+  diameter: number;
+}
+
+/**
+ * Chamfer edge circles coaxial with the rotary axis (docs/edge-tracing.md
+ * §6): a V-bit parked at the circle's exact X, swept one full A revolution
+ * per level with its tip at Ø/2 − depth — the degenerate face-cylinder
+ * vertical ring (one X, one ring per level). The depth IS the direction:
+ * - 0 — the tip anchors exactly on the circle; the flank shears whatever
+ *   rises above it on either side of X (a step wall, the root of an
+ *   existing chamfer). The wall's height is deliberately unknown (the
+ *   one-circle rule), so levels descend from the stock surface — air
+ *   sweeps are harmless and the wedge peels at stepDown increments.
+ * - > 0 — the circle is the highest point; the tip slides below it and
+ *   the flank opens outward (a rod end, the top of a modelled chamfer).
+ *   The ladder tops out at the circle itself.
+ */
+export interface CylChamferOp {
+  kind: 'cylChamfer';
+  id: string;
+  toolId: string;
+  edges: CylChamferEdge[];
+  /** tip depth below the anchor circle's Ø, mm (0 = anchor on it) */
+  depth: number;
+  /** radial step-per-level, mm */
+  stepDown: number;
+  /** G94 plunge feed at the level entries, mm/min */
+  plungeFeed: number;
+  /** direction of the A sweep */
+  rotation: 'cw' | 'ccw';
+  /** rapid clearance above the stock surface, mm — ⚡ override, else the default */
+  clearance?: number;
+}
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -650,6 +689,24 @@ export type JobOp =
        * indexed face "vertically up"). 4-axis mode only.
        */
       angle: number;
+    })
+  | (JobOpBase & {
+      kind: 'cylChamfer';
+      /**
+       * Chamfer edge circles around the stock axis (edge-tracing §6): one
+       * full A revolution at each selected circle's exact X, the V-bit
+       * flank through it. The circles come from the selection — face
+       * cylinder ops publish their step edges (Øtarget at Start/End X),
+       * the stock publishes its end rims, and model circles coaxial with
+       * the axis work too. Depth IS the direction: 0 anchors on the
+       * circle (cut up-and-out along the wall above it), >0 slides the
+       * tip below the circle (chamfer in from the rim).
+       */
+      /** chamfer depth below the selected circles' Ø, mm (0 = anchor on it) */
+      depth: number;
+      /** radial step-per-level, mm */
+      stepDown: number;
+      rotation: 'cw' | 'ccw';
     })
   | (JobOpBase & {
       kind: 'pocket';

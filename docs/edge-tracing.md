@@ -341,6 +341,53 @@ cleanup on prop changes must not touch it; only the unmount-only
 cleanup does. One handle = the section plane; the floor stays a feature
 pick, not a second handle.
 
+## 6. Cylinder chamfer: edge circles, one depth (spec 2026-10-23, settled with Alice)
+
+Chamfering edges on a turned cylinder — rod ends, face-op step edges,
+modelled chamfers on imported turned parts. The flat chamfer op can never
+do these in 4-axis mode: its gate needs a Z-facing loop, and a circle
+around the stock axis has its axis PARALLEL to the rotation axis, so
+indexing just spins it in place (no datum angle faces it up). The op for
+them is the degenerate **face-cylinder vertical ring**: one fixed X, one
+full A revolution per level, a V-bit instead of a flat — `src/cam/cylChamfer.ts`.
+
+**The cut.** Tip at the selected circle's exact X, at `Ø/2 − depth`, swept
+360° (A-only, G94 at ROTARY_FEED_DEG_MIN). The cone flank shears whichever
+side of X carries material, so there is NO side parameter; and the depth
+value IS the direction — the whole 4-case table (sharp edge stepping up,
+stepping down, existing chamfer top, existing chamfer root) collapses:
+
+- **depth 0** — anchor exactly ON the circle, cut up-and-out. The adjoining
+  diameter is deliberately unknown (the one-circle rule), so the level
+  ladder descends from the STOCK surface: air sweeps are harmless, the
+  wedge above the anchor peels at stepDown, the final pass lands exactly
+  on the anchor radius and produces the finished flank.
+- **depth > 0** — the circle is the highest point; the ladder tops out at
+  the circle and the tip slides below it. Chamfer angle is set by the tool
+  (`90° − half-angle` from the axis), width = `depth · tan(half-angle)`.
+
+**Edge circles (feature sources).** Acceptance is A-coaxiality + on-axis
+(center on the stock axis — else the sweep traces an ellipse), not
+Z-alignment; the index frame is deliberately not applied (a rotation about
+the stock axis maps such a circle to itself, and a full ring is
+datum-invariant). Circles come from anywhere:
+
+- **Job-published (`o:` ids, `opEdgeSource`)**: each face cylinder op
+  publishes exactly TWO circles at its OWN target Ø (xStart, xEnd) — the
+  one-circle rule: the root circle at the faced Ø is the up-anchor that
+  reaches the rim at the adjoining diameter, so no second circle at the
+  other Ø is published. Deleting the op dangles its ids (the standard
+  reselect failure); the ids follow edits live.
+- **Stock end rims** at the raw Ø — an unfaced rod end anchors like a
+  faced one (the original thread-entry case: end rim + a depth).
+- **Model circles** on imported turned parts, incl. sharp-junction roots
+  of modelled chamfers (§1): pick the top circle and cut down from it, or
+  the bottom circle and anchor on it.
+
+**Panel.** One depth box (0 = up-and-out), step down, rotation — no mode,
+side, or direction selects. The flat chamfer's frame-gate error now
+detects A-parallel selections and points here.
+
 ## Data model (src/core/types.ts additions)
 
 ```ts

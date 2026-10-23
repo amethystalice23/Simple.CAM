@@ -6,6 +6,7 @@ import { detectFeatures } from '../../cam/features';
 import {
   artworkLocalPoints,
   artworkSnapGeometry,
+  opEdgeSource,
   parseNamespacedId,
   primitiveGeometry,
   primitivePose,
@@ -14,7 +15,7 @@ import {
   splitSelection,
   unmatchedIds,
 } from '../featureSources';
-import { transformFn } from '../featureOverlays';
+import { buildFeatureOverlayData, transformFn } from '../featureOverlays';
 
 const cyl = (id: string, at = { x: 0, y: 0, z: 0 }): Primitive => ({
   kind: 'cylinder',
@@ -311,5 +312,78 @@ describe('artwork sources', () => {
     g.computeBoundingBox();
     expect(g.boundingBox!.min).toEqual({ x: 0, y: 0, z: 0 });
     expect(g.boundingBox!.max).toEqual({ x: 0, y: 0, z: 0 });
+  });
+});
+
+describe('opEdgeSource', () => {
+  const cylStock4 = {
+    kind: 'cylinder' as const,
+    length: 80,
+    xOrigin: 'mid' as const,
+    calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 },
+    axisMode: '4-axis' as const,
+    materialId: 'aluminum-6061',
+  };
+  const faceOp = {
+    id: 'jobop-1',
+    toolId: 't1',
+    featureIds: [],
+    kind: 'faceCylinder' as const,
+    targetDiameter: 40,
+    xStart: -30,
+    xEnd: 30,
+    stepDown: 1,
+    stepOver: null,
+    finishAllowance: 0.2,
+    rotation: 'cw' as const,
+    pattern: 'spiral' as const,
+  };
+
+  it('is absent in 3-axis mode (the circles are rotary-op anchors)', () => {
+    expect(opEdgeSource([faceOp], { ...cylStock4, axisMode: '3-axis' })).toBeNull();
+  });
+
+  it('publishes the stock end rims at the raw Ø and face-op edges at the target Ø', () => {
+    const src = opEdgeSource([faceOp], cylStock4)!;
+    expect(src).not.toBeNull();
+    const byId = new Map(src.features.circles.map((c) => [c.id, c]));
+    // stock spans machine X −40…40; rims at the raw Ø50, on the axis
+    const rim = byId.get('o:stock:end')!;
+    expect(rim.center).toEqual({ x: 40, y: 0, z: 0 });
+    expect(rim.radius).toBe(25);
+    expect(rim.axis).toEqual({ x: 1, y: 0, z: 0 });
+    // the face op's step edges at ITS OWN Ø (the one-circle rule), live
+    // with its fields
+    const start = byId.get('o:face:jobop-1:start')!;
+    expect(start.center).toEqual({ x: -30, y: 0, z: 0 });
+    expect(start.radius).toBe(20);
+    expect(byId.get('o:face:jobop-1:end')!.center.x).toBe(30);
+    // circles follow op edits — the declared geometry recomputes
+    const moved = opEdgeSource([{ ...faceOp, xStart: -25 }], cylStock4)!;
+    expect(moved.features.circles.find((c) => c.id === 'o:face:jobop-1:start')!.center.x).toBe(-25);
+  });
+
+  it('o: ids resolve through the shared pipeline and dangle when the op dies', () => {
+    const src = opEdgeSource([faceOp], cylStock4)!;
+    const r = resolveFeature([src], 'o:face:jobop-1:start');
+    expect(r).not.toBeNull();
+    expect(r!.kind).toBe('circle');
+    expect(r!.feature.id).toBe('o:face:jobop-1:start');
+    // the face op deleted → its circles vanish → the selection dangles
+    const after = opEdgeSource([], cylStock4)!;
+    expect(resolveFeature([after], 'o:face:jobop-1:start')).toBeNull();
+    // the stock rims survive
+    expect(resolveFeature([after], 'o:stock:start')).not.toBeNull();
+  });
+
+  it('renders and snaps like any source (identity transform, machine-space circles)', () => {
+    const src = opEdgeSource([faceOp], cylStock4)!;
+    const data = buildFeatureOverlayData(src.features, src.transform);
+    expect(data.circleSamples).toHaveLength(4); // 2 stock rims + 2 face edges
+    // the ring sits on the stock axis: every sample is radius 25 from it
+    for (const s of data.circleSamples[0]) {
+      expect(Math.hypot(s.y, s.z)).toBeCloseTo(25, 5);
+      expect(s.x).toBeCloseTo(-40, 5);
+    }
   });
 });

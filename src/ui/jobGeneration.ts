@@ -7,6 +7,7 @@
 
 import type * as THREE from 'three';
 import { DEFAULT_STEP_OVER_FACTOR, faceCylinder, SAFE_CLEARANCE, shortestATo } from '../cam/faceCylinder';
+import { cylChamfer } from '../cam/cylChamfer';
 import { engrave } from '../cam/engrave';
 import { spiralCarve } from '../cam/spiralCarve';
 import { thread } from '../cam/thread';
@@ -22,6 +23,7 @@ import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
 import type {
   ChamferLoop,
+  CylChamferEdge,
   DrillOp,
   JobOp,
   ModelTransform,
@@ -34,7 +36,12 @@ import type {
   Vec2,
 } from '../core/types';
 import { isDepthBearingJobOp, rotaryCalibrationOf, round2 } from '../core/types';
-import { chamferTargetsFromSelection, drillTargetsFromSelection, pocketRegionsFromSelection } from './opTargets';
+import {
+  chamferTargetsFromSelection,
+  cylChamferTargetsFromSelection,
+  drillTargetsFromSelection,
+  pocketRegionsFromSelection,
+} from './opTargets';
 import { transformFn } from './featureOverlays';
 import { resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
@@ -78,6 +85,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
+  { kind: 'cylChamfer', label: 'Cylinder chamfer (4-axis)', rotaryOnly: true },
   { kind: 'index', label: 'Index (4-axis)', rotaryOnly: true },
   { kind: 'faceCylinder', label: 'Face cylinder (4-axis)', rotaryOnly: true },
   { kind: 'spiralCarve', label: 'Spiral carve (4-axis)', rotaryOnly: true },
@@ -224,6 +232,10 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       return { ...base, kind, depth: 5, peckDepth: 2 };
     case 'chamfer':
       return { ...base, kind, mode: 'add', side: 'auto', direction: 'down', depth: 0.5 };
+    case 'cylChamfer':
+      // depth 0 = anchor on the selected circle (cut up-and-out) — the
+      // rod-end cases set a depth from the rim instead
+      return { ...base, kind, depth: 0, stepDown, rotation: 'cw' };
     case 'engrave':
       return { ...base, kind, depth: 0.5, stepDown: 0.25 };
     case 'index':
@@ -1040,6 +1052,62 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           minutes: res.estimatedMinutes,
           error: null,
           summary: `${loops.length} loop(s), ${op.depth}mm chamfer, ~${res.estimatedMinutes.toFixed(1)} min`,
+        };
+      }
+
+      case 'cylChamfer': {
+        if (ctx.stock.axisMode !== '4-axis') {
+          return fail('cylinder chamfer needs 4-axis mode (Stock tab)');
+        }
+        if (tool.type !== 'vbit') {
+          return fail('cylinder chamfer needs a V-bit — pick a chamfering/engraving bit from the library');
+        }
+        if (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180) {
+          return fail('this V-bit has no usable tip angle — set the included angle in the tool library');
+        }
+        const SEL =
+          'select edge circles around the stock axis — face-op step edges and ' +
+          'stock end rims show as green circles, and on-axis model circles work too';
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
+        const cal = rotaryCalibrationOf(ctx.stock);
+        const edges: CylChamferEdge[] = [];
+        for (const part of parts) {
+          const src = cylChamferTargetsFromSelection(
+            part.source.features,
+            part.ids,
+            part.source.transform,
+            cal,
+          );
+          if (src) edges.push(...src.edges);
+        }
+        if (edges.length === 0) return fail(SEL);
+        const res = cylChamfer(
+          {
+            kind: 'cylChamfer',
+            id: op.id,
+            toolId: tool.id,
+            edges,
+            depth: op.depth,
+            stepDown: op.stepDown,
+            rotation: op.rotation,
+            plungeFeed,
+            clearance: op.rates?.clearance,
+          },
+          cal,
+          tool,
+          ctx.startA,
+        );
+        return {
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
+          error: null,
+          summary:
+            `${edges.length} edge(s) × ${res.passes / edges.length} pass(es) ` +
+            (op.depth <= 1e-9
+              ? 'up-and-out from the anchor Ø'
+              : `${op.depth.toFixed(2)}mm below the rim (${res.width.toFixed(2)}mm wide)`) +
+            `, ${res.chamferAngleDeg.toFixed(0)}° from the bit, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 

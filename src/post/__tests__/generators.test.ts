@@ -3,12 +3,13 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { postCarvera } from '../carvera';
 import { chamfer } from '../../cam/chamfer';
+import { cylChamfer } from '../../cam/cylChamfer';
 import { drill } from '../../cam/drill';
 import { faceCylinder } from '../../cam/faceCylinder';
 import { pocket2d } from '../../cam/pocket';
 import { profile2d } from '../../cam/profile';
 import { engrave } from '../../cam/engrave';
-import type { ChamferOp, DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
+import type { ChamferOp, CylChamferOp, DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
 
 const tool: Tool = { id: 't1', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
 const drillTool: Tool = { id: 't2', name: '3mm drill', type: 'drill', diameter: 3, spindleRpm: 18000 };
@@ -273,6 +274,28 @@ describe('generator post goldens', () => {
       moves: chamfer(chamferOp, chamferTool).moves,
       tools: [chamferTool],
       options: { jobName: 'chamfer-rim' },
+    }),
+  );
+
+  // the cylinder chamfer: A-only ring sweeps in G94 (deg/min) at one
+  // fixed X, Z plunges per level — depth 0 ladders from the stock surface
+  const cylOp: CylChamferOp = {
+    kind: 'cylChamfer',
+    id: 'op7',
+    toolId: 't3',
+    edges: [{ x: 20, diameter: 15 }],
+    depth: 0, // anchor on the Ø15 circle, cut up-and-out
+    stepDown: 0.4, // Ø16.35 stock → levels 7.775 then 7.5 exactly
+    rotation: 'cw',
+    plungeFeed: 200,
+  };
+  checkGolden(
+    'cyl-chamfer.nc',
+    postCarvera({
+      moves: cylChamfer(cylOp, { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8.175 }, chamferTool)
+        .moves,
+      tools: [chamferTool],
+      options: { jobName: 'cyl-chamfer' },
     }),
   );
 });

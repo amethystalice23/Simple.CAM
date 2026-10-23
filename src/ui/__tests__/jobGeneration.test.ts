@@ -4,7 +4,7 @@ import { identityTransform, rotaryCalibrationOf } from '../../core/types';
 import { ROTARY_FEED_DEG_MIN } from '../../cam/faceCylinder';
 import type { JobOp, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
-import { sourcesFor } from '../featureSources';
+import { opEdgeSource, sourcesFor } from '../featureSources';
 import type { Primitive } from '../../core/types';
 import {
   datumAngleBefore,
@@ -1434,5 +1434,113 @@ describe('engrave generation: laser tool', () => {
     const pocket = newJobOp('pocket', laserTool, cylStock.materialId, cylStock);
     const res = generateJobOp(pocket, ctx);
     expect(res.error).toMatch(/laser only fits the engrave/);
+  });
+});
+
+describe('cylinder chamfer (edge circles → ring passes)', () => {
+  const vbit: Tool = {
+    id: 'v9',
+    name: '60° engraving bit',
+    type: 'vbit',
+    diameter: 3.175,
+    vAngle: 60,
+    tipDiameter: 0.2,
+    spindleRpm: 12000,
+  };
+  const face: JobOp = {
+    id: 'jobop-1',
+    toolId: 't1',
+    featureIds: [],
+    kind: 'faceCylinder',
+    targetDiameter: 40, // r=20 anchor
+    xStart: -30,
+    xEnd: 30,
+    stepDown: 1,
+    stepOver: null,
+    finishAllowance: 0.2,
+    rotation: 'cw',
+    pattern: 'spiral',
+  };
+  // the job's own edge circles ride the sources like any feature provider
+  const chamCtx: GenContext = {
+    stock: cylStock, // Ø50, spans machine X −40…40, axisZ 0
+    geometry: null,
+    features: null,
+    transform: identityTransform(),
+    tools: [tool, vbit],
+    primitives: [],
+    sources: [opEdgeSource([face], cylStock)!],
+    datumAngle: 0,
+    startA: 0,
+  };
+  const rimOp: JobOp = {
+    id: 'op9',
+    toolId: 'v9',
+    featureIds: ['o:stock:end'],
+    kind: 'cylChamfer',
+    depth: 0.5,
+    stepDown: 0.3,
+    rotation: 'cw',
+  };
+
+  it('chamfers the stock end rim: tip below the circle, one revolution per level', () => {
+    const res = generateJobOp(rimOp, chamCtx);
+    expect(res.error).toBeNull();
+    // Ø50 rim (r=25), depth 0.5, step 0.3 → two levels: 24.7 then 24.5
+    const sweeps = res.moves.filter((m) => m.words.a !== undefined && !m.rapid);
+    expect(sweeps).toHaveLength(2);
+    expect(sweeps[0].words.a).toBeCloseTo(360, 6);
+    expect(sweeps[1].words.a).toBeCloseTo(720, 6);
+    // X parked at the stock end (40) through the cut
+    expect(res.moves.find((m) => m.words.x !== undefined)!.words.x).toBeCloseTo(40, 6);
+    const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
+    expect(plunges[1].words.z!).toBeCloseTo(24.5, 6); // finished flank
+    // the op's spindle rides the first move like every cutting op
+    expect(res.moves[0].spindleRpm).toBe(12000);
+    expect(res.summary).toMatch(/1 edge/);
+    expect(res.finalA).toBeCloseTo(720, 6);
+  });
+
+  it('depth 0 on a face-op step edge ladders from the stock surface to the anchor', () => {
+    const stepOp: JobOp = {
+      ...rimOp,
+      featureIds: ['o:face:jobop-1:start'],
+      depth: 0, // anchor ON the Ø40 circle, cut up-and-out along the wall
+    };
+    const res = generateJobOp(stepOp, chamCtx);
+    expect(res.error).toBeNull();
+    // surface r=25 → anchor r=20 is 5mm at 0.3 steps: 17 levels, ending
+    // exactly on the anchor
+    const sweeps = res.moves.filter((m) => m.words.a !== undefined && !m.rapid);
+    expect(sweeps).toHaveLength(17);
+    const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
+    expect(plunges[plunges.length - 1].words.z!).toBeCloseTo(20, 6);
+    expect(res.moves.find((m) => m.words.x !== undefined)!.words.x).toBeCloseTo(-30, 6);
+  });
+
+  it('refuses flat tools and non-coaxial selections with explaining errors', () => {
+    expect(generateJobOp({ ...rimOp, toolId: 't1' }, chamCtx).error).toMatch(/needs a V-bit/);
+    // the model's Z-facing hole rim is no stock-axis circle
+    const modelCtx: GenContext = {
+      ...chamCtx,
+      sources: [
+        ...sourcesFor(geometry, features, identityTransform(), []),
+        opEdgeSource([], cylStock)!,
+      ],
+    };
+    expect(generateJobOp({ ...rimOp, featureIds: [holeCircleId] }, modelCtx).error).toMatch(
+      /no circle around the stock axis/,
+    );
+    // a dangling op-edge id (face op deleted) fails visibly — the STOCK
+    // rim survives, but the face-op edge is gone with its op
+    const dangle = generateJobOp({ ...rimOp, featureIds: ['o:face:jobop-1:start'] }, modelCtx);
+    expect(dangle.error).toMatch(/no longer exist|reselect/);
+    // and the stock rim still generates fine against the same sources
+    expect(generateJobOp(rimOp, modelCtx).error).toBeNull();
+  });
+
+  it('needs 4-axis mode', () => {
+    const res = generateJobOp(rimOp, { ...chamCtx, stock: boxStock });
+    expect(res.error).toMatch(/4-axis/);
   });
 });

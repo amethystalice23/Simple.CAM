@@ -6,7 +6,14 @@
 
 import * as THREE from 'three';
 import type { DetectedFeatures } from '../cam/features';
-import type { ChamferLoop, DrillOp, ModelTransform, Vec2 } from '../core/types';
+import type {
+  ChamferLoop,
+  CylChamferEdge,
+  DrillOp,
+  ModelTransform,
+  RotaryCalibration,
+  Vec2,
+} from '../core/types';
 import { transformFn } from './featureOverlays';
 
 /**
@@ -17,6 +24,12 @@ import { transformFn } from './featureOverlays';
 const Z_TOL = 0.985;
 /** Tolerance for "parallel to the machine drill axis". */
 const DRILL_Z_TOL = 0.999;
+/** Tolerance for "coaxial with the machine X / rotation axis" — a circle
+ * within ~10° of X bounds a surface the A sweep can cut. */
+const X_TOL = 0.985;
+/** A circle coaxial with X must sit ON the stock axis — farther off and
+ * the A sweep would trace an ellipse, not the selected circle. */
+const ON_AXIS_TOL_MM = 0.2;
 /** Sampling density for circle regions. */
 const CIRCLE_SEGMENTS = 64;
 
@@ -35,6 +48,13 @@ export interface PocketSource {
 function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: number }) => THREE.Vector3): number {
   const rotated = xf(v).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
   return rotated.z;
+}
+
+/** X component of a direction in machine space — 1 = parallel to the
+ * rotation axis (4th axis ∥ X, verified). */
+function machineAxisX(v: THREE.Vector3, xf: (p: { x: number; y: number; z: number }) => THREE.Vector3): number {
+  const rotated = xf(v).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
+  return rotated.x;
 }
 
 /**
@@ -340,13 +360,89 @@ export function chamferTargetsFromSelection(
   if (loops.length > 0) return { loops };
 
   // selected but nothing survived the frame gate — same diagnosis style
-  // as pocketing so the message explains itself
+  // as pocketing so the message explains itself. One geometry CAN never
+  // face up under indexing, and deserves its own message: a circle whose
+  // axis is PARALLEL to the rotation axis (a rod end, a step edge) just
+  // spins in place at every datum angle — that's the cylinder chamfer
+  // op's job, not a datum problem.
   if (selection.length > 0) {
+    for (const c of features.circles) {
+      if (!selection.includes(c.id)) continue;
+      const axis = new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z);
+      if (Math.abs(machineAxisX(axis, xf)) >= X_TOL) {
+        throw new Error(
+          'a circle around the stock axis can never be chamfered in the cutting frame — ' +
+            'its axis is the rotation axis, so indexing spins it in place. Use the ' +
+            'Cylinder chamfer op for rod ends and step edges',
+        );
+      }
+    }
     throw new Error(
       'the selected features cannot be chamfered in the cutting frame — ' +
         'they are not within ~10° of horizontal (a side face or thread circle ' +
         'may have snapped instead of the intended edge; zoom in and re-click, ' +
         'or check the datum angle)',
+    );
+  }
+  return null;
+}
+
+export interface CylChamferTargets {
+  /** accepted edge circles, machine space */
+  edges: CylChamferEdge[];
+}
+
+/**
+ * Cylinder-chamfer edges from the selection (edge-tracing §6): full
+ * circles whose axis is the machine X / rotation axis and whose center
+ * sits ON the stock axis — the A sweep cuts exactly those. The index
+ * frame is deliberately NOT applied: rotating about the stock axis maps
+ * such a circle to itself (center on the axis, X component unchanged),
+ * so the anchor is datum-invariant and a full 360° pass looks the same
+ * from any start angle. Face-op circles, stock end rims, and on-axis
+ * model circles all resolve here identically.
+ */
+export function cylChamferTargetsFromSelection(
+  features: DetectedFeatures,
+  selection: string[],
+  transform: ModelTransform,
+  calibration: RotaryCalibration,
+): CylChamferTargets | null {
+  const xf = transformFn(transform);
+  const edges: CylChamferEdge[] = [];
+  let sawOffAxis = false;
+  for (const c of features.circles) {
+    if (!selection.includes(c.id)) continue;
+    if (c.arcs) {
+      throw new Error(
+        'a partial circle (a broken rim) cannot be chamfered — select a full ' +
+          'circle around the stock axis',
+      );
+    }
+    if (Math.abs(machineAxisX(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < X_TOL) {
+      continue; // not coaxial with the rotation axis
+    }
+    const center = xf(c.center);
+    if (Math.hypot(center.y, center.z - calibration.axisZ) > ON_AXIS_TOL_MM) {
+      sawOffAxis = true; // around X, but not around the STOCK axis
+      continue;
+    }
+    edges.push({ x: center.x, diameter: c.radius * 2 });
+  }
+  if (edges.length > 0) return { edges };
+  if (sawOffAxis) {
+    throw new Error(
+      'the selected circle runs around X but sits off the stock axis — an A ' +
+        'sweep would trace an ellipse, not the circle (the primitive must sit ' +
+        'on the rotation axis)',
+    );
+  }
+  if (selection.length > 0) {
+    throw new Error(
+      'the selected features hold no circle around the stock axis — cylinder ' +
+        'chamfer cuts a full 360° ring, so it needs an edge circle coaxial with ' +
+        'the rotation axis (face-op step edges and stock end rims show as green ' +
+        'circles; zoom in and re-click)',
     );
   }
   return null;

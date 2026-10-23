@@ -101,6 +101,20 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
         mode !== op.mode || side !== op.side || direction !== op.direction || depth !== op.depth;
       return changed ? { ...op, mode, side, direction, depth } : op;
     }
+    if (op.kind === 'cylChamfer') {
+      // a save from a mid-build dev state may miss fields — normalize to
+      // the newJobOp defaults so generation never sees undefined
+      const rawDepth = (op as { depth?: unknown }).depth;
+      const rawStep = (op as { stepDown?: unknown }).stepDown;
+      const rawRot = (op as { rotation?: unknown }).rotation;
+      const normalized = {
+        ...op,
+        depth: typeof rawDepth === 'number' && rawDepth >= 0 ? rawDepth : 0,
+        stepDown: typeof rawStep === 'number' && rawStep > 0 ? rawStep : 0.5,
+        rotation: rawRot === 'cw' || rawRot === 'ccw' ? rawRot : 'cw',
+      } as JobOp;
+      return normalized;
+    }
     if (op.kind !== 'faceCylinder') return op;
     const raw = (op as { pattern?: unknown }).pattern;
     const pattern: FacePattern =

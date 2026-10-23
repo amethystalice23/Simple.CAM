@@ -27,7 +27,7 @@ import type {
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { planeExtent, transformFn } from './featureOverlays';
-import { resolveFeature, sourcesFor } from './featureSources';
+import { opEdgeSource, resolveFeature, sourcesFor } from './featureSources';
 import { ModelPanel } from './ModelPanel';
 import {
   artworkFromSvg,
@@ -152,11 +152,14 @@ export function App() {
 
   /** every selectable-feature provider: the model plus one source per
    * primitive (its features detected in local space, ids namespaced
-   * `p:<primId>:` so they never collide with model ids) */
-  const sources = useMemo(
-    () => sourcesFor(geometry, features, transform, primitives),
-    [geometry, features, transform, primitives],
-  );
+   * `p:<primId>:` so they never collide with model ids), plus the job's
+   * own edge circles (`o:` ids — face-op step edges + stock end rims,
+   * 4-axis only) for the cylinder chamfer op to anchor on */
+  const sources = useMemo(() => {
+    const s = sourcesFor(geometry, features, transform, primitives);
+    const oe = opEdgeSource(ops, stock);
+    return oe ? [...s, oe] : s;
+  }, [geometry, features, transform, primitives, ops, stock]);
 
   /** short descriptions by feature id, for op title snippets */
   const featureLabels = useMemo(() => {

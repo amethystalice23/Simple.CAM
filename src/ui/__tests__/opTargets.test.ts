@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
-import type { CircleFeature } from '../../core/types';
+import type { CircleFeature, RotaryCalibration } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import type { DetectedFeatures } from '../../cam/features';
 import { indexedPointRotation } from '../../cam/indexing';
-import { drillTargetsFromSelection, pocketRegionsFromSelection, chamferTargetsFromSelection } from '../opTargets';
+import {
+  chamferTargetsFromSelection,
+  cylChamferTargetsFromSelection,
+  drillTargetsFromSelection,
+  pocketRegionsFromSelection,
+} from '../opTargets';
 
 function plateWithHole(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -410,5 +415,98 @@ describe('partial circles: the path-following ops refuse broken rims', () => {
     expect(() =>
       chamferTargetsFromSelection(feats, [partial.id], identityTransform()),
     ).toThrowError(/partial circle/);
+  });
+});
+
+describe('cylChamferTargetsFromSelection', () => {
+  const cal: RotaryCalibration = { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 };
+  const xCircle = (
+    id: string,
+    x: number,
+    dia: number,
+    opts: { off?: { y: number; z: number }; inner?: boolean } = {},
+  ): CircleFeature => ({
+    kind: 'circle',
+    id,
+    center: { x, y: opts.off?.y ?? 0, z: opts.off?.z ?? 0 },
+    axis: { x: 1, y: 0, z: 0 },
+    radius: dia / 2,
+    inner: opts.inner ?? false,
+  });
+  const zCircle = (id: string): CircleFeature => ({
+    kind: 'circle',
+    id,
+    center: { x: 0, y: 0, z: 5 },
+    axis: { x: 0, y: 0, z: 1 },
+    radius: 3,
+    inner: true,
+  });
+  const feats = (...circles: CircleFeature[]): DetectedFeatures => ({
+    planes: [],
+    circles,
+    edges: [],
+    paths: [],
+    faceToPlane: new Int32Array(0),
+    planeLoops: [],
+  });
+
+  it('accepts full circles coaxial with the rotation axis, on the stock axis', () => {
+    const src = cylChamferTargetsFromSelection(
+      feats(xCircle('a', 12.5, 40), zCircle('z')),
+      ['a'],
+      identityTransform(),
+      cal,
+    );
+    expect(src).not.toBeNull();
+    expect(src!.edges).toEqual([{ x: 12.5, diameter: 40 }]);
+  });
+
+  it('accepts inner and outer circles alike — a ring around the axis is a ring', () => {
+    const src = cylChamferTargetsFromSelection(
+      feats(xCircle('a', 0, 40, { inner: true })),
+      ['a'],
+      identityTransform(),
+      cal,
+    );
+    expect(src!.edges).toHaveLength(1);
+  });
+
+  it('rejects circles off the stock axis with the ellipse message', () => {
+    expect(() =>
+      cylChamferTargetsFromSelection(
+        feats(xCircle('a', 0, 40, { off: { y: 2, z: 0 } })),
+        ['a'],
+        identityTransform(),
+        cal,
+      ),
+    ).toThrowError(/off the stock axis|ellipse/);
+  });
+
+  it('rejects a Z-facing circle selection with a message that says what to pick', () => {
+    expect(() =>
+      cylChamferTargetsFromSelection(feats(zCircle('z')), ['z'], identityTransform(), cal),
+    ).toThrowError(/no circle around the stock axis/);
+  });
+
+  it('refuses a partial circle loudly (a broken rim is no 360° path)', () => {
+    const partial = xCircle('p', 0, 40);
+    partial.arcs = [[{ x: 0, y: 0, z: 0 }]];
+    expect(() =>
+      cylChamferTargetsFromSelection(feats(partial), ['p'], identityTransform(), cal),
+    ).toThrowError(/partial circle/);
+  });
+
+  it('null on an empty selection', () => {
+    expect(
+      cylChamferTargetsFromSelection(feats(xCircle('a', 0, 40)), [], identityTransform(), cal),
+    ).toBeNull();
+  });
+
+  it('the flat chamfer gate points a stock-axis circle at the cylinder chamfer op', () => {
+    // a circle around the rotation axis can never face up under indexing —
+    // the error must say so instead of suggesting a datum fix
+    expect(() =>
+      chamferTargetsFromSelection(feats(xCircle('a', 0, 40)), ['a'], identityTransform()),
+    ).toThrowError(/Cylinder chamfer/);
   });
 });

@@ -14,13 +14,20 @@
 
 import * as THREE from 'three';
 import { detectFeatures, type DetectedFeatures } from '../cam/features';
+import {
+  identityTransform,
+  originSpan,
+  rotaryCalibrationOf,
+} from '../core/types';
 import type {
   CircleFeature,
   EdgeFeature,
+  JobOp,
   ModelTransform,
   PathFeature,
   PlaneFeature,
   Primitive,
+  Stock,
   Vec3,
 } from '../core/types';
 
@@ -229,6 +236,62 @@ export function parseNamespacedId(id: string): { primId: string; featureId: stri
   return m ? { primId: m[1], featureId: m[2] } : null;
 }
 
+/** The op-edge source id — `o:`-prefixed feature ids route here. */
+export const OP_EDGE_SOURCE_ID = 'op-edges';
+
+/**
+ * Features published by the JOB itself, not any mesh (edge-tracing §6):
+ * every face cylinder op's two step-edge circles at its OWN target Ø —
+ * the one-circle rule, deliberately not the adjoining diameter, because
+ * the cylinder-chamfer anchors on the faced circle and cuts up-and-out
+ * through whatever rises from it — plus the stock's end rims at the raw
+ * Ø, so an unfaced rod end anchors the same way. Local space IS machine
+ * space (identity transform): the circles are declared geometry computed
+ * from op fields, so they follow op edits live, and deleting the op
+ * dangles its ids — the standard visible "reselect" failure, like a
+ * resized primitive.
+ */
+export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
+  if (stock.axisMode !== '4-axis') return null;
+  const cal = rotaryCalibrationOf(stock);
+  const [x0, x1] =
+    stock.kind === 'cylinder'
+      ? originSpan(stock.xOrigin, stock.length)
+      : originSpan(stock.origin.x, stock.sizeX);
+  const circle = (id: string, x: number, diameter: number): CircleFeature => ({
+    kind: 'circle',
+    id,
+    center: { x, y: 0, z: cal.axisZ },
+    axis: { x: 1, y: 0, z: 0 },
+    radius: diameter / 2,
+    inner: false, // a boss outline: material inside the loop
+  });
+  const circles: CircleFeature[] = [
+    circle('o:stock:start', x0, cal.effectiveRadius * 2),
+    circle('o:stock:end', x1, cal.effectiveRadius * 2),
+  ];
+  for (const op of ops) {
+    if (op.kind !== 'faceCylinder') continue;
+    circles.push(circle(`o:face:${op.id}:start`, op.xStart, op.targetDiameter));
+    circles.push(circle(`o:face:${op.id}:end`, op.xEnd, op.targetDiameter));
+  }
+  return {
+    id: OP_EDGE_SOURCE_ID,
+    // declared geometry, no mesh: the raycast pipelines never hit it
+    // (the artwork precedent)
+    geometry: new THREE.BufferGeometry(),
+    features: {
+      planes: [],
+      circles,
+      edges: [],
+      paths: [],
+      faceToPlane: new Int32Array(0),
+      planeLoops: [],
+    },
+    transform: identityTransform(),
+  };
+}
+
 /** The id → {source, kind, index, feature} lookup shared by selection
  * resolution, labels, depth prefills, and generation. */
 export interface ResolvedFeature {
@@ -244,9 +307,14 @@ export function resolveFeature(
 ): ResolvedFeature | null {
   // namespaced ids locate their source by prefix; the stored feature ids
   // are the FULL ids (namespaced for primitives, bare for the model), so
-  // compare verbatim — do not strip the prefix.
-  const parsed = parseNamespacedId(id);
-  const source = sources.find((s) => (parsed ? s.id === parsed.primId : s.id === 'model'));
+  // compare verbatim — do not strip the prefix. `o:` ids are job-published
+  // circles (opEdgeSource) — one shared source, not one per op.
+  const parsed = typeof id === 'string' ? parseNamespacedId(id) : null;
+  const source = parsed
+    ? sources.find((s) => s.id === parsed.primId)
+    : typeof id === 'string' && id.startsWith('o:')
+      ? sources.find((s) => s.id === OP_EDGE_SOURCE_ID)
+      : sources.find((s) => s.id === 'model');
   if (!source) return null;
   const pi = source.features.planes.findIndex((f) => f.id === id);
   if (pi >= 0) return { source, kind: 'plane', index: pi, feature: source.features.planes[pi] };

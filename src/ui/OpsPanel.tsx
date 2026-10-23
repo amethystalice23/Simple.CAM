@@ -350,7 +350,7 @@ function ParamFields(props: {
               ⇩
             </button>
           </div>
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField
             label="Step over (mm)"
             // null = derived; show the 0.5·tool Ø default (a 6mm flat's 3.0
@@ -403,7 +403,7 @@ function ParamFields(props: {
             />
             <span>flatten — cut across interior voids</span>
           </label>
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
       );
@@ -445,7 +445,7 @@ function ParamFields(props: {
             onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
           <p className="hint">
             the region is the cross-section at the slice depth — put it where the body is
@@ -510,7 +510,7 @@ function ParamFields(props: {
                 : `the groove is the tool's own ${round2(props.tool?.diameter ?? 0)}mm width`}
             </p>
           )}
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <label className="field">
             <span>Rotation</span>
             <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
@@ -575,7 +575,7 @@ function ParamFields(props: {
           <NumberField label="Pitch (mm)" value={op.pitch} min={0.1} step={0.25} onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)} />
           <NumberField label="Starts" value={op.starts} min={1} step={1} onCommit={(v) => upd({ starts: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
           <NumberField label="Tolerance (mm)" value={op.tolerance} min={0} step={0.05} onCommit={(v) => upd({ tolerance: Math.max(v, 0) } as Partial<JobOp>)} />
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           <NumberField
             // null = the stock surface; show the stock Ø until set
             label="Surface Ø (mm)"
@@ -650,7 +650,7 @@ function ParamFields(props: {
             onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
         </>
       );
     case 'chamfer':
@@ -709,6 +709,36 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'cylChamfer':
+      return (
+        <>
+          <NumberField
+            label="Depth (mm)"
+            title="0 = anchor exactly on the selected circle — the flank cuts up-and-out through whatever rises above it (a step wall, the root of an existing chamfer). Above 0 = the circle is the highest point — the tip slides below it and the chamfer opens outward (a rod end, a chamfer top)"
+            value={op.depth}
+            min={0}
+            step={0.1}
+            onCommit={(v) => upd({ depth: Math.max(v, 0) } as Partial<JobOp>)}
+          />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <label className="field">
+            <span>Rotation</span>
+            <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
+              <option value="cw">cw</option>
+              <option value="ccw">ccw</option>
+            </select>
+          </label>
+          <p className="hint">
+            chamfers edge circles around the stock axis — one full A revolution at the circle's
+            exact X, the V-bit flank through it, no side to pick (the cone cuts whichever side of
+            X carries material). Depth 0 anchors on the circle and peels the wall above it level by
+            level from the stock surface; a depth slides below the circle from an already-clear rim
+            (width = depth × tan(half the bit angle), the chamfer angle = 90° − half-angle). Face
+            cylinder ops publish their step edges at their target Ø, and the stock its end rims, as
+            selectable green circles; a rod-end chamfer = the end rim + a depth
+          </p>
+        </>
+      );
     case 'engrave':
       return (
         <>
@@ -730,6 +760,7 @@ function ParamFields(props: {
                 label="Step down (mm)"
                 value={op.stepDown}
                 min={0.05}
+                step={0.1}
                 onCommit={(v) => upd({ stepDown: v })}
               />
             </>
@@ -758,7 +789,7 @@ export function OpsPanel(props: Props) {
       const stepDown = defaultStepDown(t, props.materialId);
       if (op.kind === 'pocket') {
         next = { ...next, stepDown, stepOver: defaultStepOver(t) } as JobOp;
-      } else if (op.kind === 'profile' || op.kind === 'faceCylinder') {
+      } else if (op.kind === 'profile' || op.kind === 'faceCylinder' || op.kind === 'cylChamfer') {
         next = { ...next, stepDown } as JobOp;
       }
     }
@@ -884,7 +915,7 @@ export function OpsPanel(props: Props) {
                           {PICK_BANNERS[props.picking!.kind]}
                         </button>
                       ) : (
-                        ['pocket', 'profile', 'drill', 'chamfer', 'engrave'].includes(op.kind) && (
+                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave'].includes(op.kind) && (
                           <button
                             type="button"
                             className={editing ? '' : 'secondary'}
@@ -960,7 +991,7 @@ export function OpsPanel(props: Props) {
                   {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && (
                     <p className="hint">needs a model or a primitive to select from</p>
                   )}
-                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread') && props.axisMode !== '4-axis' && (
+                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread' || op.kind === 'cylChamfer') && props.axisMode !== '4-axis' && (
                     <p className="hint">needs 4-axis mode (Stock tab)</p>
                   )}
                 </div>
