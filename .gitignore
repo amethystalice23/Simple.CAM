@@ -10,3 +10,4 @@ reference/
 # Local agent/skill infrastructure — tooling, not part of the software
 .claude/
 .agents/
+CLAUDE.md
