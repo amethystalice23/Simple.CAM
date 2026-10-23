@@ -328,6 +328,10 @@ export function Viewport({
     const pickAllows = (kind: 'edge' | 'circle' | 'plane' | 'path'): boolean => {
       const pk = pickKindRef.current;
       if (!pk) return true;
+      // the index-angle pick: every solid feature carries a direction to
+      // face (a face's normal, a hole's axis, an edge's radial) — only the
+      // artwork's strokes don't
+      if (pk === 'indexAngle') return kind !== 'path';
       if (kind === 'edge') return false;
       if (pk === 'targetDiameter' || pk === 'wrapDiameter') return kind === 'circle';
       return true;

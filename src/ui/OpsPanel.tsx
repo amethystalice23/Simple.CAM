@@ -45,8 +45,6 @@ interface Props {
   onChangeOp: (op: JobOp) => void;
   /** floor/rim switch — re-prefills the depth boxes from the selection */
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
-  /** compute the index angle that brings the op's selection to face the cutter */
-  onIndexToSelection: (op: JobOp) => void;
   /** the active one-shot "adjust to face" pick (edge-tracing §5): the
    * op's ⇩ is lit, the panel banners it, the next viewport click applies */
   picking: { opId: string; kind: FeaturePickKind } | null;
@@ -148,11 +146,12 @@ function DepthFields(props: {
   );
 }
 
-/** The index op: absolute A, plus align-the-selection convenience. */
+/** The index op: absolute A, plus the ⇩ aim-at-a-feature pick. */
 function IndexFields(props: {
   op: Extract<JobOp, { kind: 'index' }>;
   axisMode: AxisMode;
-  onIndexToSelection: (op: JobOp) => void;
+  picking: { opId: string; kind: FeaturePickKind } | null;
+  onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   onChange: (op: JobOp) => void;
 }) {
   const { op } = props;
@@ -161,20 +160,23 @@ function IndexFields(props: {
   }
   return (
     <>
-      <NumberField
-        label="Index angle (°, absolute A)"
-        value={op.angle}
-        step={15}
-        onCommit={(v) => props.onChange({ ...op, angle: v })}
-      />
-      <div className="buttons">
+      {/* the angle box and its ⇩ pick share a line — the same placement
+       * as every other take-it-from-a-feature button */}
+      <div className="floor-row">
+        <NumberField
+          label="Index angle (°, absolute A)"
+          className="floor-depth"
+          value={op.angle}
+          step={15}
+          onCommit={(v) => props.onChange({ ...op, angle: v })}
+        />
         <button
           type="button"
-          disabled={op.featureIds.length === 0}
-          onClick={() => props.onIndexToSelection(op)}
-          title="Index so the selected face's normal (or hole's axis) aligns with Z"
+          className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'indexAngle' ? ' active' : ''}`}
+          title="Pick the index angle — click, then select a face or hole in the viewport; its normal (or axis) aligns with Z"
+          onClick={() => props.onFeaturePick(op, 'indexAngle')}
         >
-          Index to selection
+          ⇩
         </button>
       </div>
       <p className="hint">
@@ -193,6 +195,7 @@ const PICK_BANNERS: Record<FeaturePickKind, string> = {
   endX: 'Selecting end X — click a feature in the viewport',
   // banners in the Model tab — the artwork's own ⇩ Ø pick
   wrapDiameter: 'Selecting artwork Ø — click a circular feature',
+  indexAngle: 'Selecting index angle — click a face or hole in the viewport',
 };
 
 /** Cutting-rate overrides for one op — the optional popup behind the ⚡
@@ -291,7 +294,6 @@ function ParamFields(props: {
   tool?: Tool;
   onChange: (op: JobOp) => void;
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
-  onIndexToSelection: (op: JobOp) => void;
   /** one-shot feature picks (edge-tracing §5) — see DepthFields */
   picking: { opId: string; kind: FeaturePickKind } | null;
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
@@ -307,7 +309,8 @@ function ParamFields(props: {
         <IndexFields
           op={op}
           axisMode={props.axisMode}
-          onIndexToSelection={props.onIndexToSelection}
+          picking={props.picking}
+          onFeaturePick={props.onFeaturePick}
           onChange={props.onChange}
         />
       );
@@ -864,7 +867,10 @@ export function OpsPanel(props: Props) {
               </div>
               {expanded && (
                 <div className="op-body">
-                  {op.kind !== 'index' && (
+                  {/* index ops carry no tool and no feature selection —
+                   * they show this row only while their ⇩ aim pick is
+                   * armed, for the cancel banner */}
+                  {(op.kind !== 'index' || props.picking?.opId === op.id) && (
                     <div className="buttons">
                       {props.picking?.opId === op.id ? (
                         /* the pick mode banners the whole row — the next
@@ -890,16 +896,18 @@ export function OpsPanel(props: Props) {
                           </button>
                         )
                       )}
-                      <button
-                        type="button"
-                        className={`icon-btn rates-btn${op.rates ? ' has-rates' : ''}${
-                          ratesOpenId === op.id ? ' active' : ''
-                        }`}
-                        title="Feeds & speeds for this operation — defaults from the Tools tab"
-                        onClick={() => setRatesOpenId(ratesOpenId === op.id ? null : op.id)}
-                      >
-                        ⚡
-                      </button>
+                      {op.kind !== 'index' && (
+                        <button
+                          type="button"
+                          className={`icon-btn rates-btn${op.rates ? ' has-rates' : ''}${
+                            ratesOpenId === op.id ? ' active' : ''
+                          }`}
+                          title="Feeds & speeds for this operation — defaults from the Tools tab"
+                          onClick={() => setRatesOpenId(ratesOpenId === op.id ? null : op.id)}
+                        >
+                          ⚡
+                        </button>
+                      )}
                     </div>
                   )}
                   {ratesOpenId === op.id && op.kind !== 'index' && (
@@ -910,20 +918,22 @@ export function OpsPanel(props: Props) {
                       onChange={props.onChangeOp}
                     />
                   )}
-                  <label className="field">
-                    <span>Tool</span>
-                    <select value={op.toolId} onChange={(e) => changeTool(op, e.target.value)}>
-                      {groupToolsBySubtype(props.tools).map((g) => (
-                        <optgroup key={g.label} label={g.label}>
-                          {g.tools.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {toolOptionLabel(t)}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </label>
+                  {op.kind !== 'index' && (
+                    <label className="field">
+                      <span>Tool</span>
+                      <select value={op.toolId} onChange={(e) => changeTool(op, e.target.value)}>
+                        {groupToolsBySubtype(props.tools).map((g) => (
+                          <optgroup key={g.label} label={g.label}>
+                            {g.tools.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {toolOptionLabel(t)}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   <ParamFields
                     op={op}
                     axisMode={props.axisMode}
@@ -932,7 +942,6 @@ export function OpsPanel(props: Props) {
                     tool={props.tools.find((t) => t.id === op.toolId)}
                     onChange={props.onChangeOp}
                     onSelectionIsChange={props.onSelectionIsChange}
-                    onIndexToSelection={props.onIndexToSelection}
                     picking={props.picking}
                     onFeaturePick={props.onFeaturePick}
                     onInsertFacingOp={props.onInsertFacingOp}

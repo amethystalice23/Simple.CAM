@@ -763,14 +763,17 @@ export type JobOp =
  * 'floor' drives end depth; the face-cylinder kinds take Start/End X and
  * the target diameter straight off a selected feature. 'wrapDiameter'
  * targets an artwork PRIMITIVE, not an op — it picks the Ø the artwork
- * wraps (its cutting-surface declaration).
+ * wraps (its cutting-surface declaration). 'indexAngle' aims an Index op:
+ * the clicked face's normal / hole's axis / edge's radial becomes the
+ * absolute A that brings it to face the cutter.
  */
 export type FeaturePickKind =
   | 'floor'
   | 'targetDiameter'
   | 'startX'
   | 'endX'
-  | 'wrapDiameter';
+  | 'wrapDiameter'
+  | 'indexAngle';
 
 /** Ops with depth boxes and the ⇩ floor pick (edge-tracing §5). */
 export type DepthBearingJobOp = Extract<

@@ -235,11 +235,17 @@ export function App() {
     setMeasureMode(true);
   };
 
-  /** a ⇩ toggles its op's pick mode (measure mode on for the pick) */
+  /** the ⇩ a ⇩ toggles its op's pick mode (measure mode on for the pick) */
   const toggleFeaturePick = (op: JobOp, kind: FeaturePickKind) => {
     const takesFacePicks =
       op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread';
-    if (kind === 'floor' ? !isDepthBearingJobOp(op) : !takesFacePicks) return;
+    if (kind === 'floor') {
+      if (!isDepthBearingJobOp(op)) return;
+    } else if (kind === 'indexAngle') {
+      if (op.kind !== 'index') return;
+    } else if (!takesFacePicks) {
+      return;
+    }
     setFeaturePick((cur) =>
       cur?.opId === op.id && cur.kind === kind ? null : { opId: op.id, kind },
     );
@@ -252,6 +258,17 @@ export function App() {
     pick: { opId: string; kind: FeaturePickKind },
     featureId: string,
   ) => {
+    if (pick.kind === 'indexAngle') {
+      // aim the Index op at the clicked feature — its facing direction
+      // becomes the op's absolute A
+      const angle = indexAngleToward(featureId);
+      if (angle === null) return; // no facing direction — stay in the mode
+      setOps((prev) =>
+        prev.map((o) => (o.id === pick.opId && o.kind === 'index' ? { ...o, angle } : o)),
+      );
+      setFeaturePick(null);
+      return;
+    }
     if (pick.kind === 'wrapDiameter') {
       // the artwork's Ø pick: pick.opId is the artwork PRIMITIVE's id
       const r = resolveFeature(sources, featureId);
@@ -669,14 +686,13 @@ export function App() {
     setOps((prev) => prev.map((o) => (o.id === op.id ? next : o)));
   };
 
-  /** index the stock so the op's first selected feature faces the cutter:
-   * a face's normal (or hole's axis) aligned with machine +Z */
-  const indexToSelection = (op: JobOp) => {
-    if (stock.axisMode !== '4-axis' || op.kind !== 'index') return;
-    const id = op.featureIds[0];
-    if (!id) return;
-    const r = resolveFeature(sources, id);
-    if (!r) return;
+  /** the absolute A that brings a feature to face the cutter: a face's
+   * normal (or hole's axis) aligned with machine +Z; edges fall back to
+   * their midpoint's radial. Null when the feature carries no direction
+   * (an artwork path) or is unresolvable. */
+  const indexAngleToward = (featureId: string): number | null => {
+    const r = resolveFeature(sources, featureId);
+    if (!r) return null;
     const xf = transformFn(r.source.transform);
     let dir: Vector3 | null = null;
     if (r.kind === 'circle') {
@@ -685,14 +701,15 @@ export function App() {
     } else if (r.kind === 'plane') {
       const pl = r.feature as PlaneFeature;
       dir = xf(pl.normal).sub(xf({ x: 0, y: 0, z: 0 })).normalize();
-    } else {
+    } else if (r.kind === 'edge') {
       // edges have no facing direction: fall back to their midpoint's radial
       const e = r.feature as EdgeFeature;
       const mid = xf(e.a).add(xf(e.b)).multiplyScalar(0.5);
       dir = mid.sub(new Vector3(0, 0, rotaryCalibrationOf(stock).axisZ)).normalize();
+    } else {
+      return null; // an artwork path carries no facing direction
     }
-    const angle = round2(indexToAlignDirection(dir));
-    setOps((prev) => prev.map((o) => (o.id === op.id ? { ...o, angle } : o)));
+    return round2(indexToAlignDirection(dir));
   };
 
   /** the floor link stays live: model/primitive moves update every linked
@@ -1069,7 +1086,6 @@ export function App() {
                 if (before && before.toolId !== op.toolId) setLastToolId(op.toolId);
               }}
               onSelectionIsChange={changeSelectionIs}
-              onIndexToSelection={indexToSelection}
               picking={featurePick}
               onFeaturePick={toggleFeaturePick}
               onInsertFacingOp={insertFacingOp}
