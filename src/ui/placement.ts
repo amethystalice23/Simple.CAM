@@ -31,6 +31,12 @@ function rotationMatrix(rotationDeg: Vec3): THREE.Matrix4 {
 export function rotatedBBox(geometry: THREE.BufferGeometry, transform: ModelTransform): THREE.Box3 {
   geometry.computeBoundingBox();
   const bb = geometry.boundingBox!;
+  if (bb.isEmpty()) {
+    // an empty mesh (artwork's raycast-transparent primitiveGeometry)
+    // carries a ±Infinity box — a zero box at the origin instead, so
+    // snapping can never write NaN/Inf into a transform position
+    return new THREE.Box3(new THREE.Vector3(), new THREE.Vector3());
+  }
   const m = rotationMatrix(transform.rotationDeg);
   const s = transform.scale;
   const out = new THREE.Box3();

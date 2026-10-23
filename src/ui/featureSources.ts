@@ -60,6 +60,24 @@ export function primitiveGeometry(p: Primitive): THREE.BufferGeometry {
   return g;
 }
 
+/**
+ * Artwork's REAL local extents for the placement snap math (ModelPanel's
+ * align/drop buttons): primitiveGeometry is deliberately empty for
+ * artwork, and an empty mesh's bounding box is ±Infinity — snapped
+ * through alignAxisToStock/dropToSurface it produced NaN/Inf positions
+ * (the artwork vanished and its X box rendered blank). Same
+ * artworkLocalPoints the Viewport draws, so "Center" centers the logo.
+ */
+export function artworkSnapGeometry(
+  p: Extract<Primitive, { kind: 'artwork' }>,
+): THREE.BufferGeometry {
+  const pts = artworkLocalPoints(p).flat();
+  if (pts.length === 0) pts.push({ x: 0, y: 0, z: 0 }); // no paths yet: snap about the origin
+  return new THREE.BufferGeometry().setFromPoints(
+    pts.map((q) => new THREE.Vector3(q.x, q.y, q.z)),
+  );
+}
+
 /** Pose for a primitive's render mesh: EXACTLY its ModelTransform. The
  * local geometry already carries the axis remap (cylinder ∥ local X), so
  * baking any extra rotation into the mesh puts it 90° out of sync with the

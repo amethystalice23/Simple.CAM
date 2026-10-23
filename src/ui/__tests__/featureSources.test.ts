@@ -5,6 +5,7 @@ import type { Primitive } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import {
   artworkLocalPoints,
+  artworkSnapGeometry,
   parseNamespacedId,
   primitiveGeometry,
   primitivePose,
@@ -276,5 +277,39 @@ describe('artwork sources', () => {
     expect(src.features.paths[0].points.length).toBe(3);
     // line work, not a solid: nothing for the raycast pipelines to hit
     expect(src.geometry.getAttribute('position')).toBeUndefined();
+  });
+
+  it('artworkSnapGeometry: the REAL line-work bounds, not the empty raycast mesh', () => {
+    // primitiveGeometry(artwork) is empty — its ±Infinity box snapped the
+    // align/drop buttons to NaN and the artwork vanished. The snap mesh
+    // carries the artwork's true local extents instead.
+    const g = artworkSnapGeometry(art);
+    g.computeBoundingBox();
+    const bb = g.boundingBox!;
+    expect(bb.min.x).toBeCloseTo(-50); // document centered
+    expect(bb.max.x).toBeCloseTo(50);
+    expect(bb.min.y).toBeCloseTo(-25); // v flipped, centered
+    expect(bb.max.y).toBeCloseTo(25);
+    expect(bb.min.z).toBe(0); // flat art lives in its plane
+    expect(bb.max.z).toBe(0);
+  });
+
+  it('artworkSnapGeometry: wrapped bounds finite, on the wrap Ø, uniform in x', () => {
+    const g = artworkSnapGeometry({ ...art, presentation: 'wrapped' });
+    g.computeBoundingBox();
+    const bb = g.boundingBox!;
+    for (const v of [bb.min.x, bb.max.x, bb.min.y, bb.max.y, bb.min.z, bb.max.z]) {
+      expect(Number.isFinite(v)).toBe(true);
+    }
+    expect(Math.max(Math.abs(bb.min.y), Math.abs(bb.max.y))).toBeLessThanOrEqual(8 + 1e-6);
+    const s = ((90 / 360) * Math.PI * 16) / 100;
+    expect(bb.max.x - bb.min.x).toBeCloseTo(50 * s, 6); // 50 units tall in doc
+  });
+
+  it('artworkSnapGeometry: path-less artwork snaps about its origin', () => {
+    const g = artworkSnapGeometry({ ...art, paths: [] });
+    g.computeBoundingBox();
+    expect(g.boundingBox!.min).toEqual({ x: 0, y: 0, z: 0 });
+    expect(g.boundingBox!.max).toEqual({ x: 0, y: 0, z: 0 });
   });
 });

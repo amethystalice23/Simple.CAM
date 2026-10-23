@@ -283,6 +283,12 @@ button.secondary:disabled:hover { background: #31373e; }
 }
 .axis-row { display: flex; align-items: center; gap: 5px; margin: 5px 0; }
 .axis-row .axis-label { width: 16px; font-size: 12px; color: #9aa4ad; flex: none; }
+/* rows whose legends are wider than one char ("wrap°", "spin°") — the
+   16px single-axis width clipped them under the number box */
+.axis-row.wide .axis-label { width: 36px; }
+/* the ⇩ pick button keeps its natural width — the axis-row button rule
+   (flex: 1) is for the quick-set/edge buttons, not the picker */
+.axis-row .icon-btn { flex: none; }
 .axis-row button { padding: 4px 6px; font-size: 10px; flex: 1; }
 input.num-input {
   width: 68px;

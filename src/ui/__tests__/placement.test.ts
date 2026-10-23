@@ -59,6 +59,14 @@ describe('rotatedBBox', () => {
     expect(bb.min.z).toBeCloseTo(-2); // was ±2 in Y
     expect(bb.max.z).toBeCloseTo(2);
   });
+
+  it('an empty mesh (artwork) gives a zero box at the origin, never ±Infinity', () => {
+    // primitiveGeometry(artwork) is empty for raycast transparency; the
+    // raw ±Infinity bbox snapped to NaN/Inf positions — regression pin
+    const bb = rotatedBBox(new THREE.BufferGeometry(), identityTransform());
+    expect(bb.min).toEqual({ x: 0, y: 0, z: 0 });
+    expect(bb.max).toEqual({ x: 0, y: 0, z: 0 });
+  });
 });
 
 describe('centerOnX / centerOnY', () => {
@@ -195,5 +203,30 @@ describe('3-axis cylinder stands vertical', () => {
     expect(stockSpan(cylinder, 'y')).toEqual([-25, 25]);
     expect(stockSpan(cylinder, 'z')).toEqual([-15, 35]); // axisZ 10 ± r 25
     expect(stockTopZ(cylinder)).toBeCloseTo(35); // axisZ + r
+  });
+});
+
+describe('empty mesh never snaps a transform to NaN/Infinity', () => {
+  // artwork's primitiveGeometry is empty (raycast transparency); before
+  // the zero-box guard its ±Infinity bbox made every align/drop button
+  // write NaN (mid) or ±Infinity (min/max) into the position — the
+  // artwork vanished and its X box rendered blank
+  const empty = () => new THREE.BufferGeometry();
+
+  it('every edge snap on every helper keeps all positions finite', () => {
+    for (const edge of ['min', 'mid', 'max'] as const) {
+      const t = alignAxisToStock(empty(), identityTransform(), cylinder, 'x', edge);
+      expect(Number.isFinite(t.position.x)).toBe(true);
+    }
+    const aligned = alignToStock(empty(), identityTransform(), cylinder);
+    const dropped = dropToSurface(empty(), identityTransform(), cylinder);
+    for (const t of [aligned, dropped]) {
+      expect([t.position.x, t.position.y, t.position.z].every(Number.isFinite)).toBe(true);
+    }
+  });
+
+  it('mid snaps the zero box about the origin: the transform lands on the stock mid', () => {
+    const t = alignAxisToStock(empty(), identityTransform(), cylinder, 'x', 'mid');
+    expect(t.position.x).toBeCloseTo(50); // extent 0, target the stock mid
   });
 });

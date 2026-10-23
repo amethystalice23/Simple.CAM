@@ -218,10 +218,22 @@ export function App() {
 
   /** the active pick: the NEXT viewport click applies it to that op
    * (floors for the depth-bearing ops; Start/End X and target Ø for the
-   * face cylinder) — one-shot, bannered in the panel */
+   * face cylinder) — one-shot, bannered in the panel. For 'wrapDiameter'
+   * the id is an artwork PRIMITIVE's (the Model tab's ⇩ Ø pick). */
   const [featurePick, setFeaturePick] = useState<{ opId: string; kind: FeaturePickKind } | null>(
     null,
   );
+
+  /** the artwork's ⇩ Ø pick arms for its primitive — same one-shot and
+   * measure-mode behavior as the op picks */
+  const toggleWrapDiameterPick = (primId: string) => {
+    setFeaturePick((cur) =>
+      cur?.opId === primId && cur.kind === 'wrapDiameter'
+        ? null
+        : { opId: primId, kind: 'wrapDiameter' },
+    );
+    setMeasureMode(true);
+  };
 
   /** a ⇩ toggles its op's pick mode (measure mode on for the pick) */
   const toggleFeaturePick = (op: JobOp, kind: FeaturePickKind) => {
@@ -240,6 +252,19 @@ export function App() {
     pick: { opId: string; kind: FeaturePickKind },
     featureId: string,
   ) => {
+    if (pick.kind === 'wrapDiameter') {
+      // the artwork's Ø pick: pick.opId is the artwork PRIMITIVE's id
+      const r = resolveFeature(sources, featureId);
+      if (!r || r.kind !== 'circle') return; // Ø comes off a circle only
+      const diameter = round2((r.feature as CircleFeature).radius * 2);
+      setPrimitives((prev) =>
+        prev.map((p) =>
+          p.kind === 'artwork' && p.id === pick.opId ? { ...p, wrapDiameter: diameter } : p,
+        ),
+      );
+      setFeaturePick(null);
+      return;
+    }
     if (pick.kind === 'targetDiameter') {
       const r = resolveFeature(sources, featureId);
       if (!r || r.kind !== 'circle') return; // Ø comes off a circle only
@@ -947,6 +972,7 @@ export function App() {
             stock={stock}
             transform={transform}
             sources={sources}
+            selectedObjectId={selectedObjectId}
             showFeatures={showFeatures}
             measureMode={measureMode}
             edgePickingEnabled={editingOpId === null}
@@ -996,6 +1022,10 @@ export function App() {
               }
               onDeletePrimitive={deletePrimitive}
               onAddPrimitive={addPrimitive}
+              pickingWrapDiameter={
+                featurePick?.kind === 'wrapDiameter' && featurePick.opId === selectedObjectId
+              }
+              onPickWrapDiameter={toggleWrapDiameterPick}
               showFeatures={showFeatures}
               measureMode={measureMode}
               onShowFeaturesChange={setShowFeatures}

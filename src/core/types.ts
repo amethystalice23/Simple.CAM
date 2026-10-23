@@ -761,9 +761,16 @@ export type JobOp =
  * The one-shot "adjust to face" pick kinds (edge-tracing §5): the ops
  * panel banners the mode, the next viewport click applies it to that op.
  * 'floor' drives end depth; the face-cylinder kinds take Start/End X and
- * the target diameter straight off a selected feature.
+ * the target diameter straight off a selected feature. 'wrapDiameter'
+ * targets an artwork PRIMITIVE, not an op — it picks the Ø the artwork
+ * wraps (its cutting-surface declaration).
  */
-export type FeaturePickKind = 'floor' | 'targetDiameter' | 'startX' | 'endX';
+export type FeaturePickKind =
+  | 'floor'
+  | 'targetDiameter'
+  | 'startX'
+  | 'endX'
+  | 'wrapDiameter';
 
 /** Ops with depth boxes and the ⇩ floor pick (edge-tracing §5). */
 export type DepthBearingJobOp = Extract<

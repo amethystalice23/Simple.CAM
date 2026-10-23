@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { round2 } from '../core/types';
 import type { ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
 import { alignAxisToStock, alignToStock, dropToSurface } from './placement';
-import { primitiveGeometry } from './featureSources';
+import { artworkSnapGeometry, primitiveGeometry } from './featureSources';
 import { NumInput } from './fields';
 import { resizePrimitive, revertPrimitive, scaleForSize } from './primitives';
 
@@ -21,6 +21,10 @@ interface Props {
   /** remove one primitive by id (the row's ✕) */
   onDeletePrimitive: (id: string) => void;
   onAddPrimitive: (kind: 'cylinder' | 'box') => void;
+  /** the artwork ⇩ Ø pick: armed for the SELECTED artwork, next viewport
+   * click on a circular feature becomes its wrap Ø */
+  pickingWrapDiameter: boolean;
+  onPickWrapDiameter: (primId: string) => void;
   showFeatures: boolean;
   measureMode: boolean;
   onShowFeaturesChange: (v: boolean) => void;
@@ -81,9 +85,17 @@ export function ModelPanel(props: Props) {
   };
 
   // extents for snapping: the model's geometry, or the primitive's shape
-  // (unified builder — the same mesh the detector and viewport use)
+  // (unified builder — the same mesh the detector and viewport use).
+  // Artwork's primitiveGeometry is empty (raycast transparency), so its
+  // REAL line-work bounds stand in — primitiveGeometry's ±Infinity box
+  // snapped to NaN and the artwork vanished.
   const withSnapGeometry = (fn: (geo: THREE.BufferGeometry) => ModelTransform) => {
-    const t = fn(isModel ? geometry! : primitiveGeometry(selectedPrimitive!));
+    const shape = !isModel
+      ? selectedPrimitive!.kind === 'artwork'
+        ? artworkSnapGeometry(selectedPrimitive!)
+        : primitiveGeometry(selectedPrimitive!)
+      : geometry!;
+    const t = fn(shape);
     // snapped positions are auto-filled numbers — they read clean at 2dp
     setActive({
       ...t,
@@ -245,7 +257,7 @@ export function ModelPanel(props: Props) {
             </label>
             {selectedPrimitive.presentation === 'wrapped' ? (
               <>
-                <div className="axis-row">
+                <div className="axis-row wide">
                   <span className="axis-label">Ø</span>
                   <NumInput
                     value={selectedPrimitive.wrapDiameter}
@@ -254,6 +266,24 @@ export function ModelPanel(props: Props) {
                       props.onPrimitiveChange({ ...selectedPrimitive, wrapDiameter: v })
                     }
                   />
+                  {/* the ⇩ Ø pick — same affordance as the face ops': click
+                   * a circular feature (the faced surface's rim, a turned
+                   * Ø) and it becomes the artwork's cutting-surface Ø */}
+                  <button
+                    type="button"
+                    className={`icon-btn${props.pickingWrapDiameter ? ' active' : ''}`}
+                    title="Pick the Ø from a circular feature in the viewport"
+                    onClick={() => props.onPickWrapDiameter(selectedPrimitive.id)}
+                  >
+                    ⇩
+                  </button>
+                </div>
+                {props.pickingWrapDiameter && (
+                  <p className="hint">
+                    selecting artwork Ø — click a circular feature (the ⇩ again cancels)
+                  </p>
+                )}
+                <div className="axis-row wide">
                   <span className="axis-label">wrap°</span>
                   <NumInput
                     value={selectedPrimitive.wrapAngle}
@@ -265,6 +295,38 @@ export function ModelPanel(props: Props) {
                       })
                     }
                   />
+                  {/* quick-sets — the wrap angle IS the artwork's size
+                   * around the cylinder; these cover the common spans */}
+                  {([90, 180, 360] as const).map((deg) => (
+                    <button
+                      key={deg}
+                      type="button"
+                      title={`Wrap ${deg}° around the cylinder`}
+                      onClick={() =>
+                        props.onPrimitiveChange({ ...selectedPrimitive, wrapAngle: deg })
+                      }
+                    >
+                      {deg}°
+                    </button>
+                  ))}
+                </div>
+                {/* the A-axis placement: rotation about the cylinder axis.
+                 * Generation applies the same rotation before computing
+                 * the cut angles, so the engrave lands exactly where the
+                 * preview shows it. */}
+                <div className="axis-row wide">
+                  <span className="axis-label">spin°</span>
+                  <NumInput
+                    value={active.rotationDeg.x}
+                    step={5}
+                    onCommit={(v) => setRotation('x', v)}
+                  />
+                  <button type="button" onClick={() => bumpRot('x', -90)}>
+                    −90°
+                  </button>
+                  <button type="button" onClick={() => bumpRot('x', 90)}>
+                    +90°
+                  </button>
                 </div>
                 <p className="hint">
                   wraps {selectedPrimitive.wrapAngle.toFixed(0)}° of Ø
@@ -277,6 +339,11 @@ export function ModelPanel(props: Props) {
                   ).toFixed(2)}{' '}
                   mm per artwork unit (the Ø is the artwork's own — point it at
                   the faced surface, not the stock)
+                </p>
+                <p className="hint">
+                  spin° is where the artwork sits around the cylinder — the X
+                  rotation below, surfaced here because it IS the A position;
+                  the seam check wants the artwork clear of ±180°
                 </p>
               </>
             ) : null}

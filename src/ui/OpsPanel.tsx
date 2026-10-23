@@ -191,6 +191,8 @@ const PICK_BANNERS: Record<FeaturePickKind, string> = {
   targetDiameter: 'Selecting target Ø — click a circular feature',
   startX: 'Selecting start X — click a feature in the viewport',
   endX: 'Selecting end X — click a feature in the viewport',
+  // banners in the Model tab — the artwork's own ⇩ Ø pick
+  wrapDiameter: 'Selecting artwork Ø — click a circular feature',
 };
 
 /** Cutting-rate overrides for one op — the optional popup behind the ⚡

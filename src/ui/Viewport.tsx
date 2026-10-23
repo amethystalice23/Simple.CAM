@@ -18,6 +18,7 @@ import {
   planeHighlightMesh,
   planePick,
   sampleVisibleAt,
+  PATH_COLOR,
   PLANE_SELECT,
   SELECT_COLOR,
   SLICE_COLOR,
@@ -97,6 +98,10 @@ interface Props {
   transform: ModelTransform;
   /** every selectable-feature provider: the model + one per primitive */
   sources: FeatureSource[];
+  /** the Model tab's selected object ('model' or a primitive id): it
+   * renders clearly picked — tinted model, brightened primitive volumes,
+   * lit-up artwork line work */
+  selectedObjectId: string | null;
   showFeatures: boolean;
   measureMode: boolean;
   /** false while an op's feature selection is active: straight lines are
@@ -154,6 +159,7 @@ export function Viewport({
   stock,
   transform,
   sources,
+  selectedObjectId,
   showFeatures,
   measureMode,
   edgePickingEnabled,
@@ -323,7 +329,7 @@ export function Viewport({
       const pk = pickKindRef.current;
       if (!pk) return true;
       if (kind === 'edge') return false;
-      if (pk === 'targetDiameter') return kind === 'circle';
+      if (pk === 'targetDiameter' || pk === 'wrapDiameter') return kind === 'circle';
       return true;
     };
 
@@ -757,6 +763,18 @@ export function Viewport({
     }
   }, [geometry]);
 
+  // the Model tab's object selection tints the model — the object list and
+  // the viewport must agree on what is picked. The scene effect recreates
+  // the material on stock rebuilds, so re-apply on those too.
+  useEffect(() => {
+    const model = modelRef.current;
+    if (!model) return;
+    const mat = model.material as THREE.MeshStandardMaterial;
+    const sel = selectedObjectId === 'model';
+    mat.color.setHex(sel ? 0x84b8e4 : 0x4d7ea8);
+    mat.emissive.setHex(sel ? 0x0d2438 : 0x000000);
+  }, [selectedObjectId, stock]);
+
   // Apply placement. Re-runs when the stock changes too, because the scene
   // rebuild creates a fresh model mesh with default pose.
   useEffect(() => {
@@ -820,6 +838,13 @@ export function Viewport({
       // must not vanish with the features toggle (there is no volume to
       // render; the amber lines are it)
       data.pathLines.visible = showFeatures || entry.source.artworkFrame !== undefined;
+      // ... and the lines are also the artwork's selection surface: the
+      // picked artwork's strokes light up amber-bright
+      if (entry.source.artworkFrame) {
+        (data.pathLines.material as THREE.LineBasicMaterial).color.setHex(
+          entry.source.id === selectedObjectId ? 0xffe066 : PATH_COLOR,
+        );
+      }
       group.add(data.edgeLines, data.circleLines, data.holeLines, data.pathLines);
     }
 
@@ -912,7 +937,7 @@ export function Viewport({
       overlaysRef.current = [];
       hoverLineRef.current = null;
     };
-  }, [sources, stock, showFeatures, opSelection]);
+  }, [sources, stock, showFeatures, opSelection, selectedObjectId]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR
   useEffect(() => {
@@ -1261,12 +1286,14 @@ export function Viewport({
       const indexed = primitiveGeometry(p);
       const geo = indexed.toNonIndexed(); // faces align with the source detection
       indexed.dispose();
+      // the selected primitive reads clearly picked: brighter fill, pale edges
+      const sel = p.id === selectedObjectId;
       const mesh = new THREE.Mesh(
         geo,
         new THREE.MeshBasicMaterial({
-          color: 0xd08850,
+          color: sel ? 0xf0c050 : 0xd08850,
           transparent: true,
-          opacity: 0.22,
+          opacity: sel ? 0.4 : 0.22,
           depthTest: false,
           side: THREE.DoubleSide,
         }),
@@ -1283,7 +1310,10 @@ export function Viewport({
       // wireframe edge for definition
       const edges = new THREE.LineSegments(
         new THREE.EdgesGeometry(geo),
-        new THREE.LineBasicMaterial({ color: 0xf0a860, depthTest: false }),
+        new THREE.LineBasicMaterial({
+          color: sel ? 0xffe0a0 : 0xf0a860,
+          depthTest: false,
+        }),
       );
       mesh.add(edges);
       group.add(mesh);
@@ -1304,7 +1334,7 @@ export function Viewport({
       }
       primMeshesRef.current = [];
     };
-  }, [primitives, stock]);
+  }, [primitives, stock, selectedObjectId]);
 
   return (
     <>
