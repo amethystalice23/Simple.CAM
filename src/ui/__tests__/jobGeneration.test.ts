@@ -1304,6 +1304,32 @@ describe('engrave generation', () => {
     expect(res.summary).toContain('1 path');
   });
 
+  it('wrapped artwork ignores an index datum — the cut stays where the artwork is', () => {
+    // an Index op at 90° precedes the engrave: the machine approaches
+    // from A=90, but the artwork is ABSOLUTELY positioned (its angle is
+    // set in the Model tab) — the cut targets the artwork's own angles,
+    // not datum + artwork. Before the fix the cut came out rotated BY the
+    // index angle, offset from the displayed artwork.
+    const wrapped = { ...art, presentation: 'wrapped' as const };
+    const ctx = {
+      ...ctxFor(wrapped, {
+        ...cylStock,
+        calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+      }),
+      datumAngle: 90,
+      startA: 90,
+    };
+    const res = generateJobOp(op(['p:prim-art:path:0']), ctx);
+    expect(res.error).toBeNull();
+    const cut = res.moves.filter((m) => !m.rapid);
+    const position = res.moves.find((m) => m.rapid && m.words.a !== undefined)!;
+    // the artwork's absolute angles (−45° → +45°), phase-positioned by
+    // shortest rotation from the machine's post-index A=90 — never the
+    // datum-shifted 45° → 135°
+    expect(position.words.a).toBeCloseTo(-45, 3);
+    expect(cut[1].words.a).toBeCloseTo(45, 3);
+  });
+
   it('a 360° wrap spun 180° straddles the A seam and cuts straight through it', () => {
     // full-turn wrap: doc x ∈ [0,100] → th ∈ ±180 (the seam rides the doc
     // edges). Spinning 180° about X moves the seam to the doc MIDDLE, so a

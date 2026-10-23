@@ -1048,9 +1048,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (error) return fail(error);
         // the frame is the ARTWORK's own, inherited per source — and one
         // op cuts in one frame. Flat paths land in the indexed cutting
-        // frame (rotated like every flat op); wrapped paths stay
-        // PART-LOCAL — the generator's datum phase positioning handles
-        // the index rotation, exactly like the spiral ops.
+        // frame (rotated like every flat op); wrapped paths are part-
+        // ABSOLUTE: the artwork's angular position is set in the Model
+        // tab, so the cut deliberately IGNORES the index rotation — an
+        // Index op before the engrave only changes the machine's approach
+        // (startA), never where on the part the artwork cuts.
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const axisZ = rotaryCalibrationOf(ctx.stock).axisZ;
         const flatPaths: { x: number; y: number }[][] = [];
@@ -1134,7 +1136,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
                   kind: 'wrapped',
                   radius: wrapD / 2,
                   surfaceZ: axisZ + wrapD / 2,
-                  datumAngle: ctx.datumAngle,
+                  // 0, NOT ctx.datumAngle: the artwork's position is
+                  // absolute — the index rotation must not move the cut
+                  datumAngle: 0,
                   startA: ctx.startA,
                 },
           ...(tool.type === 'laser'
