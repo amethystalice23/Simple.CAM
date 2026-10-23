@@ -1304,6 +1304,39 @@ describe('engrave generation', () => {
     expect(res.summary).toContain('1 path');
   });
 
+  it('a 360° wrap spun 180° straddles the A seam and cuts straight through it', () => {
+    // full-turn wrap: doc x ∈ [0,100] → th ∈ ±180 (the seam rides the doc
+    // edges). Spinning 180° about X moves the seam to the doc MIDDLE, so a
+    // mid-document stroke straddles machine ±180° — the old code errored
+    // here; the unwrap now continues through the seam and the cut rotates
+    // on across it (the post re-zeros A after the op).
+    const spun = {
+      ...art,
+      presentation: 'wrapped' as const,
+      wrapAngle: 360,
+      // dense samples either side of the doc middle (x=50): th_local
+      // ∓36 → machine th ∓36−180
+      paths: [[{ x: 60, y: 10 }, { x: 50, y: 10 }, { x: 40, y: 10 }]],
+      transform: {
+        ...identityTransform(),
+        rotationDeg: { x: 180, y: 0, z: 0 },
+      },
+    };
+    const res = generateJobOp(op(['p:prim-art:path:0']), ctxFor(spun, {
+      ...cylStock,
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+    }));
+    expect(res.error).toBeNull();
+    const cut = res.moves.filter((m) => !m.rapid);
+    const position = res.moves.find((m) => m.rapid && m.words.a !== undefined)!;
+    // first sample: doc x=60 → th_local +36 → machine −144°
+    expect(position.words.a).toBeCloseTo(-144, 3);
+    // the sweep runs on THROUGH the seam: −144 → −180 → −216 (never the
+    // raw atan2 jump to +144)
+    expect(cut[1].words.a).toBeCloseTo(-180, 3);
+    expect(cut[2].words.a).toBeCloseTo(-216, 3);
+  });
+
   it('refuses mixed frames and non-artwork selections', () => {
     const flatRes = generateJobOp(
       op(['p:prim-art:path:0']),

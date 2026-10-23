@@ -1093,12 +1093,19 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
                   );
                 }
                 const th = (Math.atan2(p.y, p.z - axisZ) * 180) / Math.PI;
-                const u = (th / 360) * circ;
-                if (i > 0 && Math.abs(u - uv[i - 1].x) > circ / 2) {
-                  throw new Error(
-                    'the artwork crosses the A seam — rotate its angular origin ' +
-                      '(or split the op) so it does not straddle ±180°',
-                  );
+                let u = (th / 360) * circ;
+                if (i > 0) {
+                  // unwrap CONTINUOUSLY through ±180°: a wrapped artwork
+                  // may straddle the seam (a 360° wrap almost always does,
+                  // spun to sit anywhere) — the cut just rotates on
+                  // through it and the post re-zeros A afterwards (G92.4),
+                  // so the seam is no boundary at all. Each step takes the
+                  // short way, so a single AUTHORED stroke spanning more
+                  // than half a turn would fold the wrong way — real line
+                  // work samples densely and never has one.
+                  const prev = uv[i - 1].x;
+                  while (u - prev > circ / 2) u -= circ;
+                  while (prev - u > circ / 2) u += circ;
                 }
                 uv.push({ x: u, y: p.x });
               });
