@@ -47,7 +47,7 @@ import {
   seedJobOpIds,
   type GeneratedOp,
 } from './jobGeneration';
-import { decodeStl, downloadJobFile, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
+import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
 import { AboutBox } from './AboutBox';
@@ -840,6 +840,27 @@ export function App() {
     }
   };
 
+  /**
+   * Route a dropped file. A `.json` goes straight to the job parser, which
+   * checks the format header (`simple.cam job`) and rejects anything else
+   * with a clear error. Anything else gets its head sniffed for that same
+   * header — a re-downloaded save is browser-deduplicated to
+   * "foo.cam (1).json" or the user renames it, so the name can't be
+   * trusted; the header identifies the file no matter what it's called.
+   * Only when the sniff fails does the file reach the STL loader.
+   */
+  const routeDroppedFile = async (f: File): Promise<void> => {
+    if (/\.svg$/i.test(f.name)) {
+      void addArtworkFromFile(f);
+      return;
+    }
+    if (/\.json$/i.test(f.name) || (await f.slice(0, 4096).text()).includes(JOB_FORMAT)) {
+      void openJob(f);
+      return;
+    }
+    void loadStl(f);
+  };
+
   /** Start over, confirming when changes would be lost. */
   const newJob = () => {
     if (
@@ -975,16 +996,7 @@ export function App() {
           onDrop={(e) => {
             e.preventDefault();
             const f = e.dataTransfer.files[0];
-            if (!f) return;
-            if (/\.svg$/i.test(f.name)) {
-              void addArtworkFromFile(f);
-              return;
-            }
-            if (/\.cam\.json$/i.test(f.name)) {
-              void openJob(f);
-              return;
-            }
-            void loadStl(f);
+            if (f) void routeDroppedFile(f);
           }}
         >
           <Viewport
@@ -1010,7 +1022,7 @@ export function App() {
           <div className="drop-hint">
             {geometry
               ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-              : 'drop an STL, an SVG (artwork), or a .cam.json job here'}
+              : 'drop an STL, an SVG (artwork), or a saved job here'}
           </div>
         </div>
         <aside>
