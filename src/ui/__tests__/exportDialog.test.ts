@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Move } from '../../core/types';
 import { postCarvera } from '../../post/carvera';
 import {
+  allIncluded,
   assignToolNumbers,
   buildExportFilename,
   clampToolNumber,
@@ -13,6 +14,7 @@ import {
   sanitizeFilename,
   setToolNumber,
   stampOp,
+  toggleAllIncluded,
 } from '../exportDialog';
 
 /** Minimal move fixture: fields the stamp must preserve. */
@@ -270,6 +272,36 @@ describe('includeUnblocked', () => {
     );
     expect([...checked]).toEqual(['a']);
     expect([...blocked]).toEqual(['b']);
+  });
+});
+
+describe('allIncluded / toggleAllIncluded (select-all box)', () => {
+  const exportable = ['a', 'b', 'c']; // 'd' is errored/empty — never tickable
+
+  it('allIncluded is true only when every exportable op is checked', () => {
+    expect(allIncluded(new Set(['a', 'b', 'c']), exportable)).toBe(true);
+    expect(allIncluded(new Set(['a', 'b']), exportable)).toBe(false);
+    expect(allIncluded(new Set(['a', 'b', 'c', 'd']), exportable)).toBe(true); // extras ignored
+  });
+
+  it('is false with nothing exportable (box renders unchecked and disabled)', () => {
+    expect(allIncluded(new Set(), [])).toBe(false);
+    expect(allIncluded(new Set(['a']), [])).toBe(false);
+  });
+
+  it('any excluded op → include every exportable op', () => {
+    const next = toggleAllIncluded(new Set(['a']), exportable);
+    expect([...next].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('nothing checked yet still counts as "excluded" → selects all', () => {
+    const next = toggleAllIncluded(new Set(), exportable);
+    expect([...next].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('all included → exclude everything', () => {
+    const next = toggleAllIncluded(new Set(['a', 'b', 'c']), exportable);
+    expect(next.size).toBe(0);
   });
 });
 

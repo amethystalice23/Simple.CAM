@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform, rotaryCalibrationOf } from '../../core/types';
 import { ROTARY_FEED_DEG_MIN } from '../../cam/faceCylinder';
-import type { JobOp, Stock, Tool } from '../../core/types';
+import type { AxisWords, JobOp, Move, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import { opEdgeSource, sourcesFor } from '../featureSources';
 import type { Primitive } from '../../core/types';
@@ -14,6 +14,7 @@ import {
   defaultStepOver,
   generateJobOp,
   newJobOp,
+  overheadMinutes,
   prefillDepths,
   presetRates,
   toolPresetFor,
@@ -1140,6 +1141,46 @@ describe('slice pocket (section plane + band)', () => {
   });
 });
 
+describe('spiral carve spin: the UI op model reaches the generator phase', () => {
+  // datum 30 with the machine at A350 exercises the shortest-rotation
+  // positioning, like the cam-level spin tests
+  const spinCtx: GenContext = { ...ctx, stock: cylStock, datumAngle: 30, startA: 350 };
+  const spiralOp: Extract<JobOp, { kind: 'spiralCarve' }> = {
+    kind: 'spiralCarve', id: 'op-spin', toolId: 't1',
+    surfaceDiameter: 50, xStart: -20, xEnd: 20, spiralAngle: 45,
+    count: 1, depth: 1, width: 1, stepDown: 0.5, rotation: 'cw',
+    featureIds: [],
+  };
+  const aWords = (res: ReturnType<typeof generateJobOp>) =>
+    res.moves.filter((m) => m.words.a !== undefined).map((m) => m.words.a!);
+
+  it('spin 90 shifts every strand A word by +90, landing strand 1 at datum + spin', () => {
+    const base = generateJobOp(spiralOp, spinCtx);
+    const spun = generateJobOp({ ...spiralOp, spin: 90 }, spinCtx);
+    expect(base.error).toBeNull();
+    expect(spun.error).toBeNull();
+    const baseA = aWords(base);
+    const spunA = aWords(spun);
+    expect(spunA).toHaveLength(baseA.length);
+    for (let i = 0; i < baseA.length; i++) {
+      expect(spunA[i] - baseA[i]).toBeCloseTo(90, 6);
+    }
+    // the first positioning rapid lands on datum 30 + spin 90 (mod 360) —
+    // still within a half-turn of the machine A it came from (350)
+    const rotate = spun.moves.find((m) => m.rapid && m.words.a !== undefined)!;
+    const phase = ((rotate.words.a! % 360) + 360) % 360;
+    expect(phase).toBeCloseTo(120, 6);
+    expect(Math.abs(rotate.words.a! - 350)).toBeLessThanOrEqual(180);
+  });
+
+  it('spin absent and spin 0 generate identical output (the default is a no-op)', () => {
+    const absent = generateJobOp(spiralOp, spinCtx);
+    const zero = generateJobOp({ ...spiralOp, spin: 0 }, spinCtx);
+    expect(zero.moves).toEqual(absent.moves);
+    expect(zero.summary).toBe(absent.summary);
+  });
+});
+
 describe('per-material spindle RPM (Makera tool presets)', () => {
   const engraver: Tool = {
     id: 't-eng', name: '60deg Engraver', type: 'vbit', diameter: 3.175,
@@ -1542,5 +1583,151 @@ describe('cylinder chamfer (edge circles → ring passes)', () => {
   it('needs 4-axis mode', () => {
     const res = generateJobOp(rimOp, { ...chamCtx, stock: boxStock });
     expect(res.error).toMatch(/4-axis/);
+  });
+});
+
+describe('honest time estimate (wrapper overhead)', () => {
+  // 4-axis cylinder stock, the shipped coupon jobs' shape
+  const carveCtx: GenContext = { ...ctx, stock: cylStock, datumAngle: 0, startA: 0 };
+  const carve: Extract<JobOp, { kind: 'spiralCarve' }> = {
+    kind: 'spiralCarve',
+    id: 'op-ov',
+    toolId: 't1',
+    surfaceDiameter: 50, // the stock surface
+    xStart: -30,
+    xEnd: 30,
+    spiralAngle: 30,
+    count: 2,
+    depth: 1,
+    width: 3,
+    stepDown: 0.5,
+    rotation: 'cw',
+    featureIds: [],
+  };
+  /** the generator's cutting-only figure, as the op summary quotes it
+   * (rounded to 0.1 min — the assertions below allow for that rounding) */
+  const quotedCutting = (res: ReturnType<typeof generateJobOp>): number => {
+    const m = /~([\d.]+) min/.exec(res.summary ?? '');
+    expect(m, `summary lacks a minutes quote: ${res.summary}`).toBeTruthy();
+    return Number(m![1]);
+  };
+
+  it('spiral carve: minutes = cutting×1.1 + overheadMinutes (rapid travel + ramp)', () => {
+    const res = generateJobOp(carve, carveCtx);
+    expect(res.error).toBeNull();
+    expect(res.spindleRpm).toBe(18000); // the stamped S-word speed, threaded to the next op
+    // absent prevRpm = a cold spindle: the overhead carries a full spin-up
+    const spinUpMin = 18000 / 1800 / 60;
+    const ovh = overheadMinutes(res.moves, 0, undefined, 18000);
+    expect(ovh).toBeGreaterThan(spinUpMin); // rapid travel on top of the ramp
+    expect(Math.abs(res.minutes - (quotedCutting(res) * 1.1 + ovh))).toBeLessThanOrEqual(0.06);
+    // honest: the estimate exceeds the cutting-only figure the summary quotes
+    expect(res.minutes).toBeGreaterThan(quotedCutting(res));
+  });
+
+  it('prevRpm threading: same speed charges no ramp; 0 or absent charges the full spin-up', () => {
+    const warm = generateJobOp(carve, { ...carveCtx, prevRpm: 18000 });
+    const cold = generateJobOp(carve, { ...carveCtx, prevRpm: 0 });
+    const absent = generateJobOp(carve, carveCtx);
+    expect(warm.error).toBeNull();
+    expect(cold.error).toBeNull();
+    const spinUpMin = 18000 / 1800 / 60;
+    expect(cold.minutes - warm.minutes).toBeCloseTo(spinUpMin, 9);
+    expect(absent.minutes).toBeCloseTo(cold.minutes, 9); // absent = cold spindle
+    // the ramp is the only difference — the move list is untouched
+    expect(warm.moves).toEqual(cold.moves);
+  });
+
+  it('overheadMinutes times linear rapids at the axis rates (Z at 600, not 1200)', () => {
+    const g0 = (words: AxisWords): Move => ({ words, feed: 0, rapid: true });
+    const moves: Move[] = [
+      g0({ a: 90 }), // 90° from startA at 3600°/min
+      g0({ x: 0, y: 0, z: 10 }), // FIRST x/y/z move: previous unknown → charges 0
+      g0({ x: 100 }), // 100mm at 1200
+      g0({ z: 0 }), // 10mm at the Z rate 600
+      g0({ x: 100, y: 50 }), // y-only: 50mm at 1200
+    ];
+    const exact = 90 / 3600 + 100 / 1200 + 10 / 600 + 50 / 1200;
+    expect(overheadMinutes(moves, 0, undefined, undefined)).toBeCloseTo(exact, 9);
+    // the Z leg really runs at 600 — an all-1200 guess would halve it
+    const atXYRate = 90 / 3600 + 100 / 1200 + 10 / 1200 + 50 / 1200;
+    expect(exact - atXYRate).toBeCloseTo(10 / 1200, 9);
+    // cutting moves update the tracked position: a rapid after a cut is
+    // measured from where the cut ended
+    const withCut: Move[] = [
+      ...moves,
+      { words: { x: 40, y: 0 }, feed: 600 }, // G94 cut over to (40, 0)
+      g0({ x: 0 }), // 40mm back at 1200
+    ];
+    expect(overheadMinutes(withCut, 0, undefined, undefined)).toBeCloseTo(exact + 40 / 1200, 9);
+  });
+
+  it('a G94 pocket op carries the overhead: cutting×1.1 + rapids + ramp', () => {
+    const warm = generateJobOp(pocketOp, { ...ctx, prevRpm: 18000 });
+    const cold = generateJobOp(pocketOp, { ...ctx, prevRpm: 0 });
+    expect(warm.error).toBeNull();
+    expect(warm.spindleRpm).toBe(18000);
+    expect(cold.minutes - warm.minutes).toBeCloseTo(18000 / 1800 / 60, 9);
+    // the pocket's move list is full of rapids — the overhead part is real
+    expect(warm.moves.some((m) => m.rapid)).toBe(true);
+    const ovh = overheadMinutes(warm.moves, 0, 18000, 18000);
+    expect(ovh).toBeGreaterThan(0);
+    expect(Math.abs(warm.minutes - (quotedCutting(warm) * 1.1 + ovh))).toBeLessThanOrEqual(0.06);
+    expect(warm.minutes).toBeGreaterThan(quotedCutting(warm));
+  });
+
+  it('laser engrave: rapid overhead present, never a spindle ramp', () => {
+    const laserTool: Tool = {
+      id: 'tL',
+      name: 'Laser Module',
+      type: 'laser',
+      diameter: 0.1,
+      spindleRpm: 20, // the power% slot (documented reuse)
+      focus: 1.5,
+    };
+    const art: Primitive = {
+      kind: 'artwork',
+      id: 'prim-art',
+      // two strokes, far apart: the rapid between them is charged
+      paths: [
+        [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+        [{ x: 0, y: 40 }, { x: 100, y: 40 }],
+      ],
+      width: 100,
+      height: 50,
+      presentation: 'flat',
+      wrapDiameter: 16,
+      wrapAngle: 90,
+      transform: { ...identityTransform(), position: { x: 0, y: 0, z: 10 } },
+    };
+    const laserCtx: GenContext = {
+      stock: cylStock,
+      geometry: null,
+      features: null,
+      transform: identityTransform(),
+      tools: [laserTool],
+      primitives: [art],
+      sources: sourcesFor(null, null, identityTransform(), [art]),
+      datumAngle: 0,
+      startA: 0,
+    };
+    const op: JobOp = {
+      kind: 'engrave',
+      id: 'eng-l',
+      toolId: 'tL',
+      featureIds: ['p:prim-art:path:0', 'p:prim-art:path:1'],
+      depth: 0.5,
+      stepDown: 0.25,
+    };
+    const cold = generateJobOp(op, laserCtx);
+    // a "running spindle" before it must not charge a ramp either way
+    const warm = generateJobOp(op, { ...laserCtx, prevRpm: 18000 });
+    expect(cold.error).toBeNull();
+    expect(cold.spindleRpm).toBeUndefined(); // beam power, not a spindle speed
+    expect(warm.minutes).toBeCloseTo(cold.minutes, 9);
+    const ovh = overheadMinutes(cold.moves, 0, undefined, undefined);
+    expect(ovh).toBeGreaterThan(0); // the rapid travel is charged
+    expect(Math.abs(cold.minutes - (quotedCutting(cold) * 1.1 + ovh))).toBeLessThanOrEqual(0.06);
+    expect(cold.minutes).toBeGreaterThan(quotedCutting(cold));
   });
 });

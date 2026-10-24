@@ -140,6 +140,38 @@ describe('parseJobFile', () => {
     expect(plain.ops[0].rates).toBeUndefined();
   });
 
+  it('round-trips spiral carve spin, and absent stays absent', () => {
+    const spiralOp: Extract<JobOp, { kind: 'spiralCarve' }> = {
+      id: 'jobop-sc',
+      toolId: 't-used',
+      featureIds: [],
+      kind: 'spiralCarve',
+      surfaceDiameter: 40,
+      xStart: 0,
+      xEnd: 20,
+      spiralAngle: 45,
+      count: 2,
+      depth: 1,
+      width: 2,
+      stepDown: 0.5,
+      rotation: 'cw',
+    };
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [],
+      ops: [{ ...spiralOp, spin: 90 }, spiralOp],
+      tools,
+      modelName: 'part.stl',
+      modelBytes: new Uint8Array([9, 9]),
+    });
+    const parsed = parseJobFile(JSON.stringify(file));
+    // normalizeJobOps leaves spiral carve ops untouched: a set spin survives,
+    // an absent one stays absent (the generator default is 0)
+    expect((parsed.ops[0] as typeof spiralOp).spin).toBe(90);
+    expect((parsed.ops[1] as typeof spiralOp).spin).toBeUndefined();
+  });
+
   it('rejects foreign files and newer formats', () => {
     expect(() => parseJobFile('{"format":"something else"}')).toThrowError(/not a simple/);
     expect(() => parseJobFile('not json at all')).toThrowError();

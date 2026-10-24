@@ -144,6 +144,24 @@ function namespaceIds(features: DetectedFeatures, primId: string): DetectedFeatu
 }
 
 /**
+ * The namespaced TOP-face plane feature id of a BOX primitive — the face
+ * a generated calibration cell's pocket op targets. The materializer
+ * builds the op before the primitive ever renders, so it must predict
+ * the id the source will publish: same cached detection, same
+ * `p:<primId>:<featureId>` namespacing. The plane normal is unnormalized
+ * (Newell), so compare its direction. Null when detection finds no +Z
+ * face (never expected for a box).
+ */
+export function boxTopFaceId(p: Extract<Primitive, { kind: 'box' }>): string | null {
+  const feats = primitiveDetection(p);
+  const top = feats.planes.find((f) => {
+    const m = Math.hypot(f.normal.x, f.normal.y, f.normal.z);
+    return m > 1e-9 && f.normal.z / m > 0.9;
+  });
+  return top ? `p:${p.id}:${top.id}` : null;
+}
+
+/**
  * Artwork → local-space 3D polylines. FLAT: the document plane at z=0,
  * centered (u −w/2 right, v UP — SVG's v-down flipped), and the standard
  * ModelTransform then places it like any other primitive. WRAPPED: bent

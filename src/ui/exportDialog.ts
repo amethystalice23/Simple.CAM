@@ -93,6 +93,28 @@ export function includeUnblocked(
   return { checked: nextChecked, blocked: nextBlocked };
 }
 
+/** Select-all state: is every exportable op currently included? */
+export function allIncluded(
+  included: ReadonlySet<string>,
+  exportableIds: readonly string[],
+): boolean {
+  return exportableIds.length > 0 && exportableIds.every((id) => included.has(id));
+}
+
+/**
+ * The select-all toggle over the exportable ops: any op currently excluded →
+ * include every exportable op; all included → exclude all. Blocked ops
+ * (errored/empty) are never exportable, so they stay untouched either way.
+ */
+export function toggleAllIncluded(
+  included: ReadonlySet<string>,
+  exportableIds: readonly string[],
+): Set<string> {
+  return exportableIds.some((id) => !included.has(id))
+    ? new Set(exportableIds)
+    : new Set();
+}
+
 /**
  * Stamp an op's moves for export: the FIRST move carries the op tag the post
  * reads — the op's 1-based position in the exported file, its display name,

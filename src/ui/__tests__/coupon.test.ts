@@ -160,12 +160,18 @@ describe('the Delrin coupon job', () => {
       sources: [],
       datumAngle: 0, startA: 0,
     };
+    // generate exactly like the app's recalcAll: A and the spindle state
+    // thread op-to-op, so the printed figure matches the export's honest one
+    let a = 0;
+    let prevRpm: number | undefined;
     let minutes = 0;
     for (const op of parsed.ops) {
-      const res = generateJobOp(op, ctx);
+      const res = generateJobOp(op, { ...ctx, startA: a, prevRpm });
       expect(res.error, `${op.id}: ${res.error}`).toBeNull();
       expect(res.moves.length).toBeGreaterThan(0);
       expect(res.moves[0].spindleRpm).toBeDefined();
+      a = res.finalA;
+      prevRpm = res.spindleRpm ?? prevRpm;
       minutes += res.minutes;
     }
     // sanity: face + spiral + thread + knurl pair = 5 ops

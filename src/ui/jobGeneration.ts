@@ -11,6 +11,7 @@ import { cylChamfer } from '../cam/cylChamfer';
 import { engrave } from '../cam/engrave';
 import { spiralCarve } from '../cam/spiralCarve';
 import { thread } from '../cam/thread';
+import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
 import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
@@ -43,12 +44,16 @@ import {
   pocketRegionsFromSelection,
 } from './opTargets';
 import { transformFn } from './featureOverlays';
-import { resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
+import { boxTopFaceId, resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
+import { nextPrimitiveId, unitTransform } from './primitives';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
 
 export interface GeneratedOp {
   moves: Move[];
-  /** cutting time estimate, minutes */
+  /** honest time estimate, minutes: the generator's cutting figure ×
+   * CUT_ACCEL_ALLOWANCE plus non-cutting overhead (rapid travel + spindle
+   * ramp — see overheadMinutes). The ops-panel summary still quotes the
+   * generator's cutting-only figure. */
   minutes: number;
   /** generation error, if any (kept per-op, not thrown) */
   error: string | null;
@@ -58,6 +63,10 @@ export interface GeneratedOp {
    * rotary ops continue from the axis' real position and never unwind the
    * previous pile to reach a small absolute target */
   finalA: number;
+  /** the spindle RPM this op stamps (its `S<rpm> M3` line) — undefined for
+   * index/laser/no-stamp ops; the NEXT op's prevRpm, so back-to-back ops at
+   * the same speed charge no ramp */
+  spindleRpm?: number;
 }
 
 export interface GenContext {
@@ -77,6 +86,10 @@ export interface GenContext {
   /** the cutting datum for this op: the absolute A established by the
    * latest Index op preceding it in the job sequence (0 = flat) */
   datumAngle: number;
+  /** the spindle speed the PREVIOUS op left running, RPM — the ramp this
+   * op charges is |its rpm − this|; undefined = a cold spindle (ramp from
+   * 0). Threaded by the recalculation pass, never the generators. */
+  prevRpm?: number;
 }
 
 export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolean }[] = [
@@ -389,6 +402,79 @@ function rpmFor(tool: Tool | undefined, materialId: string, rates?: OpRates): nu
   return toolPresetFor(tool, materialId)?.spindleRpm ?? tool.spindleRpm;
 }
 
+/** Z1 max feed rates, mm/min (docs/makera-dialect.md "Community Controller
+ *  parsing" — the Z1 profile config): rapids are axis-separate in our
+ *  generators, so each rapid is timed at its own axis's rate */
+const RAPID_MM_MIN = { x: 1200, y: 1200, z: 600 };
+/** the 4th axis rapid rate, °/min (same Z1 profile) */
+const A_RAPID_DEG_MIN = 3600;
+/** spindle spin-up/down, assumed rpm/sec — the one soft constant here;
+ *  calibrated against two measured coupon cuts (2026-10-24) */
+const SPINDLE_RAMP_RPM_PER_SEC = 1800;
+/** acceleration allowance on cutting moves — moves this short spend a
+ *  real fraction ramping; empirical, same calibration */
+const CUT_ACCEL_ALLOWANCE = 1.1;
+
+/**
+ * Non-cutting time of one op's move list, minutes: rapid travel at the
+ * axis rates, plus the spindle ramp for the rpm change this op stamps.
+ *
+ * Moves carry ABSOLUTE word targets; a missing axis word means "unchanged
+ * since the previous move". For the FIRST move the previous position is
+ * unknown except A, which starts from `startA` — axes with no known
+ * previous position contribute 0 (the move list alone cannot say how far
+ * the initial approach traveled). Each rapid is timed as the MAX over the
+ * axes it actually specifies: our generators emit axis-separate rapids,
+ * so this is exact; a coordinated rapid is conservatively its slowest
+ * axis.
+ *
+ * Spindle ramp: |rpm − prevRpm| at SPINDLE_RAMP_RPM_PER_SEC. `prevRpm`
+ * undefined means a cold spindle — a real spin-up, charged from 0.
+ * `rpm` undefined (no spindle stamp) means no ramp at all.
+ */
+export function overheadMinutes(
+  moves: Move[],
+  startA: number,
+  prevRpm: number | undefined,
+  rpm: number | undefined,
+): number {
+  let rapidMinutes = 0;
+  let x: number | undefined;
+  let y: number | undefined;
+  let z: number | undefined;
+  let a = startA;
+  for (const m of moves) {
+    const w = m.words;
+    if (m.rapid) {
+      let t = 0;
+      if (w.x !== undefined && x !== undefined) {
+        t = Math.max(t, Math.abs(w.x - x) / RAPID_MM_MIN.x);
+      }
+      if (w.y !== undefined && y !== undefined) {
+        t = Math.max(t, Math.abs(w.y - y) / RAPID_MM_MIN.y);
+      }
+      if (w.z !== undefined && z !== undefined) {
+        t = Math.max(t, Math.abs(w.z - z) / RAPID_MM_MIN.z);
+      }
+      if (w.a !== undefined) {
+        t = Math.max(t, Math.abs(w.a - a) / A_RAPID_DEG_MIN);
+      }
+      rapidMinutes += t;
+    }
+    // the position carries through cutting moves too — a later rapid is
+    // measured from wherever the cut left the axis
+    if (w.x !== undefined) x = w.x;
+    if (w.y !== undefined) y = w.y;
+    if (w.z !== undefined) z = w.z;
+    if (w.a !== undefined) a = w.a;
+  }
+  const rampMinutes =
+    rpm === undefined
+      ? 0
+      : Math.abs(rpm - (prevRpm ?? 0)) / SPINDLE_RAMP_RPM_PER_SEC / 60;
+  return rapidMinutes + rampMinutes;
+}
+
 /**
  * The rates the ops-panel popup shows as this op's defaults — EXACTLY what
  * generation uses when the op has no `rates` overrides. Drill plunges at
@@ -442,6 +528,148 @@ export function defaultStepDown(tool: Tool, materialId: string): number {
       ? preset.stepDown
       : material.stepDownByTool[tool.type];
   return Math.max(0.05, Math.min(raw, tool.diameter * 0.5));
+}
+
+/**
+ * The constant controls of a test-pattern matrix: the tool's own preset
+ * for the stock material (feed, RPM — the material-matched row, never the
+ * Tools-tab default that once ran a Delrin job at the metal row's S18000)
+ * with the derived step defaults. Every parameter NOT on a matrix axis
+ * holds these for all cells, so it can never confound the read.
+ */
+export function testPatternDefaults(tool: Tool, materialId: string): MatrixDefaults {
+  const material = getMaterial(materialId);
+  const preset = toolPresetFor(tool, materialId);
+  return {
+    feed: preset?.feed ?? material.feedByTool[tool.type],
+    spindleRpm: preset?.spindleRpm ?? tool.spindleRpm,
+    stepDown: defaultStepDown(tool, materialId),
+    stepOver: defaultStepOver(tool),
+  };
+}
+
+/** Thickness of a flat calibration cell's outline plate, mm — thin enough
+ * not to read as stock, thick enough to render and click. */
+const CELL_PLATE_MM = 1;
+
+/**
+ * Materialize a planned test pattern into ORDINARY OPS — the coupon the
+ * user refers back to: every cell is a normal op row with its rates in
+ * the ⚡ popup, its minutes in the estimate, and its parameters saved in
+ * the job file; regenerating means delete + Generate again. Rotary: a
+ * face cylinder op (when planned) then one spiral carve op per cell,
+ * grouping-outer, ranked +X tails (strand 1 longest). Flat: one thin
+ * box primitive per cell sitting on the crown (the visible, clickable
+ * cell outline; its top face is the pocket region) then one pocket op
+ * per cell, row-outer.
+ * The plunge feed is shared by every op so it can never confound a read.
+ */
+export function materializeTestPattern(
+  plan: TestPatternPlan,
+  tool: Tool,
+  materialId: string,
+): { ops: JobOp[]; primitives: Primitive[] } {
+  if (plan.error) return { ops: [], primitives: [] };
+  const plungeFeed = presetRates('pocket', tool, materialId).plungeFeed;
+  const ops: JobOp[] = [];
+  const primitives: Primitive[] = [];
+
+  if (plan.rotary) {
+    const rt = plan.rotary;
+    if (rt.face) {
+      ops.push({
+        id: `jobop-${++opCount}`,
+        toolId: tool.id,
+        featureIds: [],
+        kind: 'faceCylinder',
+        targetDiameter: rt.face.targetDiameter,
+        xStart: rt.face.xStart,
+        xEnd: rt.face.xEnd,
+        stepDown: rt.face.stepDown,
+        stepOver: rt.face.stepOver,
+        finishAllowance: 0,
+        rotation: 'cw',
+        pattern: 'spiral',
+        rates: { feed: rt.face.feed, spindleRpm: rt.face.rpm, plungeFeed },
+      });
+    }
+    for (let g = 0; g < plan.cols; g++) {
+      for (let s = 0; s < plan.rows; s++) {
+        const p = planCell(plan, s, g);
+        // the RANKED +X tail: strand 1 longest, shortening strand by
+        // strand — each groove's own length identifies it
+        const tail = rt.tailStep * (plan.rows - 1 - s);
+        ops.push({
+          id: `jobop-${++opCount}`,
+          toolId: tool.id,
+          featureIds: [],
+          kind: 'spiralCarve',
+          surfaceDiameter: rt.surfaceDiameter,
+          xStart: rt.groupXs[g],
+          xEnd: rt.groupXs[g] + rt.span + tail,
+          spiralAngle: rt.angle,
+          count: 1,
+          depth: p.stepDown, // the tested DOC IS the groove depth
+          width: Math.max(p.stepOver, tool.diameter), // single pass at tool width
+          stepDown: p.stepDown, // one full-depth pass — the v4 verdict
+          rotation: 'cw',
+          spin: s * rt.spinStep,
+          rates: { feed: p.feed, spindleRpm: p.spindleRpm, plungeFeed },
+        });
+      }
+    }
+  }
+
+  if (plan.flat) {
+    const f = plan.flat;
+    for (let r = 0; r < plan.rows; r++) {
+      for (let c = 0; c < plan.cols; c++) {
+        const p = planCell(plan, r, c);
+        const x = f.x0 + c * (f.cellW + f.spacing);
+        // row 1 is the TOP row — rows run top to bottom (+Y down to −Y)
+        const y = f.y0 + (plan.rows - 1 - r) * (f.cellH + f.spacing);
+        // cell 1/1 (top-left) grows into the perimeter on its two outer
+        // sides — the oversized corner marks the grid origin
+        const origin = r === 0 && c === 0;
+        const w = f.cellW + (origin ? f.originGrowth : 0);
+        const h = f.cellH + (origin ? f.originGrowth : 0);
+        const size = { x: w, y: h, z: CELL_PLATE_MM };
+        const prim: Extract<Primitive, { kind: 'box' }> = {
+          kind: 'box',
+          id: nextPrimitiveId(),
+          size,
+          original: { ...size },
+          transform: unitTransform({
+            // extends −X (left) and +Y (up) into the wider perimeter —
+            // the inner edges stay flush with the row/column
+            x: x + (origin ? -f.originGrowth : 0) + w / 2,
+            y: y + h / 2,
+            z: f.crownZ + CELL_PLATE_MM / 2,
+          }),
+        };
+        const faceId = boxTopFaceId(prim);
+        if (faceId === null) continue; // a box always detects its top face
+        primitives.push(prim);
+        ops.push({
+          id: `jobop-${++opCount}`,
+          toolId: tool.id,
+          featureIds: [faceId],
+          kind: 'pocket',
+          selectionIs: 'floor',
+          startDepth: 0,
+          endDepth: f.totalDepth,
+          allowance: 0,
+          stepDown: p.stepDown,
+          stepOver: p.stepOver,
+          floorFeatureId: null,
+          flatten: false,
+          rates: { feed: p.feed, spindleRpm: p.spindleRpm, plungeFeed },
+        });
+      }
+    }
+  }
+
+  return { ops, primitives };
 }
 
 /**
@@ -534,17 +762,39 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
       break;
     }
   }
-  const stamped = { ...res, finalA } satisfies GeneratedOp;
+  const stamped: GeneratedOp = { ...res, finalA };
+  // index ops position the stock; failed ops cut nothing — neither carries
+  // cutting time, so neither carries overhead
   if (op.kind === 'index' || stamped.moves.length === 0) return stamped;
   const opTool = ctx.tools.find((t) => t.id === op.toolId);
   // a laser op's S word is the BEAM POWER (stamped per path by the
-  // generator) — an `S<rpm> M3` spindle line would fight it
-  if (opTool?.type === 'laser') return stamped;
+  // generator) — an `S<rpm> M3` spindle line would fight it: rapid overhead
+  // only, never a spindle ramp
+  if (opTool?.type === 'laser') {
+    return {
+      ...stamped,
+      minutes:
+        stamped.minutes * CUT_ACCEL_ALLOWANCE +
+        overheadMinutes(stamped.moves, ctx.startA, undefined, undefined),
+    };
+  }
   const rpm = rpmFor(opTool, ctx.stock.materialId, op.rates);
-  if (rpm === undefined) return stamped;
+  if (rpm === undefined) {
+    // no spindle stamp (no `S<rpm> M3` line) — rapids still happen
+    return {
+      ...stamped,
+      minutes:
+        stamped.minutes * CUT_ACCEL_ALLOWANCE +
+        overheadMinutes(stamped.moves, ctx.startA, ctx.prevRpm, undefined),
+    };
+  }
   return {
     ...stamped,
+    spindleRpm: rpm,
     moves: [{ ...stamped.moves[0], spindleRpm: rpm }, ...stamped.moves.slice(1)],
+    minutes:
+      stamped.minutes * CUT_ACCEL_ALLOWANCE +
+      overheadMinutes(stamped.moves, ctx.startA, ctx.prevRpm, rpm),
   };
 }
 
@@ -629,6 +879,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               width: op.width,
               stepDown: op.stepDown,
               rotation: op.rotation,
+              spin: op.spin,
               feed,
               plungeFeed,
               clearance: op.rates?.clearance,

@@ -11,6 +11,7 @@ import { postCarvera } from '../post/carvera';
 import { NumInput } from './fields';
 import { OP_KINDS, type GeneratedOp } from './jobGeneration';
 import {
+  allIncluded,
   assignToolNumbers,
   buildExportFilename,
   countToolChanges,
@@ -18,6 +19,7 @@ import {
   sanitizeFilename,
   setToolNumber,
   stampOp,
+  toggleAllIncluded,
 } from './exportDialog';
 
 interface Props {
@@ -30,6 +32,9 @@ interface Props {
   /** recalculate one op in place (the per-row ↻) — the dialog reflects the
    * fresh result through the generated prop */
   onRecalcOne: (id: string) => void;
+  /** recalculate every op (the ops page's Recalculate All) — fresh results
+   * arrive through the generated prop, rows and totals update in place */
+  onRecalculateAll: () => void;
   onClose: () => void;
 }
 
@@ -126,6 +131,12 @@ export function ExportDialog(props: Props) {
     0,
   );
 
+  /** exportable op ids in job order — drives the select-all box; blocked ops
+   * (errored/empty) can never be ticked, individually or all at once */
+  const exportableIds = props.ops.filter((o) => genOk(o.id)).map((o) => o.id);
+  const allChecked = allIncluded(included, exportableIds);
+  const toggleAll = () => setIncluded(toggleAllIncluded(included, exportableIds));
+
   const suggested = useMemo(
     () =>
       buildExportFilename({
@@ -213,11 +224,22 @@ export function ExportDialog(props: Props) {
 
         <div className="export-rows">
           <div className="export-row head">
-            <span />
+            <input
+              type="checkbox"
+              checked={allChecked}
+              disabled={exportableIds.length === 0}
+              title={
+                allChecked
+                  ? 'Exclude every op from the exported file'
+                  : 'Include every op in the exported file'
+              }
+              onChange={toggleAll}
+            />
             <span>#</span>
             <span>Op</span>
             <span>Tool no.</span>
             <span>Tool type</span>
+            <span className="export-time">Time</span>
             <span />
             <span />
           </div>
@@ -228,6 +250,11 @@ export function ExportDialog(props: Props) {
             const tool = props.tools.find((t) => t.id === op.toolId);
             const num = toolNumbers.get(op.toolId);
             const problem = g?.error ?? 'no moves generated';
+            /** the row's own honest estimate — '—' when it never generated */
+            const time =
+              g !== undefined && g.error === null
+                ? `${g.minutes.toFixed(1)} min`
+                : '—';
             return (
               <div key={op.id} className={`export-row${ok ? '' : ' dim'}`}>
                 <input
@@ -257,6 +284,12 @@ export function ExportDialog(props: Props) {
                 </span>
                 <span className="export-tooltype">
                   {tool ? toolTypeLabel(tool) : 'tool missing from library'}
+                </span>
+                <span
+                  className="export-time"
+                  title="This op's own estimate — cutting time plus rapid travel and spindle ramp, same basis as the total"
+                >
+                  {time}
                 </span>
                 {!ok && (
                   <span className="export-error" title={problem}>
@@ -294,6 +327,14 @@ export function ExportDialog(props: Props) {
         </label>
 
         <div className="buttons">
+          <button
+            type="button"
+            className="secondary"
+            onClick={props.onRecalculateAll}
+            title="Regenerate every op's toolpath (same as Recalculate on the Ops tab) — rows, times, and the total update in place"
+          >
+            Recalculate All
+          </button>
           <button
             type="button"
             onClick={exportAndDownload}

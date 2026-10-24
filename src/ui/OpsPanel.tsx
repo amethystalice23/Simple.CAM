@@ -492,6 +492,13 @@ function ParamFields(props: {
             </button>
           </div>
           <NumberField label="Spiral angle (°)" value={op.spiralAngle} min={0.1} step={5} onCommit={(v) => upd({ spiralAngle: Math.min(Math.max(v, 0.1), 90) } as Partial<JobOp>)} />
+          <NumberField
+            label="Spin (°)"
+            title="Starting A of strand 1, degrees — where strand 1 starts around the cylinder. Rotates the whole strand pattern (spacing is preserved) and stacks additively with the index datum; any value works, positioning is shortest-rotation. Default 0 = first strand at the datum"
+            value={op.spin ?? 0}
+            step={5}
+            onCommit={(v) => upd({ spin: v } as Partial<JobOp>)}
+          />
           <NumberField label="Strands (around 360°)" value={op.count} min={1} step={1} onCommit={(v) => upd({ count: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
           <NumberField label="Depth (mm)" value={op.depth} min={0.1} step={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
           <NumberField label="Width (mm)" title="0 = just follow the lines — no width fan, the groove is the tool's own cut (V-bit knurling)" value={op.width} min={0} step={0.1} onCommit={(v) => upd({ width: v } as Partial<JobOp>)} />
@@ -520,7 +527,8 @@ function ParamFields(props: {
           </label>
           <p className="hint">
             helical grooves about the stock axis — angle off the circumferential direction
-            (90° = axial lines), strands evenly around 360°, depth per step-down ladder whose
+            (90° = axial lines), strands evenly around 360° — spin is where strand 1
+            starts around the cylinder — depth per step-down ladder whose
             levels retrace the same groove. Width wider than the tool Ø fans parallel passes;
             width 0 just follows the lines (the tool cuts its own width — knurling).
             Defaults from the stock; the ⇩ picks fill the area off the model

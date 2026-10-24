@@ -432,7 +432,7 @@ pre {
 .export-totals { margin-top: 8px; }
 .export-row {
   display: grid;
-  grid-template-columns: 22px 28px 1fr 74px 110px 1fr 24px; /* last = per-row ↻ */
+  grid-template-columns: 22px 28px 1fr 74px 110px 58px 1fr 24px; /* 6th = per-op time, last = per-row ↻ */
   gap: 8px;
   align-items: center;
   font-size: 12px;
@@ -452,6 +452,13 @@ pre {
 .export-row .export-kind { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .export-row .export-no-tool { color: #7d8891; }
 .export-row .export-tooltype { color: #9aa4ad; font-size: 11px; }
+.export-row .export-time {
+  color: #d8dde2;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.export-row.head .export-time { color: #7d8891; }
 .export-row .export-error {
   color: #e0785a;
   font-size: 11px;
@@ -500,3 +507,46 @@ pre {
   z-index: 3;
 }
 .projection-pill:hover { border-color: #4d94c9; color: #fff; }
+
+/* calibration coupon dialog: wider than the export modal (the ladders
+ * need room), ladder tables, and the Cancel/Generate footer */
+.cal-modal { width: 720px; }
+.cal-intro { font-size: 12px; color: #9aa4ad; margin: 4px 0 10px; }
+/* axes stack like the rest of the app's forms — only each axis's min/max
+ * pair shares a line */
+.cal-axes { margin-bottom: 4px; }
+.cal-axes .field { margin-bottom: 2px; }
+.cal-range { display: flex; gap: 8px; margin-bottom: 6px; }
+.cal-legend { margin: 10px 0; }
+.cal-legend .hint { margin: 2px 0 6px; }
+.cal-ladders {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  margin: 4px 0 8px;
+}
+.cal-ladder { border-collapse: collapse; font-size: 11px; width: 100%; }
+.cal-ladder th,
+.cal-ladder td {
+  border: 1px solid #31373e;
+  padding: 2px 8px;
+  font-weight: 400;
+  color: #b8c0c8;
+  text-align: left;
+}
+.cal-ladder thead th {
+  background: #232830;
+  color: #d8dde2;
+  font-weight: 600;
+}
+.cal-ladder td:last-child {
+  text-align: right;
+  color: #d8dde2;
+  font-variant-numeric: tabular-nums;
+}
+.dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}

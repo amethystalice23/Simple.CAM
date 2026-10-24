@@ -52,6 +52,7 @@ import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
 import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
+import { CalibrationDialog } from './CalibrationDialog';
 import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -97,6 +98,8 @@ export function App() {
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
   /** the "Export g-code" dialog is open */
   const [showExport, setShowExport] = useState(false);
+  /** the calibration-coupon generator dialog is open (top-bar button) */
+  const [showCalibration, setShowCalibration] = useState(false);
   /** the about box is open (click the product name in the header) */
   const [showAbout, setShowAbout] = useState(false);
   /** ops whose toolpath is hidden from the preview (the export dialog
@@ -512,6 +515,7 @@ export function App() {
             width: op.width,
             stepDown: op.stepDown,
             rotation: op.rotation,
+            spin: op.spin,
             feed: 1,
             plungeFeed: 1,
           },
@@ -591,9 +595,12 @@ export function App() {
     const next: Record<string, GeneratedOp> = {};
     let datum = 0; // Index ops establish the datum for the ops after them
     let a = 0; // the machine's accumulated A — ops continue from the last
+    let prevRpm: number | undefined; // the running spindle speed
     for (const o of ops) {
-      next[o.id] = generateJobOp(o, { ...genCtx, datumAngle: datum, startA: a });
+      next[o.id] = generateJobOp(o, { ...genCtx, datumAngle: datum, startA: a, prevRpm });
       a = next[o.id].finalA;
+      // ops that stamp nothing (index) carry the previous spindle state through
+      prevRpm = next[o.id].spindleRpm ?? prevRpm;
       if (o.kind === 'index') datum = o.angle;
     }
     for (const o of ops) {
@@ -609,16 +616,28 @@ export function App() {
     const op = ops.find((o) => o.id === id);
     if (!op) return;
     // continue from the nearest previously-generated op's A, so a lone
-    // recalculation lands where the machine would actually be
+    // recalculation lands where the machine would actually be; the spindle
+    // state rides back the same way (index ops carry the previous speed
+    // through, so walk past them to the last op that stamped one)
     let startA = 0;
+    let prevRpm: number | undefined;
+    let haveStartA = false;
     for (let i = ops.findIndex((o) => o.id === id) - 1; i >= 0; i--) {
       const g = generated[ops[i].id];
-      if (g) {
+      if (!g) continue;
+      if (!haveStartA) {
         startA = g.finalA;
-        break;
+        haveStartA = true;
       }
+      if (prevRpm === undefined) prevRpm = g.spindleRpm;
+      if (haveStartA && prevRpm !== undefined) break;
     }
-    const result = generateJobOp(op, { ...genCtx, datumAngle: datumAngleBefore(ops, id), startA });
+    const result = generateJobOp(op, {
+      ...genCtx,
+      datumAngle: datumAngleBefore(ops, id),
+      startA,
+      prevRpm,
+    });
     if (result.error) console.warn(`[simple.cam] op "${op.kind}" failed: ${result.error}`);
     const next = { ...generated, [id]: result };
     setGenerated(next);
@@ -633,6 +652,19 @@ export function App() {
     setLastToolId(defaultTool.id);
     setOps((prev) => [...prev, op]);
     setExpandedOpId(op.id);
+  };
+
+  /** the Calibration dialog's Generate: append the materialized coupon —
+   * ordinary ops the user can examine, toggle, edit, and save — plus the
+   * flat mode's per-cell outline primitives. The debounced recalc pass
+   * picks the new ops up on the next tick. */
+  const generateCalibration = (newOps: JobOp[], newPrimitives: Primitive[]) => {
+    if (newPrimitives.length > 0) setPrimitives((prev) => [...prev, ...newPrimitives]);
+    if (newOps.length > 0) {
+      setOps((prev) => [...prev, ...newOps]);
+      setLastToolId(newOps[0].toolId);
+      setShowCalibration(false);
+    }
   };
 
   const reorderOps = (dragId: string, targetId: string) => {
@@ -972,6 +1004,13 @@ export function App() {
           <button type="button" onClick={() => openJobInputRef.current?.click()}>
             Open job…
           </button>
+          <button
+            type="button"
+            title="Generate a feed/speed test-pattern coupon as ordinary toolpaths"
+            onClick={() => setShowCalibration(true)}
+          >
+            Calibration…
+          </button>
           <button type="button" onClick={() => setShowExport(true)}>
             Export g-code
           </button>
@@ -1142,7 +1181,18 @@ export function App() {
           stock={stock}
           modelName={geometry ? modelName : null}
           onRecalcOne={recalcOne}
+          onRecalculateAll={recalcAll}
           onClose={() => setShowExport(false)}
+        />
+      )}
+      {showCalibration && (
+        <CalibrationDialog
+          tools={tools}
+          stock={stock}
+          materialId={stock.materialId}
+          initialToolId={lastToolId}
+          onClose={() => setShowCalibration(false)}
+          onGenerate={generateCalibration}
         />
       )}
     </div>

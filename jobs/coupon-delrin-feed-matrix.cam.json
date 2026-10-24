@@ -1,0 +1,646 @@
+{
+  "format": "simple.cam job",
+  "version": 1,
+  "stock": {
+    "kind": "cylinder",
+    "length": 50,
+    "xOrigin": "mid",
+    "calibration": {
+      "aOriginDeg": 0,
+      "axisZ": 0,
+      "effectiveRadius": 8.175
+    },
+    "axisMode": "4-axis",
+    "materialId": "delrin"
+  },
+  "transform": {
+    "position": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "rotationDeg": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  "primitives": [],
+  "ops": [
+    {
+      "id": "jobop-0-face",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "faceCylinder",
+      "targetDiameter": 15.75,
+      "xStart": -25,
+      "xEnd": 25,
+      "stepDown": 0.3,
+      "stepOver": 1,
+      "finishAllowance": 0,
+      "rotation": "cw",
+      "pattern": "spiral",
+      "rates": {
+        "feed": 400,
+        "spindleRpm": 8500,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g1-s1",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -20,
+      "xEnd": -13.5,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 0,
+      "rates": {
+        "feed": 450,
+        "spindleRpm": 7000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g1-s2",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -20,
+      "xEnd": -15,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 72,
+      "rates": {
+        "feed": 500,
+        "spindleRpm": 7000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g1-s3",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -20,
+      "xEnd": -15,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 144,
+      "rates": {
+        "feed": 550,
+        "spindleRpm": 7000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g1-s4",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -20,
+      "xEnd": -15,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 216,
+      "rates": {
+        "feed": 600,
+        "spindleRpm": 7000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g1-s5",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -20,
+      "xEnd": -15,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 288,
+      "rates": {
+        "feed": 650,
+        "spindleRpm": 7000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g2-s1",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -12,
+      "xEnd": -5.5,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 0,
+      "rates": {
+        "feed": 450,
+        "spindleRpm": 7750,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g2-s2",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -12,
+      "xEnd": -7,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 72,
+      "rates": {
+        "feed": 500,
+        "spindleRpm": 7750,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g2-s3",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -12,
+      "xEnd": -7,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 144,
+      "rates": {
+        "feed": 550,
+        "spindleRpm": 7750,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g2-s4",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -12,
+      "xEnd": -7,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 216,
+      "rates": {
+        "feed": 600,
+        "spindleRpm": 7750,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g2-s5",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -12,
+      "xEnd": -7,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 288,
+      "rates": {
+        "feed": 650,
+        "spindleRpm": 7750,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g3-s1",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -4,
+      "xEnd": 2.5,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 0,
+      "rates": {
+        "feed": 450,
+        "spindleRpm": 8500,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g3-s2",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -4,
+      "xEnd": 1,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 72,
+      "rates": {
+        "feed": 500,
+        "spindleRpm": 8500,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g3-s3",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -4,
+      "xEnd": 1,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 144,
+      "rates": {
+        "feed": 550,
+        "spindleRpm": 8500,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g3-s4",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -4,
+      "xEnd": 1,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 216,
+      "rates": {
+        "feed": 600,
+        "spindleRpm": 8500,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g3-s5",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": -4,
+      "xEnd": 1,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 288,
+      "rates": {
+        "feed": 650,
+        "spindleRpm": 8500,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g4-s1",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 4,
+      "xEnd": 10.5,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 0,
+      "rates": {
+        "feed": 450,
+        "spindleRpm": 9250,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g4-s2",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 4,
+      "xEnd": 9,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 72,
+      "rates": {
+        "feed": 500,
+        "spindleRpm": 9250,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g4-s3",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 4,
+      "xEnd": 9,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 144,
+      "rates": {
+        "feed": 550,
+        "spindleRpm": 9250,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g4-s4",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 4,
+      "xEnd": 9,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 216,
+      "rates": {
+        "feed": 600,
+        "spindleRpm": 9250,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g4-s5",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 4,
+      "xEnd": 9,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 288,
+      "rates": {
+        "feed": 650,
+        "spindleRpm": 9250,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g5-s1",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 12,
+      "xEnd": 18.5,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 0,
+      "rates": {
+        "feed": 450,
+        "spindleRpm": 10000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g5-s2",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 12,
+      "xEnd": 17,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 72,
+      "rates": {
+        "feed": 500,
+        "spindleRpm": 10000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g5-s3",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 12,
+      "xEnd": 17,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 144,
+      "rates": {
+        "feed": 550,
+        "spindleRpm": 10000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g5-s4",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 12,
+      "xEnd": 17,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 216,
+      "rates": {
+        "feed": 600,
+        "spindleRpm": 10000,
+        "plungeFeed": 150
+      }
+    },
+    {
+      "id": "jobop-g5-s5",
+      "toolId": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "featureIds": [],
+      "kind": "spiralCarve",
+      "surfaceDiameter": 15.75,
+      "xStart": 12,
+      "xEnd": 17,
+      "spiralAngle": 60,
+      "count": 1,
+      "depth": 1,
+      "width": 0,
+      "stepDown": 1,
+      "rotation": "cw",
+      "spin": 288,
+      "rates": {
+        "feed": 650,
+        "spindleRpm": 10000,
+        "plungeFeed": 150
+      }
+    }
+  ],
+  "tools": [
+    {
+      "id": "makera-o-flute-bits-spiral-o-metal-3-175-12mm",
+      "name": "Spiral O Metal 3.175*12mm",
+      "type": "flat",
+      "subtype": "Spiral O · Metal",
+      "diameter": 3.175,
+      "spindleRpm": 18000,
+      "presets": [
+        {
+          "material": "Aluminum",
+          "spindleRpm": 12000,
+          "feed": 500,
+          "plungeFeed": 200,
+          "stepDown": 0.2,
+          "rampFeed": 333
+        },
+        {
+          "material": "Brass",
+          "spindleRpm": 12000,
+          "feed": 300,
+          "plungeFeed": 100,
+          "stepDown": 0.1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Copper",
+          "spindleRpm": 12000,
+          "feed": 300,
+          "plungeFeed": 100,
+          "stepDown": 0.1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Hardwood",
+          "spindleRpm": 12000,
+          "feed": 1000,
+          "plungeFeed": 300,
+          "stepDown": 1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Plastic",
+          "spindleRpm": 12000,
+          "feed": 1000,
+          "plungeFeed": 300,
+          "stepDown": 1,
+          "rampFeed": 333
+        },
+        {
+          "material": "Softwood",
+          "spindleRpm": 12000,
+          "feed": 500,
+          "plungeFeed": 200,
+          "stepDown": 2,
+          "rampFeed": 333
+        }
+      ],
+      "shaftDiameter": 3.175,
+      "fluteLength": 12,
+      "overallLength": 38,
+      "flutes": 1,
+      "material": "carbide"
+    }
+  ],
+  "model": null
+}

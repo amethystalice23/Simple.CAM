@@ -26,7 +26,8 @@ export function seedPrimitiveIds(primitives: Primitive[]): void {
   }
 }
 
-const unitTransform = (position: { x: number; y: number; z: number }): ModelTransform => ({
+/** Identity rotation/scale, positioned — the common primitive transform. */
+export const unitTransform = (position: { x: number; y: number; z: number }): ModelTransform => ({
   position,
   rotationDeg: { x: 0, y: 0, z: 0 },
   scale: { x: 1, y: 1, z: 1 },

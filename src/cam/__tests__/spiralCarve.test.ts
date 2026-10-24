@@ -164,3 +164,77 @@ describe('spiralCarve A continuity', () => {
     expect(Math.abs(rotate.words.a! - 350)).toBeLessThanOrEqual(180);
   });
 });
+
+describe('spiralCarve: spin (starting A of strand 1)', () => {
+  it('spin 0 / absent is a no-op: byte-identical moves', () => {
+    const base = spiralCarve({ ...op, count: 1 }, cal, 6, 30, 350);
+    const explicitZero = spiralCarve({ ...op, count: 1, spin: 0 }, cal, 6, 30, 350);
+    expect(explicitZero.moves).toEqual(base.moves);
+    expect(explicitZero.passes).toBe(base.passes);
+  });
+
+  it('spin shifts a single strand phase by +spin, stacking with the datum (shortest rotation preserved)', () => {
+    // startA 350 exercises the shortest-rotation positioning: the phase
+    // TARGET moves (30 → 30+90=120), A still gets there the short way
+    const base = spiralCarve({ ...op, count: 1 }, cal, 6, 30, 350);
+    const spun = spiralCarve({ ...op, count: 1, spin: 90 }, cal, 6, 30, 350);
+    // every A word (positioning rapid + both level sweeps) is exactly the
+    // base run's A + 90 — the whole groove rotated, nothing else changed
+    const aWords = (r: SpiralCarveResult) =>
+      r.moves.filter((m) => m.words.a !== undefined).map((m) => m.words.a!);
+    const baseA = aWords(base);
+    const spunA = aWords(spun);
+    expect(spunA).toHaveLength(baseA.length);
+    for (let i = 0; i < baseA.length; i++) {
+      expect(spunA[i] - baseA[i]).toBeCloseTo(90, 6);
+    }
+    // the first positioning rapid lands on datum + spin (mod 360) — and
+    // still within a half-turn of the machine A it came from (350)
+    const rotate = spun.moves.find((m) => m.rapid && m.words.a !== undefined)!;
+    const phase = ((rotate.words.a! % 360) + 360) % 360;
+    expect(phase).toBeCloseTo(120, 6); // datum 30 + spin 90
+    expect(Math.abs(rotate.words.a! - 350)).toBeLessThanOrEqual(180);
+  });
+
+  it('spin rotates ALL strands of a multi-start together, preserving the even 360/count spacing', () => {
+    const spun = spiralCarve({ ...op, count: 3, spin: 40 }, cal, 6, 0);
+    const plain = spiralCarve({ ...op, count: 3 }, cal, 6, 0);
+    const phases = (r: SpiralCarveResult) =>
+      r.moves
+        .filter((m) => m.rapid && m.words.a !== undefined)
+        .map((m) => ((m.words.a! % 360) + 360) % 360);
+    const spunPhases = phases(spun);
+    const plainPhases = phases(plain);
+    expect(spunPhases).toHaveLength(3); // one positioning per strand
+    for (let s = 0; s < 3; s++) {
+      // absolute phase: spin + s·(360/3)
+      expect(spunPhases[s]).toBeCloseTo(40 + s * 120, 6);
+      // vs the un-spun op: each strand moved by exactly +40
+      expect(spunPhases[s] - plainPhases[s]).toBeCloseTo(40, 6);
+    }
+    // the even multi-start spacing itself is untouched
+    for (let s = 1; s < 3; s++) {
+      expect(spunPhases[s] - spunPhases[s - 1]).toBeCloseTo(120, 6);
+    }
+  });
+
+  it('sampleSpiralMarks with spin starts each sampled strand at the phase the generator cuts', () => {
+    const datum = 30;
+    const spunOp: SpiralCarveOp = { ...op, count: 3, spin: 40 };
+    const marks = sampleSpiralMarks(spunOp, cal, 6, datum);
+    expect(marks).toHaveLength(3); // strands × single fan pass
+    // the generator's strand positioning phases, mod 360
+    const gen = spiralCarve(spunOp, cal, 6, datum);
+    const genPhases = gen.moves
+      .filter((m) => m.rapid && m.words.a !== undefined)
+      .map((m) => ((m.words.a! % 360) + 360) % 360);
+    for (let s = 0; s < 3; s++) {
+      // first sampled point's angle, recovered from y/z at the cut radius
+      const p = marks[s][0];
+      const theta = ((Math.atan2(p.y, p.z - 0) * 180) / Math.PI + 360) % 360;
+      expect(theta).toBeCloseTo(datum + 40 + s * 120, 6); // datum + spin + s·120
+      // …which is exactly where the generator positions strand s
+      expect(theta).toBeCloseTo(genPhases[s], 6);
+    }
+  });
+});

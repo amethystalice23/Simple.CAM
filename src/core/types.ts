@@ -280,6 +280,10 @@ export interface SpiralCarveOp {
   plungeFeed: number;
   /** rapid clearance above the stock surface, mm — ⚡ override, else the default */
   clearance?: number;
+  /** starting A of strand 1, degrees — rotates the whole strand pattern
+   *  around the cylinder (spacing between strands is preserved); stacks
+   *  additively with the index datum. Default 0 = first strand at the datum. */
+  spin?: number;
 }
 
 /**
@@ -592,6 +596,15 @@ export type Operation = FaceCylinderOp | SpiralCarveOp | ThreadOp | PocketOp | D
  * time — per-type parameters worth exposing live here, and cutting-rate
  * deviations from the tool defaults live in `rates`.
  */
+/**
+ * The parameter varied along one dimension of a calibration-coupon matrix
+ * (src/cam/testPattern.ts — the Calibration dialog). On rotary stock row
+ * = strand (around the cylinder), col = X grouping; on flat stock row =
+ * Y, col = X. The parameter not on an axis holds the tool-preset default
+ * for every cell, so it never confounds the matrix.
+ */
+export type MatrixParam = 'spindleRpm' | 'feed' | 'stepDown' | 'stepOver';
+
 export interface JobOpBase {
   id: string;
   toolId: string;
@@ -656,6 +669,10 @@ export type JobOp =
       /** axial depth-per-level ladder, mm */
       stepDown: number;
       rotation: 'cw' | 'ccw';
+      /** starting A of strand 1, degrees — rotates the whole strand pattern
+       *  around the cylinder; stacks additively with the index datum.
+       *  Default 0 = first strand at the datum. */
+      spin?: number;
     })
   | (JobOpBase & {
       kind: 'thread';

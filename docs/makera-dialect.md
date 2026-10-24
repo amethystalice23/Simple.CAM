@@ -242,10 +242,21 @@ pickier in one spot — than the MakeraStudio header block suggests:
   preview (`CNC.py:465-491`).
 - **G93 is parsed but not honored in time estimates**: `feedmode` is stored
   but nothing reads it; F is always treated as mm/min
-  (`CNC.py:537-538`, `GcodeViewer.py:1980-2017`). G93 files play fine but
-  the ETA/legend durations will be wrong. G94 is unit-detected from the
-  first G20/G21 in the first 1000 lines (default mm) and scales tool-mesh
-  dimensions — so our `G21` matters, `;@MKR|UNIT` does not.
+  (`CNC.py:537-538`). **The 2026.10.15 controller rewrote the estimator**
+  (`GcodeViewer.py` `_segment_duration_sec` + `_compute_line_times_worker`)
+  to be A-aware — it now measures the A arc at the tool's Y/Z radius
+  (`max(xyz, arc)/F`), counts A-only rapids (`|dA|` treated as millimetres
+  at the seek rate), and clamps per-axis against machine-config max rates —
+  but it STILL reads F as mm/min on G1-with-A lines. Our G93 F is
+  inverse-time (1/minutes, values ≈ 6–20), so each ~9.5 s sweep is counted
+  as ~2–4 minutes. Measured on the feed-matrix coupon (60 G93 sweeps,
+  `scripts/compare-estimates.ts` + a throwaway sim of the new estimator):
+  simple.cam 5m23s, G93-aware truth ≈ 6m30s + rapids ≈ 7–9 min, the
+  controller reports ≈ 1h40m (Alice's install: 1h53m17s). **G93 files play
+  fine; only the ETA/legend durations are wrong.** A G94-only file's
+  estimate should be close. G94 is unit-detected from the first G20/G21 in
+  the first 1000 lines (default mm) and scales tool-mesh dimensions — so
+  our `G21` matters, `;@MKR|UNIT` does not.
 - **4-axis preview validated**: every XYZ point is rotated about the X
   axis by its A angle (`GcodeViewer.py:428-439`) — the controller wraps A
   paths around a virtual cylinder exactly like our cylinder-canvas

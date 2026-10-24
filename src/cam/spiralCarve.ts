@@ -124,10 +124,10 @@ export function spiralCarve(
   let entered = false; // the descent-after-travel runs on the first entry only
 
   for (let s = 0; s < op.count; s++) {
-    // the strand's pattern phase: datum + its share of the circle. Each
-    // strand ends where it started (levels retrace), so the phase is set
-    // once per strand by the shortest rotation to its spoke.
-    const phase = datumAngle + s * (360 / op.count);
+    // the strand's pattern phase: datum + spin + its share of the circle.
+    // Each strand ends where it started (levels retrace), so the phase is
+    // set once per strand by the shortest rotation to its spoke.
+    const phase = datumAngle + (op.spin ?? 0) + s * (360 / op.count);
     a += shortestATo(phase, a);
 
     for (const off of fans) {
@@ -186,7 +186,8 @@ export function spiralCarve(
 /** The groove helices as 3D points for the setup display: each strand ×
  * width-fan pass sampled along its curve at the cut radius, in the
  * PART-LOCAL (A=0) frame — the viewport's datum rotation carries them
- * with the part. datumAngle shifts the strand phases like generation. */
+ * with the part. datumAngle + op.spin shift the strand phases exactly
+ * like generation. */
 export function sampleSpiralMarks(
   op: SpiralCarveOp,
   calibration: RotaryCalibration,
@@ -202,7 +203,9 @@ export function sampleSpiralMarks(
   const steps = Math.max(2, Math.ceil(aAdvance / 15) + 1);
   const marks: { x: number; y: number; z: number }[][] = [];
   for (let s = 0; s < op.count; s++) {
-    const phase = datumAngle + s * (360 / op.count);
+    // identical phase formula to spiralCarve() — preview and generation
+    // angle conventions must never disagree (pinned iron finding)
+    const phase = datumAngle + (op.spin ?? 0) + s * (360 / op.count);
     for (const off of fanOffsets(op.width, toolDiameter)) {
       const pts: { x: number; y: number; z: number }[] = [];
       for (let i = 0; i < steps; i++) {
