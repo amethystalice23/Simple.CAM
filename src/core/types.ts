@@ -858,7 +858,7 @@ export type JobOp =
   | (JobOpBase & {
       kind: 'waterline';
       /**
-       * Waterline rough of the whole loaded model (PLAN.md Phase A): constant-Z
+       * Waterline CONTOUR of the whole loaded model (PLAN.md Phase A): constant-Z
        * levels from the stock crown down to the model floor, each level
        * clearing the model's XY silhouette (plus a boundary margin) minus
        * the UPPER SHADOW: the union of every cross-section at/above the
@@ -876,6 +876,31 @@ export type JobOp =
        * passes wide, so mesh noise on the model's wall cannot pinch the
        * perimeter pass into plunge-per-sliver arcs (2026-10-25) */
       margin: number | null;
+    })
+  | (JobOpBase & {
+      kind: 'rasterContour';
+      /**
+       * Raster contour of the whole loaded model (PLAN.md Phase B): the
+       * paired SURFACE pass to the waterline contour. A heightmap of the
+       * model is taken by downward raycasts, dilated with the tool's
+       * kernel (flat disc / ball hemisphere) so every sweep clears to the
+       * tool-compensated surface, and cut in serpentine rows at a fixed
+       * step over — cutting only where material sits above the surface
+       * (no air cutting). Assumes bulk clearing already happened (a
+       * waterline contour with allowance): warns when the stock above the
+       * surface is deep. 4-axis indexed like the waterline op. Rough-vs-
+       * finish is the allowance choice, not the op.
+       *
+       * Row direction: `angle` in degrees, default 0 = rows along X;
+       * rows run along (cos α, sin α). Arbitrary angles (negatives fine,
+       * no clamp) — 90 gives Y-only rows, and a 0°+90° op pair gives the
+       * cross-hatch "both directions" finish. The Phase C rotational op
+       * composes from these same directions.
+       */
+      allowance: number;
+      stepOver: number;
+      /** row angle, degrees — absent = 0 = rows along X */
+      angle?: number;
     });
 
 /**

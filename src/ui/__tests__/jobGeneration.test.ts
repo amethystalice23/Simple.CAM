@@ -1039,6 +1039,115 @@ describe('slice pocket (section plane + band)', () => {
     expect(empty.error).toContain('section plane');
   });
 
+  it('raster-contours the model: serpentine rows on the compensated surface, indexed frame', () => {
+    // Phase B wiring (PLAN.md): the surface pass targets the whole model
+    // in the cutting frame — no selection, crown ceiling, model surface
+    // z. A 10×10×4 box sunk 2mm below the crown (plate-with-hole stock:
+    // crown z 0): the raster sweeps its flat top at z −2 (allowance 0 →
+    // to size) and never an A word.
+    const brick = new THREE.BoxGeometry(10, 10, 4).toNonIndexed();
+    const brickFeatures = detectFeatures(brick);
+    const brickCtx: GenContext = {
+      ...ctx,
+      geometry: brick,
+      features: brickFeatures,
+      transform: { ...identityTransform(), position: { x: 0, y: 0, z: -4 } },
+      sources: sourcesFor(brick, brickFeatures, identityTransform(), []),
+    };
+    const op = newJobOp('rasterContour', smallTool, 'aluminum-6061', boxStock) as Extract<
+      JobOp,
+      { kind: 'rasterContour' }
+    >;
+    const res = generateJobOp(op, brickCtx);
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('raster row');
+    const cuts = res.moves.filter((m) => !m.rapid && m.feed > 0 && m.words.x !== undefined);
+    expect(cuts.length).toBeGreaterThan(0);
+    expect(res.moves.every((m) => m.words.a === undefined)).toBe(true);
+    // every cut rides the box top: z −2, the box's own surface
+    let z: number | null = null;
+    for (const m of res.moves) {
+      if (m.words.z !== undefined) z = m.words.z;
+      if (!m.rapid && m.feed > 0 && m.words.x !== undefined) {
+        expect(z!).toBeCloseTo(-2, 5);
+      }
+    }
+    // no plunge runs deep: the box top is 2 below the crown — a rough-less
+    // surface pass that would bury the tool warns instead
+    expect(res.summary).not.toContain('waterline contour first');
+  });
+
+  it('rasterContour: row angle 90 runs rows along Y, angle 0 stays X-only', () => {
+    // Alice's 2026-10-25 call: rows at an arbitrary angle, default 0 = X.
+    // At 90° the roles swap — within a row Y varies and X stays constant
+    // (the mirror of the default's X-varying rows). Same brick as the
+    // flat-top test above: 10×10×4 sunk 2 below the crown.
+    const brick = new THREE.BoxGeometry(10, 10, 4).toNonIndexed();
+    const brickFeatures = detectFeatures(brick);
+    const brickCtx: GenContext = {
+      ...ctx,
+      geometry: brick,
+      features: brickFeatures,
+      transform: { ...identityTransform(), position: { x: 0, y: 0, z: -4 } },
+      sources: sourcesFor(brick, brickFeatures, identityTransform(), []),
+    };
+    const mk = (angle: number) =>
+      ({
+        ...newJobOp('rasterContour', smallTool, 'aluminum-6061', boxStock),
+        angle,
+      }) as Extract<JobOp, { kind: 'rasterContour' }>;
+
+    const r0 = generateJobOp(mk(0), brickCtx);
+    expect(r0.error).toBeNull();
+    // default rows: within a segment x varies, y never does
+    for (const m of r0.moves) {
+      if (!m.rapid && m.feed > 0 && m.words.x !== undefined) {
+        expect(m.words.y).toBeUndefined();
+      }
+    }
+    expect(r0.summary).not.toContain('rows at');
+
+    const r90 = generateJobOp(mk(90), brickCtx);
+    expect(r90.error).toBeNull();
+    expect(r90.summary).toContain('rows at 90°');
+    // 90° rows: within a row x holds constant in VALUE (the kernel emits
+    // x on every feed move) and the sweep advances along Y — on this flat
+    // top each row is ONE long feed move, so a y word on a feed cut is the
+    // Y-sweep evidence (angle 0 emits zero y words on feed moves). Rows
+    // are distributed along X, each row's own x.
+    let sawYRow = false;
+    let sawSecondRowX = false;
+    let z: number | null = null;
+    let rowX: number | null = null;
+    let firstRowX: number | null = null;
+    const finishRow = () => {
+      if (rowX !== null) {
+        if (firstRowX === null) firstRowX = rowX;
+        else if (Math.abs(rowX - firstRowX) > 1e-6) sawSecondRowX = true;
+      }
+      rowX = null;
+    };
+    for (const m of r90.moves) {
+      if (m.words.z !== undefined) z = m.words.z;
+      const feedCut = !m.rapid && m.feed > 0;
+      if (!feedCut || (m.words.x === undefined && m.words.y === undefined)) {
+        finishRow();
+        continue;
+      }
+      if (rowX === null && m.words.x !== undefined) rowX = m.words.x;
+      if (m.words.x !== undefined && rowX !== null) {
+        expect(Math.abs(m.words.x - rowX)).toBeLessThan(1e-6);
+      }
+      if (m.words.y !== undefined) {
+        sawYRow = true;
+        expect(z!).toBeCloseTo(-2, 5);
+      }
+    }
+    finishRow();
+    expect(sawYRow).toBe(true);
+    expect(sawSecondRowX).toBe(true);
+  });
+
   it('slices the ROTATED part under an index datum (indexed 4-axis flow)', () => {
     // a 4×4×20 bar standing on the rotary axis (axisZ 0, crown at z 25):
     // indexed 90° it lies along Y, thin in Z (z −2…2). The section at

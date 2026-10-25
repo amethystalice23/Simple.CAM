@@ -17,6 +17,7 @@ import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
 import { waterlineRough } from '../cam/waterline';
+import { rasterContour } from '../cam/relief';
 import { difference, offsetInward, offsetOutward } from '../cam/clipper';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
@@ -97,7 +98,8 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
   { kind: 'slicePocket', label: 'Slice pocket' },
-  { kind: 'waterline', label: 'Waterline rough (3D)' },
+  { kind: 'waterline', label: 'Waterline contour' },
+  { kind: 'rasterContour', label: 'Raster contour (3D finish)' },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'cylChamfer', label: 'Cylinder chamfer (4-axis)', rotaryOnly: true },
@@ -259,6 +261,20 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepDown: Math.max(stepDown, 0.5),
         stepOver: defaultStepOver(tool),
         margin: null, // derive tool Ø + allowance + step over at generation
+      };
+    case 'rasterContour':
+      // the paired SURFACE pass (PLAN.md Phase B): default allowance 0 —
+      // a waterline contour with allowance ahead of it already left stock,
+      // and "rough vs finish" is this one knob. Grid pitch ≈ stepOver/2
+      // (PLAN.md) derived at generation; step-over from the tool Ø.
+      // angle absent = 0 = rows along X (the spiral-spin precedent: old
+      // saves and goldens stay byte-identical).
+      return {
+        ...base,
+        kind,
+        allowance: 0,
+        stepOver: defaultStepOver(tool),
+        angle: 0,
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
@@ -1258,6 +1274,66 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             (res.skippedLevels > 0 ? `, ${res.skippedLevels} level(s) skipped` : '') +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
 
+            `, ~${res.estimatedMinutes.toFixed(1)} min` +
+            (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
+        };
+      }
+      case 'rasterContour': {
+        // Phase B 3D relief surface pass (PLAN.md): the paired finish to
+        // the waterline contour — the whole model is the target, no
+        // selection, no depth boxes (the crown is the cut ceiling, the
+        // model's own surface sets every z). Assumes the rough ran first:
+        // the deep-plunge warning in the result says when it didn't.
+        // 4-axis indexed like the waterline op (Alice's 2026-10-25 call):
+        // the datum rotation maps the part into the cutting frame.
+        if (!ctx.geometry) return fail('needs a loaded model — the surface pass targets it');
+        const crown = stockTopZ(ctx.stock);
+        const stockBottom = stockSpan(ctx.stock, 'z')[0];
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
+        const positions = rotate
+          ? (() => {
+              const out = new Float32Array(positions0.length);
+              for (let i = 0; i < positions0.length; i += 3) {
+                const v = rotate({
+                  x: positions0[i],
+                  y: positions0[i + 1],
+                  z: positions0[i + 2],
+                });
+                out[i] = v.x;
+                out[i + 1] = v.y;
+                out[i + 2] = v.z;
+              }
+              return out;
+            })()
+          : positions0;
+        const res = rasterContour({
+          positions,
+          // PLAN.md: grid pitch ≈ stepover/2
+          pitch: op.stepOver / 2,
+          stepOver: op.stepOver,
+          allowance: op.allowance,
+          angleDeg: op.angle ?? 0,
+          topZ: crown,
+          bottomZ: stockBottom,
+          tool,
+          feed,
+          plungeFeed,
+          safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+        });
+        const angle = op.angle ?? 0;
+        if (res.moves.length === 0) {
+          return fail('nothing to surface — the model top already sits at the stock crown');
+        }
+        const notes = [...res.warnings];
+        return {
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
+          error: null,
+          summary:
+            `${res.rows} raster row(s) at ${op.stepOver}mm step over` +
+            (angle !== 0 ? `, rows at ${angle}°` : '') +
+            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : ', to size') +
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };

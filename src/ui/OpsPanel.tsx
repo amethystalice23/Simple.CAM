@@ -547,6 +547,32 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'rasterContour':
+      return (
+        <>
+          <NumberField label="Allowance (mm)" value={op.allowance} min={0} step={0.05} onCommit={(v) => upd({ allowance: v } as Partial<JobOp>)} />
+          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <NumberField
+            label="Row angle (°)"
+            value={op.angle ?? 0}
+            step={5}
+            onCommit={(v) => upd({ angle: v } as Partial<JobOp>)}
+          />
+          <p className="hint">
+            the paired SURFACE pass to the waterline contour: a heightmap of the model is taken by
+            downward raycasts, dilated with the tool's kernel (flat disc / ball hemisphere) so every
+            sweep clears to the tool-compensated surface, and cut in serpentine rows at this step
+            over — cutting only where material sits above the surface (no air cutting). No
+            selection, no depth boxes: the stock crown is the ceiling, the model's surface sets
+            every z. Run it after a waterline contour with allowance (the rough): this op's
+            allowance is the only rough-vs-finish knob — 0 cuts to the model surface. Assumes bulk
+            stock is already cleared; warns when a plunge would run deeper than a surface pass
+            should. Works in 4-axis indexed mode like the waterline op. Row angle 0 = rows run
+            along X; 90 = along Y; any angle works, and a 0° + 90° pair gives the cross-hatch
+            "both directions" finish
+          </p>
+        </>
+      );
     case 'spiralCarve':
       return (
         <>
@@ -1086,10 +1112,10 @@ export function OpsPanel(props: Props) {
                   {gen?.error && <p className="error">{gen.error}</p>}
                   {gen?.summary && <p className="hint">{gen.summary}</p>}
                   {!gen && <p className="hint">not calculated yet</p>}
-                  {(op.kind === 'slicePocket' || op.kind === 'waterline') && !props.hasModel && (
+                  {(op.kind === 'slicePocket' || op.kind === 'waterline' || op.kind === 'rasterContour') && !props.hasModel && (
                     <p className="hint">needs a model — the geometry comes from the loaded STL</p>
                   )}
-                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && op.kind !== 'waterline' && (
+                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && op.kind !== 'waterline' && op.kind !== 'rasterContour' && (
                     <p className="hint">needs a model or a primitive to select from</p>
                   )}
                   {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread' || op.kind === 'cylChamfer') && props.axisMode !== '4-axis' && (

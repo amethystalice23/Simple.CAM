@@ -231,7 +231,7 @@ unreachable at every rotation; the machine agrees with the map. The
 residual hard 20% is collision validation (shank/holder vs. rotated
 features), phase D.
 
-**Phase A — Waterline rough (3D, 3-axis)** — cheapest, mostly existing
+**Phase A — Waterline contour (3D; 'rough' vs 'final pass' is the user's allowance choice)** — cheapest, mostly existing
 machinery: loop `sliceAtZ` + `pocket2d` (inside mode) over Z levels from
 the stock crown down to the model floor; each level pockets that slice's
 cross-section over its band. **BOTH-axis allowance (the Carvera
@@ -303,7 +303,7 @@ rotations between them compose — each bounded by its own orientation's
 geometry, and the rough can never free the part. Continuous/multi-
 orientation rotary roughing remains future work.
 
-**Phase B — Raster finish (3D, 3-axis)** — new pure core
+**Phase B — Raster contour (3D; the paired surface pass — 'finish' is an allowance choice)** — new pure core
 `src/cam/relief.ts`: (1) dense surface heightmap via BVH raycasts
 (**three-mesh-bvh, MIT — add when this phase starts**; per-cell
 `raycastFirst` is the v1 path, triangle-splatting only if profiling
@@ -315,6 +315,35 @@ where the dilated surface sits below the stock crown (no air cutting);
 (s ≈ √(8·r·h)); (5) `Move[]` IR out, G94, entry-safety convention
 (travel at height, descend at destination); preview + estimate pick it
 up as ordinary moves.
+**IMPLEMENTED 2026-10-25** — `rasterContour` (src/cam/relief.ts) + the
+`rasterContour` op (allowance + step over — rough-vs-finish is the
+allowance choice, exactly like the waterline contour; grid pitch
+stepOver/2 derived at generation, serpentine rows at the step over).
+The dilation semantics settled by testing: the compensated surface at a
+cell is the highest TOOL TIP touching the model with the tool CENTER
+there (max over kernel offsets; ball kernel z = √(r²−d²) − r — the
+ball's equator grazing a point hangs its tip r below it, which is
+CORRECT and why a relief needs its floor: the stock-bottom clamp is the
+honest floor around an open-shell model). Flat/bull/vbit/corn all ride
+the flat disc (conservative — a vbit's cone sits inside its Ø disc).
+Entry-safety convention per segment: travel at safe Z, descend at the
+destination, feed the approach stretch. Deep-plunge warning (deeper than
+2mm below the crown → "run a waterline contour first") — this op assumes
+the rough ran; the allowance lifts the whole compensated surface, so a
+waterline at allowance X followed by a raster at allowance X nets the
+model surface exactly. 4-axis indexed like the waterline op (the datum
+rotation maps the part into the cutting frame). **Row angle (Alice's
+2026-10-25 call): `angle` degrees, default 0 = rows along X — arbitrary
+angles (negatives fine); 90 = Y rows, and a 0°+90° op pair gives the
+cross-hatch "both directions" finish. A GRID-FRAME rotation, not a mesh
+rotation: a Z-rotation commutes with the downward raycasts, so the same
+BVH is sampled on a rotated grid and machine coords emitted at the
+edges — angle 0 reproduces the unrotated grid byte-identically, and the
+isotropic dilation kernel is untouched. The Phase C rotational op
+composes from these same directions.** Not yet: the Phase C
+unwrapped (x,θ) frame; the Web Worker hosting (generation is
+synchronous — the ~300k-raycast fine-grid case is the worker's charter);
+scallop-height step-over derivation (a plain mm knob for now).
 
 **Phase C — 4-axis relief** — the same core in the unwrapped (x, θ)
 frame: dexel r(x,θ) = surface radius per cell (rays outward from the
@@ -359,7 +388,7 @@ estimate before anyone commits a 3-hour bar.
 
 **Open for the build session:** 4-axis roughing strategy (face the
 cylinder + finish directly into round stock, vs. an unwrapped-frame
-waterline rough); adaptive Δz levels; slope-split finishing; how the
+waterline rough); adaptive clearing (trochoidal — a named contour type to add, with raster contour/waterline contour the family so far); adaptive Δz levels; slope-split finishing; how the
 long-running worker integrates with the recalc/preview pipeline.
 
 ## License policy (hard rule)
