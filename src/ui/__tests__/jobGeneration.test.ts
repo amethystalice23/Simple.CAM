@@ -984,6 +984,53 @@ describe('slice pocket (section plane + band)', () => {
     }
   });
 
+  it('waterlines the INDEXED part in 4-axis mode: rotated frame, self-limited ladder', () => {
+    // Alice's indexed workflow (2026-10-25): the datum rotation maps the
+    // part into the cutting frame, and the ladder needs no Z-stop knob —
+    // it is bounded by the model's own floor in that orientation and by
+    // the moat-only stop. A 4×4×20 bar indexed 90° lies along Y (thin in
+    // Z, z −2…2, vertical sides): the levels above the bar clear its
+    // column, then the ladder stops at the bar's top — a constant
+    // cross-section is one full-depth profile pass, not N waterline
+    // levels — and nothing is cut near the model floor or the stock
+    // bottom (the holder below the part stays).
+    const bar = new THREE.BoxGeometry(4, 4, 20).toNonIndexed();
+    const barFeatures = detectFeatures(bar);
+    const barCtx: GenContext = {
+      ...ctx,
+      stock: cylStock,
+      geometry: bar,
+      features: barFeatures,
+      sources: sourcesFor(bar, barFeatures, identityTransform(), []),
+      datumAngle: 90, startA: 0,
+    };
+    const op: Extract<JobOp, { kind: 'waterline' }> = {
+      id: 'wl',
+      toolId: 't1',
+      featureIds: [],
+      kind: 'waterline',
+      allowance: 0.2,
+      stepDown: 2,
+      stepOver: 1,
+      margin: null,
+    };
+    const res = generateJobOp(op, barCtx);
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('ladder stopped');
+    const cuts = res.moves.filter((m) => !m.rapid && m.feed > 0);
+    expect(cuts.length).toBeGreaterThan(0);
+    // the rotated frame: the moat/column passes run along the bar's 20mm
+    // Y length, past its ±10 ends
+    const maxY = Math.max(...cuts.map((m) => Math.abs(m.words.y ?? 0)));
+    expect(maxY).toBeGreaterThan(10.5);
+    // the ladder ended at the bar's top: the deepest cut sits at the
+    // first cut plane above the bar, never near its floor (z −2) or the
+    // stock bottom (z −25)
+    const minZ = Math.min(...cuts.map((m) => m.words.z ?? Infinity));
+    expect(minZ).toBeGreaterThan(2);
+    expect(minZ).toBeLessThan(4);
+  });
+
   it('fails visibly: no model, and an empty section plane', () => {
     const noModel = generateJobOp(sliceOp, { ...steppedCtx, geometry: null, features: null, sources: [] });
     expect(noModel.error).toContain('needs a loaded model');

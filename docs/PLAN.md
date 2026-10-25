@@ -92,7 +92,7 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 | Indexed pocket/profile/drill | 2.5D | A frozen at index angle → ordinary flat op in rotated frame (reuses flat engine) |
 | Thread (90° V-bit, IMPLEMENTED 2026-10-20) | parametric helix | `thread.ts`: per pass `G1 X… A…` constant Z, A advances `(span/lead)·360°` (lead = starts×pitch); Z depth-steps between passes re-entering at identical absolute A phase (levels retrace — sweeps alternate, A returns along the helix); multi-start = 360/starts phase offsets following the index datum; spring pass per start; external only. Depth derives from pitch + the tool's tip angle + tolerance (grooves half a pitch wide at crest; crest Ø = nominal − 2·tolerance); the panel's "Add facing toolpath" INSERTS a prefilled Face cylinder op before the thread (crest Ø, the thread's X range and rotation — its own tool/feeds/step-over); editing the nominal Ø prefills the standard ISO coarse pitch (metricPitch: M4→0.7, M6→1.0…). Fit is EMPIRICAL (risk 3) — the tolerance knob tunes it on a coupon |
 | Spiral carve (wrapped groove, STARTED 2026-10-20) | parametric | `spiralCarve.ts`: multi-start helices about the stock axis at a user angle off circumferential (90° = axial); depth ladder retraces the same groove per level (sweeps alternate, A returns along the helix); width > tool Ø fans parallel passes; X+A sweeps G93 from the rotary limit; strand phases follow the index datum; setup ghost + groove marks in the viewport (docs/edge-tracing.md §5). Archimedean/straight/cross-hatch still to come |
-| Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection. Profile (and slice-pocket outside) carry **TABS** (2026-10-25, Alice's cut-out workflow): N auto-spaced hold-down bridges (count/height/length, defaults 3 × 0.5mm × 3mm) — deep levels cut spans between them, shallow levels cut through; arc-length placement never straddles the loop seam. Waterline carries the same tabs as keep-out bridge boxes (rimless reliefs) |
+| Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection. Profile (and slice-pocket outside) carry **TABS** (2026-10-25, Alice's cut-out workflow): N auto-spaced hold-down bridges (count/height/length, defaults 3 × 0.5mm × 3mm) — deep levels cut spans between them, shallow levels cut through; arc-length placement never straddles the loop seam. The waterline rough needs none: its upper-shadow keep-out plus the widest-section stop make it provably unable to free a part (2026-10-25, tabs removed) |
 | Slice pocket (3-axis) | 2.5D | one `sliceAtZ` cross-section at the op's slice plane → `'outside'` profiles around it (tool-center path offset out by tool Ø/2 + allowance) / `'inside'` pockets its interior, over the start→end band; floor via the ⇩ pick; violet section-plane overlay + drag handle (docs/edge-tracing.md §2, §5) |
 | Flat chamfer (V-bit) | single-pass flank | two modes. **add**: the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path) — a new chamfer through a sharp edge. **existing**: the model already has the chamfer — the bit rides the modelled face, and direction selects which end was clicked: **up** = the bottom edge, traced exactly (depth ignored — the bit cuts up and out from there); **down** = the top edge, the tip slides down-and-in by depth·tan(angle/2) along the modelled face, landing on the bottom edge when depth matches the model. User side option (inside/outside — geometry can't always tell) and depth along the wall |
 | Cylinder chamfer (4-axis, 2026-10-23) | rotary ring pass | `cylChamfer.ts`: the degenerate face-cylinder vertical ring — one full A revolution per level at the selected edge circle's exact X, V-bit tip at Ø/2 − depth. The DEPTH is the only direction: 0 anchors on the circle and cuts up-and-out through whatever rises above it (ladder from the stock surface — the adjoining Ø is deliberately unknown, the one-circle rule; spec + edge sources in edge-tracing §6), >0 slides below the circle from an already-clear rim. Edges are A-coaxial circles: face-cylinder ops publish their step edges at their own target Ø (`o:` ids), the stock its end rims, model circles on turned parts too; A-only sweeps G94 at the rotary deg/min |
@@ -278,13 +278,30 @@ allowance and gouge the model. The default step-down floors at 0.5mm so
 it never self-skips against the 0.2mm allowance default, and the ladder
 ENDS at
 the first moat-only level (widest section — a rimmed coin stops at its
-rim, honestly noted; the cut-out below is the profile op's job). A
-RIMLESS relief (surface descending to the stock floor) legitimately
-roughs to the floor and would sever the part: waterline therefore also
-carries TABS — keep-out bridge boxes at silhouette arc positions
-(count/height/length, defaults 3 × 0.5mm × 3mm; height measured above
-the roughing floor `floor+allowance`), subtracted from every level below
-the bridge top, never influencing the stop check.
+rim, honestly noted; the cut-out below is the profile op's job). UPPER-SHADOW
+keep-out (Alice's rule, 2026-10-25, from the 4-axis trial): each level
+clears `reach − union(every section at/above the cut plane)`, so
+overhangs are keep-out a vertical tool must respect — a section-only
+keep-out programmed the tool under overhangs and into the material
+(the old "rimless relief severs the part" scenario was exactly that
+lie: clearing under a dome it could not reach). Consequence: the upper
+shadow at the deepest cut plane IS the whole silhouette, so that level
+is always moat-only and the moat-only stop is structural — the rough
+can provably never free a part, and the waterline TABS built for the
+severing scenario were removed 2026-10-25 (profile/slice-pocket tabs
+stay). The upper shadow is sampled at the ladder's planes; up-widening
+steeper than the allowance inside one unsampled gap can still exceed
+it — the undercut warning plus the preview are the guard there. 4-axis
+INDEXED mode is allowed (Alice's call, 2026-10-25, over the initial
+hard gate): the datum rotation maps the part into the cutting frame
+and the ladder self-limits — bounded by the model's own floor in that
+orientation (never the stock bottom; the holder below the part stays)
+and by the moat-only stop at the widest section (a vertical-sided part
+stops at its top: a constant cross-section is one full-depth profile
+pass, not N waterline levels). Multiple waterline ops with index
+rotations between them compose — each bounded by its own orientation's
+geometry, and the rough can never free the part. Continuous/multi-
+orientation rotary roughing remains future work.
 
 **Phase B — Raster finish (3D, 3-axis)** — new pure core
 `src/cam/relief.ts`: (1) dense surface heightmap via BVH raycasts

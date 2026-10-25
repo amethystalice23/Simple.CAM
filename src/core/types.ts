@@ -860,8 +860,9 @@ export type JobOp =
       /**
        * Waterline rough of the whole loaded model (PLAN.md Phase A): constant-Z
        * levels from the stock crown down to the model floor, each level
-       * clearing the model's XY silhouette (plus a boundary margin) minus the
-       * model's cross-section at the cut plane — the rough stops at the
+       * clearing the model's XY silhouette (plus a boundary margin) minus
+       * the UPPER SHADOW: the union of every cross-section at/above the
+       * cut plane, so overhangs are keep-out a vertical tool must respect — the rough stops at the
        * model's boundary; the surrounding stock stays for a cut-out profile
        * op to ride in. No selection — the model is the target; no depth
        * boxes — the crown and the model floor set the range.
@@ -871,16 +872,10 @@ export type JobOp =
       stepDown: number;
       stepOver: number;
       /** clearance around the model's silhouette, mm — null = derive the
-       * tool Ø + allowance at generation: the moat between the model and
-       * the rough's outer edge is then exactly one tool pass wide, so the
-       * deepest levels actually cut instead of tripping the
-       * thinner-than-the-tool skip */
+       * tool Ø + allowance + step over at generation: the moat is two tool
+       * passes wide, so mesh noise on the model's wall cannot pinch the
+       * perimeter pass into plunge-per-sliver arcs (2026-10-25) */
       margin: number | null;
-      /** cut-out bridges for RIMLESS reliefs (a dome descending straight to
-       * the stock floor — the rough itself severs the part at the deepest
-       * moat rings): keep-out boxes left standing below the bridge top.
-       * null = none; ProfileTabs reused (count/height/length) */
-      tabs: ProfileTabs | null;
     });
 
 /**

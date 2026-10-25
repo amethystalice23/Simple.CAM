@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { Move, Tool, Vec2 } from '../../core/types';
 import { identityTransform } from '../../core/types';
-import { simplifyContour, zLadder } from '../paths';
-import { buildZIndex, sliceAtZ, transformedPositions } from '../slicing';
-import { union } from '../clipper';
-import { tabBridgesFor, waterlineRough, type WaterlineRoughOptions } from '../waterline';
+import { zLadder } from '../paths';
+import { transformedPositions } from '../slicing';
+import { waterlineRough, type WaterlineRoughOptions } from '../waterline';
 
 const tool: Tool = { id: 't1', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
 
@@ -169,128 +168,6 @@ function distToSquare(p: { x: number; y: number }, w: number): number {
   return Math.hypot(dx, dy);
 }
 
-/** Translate an xyz triple array by dx in X. */
-function shiftX(a: Float32Array, dx: number): Float32Array {
-  const out = new Float32Array(a.length);
-  for (let i = 0; i < a.length; i += 3) {
-    out[i] = a[i] + dx;
-    out[i + 1] = a[i + 1];
-    out[i + 2] = a[i + 2];
-  }
-  return out;
-}
-
-/** Convex-quad containment (bridge boxes are 4-corner polygons). */
-function inQuad(p: { x: number; y: number }, box: Vec2[]): boolean {
-  let sign = 0;
-  for (let i = 0; i < 4; i++) {
-    const a = box[i];
-    const b = box[(i + 1) % 4];
-    const cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
-    if (cross !== 0) {
-      const s = Math.sign(cross);
-      if (sign === 0) sign = s;
-      else if (s !== sign) return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Cut distance travelled per pass (plunge → XY feeds → retract), for the
- * sliver regression: a pass shorter than the tool's own Ø spends more time
- * plunging than cutting.
- */
-function passCutLengths(moves: Move[]): number[] {
-  const lens: number[] = [];
-  let cur: number | null = null;
-  let prev: Vec2 | null = null;
-  let at: Vec2 | null = null; // last XY the machine sits at
-  for (const m of moves) {
-    if (m.words.x !== undefined && m.words.y !== undefined) at = { x: m.words.x, y: m.words.y };
-    if (m.rapid) {
-      if (cur !== null) lens.push(cur);
-      cur = null;
-      prev = null;
-      continue;
-    }
-    if (m.words.z !== undefined) {
-      // the plunge starts a pass where the rapid just positioned
-      if (cur === null) {
-        cur = 0;
-        prev = at;
-      }
-      continue;
-    }
-    if (prev) cur = (cur ?? 0) + Math.hypot(m.words.x! - prev.x, m.words.y! - prev.y);
-    prev = { x: m.words.x!, y: m.words.y! };
-  }
-  if (cur !== null) lens.push(cur);
-  return lens;
-}
-
-/**
- * Noisy tapered relief column for the sliver regression: the wall widens
- * downward (a rimless relief that legitimately roughs to the floor), with
- * a 61-lobe radius wobble whose phase decorrelates per ring (real fine
- * meshes differ chaotically plane-to-plane, not smoothly) — every ladder
- * plane's section differs from the silhouette envelope by tessellation
- * noise, the stand-in for a real high-res relief STL (Alice's coin:
- * ±0.05mm around a "smooth" wall, 1144 distinct vertex heights). At the
- * deepest cut plane the section IS the widest sliced section, so the
- * model-vs-envelope gap collapses to that noise alone.
- */
-function noisyCone(topR: number, taper: number, amp: number, seg: number, rows: number): Float32Array {
-  const tri: number[] = [];
-  const z0 = -3.75;
-  const z1 = 0;
-  const ring = (i: number): [number, number][] => {
-    const z = z0 + ((z1 - z0) * i) / rows;
-    const pts: [number, number][] = [];
-    for (let s = 0; s < seg; s++) {
-      const a = (2 * Math.PI * s) / seg;
-      pts.push([a, topR + taper * -z + amp * Math.sin(61 * a + 40 * i)]);
-    }
-    return pts;
-  };
-  for (let i = 0; i < rows; i++) {
-    const za = z0 + ((z1 - z0) * i) / rows;
-    const zb = z0 + ((z1 - z0) * (i + 1)) / rows;
-    const A = ring(i);
-    const B = ring(i + 1);
-    for (let s = 0; s < seg; s++) {
-      const s2 = (s + 1) % seg;
-      tri.push(
-        Math.cos(A[s][0]) * A[s][1], Math.sin(A[s][0]) * A[s][1], za,
-        Math.cos(A[s2][0]) * A[s2][1], Math.sin(A[s2][0]) * A[s2][1], za,
-        Math.cos(B[s2][0]) * B[s2][1], Math.sin(B[s2][0]) * B[s2][1], zb,
-      );
-      tri.push(
-        Math.cos(A[s][0]) * A[s][1], Math.sin(A[s][0]) * A[s][1], za,
-        Math.cos(B[s2][0]) * B[s2][1], Math.sin(B[s2][0]) * B[s2][1], zb,
-        Math.cos(B[s][0]) * B[s][1], Math.sin(B[s][0]) * B[s][1], zb,
-      );
-    }
-  }
-  return new Float32Array(tri);
-}
-
-/** Rebuild the generator's silhouette the same way it does, from the same
- *  public pieces: slice every ladder plane, simplify, union. The tab-bridge
- *  oracle needs the exact contours the boxes sit on. */
-function silhouetteOf(o: WaterlineRoughOptions): Vec2[][] {
-  const nominal = zLadder(o.topZ, o.floorZ, o.stepDown);
-  const idx = buildZIndex(o.positions);
-  const planes: number[] = [];
-  for (let i = 0; i < nominal.length; i++) {
-    planes.push(nominal[i] + o.allowance, i === 0 ? o.topZ : nominal[i - 1]);
-  }
-  return union(
-    planes.flatMap((z) =>
-      sliceAtZ(o.positions, z, idx).contours.map((c) => simplifyContour(c, 0.01)),
-    ),
-  );
-}
 
 describe('waterlineRough', () => {
   it('roughs a pyramid in waterline levels leaving the side allowance', () => {
@@ -341,59 +218,64 @@ describe('waterlineRough', () => {
     }
   });
 
-  it('drops the perimeter sliver arcs a noisy fine-mesh wall pinches out of the moat', () => {
-    // Alice's coin regression (2026-10-25): a real relief STL's "smooth
-    // circular wall" is a fine noisy tessellation, and where the moat is
-    // exactly one tool pass wide (margin = Ø + allowance) its tool-center
-    // track is only model-vs-silhouette NOISE wide — the offset shatters
-    // into a ring of sub-tool arcs, plunge-cut-plunge all around the
-    // perimeter. Those arcs are dropped (the stock they would take is
-    // thinner than the tool) and one warning says so.
-    //
-    // The fixture: a slowly-tapering column whose wall wobbles ±0.15mm in
-    // 61 lobes with the wobble phase decorrelating per ring (a real fine
-    // mesh's sections differ chaotically plane-to-plane, not smoothly).
-    // Small taper + small allowance put the deep levels inside the pinch
-    // window: the model-vs-envelope gap swings from ~0 (pinch — sliver
-    // arcs) past the allowance (so the moat-only stop still sees shaping
-    // work and the level is cut).
-    const positions = noisyCone(5, 0.1, 0.15, 360, 20);
-    const base = {
-      positions,
-      footprint: footprint(),
-      topZ: 0.25,
-      floorZ: -3.75,
+  it('never cuts under an overhang: the keep-out is the union of every section above the plane', () => {
+    // Alice's rule (2026-10-25, from the 4-axis trial): a level's own
+    // section understates what blocks a VERTICAL tool — the tool body
+    // must clear everything ABOVE the cut plane too. A section-only
+    // keep-out programs the tool under overhangs and into the material.
+    // Goblet: a bowl with a VERTICAL r4.5 wall (so the sampled upper
+    // shadow is exact) over a r1.5 stem, standing on a flare that
+    // reaches r6 exactly at the ladder's deepest cut plane — wide enough
+    // that the stem levels still find silhouette outside the bowl's
+    // shadow and get cut, but ONLY outside it. The old section-only
+    // keep-out would have swept the tool around the stem at r 2.8+,
+    // directly under the bowl.
+    const goblet = lathe([
+      [0, 4.5], // bowl rim
+      [-1, 4.5], // bowl wall (vertical — sampled exactly at any plane)
+      [-1.05, 1.5], // step down to the stem
+      [-4, 1.5], // stem
+      [-4.15, 6], // flange shoulder (steep, sampled by the deep planes)
+      [-4.6, 6], // flange rim — the ladder's deepest cut crosses it cleanly
+    ]);
+    const o = opts({
+      positions: goblet,
+      topZ: 0.75,
+      floorZ: -4.75,
       stepDown: 0.5,
       stepOver: 1,
-      allowance: 0.02,
-      tool,
-      feed: 500,
-      plungeFeed: 200,
-      safeClearance: 5,
-    };
+      allowance: 0.3,
+      margin: 3,
+    });
+    const res = waterlineRough(o);
 
-    // degenerate one-pass moat: the deep levels' perimeter track is
-    // noise-width, so those levels cut nothing but dropped slivers
-    const tight = waterlineRough({ ...base, margin: tool.diameter + 0.02 });
-    expect(tight.levels.length).toBeGreaterThan(3); // the taper keeps the ladder alive
-    const tightLens = passCutLengths(tight.moves);
-    expect(tightLens.length).toBeGreaterThan(0);
-    // THE guarantee: nothing shorter than the tool's own Ø is ever emitted
-    expect(Math.min(...tightLens)).toBeGreaterThanOrEqual(tool.diameter - 1e-9);
-    expect(tight.warnings.some((w) => w.includes('sliver pass(es) thinner than the tool dropped'))).toBe(true);
-    // the upper levels' moat is wider than the noise — real ring passes
-    expect(Math.max(...tightLens)).toBeGreaterThan(20);
-    expect(tight.passes).toBeGreaterThan(0);
+    // the ladder runs down the bowl band and the stem band, then stops
+    // where the flare's shadow covers its own silhouette (moat-only)
+    expect(res.levels.length).toBeGreaterThan(6);
+    expect(Math.min(...res.levels)).toBeLessThan(-1);
+    expect(res.warnings.some((w) => w.includes('ladder stopped at z-4.45'))).toBe(true);
 
-    // the derived default's extra step-over keeps the moat pass whole:
-    // no slivers to drop, and the moat ring is one long pass
-    const wide = waterlineRough({ ...base, margin: tool.diameter + 0.02 + 1 });
-    const wideLens = passCutLengths(wide.moves);
-    expect(Math.min(...wideLens)).toBeGreaterThanOrEqual(tool.diameter - 1e-9);
-    expect(wide.warnings.some((w) => w.includes('sliver'))).toBe(false);
-    expect(Math.max(...wideLens)).toBeGreaterThan(20); // the moat ring, unbroken
+    // THE guarantee: below the bowl rim, every cutting point stays
+    // outside the bowl's upper shadow (bowl r + allowance + toolR, minus
+    // Clipper tolerance) — at the stem levels especially, nothing
+    // reaches under the bowl
+    const cuts = cutPoints(res.moves);
+    expect(cuts.length).toBeGreaterThan(0);
+    for (const p of cuts) {
+      if (p.z >= 0) continue; // above the model — the whole column clears
+      expect(Math.hypot(p.x, p.y)).toBeGreaterThanOrEqual(4.5 + o.allowance + tool.diameter / 2 - 0.1);
+    }
+    // the stem levels still clear real stock: the ring between the bowl
+    // shadow and the flare silhouette is reachable material, and the tool
+    // stays inside the rough's reach
+    const stemCuts = cuts.filter((p) => p.z < -1);
+    expect(stemCuts.length).toBeGreaterThan(0);
+    for (const p of stemCuts) {
+      expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(6 + o.margin - tool.diameter / 2 + 0.1);
+    }
+    // and nothing is cut at/below the stopped level
+    expect(cuts.every((p) => p.z > -4.45)).toBe(true);
   });
-
   it('pins the cut planes to the nominal ladder when allowance is 0', () => {
     // allowance 0 → the cut planes equal the nominal levels exactly, and the
     // ladder ends at the floor plane it WOULD have cut: there the section
@@ -596,10 +478,6 @@ describe('waterlineRough', () => {
     expect(() => waterlineRough(opts({ stepOver: -1 }))).toThrowError(/stepOver/);
     expect(() => waterlineRough(opts({ allowance: -0.1 }))).toThrowError(/allowance/);
     expect(() => waterlineRough(opts({ margin: -0.1 }))).toThrowError(/margin/);
-    expect(() => waterlineRough(opts({ tabs: { count: 0, height: 1, length: 1 } }))).toThrowError(/tab count/);
-    expect(() => waterlineRough(opts({ tabs: { count: 2.5, height: 1, length: 1 } }))).toThrowError(/tab count/);
-    expect(() => waterlineRough(opts({ tabs: { count: 2, height: 0, length: 1 } }))).toThrowError(/tab height/);
-    expect(() => waterlineRough(opts({ tabs: { count: 2, height: 1, length: 0 } }))).toThrowError(/tab length/);
   });
 
   it('simplifies dense relief slices before the Clipper offsets', () => {
@@ -648,158 +526,4 @@ describe('waterlineRough', () => {
     expect(enclosed).toBeLessThanOrEqual(1.02 * exact);
   });
 
-  it('leaves tab bridges standing where the rough would sever a rimless relief', () => {
-    // Alice's rimless case: a dome descending into a TALL blank (floor well
-    // below its base) — the levels below the base have empty sections, so
-    // they clear the whole column, moat included, and the rough alone would
-    // cut the part free; the bridges are what holds it for the profile op
-    const tabs = { count: 3, height: 4, length: 4 };
-    const o = opts({
-      positions: lathe([[5, 0.5], [0, 8]]),
-      topZ: 10,
-      floorZ: -3,
-      stepDown: 1,
-      tabs,
-    });
-    const res = waterlineRough(o);
-    expect(res.levels).toHaveLength(13); // roughs to the floor — no stop
-    expect(res.warnings).toHaveLength(0); // 3 tabs fit the one contour cleanly
-    const bridgeTop = o.floorZ + o.allowance + tabs.height; // z 1.5
-    const boxes = tabBridgesFor(silhouetteOf(o), tabs, {
-      allowance: o.allowance,
-      margin: o.margin,
-      toolR: tool.diameter / 2,
-    }).boxes;
-    expect(boxes).toHaveLength(3);
-    const cuts = cutPoints(res.moves);
-    // below the bridge top NO cutting move lands inside any bridge box…
-    const below = cuts.filter((p) => p.z < bridgeTop - 1e-9);
-    expect(below.length).toBeGreaterThan(0);
-    for (const p of below) {
-      expect(boxes.some((b) => inQuad(p, b))).toBe(false);
-    }
-    // …the deep moat still clears in the windows between them (the deepest
-    // level, below the dome's base, is the severing one)
-    expect(below.some((p) => p.z === -2.5)).toBe(true);
-    // …and the levels at/above the bridge top cut through the box positions
-    // unbroken
-    const above = cuts.filter((p) => p.z >= bridgeTop - 1e-9);
-    expect(above.some((p) => boxes.some((b) => inQuad(p, b)))).toBe(true);
-  });
-
-  it('pins the tab-height edges: short bridges still stand, over-tall ones do nothing', () => {
-    const base = {
-      positions: lathe([[5, 0.5], [0, 8]]),
-      topZ: 10,
-      floorZ: -3,
-      stepDown: 1,
-    };
-    // height ≤ allowance is STILL a real bridge — the top sits `height`
-    // above the rough's effective floor (the allowance skin), not the raw
-    // floor: no clamping, no warning, the deepest level keeps clear of the
-    // boxes
-    const shortTabs = { count: 3, height: 0.3, length: 4 };
-    const short = waterlineRough(opts({ ...base, tabs: shortTabs }));
-    expect(short.levels).toHaveLength(13);
-    expect(short.warnings).toHaveLength(0);
-    // only the deepest level (cut z −2.5) sits below that bridge top (−2.2)
-    const boxes = tabBridgesFor(silhouetteOf(opts(base)), shortTabs, {
-      allowance: 0.5,
-      margin: 3,
-      toolR: tool.diameter / 2,
-    }).boxes;
-    const deep = cutPoints(short.moves).filter((p) => p.z === -2.5);
-    expect(deep.length).toBeGreaterThan(0);
-    for (const p of deep) {
-      expect(boxes.some((b) => inQuad(p, b))).toBe(false);
-    }
-    // a tab reaching above the whole roughing band leaves nothing standing
-    // anywhere — say so and cut like tabs were never asked for
-    const tall = waterlineRough(opts({ ...base, tabs: { count: 3, height: 20, length: 4 } }));
-    expect(tall.warnings).toEqual([
-      'tab height reaches above the roughing band — no bridges left standing',
-    ]);
-    const plain = waterlineRough(opts(base));
-    expect(tall.moves).toEqual(plain.moves);
-    expect(tall.levels).toEqual(plain.levels);
-  });
-
-  it('distributes tabs across silhouette contours by perimeter share', () => {
-    // two separated domes in one footprint, perimeters ~2π·4 and ~2π·2 →
-    // count 3 splits 2 + 1 across them
-    const positions = concat(
-      shiftX(lathe([[5, 0.2], [2, 2], [1, 4]]), -8),
-      shiftX(lathe([[5, 0.2], [2, 1.4], [1, 2]]), 8),
-    );
-    const tabs = { count: 3, height: 2, length: 2 };
-    const o = opts({
-      positions,
-      topZ: 7,
-      floorZ: -2,
-      stepDown: 2,
-      allowance: 0.2,
-      tabs,
-    });
-    const res = waterlineRough(o);
-    const sil = silhouetteOf(o);
-    expect(sil).toHaveLength(2); // two disjoint outer rings
-    const { boxes, notes } = tabBridgesFor(sil, tabs, {
-      allowance: o.allowance,
-      margin: o.margin,
-      toolR: tool.diameter / 2,
-    });
-    expect(notes).toEqual([]);
-    expect(boxes).toHaveLength(3);
-    const centroidX = (b: Vec2[]): number => b.reduce((s, p) => s + p.x, 0) / b.length;
-    expect(boxes.filter((b) => centroidX(b) < 0)).toHaveLength(2); // the wide dome
-    expect(boxes.filter((b) => centroidX(b) > 0)).toHaveLength(1); // the narrow dome
-    // the deepest level (below both bases — the severing one) pockets
-    // around the bridges: cuts happen, none inside a box
-    expect(res.levels).toContain(-0.8);
-    const deep = cutPoints(res.moves).filter((p) => p.z === -0.8);
-    expect(deep.length).toBeGreaterThan(0);
-    for (const p of deep) {
-      expect(boxes.some((b) => inQuad(p, b))).toBe(false);
-    }
-  });
-
-  it('is identical without tabs (absent, undefined, and null)', () => {
-    const base = opts({
-      positions: lathe([[5, 0.5], [0, 8]]),
-      topZ: 10,
-      floorZ: -3,
-      stepDown: 1,
-    });
-    const plain = waterlineRough(base);
-    expect(waterlineRough({ ...base, tabs: undefined })).toEqual(plain);
-    expect(waterlineRough({ ...base, tabs: null })).toEqual(plain);
-    // and tabs genuinely suppress deep cutting: without them the deepest
-    // levels' passes ride straight through the bridge footprints
-    const tabs = { count: 3, height: 4, length: 4 };
-    const tabbed = waterlineRough({ ...base, tabs });
-    expect(plain.levels).toEqual(tabbed.levels); // tabs change WHERE, not WHETHER
-    const boxes = tabBridgesFor(silhouetteOf(base), tabs, {
-      allowance: base.allowance,
-      margin: base.margin,
-      toolR: tool.diameter / 2,
-    }).boxes;
-    const deepPlain = cutPoints(plain.moves).filter((p) => p.z < 1.5);
-    expect(deepPlain.some((p) => boxes.some((b) => inQuad(p, b)))).toBe(true);
-  });
-
-  it('consumes no bridges when the moat-only stop ends the ladder first', () => {
-    // the rimmed coin: the ladder stops at the rim, above the bridge top —
-    // tabs were asked for but never engaged, so they say nothing at all
-    const positions = concat(
-      lathe([[2, 0.5], [-0.3, 6]]), // dome, base embedded into the disc
-      lathe([[-0.2, 10], [-3, 10]]), // rim disc r10
-    );
-    const base = { positions, topZ: 10, floorZ: -3, stepDown: 1 };
-    const tabbed = waterlineRough(opts({ ...base, tabs: { count: 3, height: 1, length: 4 } }));
-    const plain = waterlineRough(opts(base));
-    expect(plain.warnings).toHaveLength(1); // the rim stop note alone
-    expect(tabbed.warnings).toEqual(plain.warnings); // zero notes from tabs
-    expect(tabbed.moves).toEqual(plain.moves);
-    expect(tabbed.levels).toEqual(plain.levels);
-  });
 });

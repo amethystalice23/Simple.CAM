@@ -284,13 +284,15 @@ function RatesPopup(props: {
 }
 
 /**
- * Cut-out tabs (profile + slice-pocket outside + waterline, the ops that can
- * free a part): N bridges of uncut stock spanning the groove/moat, holding
- * the part to the surrounding frame until it's snapped free. Auto-spaced
- * around the contour/silhouette; deep levels cut spans/regions around them.
+ * Cut-out tabs (profile + slice-pocket outside, the ops that can free a
+ * part): N bridges of uncut stock spanning the groove, holding the part
+ * to the surrounding frame until it's snapped free. Auto-spaced around
+ * the contour; deep levels cut spans around them. The waterline rough
+ * needs none of this: its upper-shadow keep-out plus the widest-section
+ * stop make it provably unable to sever a part.
  */
 function TabsFields(props: {
-  op: Extract<JobOp, { kind: 'profile' | 'slicePocket' | 'waterline' }>;
+  op: Extract<JobOp, { kind: 'profile' | 'slicePocket' }>;
   upd: (p: Partial<JobOp>) => void;
 }) {
   const { op, upd } = props;
@@ -526,18 +528,22 @@ function ParamFields(props: {
             step={0.1}
             onCommit={(v) => upd({ margin: v } as Partial<JobOp>)}
           />
-          <TabsFields op={op} upd={upd} />
           <p className="hint">
             roughs the whole model in constant-Z waterline levels from the stock crown down to the
-            model floor — no selection needed. The clearing region stops at the model's silhouette
-            plus this margin (default: tool Ø + allowance + step over — a moat wide enough that
-            mesh noise on the model's wall cannot pinch the perimeter pass into plunge-per-sliver
-            arcs; the surrounding stock stays for a cut-out profile to ride in). Allowance is
-            BOTH-axis roughing stock for a finishing op: every level's cut plane rises by it and
-            its clearing region insets from the model contour. Follow with a finishing op
-            (allowance 0). Tabs leave holding bridges when a rimless relief roughs all the way
-            down to the floor — a rimmed part stops at its widest section, where the cut-out is
-            the profile op's job
+            model floor — no selection needed. Works in 4-axis indexed mode too (the op follows the
+            datum rotation; run several with index rotations between them to rough around a part).
+            Each level clears everything the tool
+            can reach: the model's silhouette plus this margin (default: tool Ø + allowance +
+            step over — a moat wide enough that mesh noise on the model's wall cannot pinch the
+            perimeter pass into plunge-per-sliver arcs; the surrounding stock stays for a cut-out
+            profile to ride in), minus the union of every cross-section ABOVE the level's cut
+            plane — so overhangs are keep-out and nothing is ever programmed underneath them.
+            Allowance is BOTH-axis roughing stock for a finishing op: every level's cut plane
+            rises by it and its clearing region insets from the model contour. Follow with a
+            finishing op (allowance 0). The ladder needs no depth-stop knob: it ends at the
+            model's own floor and at its widest section — whichever comes first — so the stock
+            below the part (its holder, in 4-axis mode) is never cleared, and the rough never
+            cuts the part free: that is the profile op's job, tabs and all
           </p>
         </>
       );

@@ -58,19 +58,18 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
         return { ...op, surfaceDiameter: null } as JobOp;
       }
     }
-    // pre-margin/pre-tabs waterline saves (interim builds, 2026-10-25):
-    // derive the tool Ø + allowance at generation, no bridges
+    // pre-margin waterline saves (interim builds, 2026-10-25): derive the
+    // tool Ø + allowance + step over at generation. Saves from the
+    // tabs-era interim build may also carry a `tabs` field — dropped (the
+    // upper-shadow keep-out made the rough provably unable to sever, so
+    // waterline tabs guarded a scenario that cannot occur).
     if (op.kind === 'waterline') {
       const rawMargin = (op as { margin?: unknown }).margin;
       const rawTabs = (op as { tabs?: unknown }).tabs;
       const marginOk = typeof rawMargin === 'number' || rawMargin === null;
-      const tabsOk = rawTabs === null || (typeof rawTabs === 'object' && rawTabs !== null);
-      if (!marginOk || !tabsOk) {
-        return {
-          ...op,
-          margin: marginOk ? rawMargin : null,
-          tabs: tabsOk ? rawTabs : null,
-        } as JobOp;
+      if (!marginOk || rawTabs !== undefined) {
+        const { tabs: _tabsEra, ...rest } = op as typeof op & { tabs?: unknown };
+        return { ...rest, margin: marginOk ? rawMargin : null } as JobOp;
       }
     }
     // pre-tabs profile/slicePocket saves: no bridges. ASSIGN, never return —

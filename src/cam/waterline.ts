@@ -2,13 +2,17 @@
  * Waterline rough of a whole model (PLAN.md §"3D relief carving", Phase A):
  * constant-Z levels from the stock crown down to the model floor, each level
  * clearing the MODEL'S COLUMN — its XY silhouette grown by `margin` and
- * clipped to the stock footprint — minus the keep-out grown from the model's
- * cross-section at that cut plane. The rough stops at the model's boundary
+ * clipped to the stock footprint — minus the UPPER SHADOW: the union of
+ * every cross-section at/above that level's cut plane (what blocks a
+ * vertical tool from above, overhangs included), grown by the allowance. The rough stops at the model's boundary
  * (the coin workflow: rough the relief, then profile the coin out), so the
  * waste outside the column stays standing instead of milled to the floor —
  * and it stops CLIMBING DOWN the ladder at the first level that would cut
- * nothing but moat (see the moat-only stop below): the cut-out is the
- * profile op's job, tabs and all.
+ * nothing but moat (see the moat-only stop below). The upper shadow makes
+ * the stop structural: at the deepest cut plane the shadow IS the whole
+ * silhouette, so that level is always moat-only and the ladder always
+ * ends above it — the rough can never cut a part free, and the cut-out is
+ * the profile op's job, tabs and all.
  *
  * BOTH-axis allowance (the Carvera omission, twice-flagged by Alice): the
  * floor allowance raises EVERY level's cut plane (the deeper levels' bands
@@ -22,7 +26,7 @@
  * upward (undercuts) are warned about, not silently mis-cut.
  */
 
-import type { Move, PocketOp, ProfileTabs, Tool, Vec2 } from '../core/types';
+import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
 import { difference, intersection, offsetOutward, union } from './clipper';
 import { simplifyContour, zLadder } from './paths';
 import { pocket2d } from './pocket';
@@ -55,16 +59,6 @@ export interface WaterlineRoughOptions {
    * allowance growing the keep-out.
    */
   margin: number;
-  /**
-   * Cut-out bridges for rimless reliefs (a dome descending straight to the
-   * stock floor — the rough itself severs the part at the deepest moat
-   * rings): keep-out boxes spanning the moat annulus, subtracted from
-   * every level below the bridge top (floorZ + allowance + height — the
-   * height stands above the rough's effective floor, the allowance skin).
-   * Absent/null = none. Applied AFTER the moat-only stop, so tabs never
-   * influence the stop decision.
-   */
-  tabs?: ProfileTabs | null;
   tool: Tool;
   /** G94 mm/min */
   feed: number;
@@ -124,115 +118,6 @@ function signedAreaOf(c: Vec2[]): number {
   return a / 2;
 }
 
-/** Perimeter of a closed contour. */
-function perimeterOf(c: Vec2[]): number {
-  let s = 0;
-  for (let i = 0; i < c.length; i++) {
-    const p = c[i];
-    const q = c[(i + 1) % c.length];
-    s += Math.hypot(q.x - p.x, q.y - p.y);
-  }
-  return s;
-}
-
-/** Point and unit tangent at arc length s along a closed contour (linear
- *  scan — the simplified silhouette contours are small). */
-function frameAt(c: Vec2[], s: number): { p: Vec2; t: Vec2 } {
-  const n = c.length;
-  let acc = 0;
-  for (let i = 0; i < n; i++) {
-    const a = c[i];
-    const b = c[(i + 1) % n];
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    if (len <= 1e-12) continue;
-    if (s <= acc + len) {
-      const f = (s - acc) / len;
-      return {
-        p: { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f },
-        t: { x: (b.x - a.x) / len, y: (b.y - a.y) / len },
-      };
-    }
-    acc += len;
-  }
-  // s at/past the end: the last vertex and its incoming tangent
-  const a = c[(n - 2 + n) % n];
-  const b = c[n - 1];
-  const len = Math.hypot(b.x - a.x, b.y - a.y);
-  return {
-    p: { x: b.x, y: b.y },
-    t: len > 0 ? { x: (b.x - a.x) / len, y: (b.y - a.y) / len } : { x: 1, y: 0 },
-  };
-}
-
-/** The tab-bridge radial padding, mm: the box must fully cross the moat
- *  annulus — past the tool-center path hugging the deep section on the
- *  inside, and past the rough's reach edge on the outside — so the bridge
- *  runs from the part into the surrounding stock. */
-const TAB_CROSS_PAD = 0.1;
-
-/**
- * Tab bridges for a silhouette: keep-out boxes placed on its contours and
- * subtracted from the pocketing region of every level below the bridge
- * top. The tab count distributes across the contours by perimeter share
- * (rounded, zeros dropped); a contour shorter than one tab length gets
- * none. Anchors sit at half-interval arc positions — the same
- * no-straddle rule as profile tabs. Pure, and the test oracle for box
- * placement. `notes` are informational (perimeter clamps, short contours).
- */
-export function tabBridgesFor(
-  silhouette: Vec2[][],
-  tabs: ProfileTabs,
-  geo: { allowance: number; margin: number; toolR: number },
-): { boxes: Vec2[][]; notes: string[] } {
-  const notes: string[] = [];
-  const perims = silhouette.map((c) => ({ c, P: perimeterOf(c), area: signedAreaOf(c) }));
-  const totalP = perims.reduce((s, p) => s + p.P, 0);
-
-  const assigned: { c: Vec2[]; P: number; sign: number; n: number }[] = [];
-  let total = 0;
-  if (totalP > 0) {
-    for (const { c, P, area } of perims) {
-      if (P < tabs.length - 1e-9) {
-        notes.push('contour too short for tabs — left unbridged');
-        continue;
-      }
-      const n = Math.round((tabs.count * P) / totalP);
-      if (n < 1) continue; // perimeter share too small — dropped
-      total += n;
-      assigned.push({ c, P, sign: area >= 0 ? 1 : -1, n });
-    }
-  }
-  if (total < tabs.count) {
-    notes.push(`tab count reduced to ${total} by the perimeter distribution`);
-  }
-
-  // radial span: from allowance + toolR (+pad) inside the silhouette —
-  // past the innermost tool-center pass — to margin + allowance + toolR
-  // (+pad) outside — past the reach edge
-  const inR = geo.allowance + geo.toolR + TAB_CROSS_PAD;
-  const outR = geo.margin + geo.allowance + geo.toolR + TAB_CROSS_PAD;
-  const halfL = tabs.length / 2;
-
-  const boxes: Vec2[][] = [];
-  for (const { c, P, sign, n } of assigned) {
-    for (let k = 0; k < n; k++) {
-      const { p, t } = frameAt(c, ((k + 0.5) * P) / n);
-      // outward from the model: right of travel on CCW outers, left on CW
-      // holes — the side the roughing region lies on either way
-      const nx = sign * t.y;
-      const ny = -sign * t.x;
-      const at = (a: number, b: number): Vec2 => ({
-        x: p.x + t.x * a + nx * b,
-        y: p.y + t.y * a + ny * b,
-      });
-      let box = [at(-halfL, -inR), at(halfL, -inR), at(halfL, outR), at(-halfL, outR)];
-      if (signedAreaOf(box) < 0) box.reverse(); // oriented CCW
-      boxes.push(box);
-    }
-  }
-  return { boxes, notes };
-}
-
 export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   if (!(o.floorZ < o.topZ)) {
     throw new Error('the model floor is at/above the stock crown — nothing to rough');
@@ -241,13 +126,6 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   if (o.stepOver <= 0) throw new Error('stepOver must be positive');
   if (o.allowance < 0) throw new Error('allowance must not be negative');
   if (o.margin < 0) throw new Error('margin must not be negative');
-  if (o.tabs) {
-    if (!Number.isInteger(o.tabs.count) || o.tabs.count < 1) {
-      throw new Error('tab count must be an integer >= 1');
-    }
-    if (o.tabs.height <= 0) throw new Error('tab height must be > 0');
-    if (o.tabs.length <= 0) throw new Error('tab length must be > 0');
-  }
 
   // nominal ladder z_1..z_n (z_n = floorZ); the band above level i is
   // [z_{i-1}, z_i] with z_0 = the crown. Cut planes sit allowance above the
@@ -323,20 +201,10 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   let droppedSlivers = 0;
   let undercutWarned = false;
 
-  // Tab bridges (rimless reliefs): the bridge top sits `height` above the
-  // rough's effective floor — the allowance skin — so the specified
-  // thickness is what actually stands. A bridge reaching above the whole
-  // roughing band leaves nothing standing anywhere — say so and cut like
-  // tabs were never asked for. The boxes are built lazily at the first
-  // level that actually bridges, so a ladder the moat-only stop ends
-  // early never emits tab warnings (test: the rimmed coin).
-  const tabs = o.tabs ?? null;
-  const bridgeTop = tabs ? o.floorZ + o.allowance + tabs.height : -Infinity;
-  const tabsNoOp = tabs !== null && bridgeTop >= nominal[0] + o.allowance - 1e-9;
-  if (tabsNoOp) {
-    warnings.push('tab height reaches above the roughing band — no bridges left standing');
-  }
-  let tabBridges: { boxes: Vec2[][]; notes: string[] } | null = null;
+  const shadowPlanes = [...sliceCache.keys()].sort((a, b) => b - a);
+  let shadowPtr = 0;
+  /** union of all sections at/above the current cut plane (upper shadow) */
+  let upperShadow: Vec2[][] = [];
 
   for (const { bandTop, cut } of bands) {
     if (cut >= bandTop) {
@@ -363,23 +231,39 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       }
     }
 
-    // clearing region: the model's column minus the keep-out grown from THIS
-    // level's section — the rough stops at the model's boundary, and the
-    // constant radial wall stock comes from THIS level's contour, never the
-    // previous level's. Above the model top the section is empty and the
+    // Clearing region: the model's column minus the UPPER SHADOW — the
+    // union of every section at/above this cut plane, grown by the
+    // allowance. A level's own section alone understates what blocks a
+    // VERTICAL tool: wherever the model widens going up (an overhang), the
+    // tool body has to pass beside the overhanging material, so the whole
+    // shadow above the plane is keep-out. Alice's rule, 2026-10-25 (the
+    // 4-axis trial made it visible — paths underneath a part the machine
+    // never re-orients — but the 3-axis case is the dangerous one: a
+    // section-only keep-out programs the tool UNDER overhangs and into
+    // the material). Monotone parts (sections only widening downward)
+    // are unaffected: their upper shadow IS the level's own section, the
+    // widest of everything above. The wall stock is still measured from
+    // THIS level's contour (the shadow union contains it), never from the
+    // previous level. Above the model top the shadow is empty and the
     // whole column is cleared (still not the whole stock footprint).
+    while (shadowPtr < shadowPlanes.length && shadowPlanes[shadowPtr] >= cut - 1e-9) {
+      const above = sliceCache.get(shadowPlanes[shadowPtr])!.contours;
+      upperShadow =
+        upperShadow.length === 0 ? above : union([...upperShadow, ...above]);
+      shadowPtr++;
+    }
     let region: Vec2[][];
     if (reach.length === 0) {
       region = []; // no shadow inside the stock — nothing to rough anywhere
-    } else if (slice.contours.length === 0) {
+    } else if (upperShadow.length === 0) {
       region = reach;
     } else {
       const keepOut =
-        o.allowance > 0 ? offsetOutward(slice.contours, o.allowance) : slice.contours;
+        o.allowance > 0 ? offsetOutward(upperShadow, o.allowance) : upperShadow;
       region = difference(reach, keepOut);
     }
     if (region.length === 0) {
-      skippedLevels++; // the section (grown by the allowance) covers the whole column
+      skippedLevels++; // the upper shadow (grown by the allowance) covers the whole column
       continue;
     }
 
@@ -406,30 +290,9 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     // offset ~20× slower and the emitted gcode ~5× longer, for boundary
     // fidelity far under the slice simplification tolerance. Simplify the
     // pocketing region (the stop check above ran on the raw region).
-    let pocketRegion = region.map((c) => simplifyContour(c, SLICE_SIMPLIFY_TOL));
-
-    // tab bridges — AFTER the moat-only stop, which ran on the untabbbed
-    // region: tabs suppress cutting, they must never influence the stop.
-    // Below the bridge top every level keeps clear of the boxes, leaving
-    // the bridges standing from the part into the surrounding stock; at
-    // and above it the levels cut through the box positions unbroken.
-    if (tabs !== null && !tabsNoOp && cut < bridgeTop - 1e-9) {
-      if (!tabBridges) {
-        tabBridges = tabBridgesFor(silhouette, tabs, {
-          allowance: o.allowance,
-          margin: o.margin,
-          toolR: o.tool.diameter / 2,
-        });
-        warnings.push(...tabBridges.notes);
-      }
-      pocketRegion = difference(pocketRegion, tabBridges.boxes);
-      if (pocketRegion.length === 0) {
-        // the bridge windows swallowed this level's whole region — nothing
-        // to cut, same vanish as an empty region
-        skippedLevels++;
-        continue;
-      }
-    }
+    // The bridge-window vanish case is gone with the tabs: the upper
+    // shadow + moat-only stop already guarantee the rough never severs.
+    const pocketRegion = region.map((c) => simplifyContour(c, SLICE_SIMPLIFY_TOL));
 
     // pocket the band in a single pocket level — the ladder's own stepping
     // already happened; pocket2d raises its own safeZ from the band top, so

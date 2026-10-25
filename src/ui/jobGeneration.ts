@@ -258,8 +258,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         // step-down) — the op would silently degenerate to a single pass
         stepDown: Math.max(stepDown, 0.5),
         stepOver: defaultStepOver(tool),
-        margin: null,
-        tabs: null, // rimless-relief bridges only when asked
+        margin: null, // derive tool Ø + allowance + step over at generation
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
@@ -1156,7 +1155,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           error: null,
           summary:
             sliceSummary(op, range, passes, minutes, dropped, 'profile') +
-            (op.tabs ? `, ${op.tabs.count} tab(s)` : '') +
+
             wasteNote +
             (ring.warnings.length > 0 ? ` · ${ring.warnings.join(' · ')}` : ''),
         };
@@ -1165,8 +1164,19 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // Phase A 3D relief roughing (PLAN.md): the whole loaded model is the
         // target — no selection, no depth boxes. Constant-Z waterline levels
         // from the stock crown down to the model floor, each level clearing
-        // the stock footprint minus the model's cross-section at the cut
-        // plane (src/cam/waterline.ts owns the math).
+        // the model's column minus the UPPER SHADOW of everything above the
+        // cut plane (src/cam/waterline.ts owns the math). Works in 4-axis
+        // INDEXED mode too (Alice's call, 2026-10-25): the datum rotation
+        // below maps the part into the cutting frame, and the ladder needs
+        // no Z-stop knob — it is bounded twice, by whichever is higher: the
+        // model's own floor in the rotated frame (never the stock bottom;
+        // the holder below the part stays) and the moat-only stop at the
+        // part's widest section in that orientation (vertical-sided parts
+        // stop at their top: a constant cross-section is one full-depth
+        // profile pass, not N waterline levels). Multiple waterline ops
+        // with index rotations between them compose — each is bounded by
+        // its own orientation's geometry, and the rough can never free
+        // the part.
         if (!ctx.geometry) return fail('needs a loaded model — the rough targets it');
         const crown = stockTopZ(ctx.stock);
         const stockBottom = stockSpan(ctx.stock, 'z')[0];
@@ -1223,8 +1233,6 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           // collapses to wall-tessellation noise — exactly one pass wide
           // (Ø + allowance alone) shatters into plunge-per-sliver arcs there
           margin: op.margin ?? tool.diameter + op.allowance + op.stepOver,
-          // rimless-relief bridges: keep-out boxes below floor+allowance+height
-          tabs: op.tabs ?? undefined,
           tool,
           feed,
           plungeFeed,
@@ -1249,7 +1257,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `z${crown.toFixed(1)} → z${deepest.toFixed(1)}` +
             (res.skippedLevels > 0 ? `, ${res.skippedLevels} level(s) skipped` : '') +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
-            (op.tabs ? `, ${op.tabs.count} tab(s)` : '') +
+
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
@@ -1375,7 +1383,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
-            (op.tabs ? `, ${op.tabs.count} tab(s)` : '') +
+
             `, ~${minutes.toFixed(1)} min` +
             wasteNote +
             (res.warnings.length > 0 ? ` · ${res.warnings.join(' · ')}` : ''),
