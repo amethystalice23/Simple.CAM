@@ -46,6 +46,13 @@ const SHARP_DEG = 30;
 /** Vertex welding precision, mm. */
 const WELD = 1e6;
 
+/**
+ * Features smaller than this are never selectable: sub-0.1mm planes,
+ * circles, and edges are tessellation noise. Alice's rule, 2026-10-25 —
+ * unconditional, every mesh, not just fine ones.
+ */
+const MIN_FEATURE_SIZE_MM = 0.1;
+
 // ---------------------------------------------------------------- utilities
 
 function vkey(x: number, y: number, z: number): string {
@@ -954,7 +961,78 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     points: lv.map((vi) => verts[vi]),
   }));
 
-  return { planes, circles, edges, paths: [], faceToPlane, planeLoops };
+  // ------------------------------------------------ final size filter
+  // (MIN_FEATURE_SIZE_MM). Planes are measured by their in-plane
+  // footprint extents — w and h of the member triangles' vertices
+  // projected into the plane; circles by diameter; edges by length.
+  // A plane under the limit in EITHER extent is a sliver, dropped.
+  //
+  // Dropping planes re-indexes every plane cross-reference: planeLoops
+  // entries of dropped planes go too, surviving entries are RE-BASED, and
+  // faceToPlane cells pointing at a dropped plane become −1. The UI reads
+  // all three arrays by index (plane highlighting, planeExtent(s) finding
+  // member triangles for a plane) — the rebase preserves exactly that
+  // contract: every surviving plane index still has member triangles.
+  const ext = planes.map(() => ({
+    minU: Infinity,
+    maxU: -Infinity,
+    minV: Infinity,
+    maxV: -Infinity,
+  }));
+  const basisCache: ({ u: Vec3; v: Vec3 } | null)[] = planes.map(() => null);
+  faces.forEach((f, i) => {
+    const p = planeOf[i];
+    let b = basisCache[p];
+    if (!b) {
+      b = basis(normals[p]);
+      basisCache[p] = b;
+    }
+    for (const v of f) {
+      const w = verts[v];
+      const pu = dot(w, b.u);
+      const pv = dot(w, b.v);
+      const e = ext[p];
+      if (pu < e.minU) e.minU = pu;
+      if (pu > e.maxU) e.maxU = pu;
+      if (pv < e.minV) e.minV = pv;
+      if (pv > e.maxV) e.maxV = pv;
+    }
+  });
+
+  // old plane index → surviving index (−1 when the plane was dropped)
+  const remap = new Int32Array(planes.length);
+  const keptPlanes: PlaneFeature[] = [];
+  for (let p = 0; p < planes.length; p++) {
+    const e = ext[p];
+    const keep =
+      e.maxU - e.minU >= MIN_FEATURE_SIZE_MM && e.maxV - e.minV >= MIN_FEATURE_SIZE_MM;
+    remap[p] = keep ? keptPlanes.length : -1;
+    if (keep) keptPlanes.push(planes[p]);
+  }
+
+  const keptLoops = planeLoops
+    .filter((l) => remap[l.plane] >= 0)
+    .map((l) => ({ plane: remap[l.plane], points: l.points }));
+
+  const keptFaceToPlane = new Int32Array(faceToPlane.length);
+  for (let t = 0; t < faceToPlane.length; t++) {
+    const p = faceToPlane[t];
+    keptFaceToPlane[t] = p < 0 ? -1 : remap[p];
+  }
+
+  const keptCircles = circles.filter((c) => c.radius * 2 >= MIN_FEATURE_SIZE_MM);
+  const keptEdges = edges.filter(
+    (e) => Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z) >= MIN_FEATURE_SIZE_MM,
+  );
+
+  return {
+    planes: keptPlanes,
+    circles: keptCircles,
+    edges: keptEdges,
+    paths: [],
+    faceToPlane: keptFaceToPlane,
+    planeLoops: keptLoops,
+  };
 }
 
 // ------------------------------------------------- machine-space derivation

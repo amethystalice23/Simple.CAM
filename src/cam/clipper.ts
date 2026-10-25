@@ -68,6 +68,36 @@ export function offsetOutward(contours: Vec2[][], deltaMm: number): Vec2[][] {
 }
 
 /**
+ * Boolean union of a whole contour set (non-zero fill, so nested CCW-outer /
+ * CW-hole contours behave as areas and overlapping outers merge). The
+ * waterline rough's silhouette: the model's XY shadow as the union of the
+ * section contours over every slice plane.
+ */
+export function union(paths: Vec2[][]): Vec2[][] {
+  if (paths.length === 0) return [];
+  const c = new Clipper();
+  c.AddPaths(paths.map(toPath), PolyType.ptSubject, true);
+  const sol: ClipperPath[] = [];
+  c.Execute(ClipType.ctUnion, sol, PolyFillType.pftNonZero, PolyFillType.pftNonZero);
+  return fromSolution(sol);
+}
+
+/**
+ * Boolean intersection subject ∩ clip (non-zero fill, so nested CCW-outer /
+ * CW-hole contours behave as areas). The waterline rough's model column:
+ * the silhouette grown by the margin, clipped to the stock footprint.
+ */
+export function intersection(subject: Vec2[][], clip: Vec2[][]): Vec2[][] {
+  if (subject.length === 0 || clip.length === 0) return [];
+  const c = new Clipper();
+  c.AddPaths(subject.map(toPath), PolyType.ptSubject, true);
+  c.AddPaths(clip.map(toPath), PolyType.ptClip, true);
+  const sol: ClipperPath[] = [];
+  c.Execute(ClipType.ctIntersection, sol, PolyFillType.pftNonZero, PolyFillType.pftNonZero);
+  return fromSolution(sol);
+}
+
+/**
  * Boolean difference subject − clip (non-zero fill, so nested CCW-outer /
  * CW-hole contours behave as areas). The slice pocket's 'outside' mode:
  * stock footprint minus the model's cross-section.

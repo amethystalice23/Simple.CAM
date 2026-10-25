@@ -122,6 +122,7 @@ const profileOp: Extract<JobOp, { kind: 'profile' }> = {
   side: 'online',
   floorFeatureId: null,
   clearToStock: false,
+  tabs: null,
 };
 
 describe('newJobOp / defaults', () => {
@@ -911,6 +912,7 @@ describe('slice pocket (section plane + band)', () => {
     stepOver: 2,
     floorFeatureId: null,
     clearToStock: false,
+    tabs: null,
   };
 
   it('new ops default: section 2 below the crown, band from the crown down', () => {
@@ -1089,6 +1091,7 @@ describe('slice pocket (section plane + band)', () => {
       side: 'outside',
       floorFeatureId: null,
       clearToStock: true,
+      tabs: null,
     };
     const res = generateJobOp(op, steppedCtx);
     expect(res.error).toBeNull();

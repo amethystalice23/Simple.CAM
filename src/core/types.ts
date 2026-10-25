@@ -508,6 +508,18 @@ export interface DrillOp {
   safeClearance: number;
 }
 
+/** Cut-out tabs: N uncut bridges spanning the groove, holding the part to
+ *  the surrounding stock. Deep levels (below floorZ + height) cut SPANS
+ *  between the tabs; shallower levels cut through unbroken. */
+export interface ProfileTabs {
+  /** bridges around the contour (clamped to what the perimeter fits) */
+  count: number;
+  /** bridge height above the profile floor, mm */
+  height: number;
+  /** bridge length along the contour, mm */
+  length: number;
+}
+
 /**
  * Follow a contour as a wall pass: tool center offset to one side of the
  * line (outside grows the contour, inside shrinks it, online follows it
@@ -533,6 +545,8 @@ export interface ProfileOp {
   plungeFeed: number;
   /** rapid clearance above topZ, mm */
   safeClearance: number;
+  /** cut-out tabs — absent = cut through in one piece (src/cam/profile.ts) */
+  tabs?: ProfileTabs;
 }
 
 /**
@@ -800,6 +814,9 @@ export type JobOp =
        * falls back to the outline ring when the frame is thinner than
        * the tool */
       clearToStock: boolean;
+      /** cut-out tabs (hold-down bridges) — null = cut through unbroken;
+       * threaded to profile2d at generation */
+      tabs: ProfileTabs | null;
     })
   | (JobOpBase & {
       kind: 'slicePocket';
@@ -834,6 +851,36 @@ export type JobOp =
        * §2) — falls back to the outline ring when the frame is thinner
        * than the tool */
       clearToStock: boolean;
+      /** cut-out tabs on the outside profile ring — null = no bridges;
+       * threaded to profile2d at generation (ignored in 'inside' mode) */
+      tabs: ProfileTabs | null;
+    })
+  | (JobOpBase & {
+      kind: 'waterline';
+      /**
+       * Waterline rough of the whole loaded model (PLAN.md Phase A): constant-Z
+       * levels from the stock crown down to the model floor, each level
+       * clearing the model's XY silhouette (plus a boundary margin) minus the
+       * model's cross-section at the cut plane — the rough stops at the
+       * model's boundary; the surrounding stock stays for a cut-out profile
+       * op to ride in. No selection — the model is the target; no depth
+       * boxes — the crown and the model floor set the range.
+       */
+      /** roughing stock left on walls AND floor for a finishing op, mm (0 = to size) */
+      allowance: number;
+      stepDown: number;
+      stepOver: number;
+      /** clearance around the model's silhouette, mm — null = derive the
+       * tool Ø + allowance at generation: the moat between the model and
+       * the rough's outer edge is then exactly one tool pass wide, so the
+       * deepest levels actually cut instead of tripping the
+       * thinner-than-the-tool skip */
+      margin: number | null;
+      /** cut-out bridges for RIMLESS reliefs (a dome descending straight to
+       * the stock floor — the rough itself severs the part at the deepest
+       * moat rings): keep-out boxes left standing below the bridge top.
+       * null = none; ProfileTabs reused (count/height/length) */
+      tabs: ProfileTabs | null;
     });
 
 /**

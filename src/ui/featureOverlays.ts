@@ -78,6 +78,80 @@ export function planeExtent(
   return { u, v, n, w: maxA - minA, h: maxB - minB, center, planeOffset };
 }
 
+/**
+ * Every plane's extent in ONE mesh pass: bucket triangles by their plane
+ * while walking the mesh once. planeExtent rescans the whole mesh per
+ * call — fine for one highlighted face, catastrophic when featureLabels
+ * measures EVERY plane of a fine mesh (tens of thousands of planes ×
+ * hundreds of thousands of triangles went quadratic there). Identical
+ * math and results to planeExtent, batched.
+ */
+export function planeExtents(
+  geometry: THREE.BufferGeometry,
+  features: DetectedFeatures,
+  transform: ModelTransform,
+): (PlaneExtent | null)[] {
+  // nothing to measure — and some sources carry empty geometries (artwork,
+  // the job's edge circles) with no position attribute at all, so this
+  // guard must come before any attribute read
+  if (features.planes.length === 0) return [];
+  const xf = transformFn(transform);
+  const zero = xf({ x: 0, y: 0, z: 0 });
+  const acc = features.planes.map((p) => {
+    const n = xf(p.normal).sub(zero).normalize();
+    const ref = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const u = ref
+      .clone()
+      .sub(n.clone().multiplyScalar(n.dot(ref)))
+      .normalize();
+    const v = new THREE.Vector3().crossVectors(n, u).normalize();
+    return { n, u, v, minA: Infinity, maxA: -Infinity, minB: Infinity, maxB: -Infinity, has: false };
+  });
+  const geo = geometry.index ? geometry.toNonIndexed() : geometry;
+  const attr = geo.getAttribute('position') as THREE.BufferAttribute;
+  const triCount = Math.floor(attr.count / 3);
+  for (let t = 0; t < triCount; t++) {
+    const pi = features.faceToPlane[t];
+    const b = pi >= 0 ? acc[pi] : null;
+    if (!b) continue; // degenerate drop (−1) or dangling index
+    b.has = true;
+    for (let k = 0; k < 3; k++) {
+      const w = xf({
+        x: attr.getX(t * 3 + k),
+        y: attr.getY(t * 3 + k),
+        z: attr.getZ(t * 3 + k),
+      });
+      const a = w.dot(b.u);
+      const c = w.dot(b.v);
+      if (a < b.minA) b.minA = a;
+      if (a > b.maxA) b.maxA = a;
+      if (c < b.minB) b.minB = c;
+      if (c > b.maxB) b.maxB = c;
+    }
+  }
+  return acc.map((b, i) => {
+    const p = features.planes[i];
+    if (!p || !b.has) return null;
+    const ca = (b.minA + b.maxA) / 2;
+    const cb = (b.minB + b.maxB) / 2;
+    const planeOffset = b.n.dot(xf(p.point));
+    const center = b.u
+      .clone()
+      .multiplyScalar(ca)
+      .add(b.v.clone().multiplyScalar(cb))
+      .add(b.n.clone().multiplyScalar(planeOffset));
+    return {
+      u: b.u,
+      v: b.v,
+      n: b.n,
+      w: b.maxA - b.minA,
+      h: b.maxB - b.minB,
+      center,
+      planeOffset,
+    };
+  });
+}
+
 // ---------------------------------------------------------------- measuring
 
 /** One manually selected item in measure mode (right-click). */

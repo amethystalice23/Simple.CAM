@@ -6,6 +6,7 @@
 ; verify 4th-axis Z datum (stock-center, Z1-probed) matches the job stock calibration
 G90 G21
 G92.4 A0 R0
+G0 Y0
 G0 A90 ; index stock to A90°
 G0 X5 Y5 ; drill (5.00, 5.00) depth 5.00mm
 G0 Z5

@@ -325,3 +325,85 @@ describe('bounding measurements', () => {
     expect((x0 + x1) / 2).toBeCloseTo(0, 1);
   });
 });
+
+/** Concatenate non-indexed geometries' positions into one mesh (disjoint
+ * solids stay disjoint — no shared edges, so no plane can flood across). */
+function merge(...geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const parts = geos.map((g) => (g.index ? g.toNonIndexed() : g));
+  const total = parts.reduce((s, g) => s + g.getAttribute('position').count, 0);
+  const pos = new Float32Array(total * 3);
+  let o = 0;
+  for (const g of parts) {
+    const attr = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < attr.count; i++) {
+      pos[o++] = attr.getX(i);
+      pos[o++] = attr.getY(i);
+      pos[o++] = attr.getZ(i);
+    }
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  return out;
+}
+
+describe('detectFeatures: minimum feature size (the 0.1mm rule)', () => {
+  /** A 2mm box at the origin plus a 0.05mm box off to the side: the tiny
+   * box's planes (0.05 × 0.05 extents), edges (0.05 long) are all under
+   * the limit; the big box's are all over it. */
+  const mixedMesh = (): THREE.BufferGeometry => {
+    const tiny = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+    tiny.translate(5, 0, 0);
+    return merge(box(2), tiny);
+  };
+
+  it('drops sub-0.1mm planes and edges, keeps the real ones', () => {
+    const f = detectFeatures(mixedMesh());
+    expect(f.planes).toHaveLength(6); // only the big box's faces
+    expect(f.edges).toHaveLength(12);
+    expect(f.circles).toHaveLength(0);
+    for (const e of f.edges) {
+      const l = Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z);
+      expect(l).toBeGreaterThanOrEqual(0.1);
+    }
+  });
+
+  it('keeps faceToPlane and planeLoops consistent after planes drop', () => {
+    const geo = mixedMesh();
+    const f = detectFeatures(geo);
+    const triCount = geo.getAttribute('position').count / 3; // both boxes
+    expect(f.faceToPlane).toHaveLength(triCount);
+
+    // every surviving plane index has member triangles (planeExtent in the
+    // UI rescans the mesh per plane via faceToPlane — this is its contract)
+    for (let i = 0; i < f.planes.length; i++) {
+      expect(f.faceToPlane.includes(i)).toBe(true);
+    }
+    // the tiny box's triangles are orphaned (−1), never mis-mapped
+    const present = new Set(f.faceToPlane);
+    expect([...present].sort((a, b) => a - b)).toEqual([-1, 0, 1, 2, 3, 4, 5]);
+    const orphans = f.faceToPlane.filter((p) => p === -1).length;
+    expect(orphans).toBe(12); // exactly the tiny box's 12 triangles
+
+    // surviving planeLoops are re-based into the surviving plane range,
+    // dropped planes' loops are gone
+    expect(f.planeLoops).toHaveLength(6); // one per kept big-box face
+    for (const l of f.planeLoops) {
+      expect(l.plane).toBeGreaterThanOrEqual(0);
+      expect(l.plane).toBeLessThan(f.planes.length);
+      expect(l.points).toHaveLength(4); // big-box outlines only
+    }
+  });
+
+  it('drops circles under 0.1mm diameter, keeps the control size', () => {
+    const tiny = new THREE.CylinderGeometry(0.03, 0.03, 0.06, 24).toNonIndexed();
+    const f = detectFeatures(tiny);
+    expect(f.circles).toHaveLength(0); // Ø0.06 caps fall under the rule
+    expect(f.planes).toHaveLength(0); // caps 0.06 across, walls 0.06 × 0.008 slivers
+    expect(f.edges).toHaveLength(0);
+
+    const big = new THREE.CylinderGeometry(3, 3, 6, 24).toNonIndexed();
+    const control = detectFeatures(big);
+    expect(control.circles.length).toBeGreaterThanOrEqual(2);
+    for (const c of control.circles) expect(c.radius * 2).toBeGreaterThanOrEqual(0.1);
+  });
+});

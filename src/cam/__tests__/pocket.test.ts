@@ -153,4 +153,23 @@ describe('pocket2d', () => {
     // plunges: passes × approach depth at plungeFeed; loops at cut feed
     expect(res.estimatedMinutes).toBeCloseTo(len / 500 + (res.passes * 0.5) / 200, 5);
   });
+
+  it('drops closed passes shorter than minLoopPerimeter, counting them', () => {
+    // a 4.2mm square pockets to an 8.8mm-perimeter orbit at k=0, then a
+    // 0.8mm-perimeter orbit at k=1 — a plunge-wiggle shorter than the tool
+    // itself. The threshold drops it and says so; without one (the plain
+    // pocket op's contract) every orbit is cut.
+    const region = [square(-2.1, 4.2)];
+    const plain = pocket2d(op({ regions: region }), tool);
+    expect(plain.passes).toBe(2);
+    expect(plain.droppedLoops).toBe(0);
+    expect(passLoops(plain.moves)).toHaveLength(2);
+
+    const filtered = pocket2d(op({ regions: region }), tool, { minLoopPerimeter: 2 });
+    expect(filtered.passes).toBe(1);
+    expect(filtered.droppedLoops).toBe(1);
+    const loops = passLoops(filtered.moves);
+    expect(loops).toHaveLength(1);
+    expect(loopArea(loops[0])).toBeCloseTo(2.2 * 2.2, 5);
+  });
 });

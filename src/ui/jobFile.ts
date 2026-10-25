@@ -58,6 +58,30 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
         return { ...op, surfaceDiameter: null } as JobOp;
       }
     }
+    // pre-margin/pre-tabs waterline saves (interim builds, 2026-10-25):
+    // derive the tool Ø + allowance at generation, no bridges
+    if (op.kind === 'waterline') {
+      const rawMargin = (op as { margin?: unknown }).margin;
+      const rawTabs = (op as { tabs?: unknown }).tabs;
+      const marginOk = typeof rawMargin === 'number' || rawMargin === null;
+      const tabsOk = rawTabs === null || (typeof rawTabs === 'object' && rawTabs !== null);
+      if (!marginOk || !tabsOk) {
+        return {
+          ...op,
+          margin: marginOk ? rawMargin : null,
+          tabs: tabsOk ? rawTabs : null,
+        } as JobOp;
+      }
+    }
+    // pre-tabs profile/slicePocket saves: no bridges. ASSIGN, never return —
+    // legacy saves lack tabs AND the depth-bearing fields below, and an
+    // early return would skip that migration
+    if (op.kind === 'profile' || op.kind === 'slicePocket') {
+      const rawTabs = (op as { tabs?: unknown }).tabs;
+      if (rawTabs !== null && typeof rawTabs !== 'object') {
+        op = { ...op, tabs: null } as JobOp;
+      }
+    }
     // pre-⇩ saves carry no floorFeatureId — detached is the null default
     if (isDepthBearingJobOp(op)) {
       const normalized = op.floorFeatureId === undefined ? { ...op, floorFeatureId: null } : op;
@@ -137,15 +161,26 @@ export interface SaveableState {
   modelBytes: Uint8Array | null;
 }
 
-/** Base64 with chunked conversion (String.fromCharCode chokes on spread
- * for multi-MB inputs). */
+/**
+ * Base64 with chunked conversion (String.fromCharCode chokes on spread
+ * for multi-MB inputs). Cached by the bytes' identity: the array is stable
+ * for as long as a model is loaded, and every debounced autosave re-encodes
+ * it — a 12MB STL paid seconds of main-thread base64 per edit otherwise
+ * (a WeakMap so a replaced model's string can be collected).
+ */
+const stlBase64Cache = new WeakMap<Uint8Array, string>();
+
 export function encodeStl(bytes: Uint8Array): string {
+  const hit = stlBase64Cache.get(bytes);
+  if (hit !== undefined) return hit;
   let s = '';
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {
     s += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
   }
-  return btoa(s);
+  const b64 = btoa(s);
+  stlBase64Cache.set(bytes, b64);
+  return b64;
 }
 
 export function decodeStl(b64: string): Uint8Array {

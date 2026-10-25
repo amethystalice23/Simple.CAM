@@ -26,7 +26,7 @@ import type {
   Tool,
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
-import { planeExtent, transformFn } from './featureOverlays';
+import { planeExtents, transformFn } from './featureOverlays';
 import { opEdgeSource, resolveFeature, sourcesFor } from './featureSources';
 import { ModelPanel } from './ModelPanel';
 import {
@@ -50,6 +50,7 @@ import {
 import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
+import { decimateForDetection } from '../cam/decimate';
 import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
 import { CalibrationDialog } from './CalibrationDialog';
@@ -68,6 +69,15 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
 };
 
 const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v2'; // v2: corn bits split out of flat
+
+/**
+ * Feature-picking caps: above this triangle count a model is a fine relief
+ * (scan/coin class) — detection runs on a vertex-clustered decimation
+ * instead (flat fields weld into genuinely planar patches, which is what
+ * picking wants). Display and generation always use the full mesh.
+ */
+const DETECTION_TRIANGLE_CAP = 100_000;
+const DETECTION_DECIMATE_TARGET = 50_000;
 
 function loadToolLibrary(): Tool[] {
   try {
@@ -123,6 +133,13 @@ export function App() {
   /** changes since the last save/new/restore — gates the New Job confirm */
   const [dirty, setDirty] = useState(false);
   const lastSavedRef = useRef<string | null>(null); // fingerprint baseline
+  /** fingerprint of the last AUTOSAVE written — identical re-runs (edits
+   * that didn't change the saved content, or effect re-fires) skip the
+   * IndexedDB rewrite of the multi-MB job file. The model BYTES identity
+   * also gates it: the fingerprint only carries name+size, so a different
+   * model of coincidentally-equal length must still force a write. */
+  const lastAutosaveRef = useRef<string | null>(null);
+  const autosavedModelRef = useRef<Uint8Array | null>(null);
   const restoredRef = useRef(false); // autosave waits for the mount restore
   const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
   const [showPreview, setShowPreview] = useState(true);
@@ -135,8 +152,29 @@ export function App() {
   const [lastToolId, setLastToolId] = useState<string | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
 
-  // feature detection is model-space only: reruns on model load, not moves
-  const features = useMemo(() => (geometry ? detectFeatures(geometry) : null), [geometry]);
+  // Feature detection runs on a DECIMATED copy above the triangle cap: a
+  // fine relief mesh (scans, coin art) has no pickable planes, and full-res
+  // detection on it takes seconds and builds a plane per few triangles.
+  // The viewport and every generator keep the full-resolution mesh — only
+  // the feature-picking pipeline (sources, overlays, snaps, primitive
+  // sizing) sees the simplified copy.
+  const detection = useMemo(() => {
+    if (!geometry) return null;
+    const tris = (geometry.getAttribute('position')?.count ?? 0) / 3;
+    if (tris <= DETECTION_TRIANGLE_CAP) {
+      return { geometry, features: detectFeatures(geometry), note: null as string | null };
+    }
+    const decimated = decimateForDetection(geometry, DETECTION_DECIMATE_TARGET);
+    return {
+      geometry: decimated.geometry,
+      features: detectFeatures(decimated.geometry),
+      note:
+        `features detected on a simplified copy — ${Math.round(tris)} → ${decimated.triangles} ` +
+        `triangles clustered at ${decimated.pitch.toFixed(2)}mm; the full mesh is untouched ` +
+        'for display and cutting',
+    };
+  }, [geometry]);
+  const features = detection?.features ?? null;
   /**
    * Model size as displayed — bounding box × per-axis model scale, same
    * computation and formatting as the Model tab's "loaded · X × Y × Z mm"
@@ -159,10 +197,12 @@ export function App() {
    * own edge circles (`o:` ids — face-op step edges + stock end rims,
    * 4-axis only) for the cylinder chamfer op to anchor on */
   const sources = useMemo(() => {
-    const s = sourcesFor(geometry, features, transform, primitives);
+    // the model source pairs features with the geometry they were detected
+    // on — the decimated copy above the cap, else the full mesh
+    const s = sourcesFor(detection?.geometry ?? null, features, transform, primitives);
     const oe = opEdgeSource(ops, stock);
     return oe ? [...s, oe] : s;
-  }, [geometry, features, transform, primitives, ops, stock]);
+  }, [detection, features, transform, primitives, ops, stock]);
 
   /** short descriptions by feature id, for op title snippets */
   const featureLabels = useMemo(() => {
@@ -174,8 +214,12 @@ export function App() {
       for (const e of source.features.edges) {
         map[e.id] = `L${Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z).toFixed(1)}`;
       }
+      // one batched mesh pass for ALL planes — the per-plane planeExtent
+      // call went quadratic on fine meshes (this re-runs on every stock
+      // edit, sources depends on it)
+      const exts = planeExtents(source.geometry, source.features, source.transform);
       for (let i = 0; i < source.features.planes.length; i++) {
-        const ext = planeExtent(source.geometry, source.features, source.transform, i);
+        const ext = exts[i];
         map[source.features.planes[i].id] = ext ? `${ext.w.toFixed(1)}×${ext.h.toFixed(1)}` : 'face';
       }
     }
@@ -393,13 +437,16 @@ export function App() {
   /** Create a primitive, sized from the selection when it matches the kind. */
   const addPrimitive = (kind: 'cylinder' | 'box') => {
     let prim: Primitive | null = null;
-    if (features && geometry) {
+    // boxFromPlane indexes features.faceToPlane — it must get the geometry
+    // those features were detected on (the decimated copy above the cap)
+    const featureGeometry = detection?.geometry ?? null;
+    if (features && featureGeometry) {
       if (kind === 'cylinder') {
         const circle = selection
           .map((id) => features.circles.find((c) => c.id === id))
           .find((c) => c !== undefined);
         if (circle) {
-          const span = axialExtentX(transformedPositions(geometry, transform));
+          const span = axialExtentX(transformedPositions(featureGeometry, transform));
           prim = cylinderFromCircle(circle, transform, span);
         }
       } else {
@@ -407,7 +454,7 @@ export function App() {
           .map((id) => features.planes.findIndex((p) => p.id === id))
           .find((i) => i >= 0);
         if (idx !== undefined && idx >= 0) {
-          prim = boxFromPlane(geometry, features, transform, idx);
+          prim = boxFromPlane(featureGeometry, features, transform, idx);
         }
       }
     }
@@ -966,7 +1013,11 @@ export function App() {
       } else if (fp !== lastSavedRef.current) {
         setDirty(true);
       }
-      void saveAutosave(file);
+      if (fp !== lastAutosaveRef.current || autosavedModelRef.current !== modelBytes) {
+        lastAutosaveRef.current = fp;
+        autosavedModelRef.current = modelBytes;
+        void saveAutosave(file);
+      }
     }, 600);
     return () => clearTimeout(t);
   }, [stock, transform, primitives, ops, tools, modelName, modelBytes]);
@@ -1085,6 +1136,7 @@ export function App() {
               stock={stock}
               transform={transform}
               onTransformChange={setTransform}
+              detectionNote={detection?.note ?? null}
               primitives={primitives}
               selectedObjectId={selectedObjectId}
               onSelectObject={setSelectedObjectId}

@@ -90,29 +90,111 @@ function pointInPoly(pt: Vec2, poly: Vec2[]): boolean {
 }
 
 /**
+ * Z-span bucket index over a positions array: bucket i holds the face
+ * indices whose (padded) Z span overlaps [minZ + i·bucketH, minZ + (i+1)·bucketH),
+ * so a slice plane tests only the candidates in its one bucket instead of
+ * scanning every triangle. Build once per mesh, slice many planes — the
+ * waterline rough slices O(levels) planes, and on a 235k-triangle relief
+ * the full scan per plane is what made generation O(levels × triangles).
+ *
+ * The bucket set is purely a candidate FILTER: a triangle that straddles
+ * (or, within the on-plane epsilon, touches) a plane is guaranteed to be
+ * in that plane's bucket — spans are padded by more than the epsilon —
+ * and the accept/reject math is the shared per-triangle test, so indexed
+ * and unindexed slices return identical results.
+ */
+export interface ZIndex {
+  readonly minZ: number;
+  readonly bucketH: number;
+  /** face indices per bucket (ascending — the full-scan order) */
+  readonly buckets: readonly (readonly number[])[];
+}
+
+/** Aim for ~64 candidate triangles per bucket on an evenly spread mesh. */
+const BUCKET_TARGET = 64;
+
+/**
+ * Z-span padding, mm: must dominate the on-plane epsilon
+ * (1e-9 · max(1, |z|)) at any sane machine Z so a touching triangle never
+ * falls out of its plane's bucket, while staying far under a bucket height.
+ */
+function indexPad(minZ: number, maxZ: number): number {
+  return 1e-6 * Math.max(1, Math.abs(minZ), Math.abs(maxZ));
+}
+
+/**
+ * Build the Z-span bucket index for a positions array (flat xyz triples,
+ * non-indexed — the same array `sliceAtZ` will be given). One pass over
+ * the triangles; NaN-span faces are left out (they can never cross a
+ * plane — the scan's side test reads them as on-plane and skips).
+ */
+export function buildZIndex(positions: ArrayLike<number>): ZIndex {
+  const faceCount = Math.floor(positions.length / 9);
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 2; i < positions.length; i += 3) {
+    const z = positions[i];
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  if (!Number.isFinite(minZ)) {
+    minZ = 0; // empty mesh: one empty bucket keeps every query honest
+    maxZ = 0;
+  }
+  const span = maxZ - minZ;
+  const nBuckets = Math.max(1, Math.ceil(faceCount / BUCKET_TARGET));
+  const bucketH = span > 0 ? span / nBuckets : 1;
+  const pad = indexPad(minZ, maxZ);
+  const buckets: number[][] = Array.from({ length: nBuckets }, () => []);
+  for (let f = 0; f < faceCount; f++) {
+    const o = f * 9;
+    let lo = positions[o + 2];
+    let hi = lo;
+    for (let k = 1; k < 3; k++) {
+      const z = positions[o + k * 3 + 2];
+      if (z < lo) lo = z;
+      if (z > hi) hi = z;
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
+    let b0 = Math.floor((lo - pad - minZ) / bucketH);
+    let b1 = Math.floor((hi + pad - minZ) / bucketH);
+    if (b0 < 0) b0 = 0;
+    if (b1 > nBuckets - 1) b1 = nBuckets - 1;
+    for (let b = b0; b <= b1; b++) buckets[b].push(f);
+  }
+  return { minZ, bucketH, buckets };
+}
+
+/**
  * Slice machine-space positions (flat xyz triples, non-indexed) at Z = z.
  * Triangles exactly coplanar with the slice plane are skipped; the contour
  * comes from their neighbors' crossings. Open chains are dropped and
  * counted — the UI surfaces that as a broken-mesh warning.
+ *
+ * Pass a `ZIndex` built from the SAME positions array (see `buildZIndex`)
+ * to test only the plane's candidate triangles; without one this is the
+ * plain full scan over every triangle, with identical results.
  */
-export function sliceAtZ(positions: ArrayLike<number>, z: number): SliceResult {
+export function sliceAtZ(positions: ArrayLike<number>, z: number, index?: ZIndex): SliceResult {
   const eps = 1e-9 * Math.max(1, Math.abs(z));
   const side = (d: number) => (d > eps ? 1 : d < -eps ? -1 : 0);
-  const faceCount = Math.floor(positions.length / 9);
 
   const segs: { a: Vec2; b: Vec2; used: boolean }[] = [];
-  for (let f = 0; f < faceCount; f++) {
+
+  // one triangle's crossing test — shared verbatim by both candidate
+  // paths, so an indexed slice accepts/rejects exactly what the scan would
+  const collectFace = (o: number): void => {
     const vx: number[] = [];
     const vy: number[] = [];
     const d: number[] = [];
     for (let k = 0; k < 3; k++) {
-      const o = f * 9 + k * 3;
-      vx.push(positions[o]);
-      vy.push(positions[o + 1]);
-      d.push(positions[o + 2] - z);
+      const v = o + k * 3;
+      vx.push(positions[v]);
+      vy.push(positions[v + 1]);
+      d.push(positions[v + 2] - z);
     }
     const s = [side(d[0]), side(d[1]), side(d[2])];
-    if (s[0] === s[1] && s[1] === s[2]) continue; // no crossing (coplanar incl.)
+    if (s[0] === s[1] && s[1] === s[2]) return; // no crossing (coplanar incl.)
 
     const pts: Vec2[] = [];
     const push = (x: number, y: number) => {
@@ -127,6 +209,19 @@ export function sliceAtZ(positions: ArrayLike<number>, z: number): SliceResult {
       }
     }
     if (pts.length === 2) segs.push({ a: pts[0], b: pts[1], used: false });
+  };
+
+  if (index) {
+    // the plane's single bucket: a superset of the straddling/touching
+    // triangles (spans padded past the epsilon at insertion), pruned by
+    // the same per-triangle test. Bucket faces are ascending, so the
+    // segment order — and hence the stitched result — matches the scan.
+    const b = Math.floor((z - index.minZ) / index.bucketH);
+    const bi = b < 0 ? 0 : b >= index.buckets.length ? index.buckets.length - 1 : b;
+    for (const f of index.buckets[bi]) collectFace(f * 9);
+  } else {
+    const faceCount = Math.floor(positions.length / 9);
+    for (let f = 0; f < faceCount; f++) collectFace(f * 9);
   }
 
   // stitch segments into loops by shared endpoints

@@ -156,7 +156,16 @@ Notes on header fields:
   alternate `G1 A360 F240` with X cross-feed steps. This is presumably
   why G93 never appears in real output.
 - Fixed-A machining (flat on a rotated cylinder): rotate, `G92.4 A180 R0`,
-  then pure X/Y/Z 3-axis body — A stays put.
+  then pure X/Y/Z 3-axis body — A stays put. These are the only corpus
+  files WITHOUT a `G0 Y0` start line: their Y is positioned continuously
+  like any 3-axis job.
+- **`G0 Y0` positions the rotary centerline** — emitted as its own
+  single-axis rapid at the start of every centerline-riding toolpath
+  (Stage1: `G92.4 A0 R0` → `G0 X20` → `G0 Y0` → `G0 A0`; Turned: 1 per
+  toolpath). Wrapped/turned bodies never contain another Y word: the file
+  must establish Y itself, because the controller's tool-swap /
+  length-measure / 4th-axis-probe cycles move Y off the centerline and
+  their return position is not guaranteed.
 - Park position at op/file end: `G0 Z11`/`G0 Z13` retract, then `G0 Y13`.
 - Approach quirk: `G0 Z11` is emitted twice in a row in Stage2 transitions
   (harmless duplication).
@@ -398,6 +407,7 @@ controller section).
 | 6 | 3-decimal coords, 4-decimal F | ≤2-decimal trimmed, integer F | cosmetic |
 | 7 | trailing `; comment` on motion lines | none (only `; Tn-…` tool comments) | verified harmless — controller strips inline comments before tokenizing (`CNC.py:382-386`); keep or drop for Studio parity |
 | 8 | LF endings | CRLF in all 22 files | cosmetic — controller normalizes newlines; Studio always writes CRLF |
+| 10 | **no Y word anywhere** in wrapped 4-axis files | `G0 Y0` at every centerline-riding toolpath start | **FIXED 2026-10-25 after a field report**: two users (community AND official controller/firmware) hit "traverses X but not Y, then cuts in mid air" right after the tool swap/length-measure/4th-axis-probe start cycle. Wrapped ops live in X-Z-A (Y constant at the rotary centerline, so our body never commands it) — but the controller's own start cycles jog Y off the centerline and the return is not guaranteed. Studio's Stage1/Turned exports emit `G0 Y0` per toolpath; their Stage2 fixed-A "flat" ops position Y continuously instead. Our post now emits `G0 Y0` after the header datum and after every mid-file `Tn M6` |
 | 9 | earlier note: "no `M5` string in the output" | both `M5` (mid-file) and `M05` (final) emitted | comment in carvera.ts is factually wrong — correct it |
 
 Firmware-verdict on the G93 design: **implemented and safe to use** —

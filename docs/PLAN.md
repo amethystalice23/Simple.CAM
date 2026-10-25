@@ -92,7 +92,7 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 | Indexed pocket/profile/drill | 2.5D | A frozen at index angle → ordinary flat op in rotated frame (reuses flat engine) |
 | Thread (90° V-bit, IMPLEMENTED 2026-10-20) | parametric helix | `thread.ts`: per pass `G1 X… A…` constant Z, A advances `(span/lead)·360°` (lead = starts×pitch); Z depth-steps between passes re-entering at identical absolute A phase (levels retrace — sweeps alternate, A returns along the helix); multi-start = 360/starts phase offsets following the index datum; spring pass per start; external only. Depth derives from pitch + the tool's tip angle + tolerance (grooves half a pitch wide at crest; crest Ø = nominal − 2·tolerance); the panel's "Add facing toolpath" INSERTS a prefilled Face cylinder op before the thread (crest Ø, the thread's X range and rotation — its own tool/feeds/step-over); editing the nominal Ø prefills the standard ISO coarse pitch (metricPitch: M4→0.7, M6→1.0…). Fit is EMPIRICAL (risk 3) — the tolerance knob tunes it on a coupon |
 | Spiral carve (wrapped groove, STARTED 2026-10-20) | parametric | `spiralCarve.ts`: multi-start helices about the stock axis at a user angle off circumferential (90° = axial); depth ladder retraces the same groove per level (sweeps alternate, A returns along the helix); width > tool Ø fans parallel passes; X+A sweeps G93 from the rotary limit; strand phases follow the index datum; setup ghost + groove marks in the viewport (docs/edge-tracing.md §5). Archimedean/straight/cross-hatch still to come |
-| Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection |
+| Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection. Profile (and slice-pocket outside) carry **TABS** (2026-10-25, Alice's cut-out workflow): N auto-spaced hold-down bridges (count/height/length, defaults 3 × 0.5mm × 3mm) — deep levels cut spans between them, shallow levels cut through; arc-length placement never straddles the loop seam. Waterline carries the same tabs as keep-out bridge boxes (rimless reliefs) |
 | Slice pocket (3-axis) | 2.5D | one `sliceAtZ` cross-section at the op's slice plane → `'outside'` profiles around it (tool-center path offset out by tool Ø/2 + allowance) / `'inside'` pockets its interior, over the start→end band; floor via the ⇩ pick; violet section-plane overlay + drag handle (docs/edge-tracing.md §2, §5) |
 | Flat chamfer (V-bit) | single-pass flank | two modes. **add**: the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path) — a new chamfer through a sharp edge. **existing**: the model already has the chamfer — the bit rides the modelled face, and direction selects which end was clicked: **up** = the bottom edge, traced exactly (depth ignored — the bit cuts up and out from there); **down** = the top edge, the tip slides down-and-in by depth·tan(angle/2) along the modelled face, landing on the bottom edge when depth matches the model. User side option (inside/outside — geometry can't always tell) and depth along the wall |
 | Cylinder chamfer (4-axis, 2026-10-23) | rotary ring pass | `cylChamfer.ts`: the degenerate face-cylinder vertical ring — one full A revolution per level at the selected edge circle's exact X, V-bit tip at Ø/2 − depth. The DEPTH is the only direction: 0 anchors on the circle and cuts up-and-out through whatever rises above it (ladder from the stock surface — the adjoining Ø is deliberately unknown, the one-circle rule; spec + edge sources in edge-tracing §6), >0 slides below the circle from an already-clear rim. Edges are A-coaxial circles: face-cylinder ops publish their step edges at their own target Ø (`o:` ids), the stock its end rims, model circles on turned parts too; A-only sweeps G94 at the rotary deg/min |
@@ -208,6 +208,142 @@ library is imported from Makera's public profiles repo
 Users add/modify/delete tools in the Tools panel; the user library persists
 in browser storage. Feeds/speeds defaults come from material presets × tool
 type, not from the tool record.
+
+### 3D relief carving — heightmap & dexel (SPEC 2026-10-24, build in a later session)
+
+"Select a whole object, recreate it as accurately as the machine can reach."
+The spec below was thrashed out with Alice 2026-10-24 (with a Gemini plan
+cross-checked; its convergent core validated the approach, its `G1 X Z A`
+G-code template was REJECTED — see the machine-facts block). Decisions
+settled by Alice: **waterline first** (cheap stepping stone); **roughing
+and finishing are SEPARATE OPS** following the existing methodology
+(one op: flat endmill + allowance, roughs fast; a second op: zero
+allowance, ball or V-bit, finishes — she noted V-bit jobs run very long
+from the tip size); **tools: flat + ball first, V-bit later**.
+
+**The unifying insight.** The spindle never tilts: the tool always cuts
+from straight down. Rotation sweeps that through exactly one ring of
+approach directions — which is *precisely* what the unwrapped (x, θ)
+heightmap samples. So the heightmap is not an approximation of "true"
+4-axis carving — on THIS machine it is the complete representation.
+Radial shadow (material at larger radius on the same radial ray) is
+unreachable at every rotation; the machine agrees with the map. The
+residual hard 20% is collision validation (shank/holder vs. rotated
+features), phase D.
+
+**Phase A — Waterline rough (3D, 3-axis)** — cheapest, mostly existing
+machinery: loop `sliceAtZ` + `pocket2d` (inside mode) over Z levels from
+the stock crown down to the model floor; each level pockets that slice's
+cross-section over its band. **BOTH-axis allowance (the Carvera
+omission, twice-flagged by Alice)**: floor allowance raises each level's
+floor; side allowance insets every level's contours from the MODEL
+contour by one constant radial stock (never from the previous level —
+no inherited taper). Flat endmill default; stock-footprint clip; feeds
+from material presets; composes before a finishing op.
+**IMPLEMENTED 2026-10-25** — `waterlineRough` (src/cam/waterline.ts) +
+the `waterline` op (no selection, no depth boxes: crown → model floor,
+clamped at the stock bottom). Correction to the sketch above: each level
+CLEARs `stockFootprint − section(cutPlane)` — the section's interior is
+the part being KEPT, never pocketed; an empty section (level above the
+model top) clears the whole layer. Allowance raises every level's cut
+plane and grows the section as keep-out. Warnings, never silence:
+undercut bands (3-axis cannot reach under overhangs), levels skipped
+(section covers the footprint / allowance ≥ stepDown / frame thinner
+than the tool — left standing), dropped chains, model above crown or
+below stock bottom. Phase B raster finish is the follow-up op.
+**Fine-mesh support (2026-10-25, from Alice's 12MB relief-coin session):**
+waterline slice contours simplify at 0.01mm before the Clipper offsets —
+and the pocketing regions too (the real bench culprit: 235k-tri coin,
+50 levels went 19.6s → 1.1s; sliceAtZ gained an optional Z-span triangle
+index, `buildZIndex`, exact-equal results pinned); feature detection caps
+at 100k triangles (decimated vertex-clustered copy for picking only —
+display and cutting stay full-res) and never emits sub-0.1mm features
+(edge-tracing §1 "size floor"). Generation itself is still synchronous —
+the Phase B Web Worker is the cure if Recalculate on fine meshes stays
+painful. The rough stops at the MODEL'S SILHOUETTE + a boundary margin
+(default tool Ø + allowance + step over — the moat is two tool passes
+wide, so its tool-center track keeps a step-over of width even at the
+widest-section level; Ø + allowance alone is exactly one pass wide and a
+fine mesh's ±0.05mm wall noise pinches that track into a ring of
+sub-tool arcs — plunge-cut-plunge around the perimeter, the 2026-10-25
+coin session) — for the cut-out profile to ride in; the earlier
+footprint semantics milled all waste around a small part. Pocket passes
+shorter than the tool's own Ø are DROPPED as sliver noise (pocket2d's
+optional `minLoopPerimeter`; the stock they would take is thinner than
+the tool — left standing for finishing, warned once per run), and
+waterline slice contours are normalized CCW at the single consumption
+point: a mesh with inverted facet windings slices to CW contours, which
+the keep-out offset would otherwise SHRINK — the rough would eat its own
+allowance and gouge the model. The default step-down floors at 0.5mm so
+it never self-skips against the 0.2mm allowance default, and the ladder
+ENDS at
+the first moat-only level (widest section — a rimmed coin stops at its
+rim, honestly noted; the cut-out below is the profile op's job). A
+RIMLESS relief (surface descending to the stock floor) legitimately
+roughs to the floor and would sever the part: waterline therefore also
+carries TABS — keep-out bridge boxes at silhouette arc positions
+(count/height/length, defaults 3 × 0.5mm × 3mm; height measured above
+the roughing floor `floor+allowance`), subtracted from every level below
+the bridge top, never influencing the stop check.
+
+**Phase B — Raster finish (3D, 3-axis)** — new pure core
+`src/cam/relief.ts`: (1) dense surface heightmap via BVH raycasts
+(**three-mesh-bvh, MIT — add when this phase starts**; per-cell
+`raycastFirst` is the v1 path, triangle-splatting only if profiling
+demands); (2) per-tool compensation = grayscale DILATION of the
+heightmap with the tool's kernel (ball → hemisphere, flat → disc; no
+per-sample closest-point queries); grid pitch ≈ stepover/2; (3) cut only
+where the dilated surface sits below the stock crown (no air cutting);
+(4) serpentine passes, stepover from a scallop-height target
+(s ≈ √(8·r·h)); (5) `Move[]` IR out, G94, entry-safety convention
+(travel at height, descend at destination); preview + estimate pick it
+up as ordinary moves.
+
+**Phase C — 4-axis relief** — the same core in the unwrapped (x, θ)
+frame: dexel r(x,θ) = surface radius per cell (rays outward from the
+rotation axis; BVH-accelerated), same dilation (unwrap distortion is
+small while tool ≪ stock radius — carry a small safety margin until cuts
+say otherwise), stock = the bar (cut below stock radius only). Three
+path strategies, all through the existing spiral-family emission:
+- **horizontal** (default): cut along X at real feed, rapid the A step —
+  time spent in fast linear motion;
+- **vertical**: continuous A cutting — every coordinated move runs G93
+  and clamps at the ~6.6 RPM rotary ceiling (one full wrap ≈ 9s floor);
+- **spiral wrap**: X advancing continuously while A turns — the strategy
+  Makera does NOT have, and our G93 machinery already cuts it.
+Blocked-cell reporting: cells the dexel cannot reach (radial shadow,
+normal ∥ X) are REPORTED ("these cells are unreachable: …"), never left
+as silent mystery material. Cylinder stock + on-axis model only.
+
+**Phase D (later, exactness)** — machine-frame gouge + shank/holder
+collision validation per pose (three-mesh-bvh `closestPointToGeometry`
+against a ball+shank+holder tool mesh); classifies blocked cells
+(shadow / collision / normal-parallel-to-X). Prototype torture part: a
+sphere offset from the rotation axis (star-shaped cells, a genuine
+radial shadow, shaft-clearance grazing — all in one STL).
+
+**Architecture rules for all phases:** the heavy core is PURE
+functions (grid in → Move[] out) so vitest covers it without worker
+harnesses; the Web Worker is a thin shell streaming progress + preview
+points (the dexel grid is this app's first genuinely heavy computation
+— ~300k raycasts on a fine grid). Generators emit Move[] IR only —
+NEVER G-code strings; G93 inverse-time with F on every line for any
+A+linear move, A accumulates with G92.4 wrapping, cutting feeds clamp
+at the rotary ceiling — all pinned facts, all owned by the post.
+License: three-mesh-bvh MIT ✓; **kiri-moto MIT ✓ (verified 2026-10-24 —
+a browser-native CAM engine we are ALLOWED to read: point the cam-kernel
+agent at its slicing/offset/gouge patterns)**; OpenCAMLib stays parked
+(LGPL WASM port is a project in itself; nothing above needs it).
+Honest limits on the box: 3-axis recreates only the reachable surface
+(no undercuts, period); 4-axis heals most overhangs but not
+normal-∥-X surfaces nor concavities narrower than the tool; fine-pitch
+4-axis relief at the rotary ceiling is SLOW — surface an honest time
+estimate before anyone commits a 3-hour bar.
+
+**Open for the build session:** 4-axis roughing strategy (face the
+cylinder + finish directly into round stock, vs. an unwrapped-frame
+waterline rough); adaptive Δz levels; slope-split finishing; how the
+long-running worker integrates with the recalc/preview pipeline.
 
 ## License policy (hard rule)
 

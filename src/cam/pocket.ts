@@ -15,11 +15,30 @@ export interface PocketResult {
   levels: number;
   /** total clearing loops cut (levels × inset passes × loops) */
   passes: number;
-  /** cutting time estimate, minutes (excludes rapids) */
+  /** clearing time estimate, minutes (excludes rapids) */
   estimatedMinutes: number;
+  /**
+   * Loops dropped by `opts.minLoopPerimeter` (summed over levels). The
+   * caller decides whether that is worth reporting; 0 when no threshold.
+   */
+  droppedLoops: number;
 }
 
-export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
+export interface PocketOptions {
+  /**
+   * Drop closed clearing passes whose perimeter is below this, mm. A pass
+   * shorter than the tool's own diameter spends more time plunging than
+   * cutting, and removes at most a lens narrower than the tool — a
+   * sliver of a pinched region (wall-tessellation noise on a near-exact
+   * fit), not a shape anyone asked for. The stock it would have taken
+   * stays standing, thinner than the tool can usefully reach. Roughing
+   * ops want this; a pocket small enough to need sub-tool-Ø loops is
+   * really a "does not fit" the caller should surface instead.
+   */
+  minLoopPerimeter?: number;
+}
+
+export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): PocketResult {
   if (op.regions.length === 0) throw new Error('pocket needs at least one region contour');
   // top == floor is legal: a single level at the floor (finishing pass,
   // where roughing already removed everything above)
@@ -40,6 +59,7 @@ export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
   let cur: Vec2 | null = null;
   let passes = 0;
   let minutes = 0;
+  let droppedLoops = 0;
 
   for (const levelZ of levels) {
     // passes from the wall inward in stepOver increments, until the region
@@ -49,6 +69,20 @@ export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
       if (loops.length === 0) break;
 
       for (const raw of loops) {
+        // a closed pass shorter than the threshold is pinch noise, not
+        // clearing (see PocketOptions.minLoopPerimeter)
+        if (opts.minLoopPerimeter !== undefined) {
+          let perim = 0;
+          for (let i = 0; i < raw.length; i++) {
+            const p = raw[i];
+            const q = raw[(i + 1) % raw.length];
+            perim += Math.hypot(q.x - p.x, q.y - p.y);
+          }
+          if (perim < opts.minLoopPerimeter) {
+            droppedLoops++;
+            continue;
+          }
+        }
         const loop = rotateToNearest(raw, cur);
         const start = loop[0];
 
@@ -86,5 +120,5 @@ export function pocket2d(op: PocketOp, tool: Tool): PocketResult {
     }
   }
 
-  return { moves, levels: levels.length, passes, estimatedMinutes: minutes };
+  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, droppedLoops };
 }

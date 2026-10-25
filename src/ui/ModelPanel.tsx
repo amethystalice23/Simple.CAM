@@ -20,6 +20,10 @@ interface Props {
   onPrimitiveChange: (p: Primitive) => void;
   /** remove one primitive by id (the row's ✕) */
   onDeletePrimitive: (id: string) => void;
+  /** non-null when the mesh was too fine for full-res feature detection —
+   * says picking runs on a simplified copy (display and cutting are
+   * untouched) */
+  detectionNote: string | null;
   onAddPrimitive: (kind: 'cylinder' | 'box') => void;
   /** the artwork ⇩ Ø pick: armed for the SELECTED artwork, next viewport
    * click on a circular feature becomes its wrap Ø */
@@ -146,6 +150,7 @@ export function ModelPanel(props: Props) {
               </button>
             </div>
           )}
+          {props.detectionNote && <p className="hint">{props.detectionNote}</p>}
           {primitives.map((p) => (
             <div
               key={p.id}

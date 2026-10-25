@@ -43,6 +43,19 @@ pass — the detail features are ignored until a finishing op consumes them.
 Input: the placed model as a triangle soup (three.js BufferGeometry,
 non-indexed). Work in machine coordinates, after ModelTransform.
 
+### Size floor + fine-mesh cap (Alice's rules, 2026-10-25)
+
+- **0.1mm minimum feature size** (`MIN_FEATURE_SIZE_MM`): planes, circles,
+  and edges under 0.1mm are NEVER emitted — "we are never going to need to
+  select any feature smaller than 0.1mm". Unconditional, every mesh; dropped
+  planes re-base planeLoops indices and blank their faceToPlane cells.
+- **100k-triangle decimation cap** (`src/cam/decimate.ts`): above it,
+  detection runs on a vertex-clustered copy (target ≤50k tris) — flat
+  fields weld into genuinely planar patches, which is exactly what picking
+  wants on a fine relief (scan/coin class). The viewport and every
+  generator keep the full-resolution mesh; only the picking pipeline
+  (sources, overlays, snaps, primitive sizing) sees the copy.
+
 ### Face grouping into planes
 
 - Compute face normals.

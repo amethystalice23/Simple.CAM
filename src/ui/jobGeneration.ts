@@ -16,6 +16,7 @@ import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
+import { waterlineRough } from '../cam/waterline';
 import { difference, offsetInward, offsetOutward } from '../cam/clipper';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
@@ -96,6 +97,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
   { kind: 'slicePocket', label: 'Slice pocket' },
+  { kind: 'waterline', label: 'Waterline rough (3D)' },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'cylChamfer', label: 'Cylinder chamfer (4-axis)', rotaryOnly: true },
@@ -240,6 +242,24 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepOver: defaultStepOver(tool),
         floorFeatureId: null,
         clearToStock: false, // outline ring only unless asked
+        tabs: null, // bridges only when cutting a part out
+      };
+    case 'waterline':
+      // a ROUGH op by charter (PLAN.md Phase A): default stock left for the
+      // finishing op that follows — 0 cut-to-size is a deliberate choice.
+      // margin null = derive the tool Ø + allowance at generation (job files
+      // stay tool-agnostic, like facing's step-over)
+      return {
+        ...base,
+        kind,
+        allowance: 0.2,
+        // floored at 0.5mm: several presets say 0.2, and a step-down equal
+        // to the 0.2 allowance self-skips every level (allowance ≥
+        // step-down) — the op would silently degenerate to a single pass
+        stepDown: Math.max(stepDown, 0.5),
+        stepOver: defaultStepOver(tool),
+        margin: null,
+        tabs: null, // rimless-relief bridges only when asked
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
@@ -265,6 +285,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         side: 'outside',
         floorFeatureId: null,
         clearToStock: false, // outline ring only unless asked
+        tabs: null, // bridges only when cutting a part out
       };
   }
 }
@@ -1104,6 +1125,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             topZ: range.topZ,
             floorZ: range.floorZ,
             stepDown: op.stepDown,
+            tabs: op.tabs ?? undefined,
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
@@ -1132,7 +1154,104 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           moves,
           minutes,
           error: null,
-          summary: sliceSummary(op, range, passes, minutes, dropped, 'profile') + wasteNote,
+          summary:
+            sliceSummary(op, range, passes, minutes, dropped, 'profile') +
+            (op.tabs ? `, ${op.tabs.count} tab(s)` : '') +
+            wasteNote +
+            (ring.warnings.length > 0 ? ` · ${ring.warnings.join(' · ')}` : ''),
+        };
+      }
+      case 'waterline': {
+        // Phase A 3D relief roughing (PLAN.md): the whole loaded model is the
+        // target — no selection, no depth boxes. Constant-Z waterline levels
+        // from the stock crown down to the model floor, each level clearing
+        // the stock footprint minus the model's cross-section at the cut
+        // plane (src/cam/waterline.ts owns the math).
+        if (!ctx.geometry) return fail('needs a loaded model — the rough targets it');
+        const crown = stockTopZ(ctx.stock);
+        const stockBottom = stockSpan(ctx.stock, 'z')[0];
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
+        const positions = rotate
+          ? (() => {
+              const out = new Float32Array(positions0.length);
+              for (let i = 0; i < positions0.length; i += 3) {
+                const v = rotate({
+                  x: positions0[i],
+                  y: positions0[i + 1],
+                  z: positions0[i + 2],
+                });
+                out[i] = v.x;
+                out[i + 1] = v.y;
+                out[i + 2] = v.z;
+              }
+              return out;
+            })()
+          : positions0;
+        // model extent in the cutting frame: the ladder runs crown → model
+        // floor, clamped at the stock bottom (below it is the fixture)
+        let modelMinZ = Infinity;
+        let modelMaxZ = -Infinity;
+        for (let i = 2; i < positions.length; i += 3) {
+          if (positions[i] < modelMinZ) modelMinZ = positions[i];
+          if (positions[i] > modelMaxZ) modelMaxZ = positions[i];
+        }
+        const floorZ = Math.max(modelMinZ, stockBottom);
+        const setup: string[] = [];
+        if (modelMinZ < stockBottom - 1e-9) {
+          setup.push(
+            `model extends ${(stockBottom - modelMinZ).toFixed(1)}mm below the stock bottom — roughing stops at the bottom`,
+          );
+        }
+        if (modelMaxZ > crown + 1e-9) {
+          setup.push(
+            `model rises ${(modelMaxZ - crown).toFixed(1)}mm above the stock crown — the excess is left as-is`,
+          );
+        }
+        const res = waterlineRough({
+          positions,
+          footprint: stockFootprint(ctx.stock, ctx.datumAngle !== 0),
+          topZ: crown,
+          floorZ,
+          stepDown: op.stepDown,
+          stepOver: op.stepOver,
+          allowance: op.allowance,
+          // null = derive Ø + allowance + step over at generation (job files
+          // stay tool-agnostic): the moat is two tool passes wide, so its
+          // tool-center track keeps a step-over of width even at the
+          // widest-section level where the model-vs-silhouette gap
+          // collapses to wall-tessellation noise — exactly one pass wide
+          // (Ø + allowance alone) shatters into plunge-per-sliver arcs there
+          margin: op.margin ?? tool.diameter + op.allowance + op.stepOver,
+          // rimless-relief bridges: keep-out boxes below floor+allowance+height
+          tabs: op.tabs ?? undefined,
+          tool,
+          feed,
+          plungeFeed,
+          safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+        });
+        if (res.moves.length === 0) {
+          return fail(
+            'nothing to rough — the model already fills the stock footprint down to its floor',
+          );
+        }
+        const deepest = res.levels[res.levels.length - 1];
+        const notes = [...setup, ...res.warnings];
+        if (res.droppedChains > 0) {
+          notes.push(`${res.droppedChains} open chain(s) dropped — broken mesh, some levels incomplete`);
+        }
+        return {
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
+          error: null,
+          summary:
+            `${res.levels.length} waterline level(s), ${res.passes} passes, ` +
+            `z${crown.toFixed(1)} → z${deepest.toFixed(1)}` +
+            (res.skippedLevels > 0 ? `, ${res.skippedLevels} level(s) skipped` : '') +
+            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+            (op.tabs ? `, ${op.tabs.count} tab(s)` : '') +
+            `, ~${res.estimatedMinutes.toFixed(1)} min` +
+            (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
       }
       case 'drill': {
@@ -1226,6 +1345,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             topZ: range.topZ,
             floorZ: range.floorZ, // floor raised by the same allowance
             stepDown: op.stepDown,
+            tabs: op.tabs ?? undefined,
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
@@ -1255,8 +1375,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+            (op.tabs ? `, ${op.tabs.count} tab(s)` : '') +
             `, ~${minutes.toFixed(1)} min` +
-            wasteNote,
+            wasteNote +
+            (res.warnings.length > 0 ? ` · ${res.warnings.join(' · ')}` : ''),
         };
       }
 

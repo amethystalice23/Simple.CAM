@@ -177,4 +177,66 @@ describe('Carvera multi-op post', () => {
       .filter((l) => /\bZ[-\d.]/.test(l) && /\b[XYA][-.\d]/.test(l));
     expect(diagonals).toEqual([]);
   });
+
+  it('positions the rotary centerline (G0 Y0) in 4-axis jobs, after the datum and every tool change', () => {
+    // 2026-10-25 field report: two users, both controllers — after the
+    // tool swap/length-measure/4th-axis-probe start cycle the machine
+    // traversed X but never Y and cut in mid air. Wrapped ops live in
+    // the X-Z-A frame (Y is constant at the centerline and NEVER
+    // appears in the body), so the file must establish Y itself:
+    // Studio's Stage1/Turned exports emit `G0 Y0` at every
+    // centerline-riding toolpath start, and the controller's own cycles
+    // are what knock Y off it in between.
+    const rotary = [
+      {
+        words: { x: 0, z: 30 },
+        feed: 0,
+        rapid: true,
+        spindleRpm: 18000,
+        op: { number: 1, name: 'Face', toolNumber: 1 },
+      },
+      { words: { z: 24, a: 90 }, feed: 26.4, op: { number: 1, name: 'Face', toolNumber: 1 } },
+      {
+        words: { x: 0, z: 30 },
+        feed: 0,
+        rapid: true,
+        spindleRpm: 12000,
+        op: { number: 2, name: 'Chamfer', toolNumber: 2 },
+      },
+      { words: { z: 25, a: 120 }, feed: 30, op: { number: 2, name: 'Chamfer', toolNumber: 2 } },
+    ];
+
+    const gcode = postCarvera({
+      moves: rotary,
+      tools,
+      toolNumbers: [1, 2],
+      options: { jobName: 'rotary-y0' },
+    });
+    const lines = gcode.split('\n');
+
+    // the header datum is immediately followed by the centerline rapid
+    const datum = lines.findIndex((l) => l === 'G92.4 A0 R0');
+    expect(datum).toBeGreaterThan(-1);
+    expect(lines[datum + 1]).toBe('G0 Y0');
+
+    // the mid-file tool change re-establishes it — and BEFORE any other
+    // motion, so the op's own travel never runs off-centerline
+    const m6 = lines.findIndex((l) => l === 'T2 M6');
+    expect(m6).toBeGreaterThan(-1);
+    const after = lines.slice(m6 + 1);
+    const firstMotion = after.findIndex((l) => /^G[01][^0-9]/.test(l));
+    expect(after[firstMotion]).toBe('G0 Y0');
+
+    // 3-axis files never carry the line: nothing rides a centerline
+    const flat = postCarvera({
+      moves: [
+        { words: { x: 5, y: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op: { number: 1, name: 'Pocket', toolNumber: 1 } },
+        { words: { z: -1 }, feed: 200, op: { number: 1, name: 'Pocket', toolNumber: 1 } },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'flat-no-y0' },
+    });
+    expect(flat).not.toContain('G0 Y0');
+  });
 });

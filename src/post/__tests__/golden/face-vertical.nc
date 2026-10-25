@@ -6,6 +6,7 @@
 ; verify 4th-axis Z datum (stock-center, Z1-probed) matches the job stock calibration
 G90 G21
 G92.4 A0 R0
+G0 Y0
 G0 X0 ; pass 1/3 depth 2.000mm radial — 9 rings
 G0 Z30
 G1 Z23 F300 ; plunge 2.000mm radial

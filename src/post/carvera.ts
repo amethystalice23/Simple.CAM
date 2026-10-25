@@ -130,6 +130,18 @@ export function postCarvera(input: PostInput): string {
   lines.push('G90 G21');
   if (anyA) {
     lines.push('G92.4 A0 R0');
+    // Position the rotary centerline EXPLICITLY — never trust ambient Y.
+    // Wrapped ops work purely in the X-Z-A frame (Y is constant at the
+    // centerline, so no Y word appears in the whole body), but the
+    // controller's own start cycle moves Y off it: tool swap, length
+    // measure, and the 4th-axis Z probe each jog X/Y/Z out and "back",
+    // and the return is not guaranteed to land on the centerline. Without
+    // this line the machine cut beside the stock in mid air, exactly
+    // when a probe cycle had touched Y (2026-10-25 field report, two
+    // controllers). Studio's own 4-axis exports emit `G0 Y0` at every
+    // centerline-riding toolpath start (Stage1/Turned corpus files) —
+    // only their fixed-A "flat" ops position Y continuously instead.
+    lines.push('G0 Y0');
   }
 
   // ---- moves ----
@@ -212,6 +224,14 @@ export function postCarvera(input: PostInput): string {
             lines.push('');
             lines.push(`T${currentToolNum} M6`);
             lines.push('');
+
+            // The swap+length-measure cycle moved Y off the rotary
+            // centerline (see the header's G0 Y0) — re-establish it
+            // before this op's body, which never commands Y itself
+            if (anyA) {
+              lines.push('G0 Y0');
+              lines.push('');
+            }
 
             // Reset spindle state to force S M3 re-emission even if RPM is unchanged
             st.lastSpindle = -1;
