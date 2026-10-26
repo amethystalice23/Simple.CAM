@@ -534,6 +534,15 @@ GOUGE (removed deeper than the step-down, or by any RAPID — "removed,
 just not intentionally"), RED COLLISION (shank contact on standing
 material: not removed, move counted once). Per-move step-down threads
 from the owning op (App.simStepDown; drill → peckDepth; 0 = one pitch).
+The shank solid uses the tool's REAL fields — `shaftDiameter` (default
+cutter Ø), `fluteLength`, `overallLength` (default +30) — so red contact
+is the actual holder-vs-stock clearance, not a phantom fat shank; and
+the shank is BANDS, not one cylinder (Alice's 2026-10-26 T-slot
+groundwork: "a head wider than the shaft") — the optional
+`headDiameter`/`headLength` fields carry an undercutting head directly
+above the flute with the slimmer shaft continuing above it, no tool
+type sets them yet; `shankRadius`/`shankTop` span the whole profile so
+the kernel's pose AABB covers the head.
 **The standing surface follows the pose's FAMILY (2026-10-26, her
 two-waterline + 90°-index report: the second op's deliberate passes
 painted ALL yellow):** a tool lying along ±Y (a ±90°-indexed op) reads

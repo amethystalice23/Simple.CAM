@@ -142,4 +142,40 @@ describe('buildToolSpec', () => {
     expect(s.inside(20.001, 0)).toBe(false);
     expect(s.bounds()).toEqual([-3, 3, -3, 3, 0, 20]);
   });
+
+  it('undercutting head band: a T-slot-style head wider than the shaft contacts out to the head, then the slimmer shaft above it', () => {
+    // Alice's 2026-10-26 groundwork: "T slot undercutting bits that have a
+    // head wider than the shaft" — the shank profile is BANDS: the wide head
+    // directly above the flute (headDiameter/headLength), the slimmer shaft
+    // continuing above it. shankRadius/shankTop span the WHOLE solid so the
+    // kernel's pose AABB covers the head too.
+    const s = buildToolSpec(
+      tool({
+        type: 'flat',
+        diameter: 3,
+        fluteLength: 10,
+        shaftDiameter: 4,
+        headDiameter: 10,
+        headLength: 3,
+        overallLength: 40,
+      }),
+    );
+    expect(s.shankRadius).toBe(5); // the HEAD radius, wider than the shaft's 2
+    expect(s.shankTop).toBe(40);
+    // inside the head band (z 10..13): contact within 5, not at 5.01
+    expect(s.shankInside(11, 24.99)).toBe(true);
+    expect(s.shankInside(11, 25)).toBe(true);
+    expect(s.shankInside(11, 25.01)).toBe(false);
+    expect(s.shankInside(10, 0)).toBe(false); // flute top is exclusive to the band
+    // above the head (z > 13): the shaft's slimmer radius 2 rules again
+    expect(s.shankInside(14, 3.99)).toBe(true);
+    expect(s.shankInside(14, 4.01)).toBe(false);
+    expect(s.shankInside(40, 0)).toBe(true); // shankTop inclusive
+    expect(s.shankInside(40.001, 0)).toBe(false);
+    // without head fields: the plain single-band shaft behaves as before
+    const plain = buildToolSpec(tool({ type: 'flat', diameter: 3, fluteLength: 10, shaftDiameter: 4, overallLength: 40 }));
+    expect(plain.shankRadius).toBe(2);
+    expect(plain.shankInside(14, 4.01)).toBe(false);
+    expect(plain.shankInside(14, 3.99)).toBe(true);
+  });
 });

@@ -21,6 +21,16 @@ export interface Tool {
   cornerRadius?: number;
   /** shank diameter, mm */
   shaftDiameter?: number;
+  /**
+   * UNDERCUTTING/T-SLOT HEAD, mm — the wide cutting head some bits carry
+   * just above the flute (a T-slot cutter: head wider than the shaft). The
+   * carve simulator models it as a contact band above the flute (collision
+   * honesty — her 2026-10-26 ask: "a head wider than the shaft"); no tool
+   * type sets it yet.
+   */
+  headDiameter?: number;
+  /** head length above the flute, mm — see headDiameter */
+  headLength?: number;
   /** flute length, mm */
   fluteLength?: number;
   /** overall length, mm */

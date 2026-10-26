@@ -33,14 +33,19 @@ export interface ToolSpec {
    *  only (byte-identical to the pre-shank specs, pinned by toolShape
    *  tests); the kernel extends its pose AABB with shankRadius/shankTop */
   bounds(): [number, number, number, number, number, number];
-  /** shank radius, mm — shaftDiameter/2, defaulting to diameter/2 */
+  /** shank radius, mm — the WIDEST shank-profile band (an undercutting
+   *  head, else shaftDiameter/2, else diameter/2): the kernel's pose AABB
+   *  extends by it so red contact scanning covers the whole solid */
   shankRadius: number;
   /** top of the shank above the tip, mm = fluteLen + shank height, where
    *  the shank height is overallLength − fluteLength when both are known,
    *  else 30 (the kernel's pose AABB clamps to the grid anyway) */
   shankTop: number;
-  /** shank CONTACT test (red collision — never removal): z strictly above
-   *  the flute, up to shankTop, within shankRadius */
+  /** shank CONTACT test (red collision — never removal): true where any
+   *  shank-profile band [zFrom, zTo] contains z within its radius — today
+   *  the shaft cylinder above the flute, plus the optional undercutting
+   *  head band (headDiameter > shaft, Alice's 2026-10-26 T-slot groundwork:
+   *  "a head wider than the shaft") */
   shankInside(z: number, rhoSq: number): boolean;
 }
 
@@ -154,22 +159,45 @@ export function buildToolSpec(tool: Tool): ToolSpec {
   }
 }
 
-/** shank solid (red-collision contact only — never removal):
- *  radius from shaftDiameter/2 (default diameter/2), top at
- *  fluteLen + (overallLength − fluteLength) or fluteLen + 30 when the
- *  overall length is unknown (the kernel's pose AABB clamps to the grid) */
+/** shank-profile band: z ∈ (zFrom, zTo] within radius — contact-only
+ *  (red collision), never removal */
+type ShankBand = { zFrom: number; zTo: number; radius: number };
+
+/** shank solid (red-collision contact only — never removal) as BANDS above
+ *  the flute: today the shaft cylinder (radius shaftDiameter/2, default
+ *  diameter/2; top at fluteLen + (overallLength − fluteLength), or +30 when
+ *  the overall length is unknown — the kernel's pose AABB clamps to the
+ *  grid), plus the optional UNDERCUTTING HEAD a T-slot bit carries: a wide
+ *  band right above the flute (headDiameter/headLength) with the slimmer
+ *  shaft continuing above it. shankRadius = the widest band, shankTop =
+ *  the topmost — the kernel's AABB covers the whole solid. */
 function shankOf(
   tool: Tool,
   fluteLen: number,
 ): Pick<ToolSpec, 'shankRadius' | 'shankTop' | 'shankInside'> {
-  const shankRadius = (tool.shaftDiameter ?? tool.diameter) / 2;
+  const shaftRadius = (tool.shaftDiameter ?? tool.diameter) / 2;
   const shankLen = tool.overallLength !== undefined ? Math.max(0, tool.overallLength - fluteLen) : 30;
   const shankTop = fluteLen + shankLen;
+  const bands: ShankBand[] = [];
+  const headR = (tool.headDiameter ?? 0) / 2;
+  const headLen = tool.headLength ?? 0;
+  if (headR > 0 && headLen > 0) {
+    // the head sits directly above the flute; the shaft continues above it
+    bands.push({ zFrom: fluteLen, zTo: fluteLen + headLen, radius: headR });
+    if (shankTop > fluteLen + headLen) {
+      bands.push({ zFrom: fluteLen + headLen, zTo: shankTop, radius: shaftRadius });
+    }
+  } else {
+    bands.push({ zFrom: fluteLen, zTo: shankTop, radius: shaftRadius });
+  }
   return {
-    shankRadius,
-    shankTop,
+    shankRadius: Math.max(...bands.map((b) => b.radius)),
+    shankTop: Math.max(...bands.map((b) => b.zTo)),
     shankInside(z, rhoSq) {
-      return z > fluteLen && z <= shankTop && rhoSq <= shankRadius * shankRadius;
+      for (const b of bands) {
+        if (z > b.zFrom && z <= b.zTo && rhoSq <= b.radius * b.radius) return true;
+      }
+      return false;
     },
   };
 }
