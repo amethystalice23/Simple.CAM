@@ -58,6 +58,9 @@ interface Props {
   onSelectFeatures: (id: string | null) => void;
   onRecalcOne: (id: string) => void;
   onRecalcAll: () => void;
+  /** in-flight generation status ("Generating Waterline contour…"), null
+   *  when idle — recalculation is disabled while a pass runs */
+  generating?: string | null;
   /** discard all calculated toolpaths (the Clear button — ops keep their
    *  parameters, the preview + export inputs empty until recalculated) */
   onClearToolpaths: () => void;
@@ -1170,7 +1173,8 @@ export function OpsPanel(props: Props) {
                 <button
                   type="button"
                   className="icon-btn"
-                  title="Recalculate this toolpath"
+                  title={props.generating ?? 'Recalculate this toolpath'}
+                  disabled={!!props.generating}
                   onClick={(e) => {
                     e.stopPropagation();
                     props.onRecalcOne(op.id);
@@ -1296,7 +1300,12 @@ export function OpsPanel(props: Props) {
       </div>
       {props.ops.length > 0 && (
         <div className="buttons">
-          <button type="button" onClick={props.onRecalcAll}>
+          {props.generating && (
+            <span className="hint generating" title="Heavy operations run in a background worker — the app stays responsive">
+              {props.generating}
+            </span>
+          )}
+          <button type="button" onClick={props.onRecalcAll} disabled={!!props.generating}>
             Recalculate
           </button>
           <button

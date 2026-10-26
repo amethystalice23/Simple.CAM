@@ -43,10 +43,13 @@ import {
   generateJobOp,
   metricPitch,
   newJobOp,
+  OP_KINDS,
   prefillDepths,
   seedJobOpIds,
   type GeneratedOp,
 } from './jobGeneration';
+import { isHeavyGenOp } from './genWorkerProtocol';
+import { GEN_CANCELLED, useGenWorker } from './useGenWorker';
 import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import { stockTopZ } from './placement';
@@ -119,6 +122,11 @@ export function App() {
   /** the carve simulator hook — chunk meshes flow to the Viewport while
    *  the dialog runs; cleared (dispose) on exit */
   const carveSim = useCarveSim();
+  /** the generation worker — heavy ops (waterline/raster/slice-pocket)
+   *  run off-thread so a fine mesh never freezes the UI; light ops stay
+   *  inline. `genNote` is the in-flight status line ("Generating …"). */
+  const genWorker = useGenWorker();
+  const [genNote, setGenNote] = useState<string | null>(null);
   /** ops whose toolpath is hidden from the preview (the export dialog
    * selects the ops that go into the .nc separately) */
   const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
@@ -701,18 +709,71 @@ export function App() {
     if (generated) updateJobOutput(generated, next);
   };
 
-  const recalcAll = () => {
+  /** one heavy op through the worker — or the op's error result, never a
+   *  thrown exception (a broken worker must be visible per-op, not a
+   *  hung or dead pass). Returns null when the pass was superseded. */
+  const generateOffThread = async (
+    token: number,
+    op: JobOp,
+    a: number,
+    datum: number,
+    prevRpm: number | undefined,
+    /** progress position for the status line, e.g. "op 3/7" */
+    where?: string,
+  ): Promise<GeneratedOp | null> => {
+    const label = OP_KINDS.find((k) => k.kind === op.kind)?.label ?? op.kind;
+    setGenNote(`Generating ${label}${where ? ` (${where})` : ''}…`);
+    try {
+      const result = await genWorker.generate(geometry!, {
+        op,
+        ops,
+        stock,
+        transform,
+        tools,
+        primitives,
+        features,
+        datumAngle: datum,
+        startA: a,
+        prevRpm,
+      });
+      return genWorker.currentToken() === token ? result : null;
+    } catch (err) {
+      if (err instanceof Error && err.message === GEN_CANCELLED) return null;
+      return {
+        moves: [],
+        minutes: 0,
+        error: err instanceof Error ? err.message : String(err),
+        summary: null,
+        finalA: a,
+      };
+    }
+  };
+
+  const recalcAll = async () => {
+    const token = genWorker.beginPass();
     const next: Record<string, GeneratedOp> = {};
     let datum = 0; // Index ops establish the datum for the ops after them
     let a = 0; // the machine's accumulated A — ops continue from the last
     let prevRpm: number | undefined; // the running spindle speed
+    let index = 0;
     for (const o of ops) {
-      next[o.id] = generateJobOp(o, { ...genCtx, datumAngle: datum, startA: a, prevRpm });
-      a = next[o.id].finalA;
+      index++;
+      if (genWorker.currentToken() !== token) return; // superseded mid-walk
+      let result: GeneratedOp | null;
+      if (isHeavyGenOp(o) && geometry) {
+        result = await generateOffThread(token, o, a, datum, prevRpm, `op ${index}/${ops.length}`);
+        if (result === null) return; // superseded while the worker ran
+      } else {
+        result = generateJobOp(o, { ...genCtx, datumAngle: datum, startA: a, prevRpm });
+      }
+      next[o.id] = result;
+      a = result.finalA;
       // ops that stamp nothing (index) carry the previous spindle state through
-      prevRpm = next[o.id].spindleRpm ?? prevRpm;
+      prevRpm = result.spindleRpm ?? prevRpm;
       if (o.kind === 'index') datum = o.angle;
     }
+    setGenNote(null);
+    if (genWorker.currentToken() !== token) return; // superseded at the wire
     for (const o of ops) {
       if (next[o.id].error) console.warn(`[simple.cam] op "${o.kind}" failed: ${next[o.id].error}`);
     }
@@ -726,9 +787,10 @@ export function App() {
     setError(null);
   };
 
-  const recalcOne = (id: string) => {
+  const recalcOne = async (id: string) => {
     const op = ops.find((o) => o.id === id);
     if (!op) return;
+    const token = genWorker.beginPass();
     // continue from the nearest previously-generated op's A, so a lone
     // recalculation lands where the machine would actually be; the spindle
     // state rides back the same way (index ops carry the previous speed
@@ -746,12 +808,15 @@ export function App() {
       if (prevRpm === undefined) prevRpm = g.spindleRpm;
       if (haveStartA && prevRpm !== undefined) break;
     }
-    const result = generateJobOp(op, {
-      ...genCtx,
-      datumAngle: datumAngleBefore(ops, id),
-      startA,
-      prevRpm,
-    });
+    const datum = datumAngleBefore(ops, id);
+    let result: GeneratedOp | null;
+    if (isHeavyGenOp(op) && geometry) {
+      result = await generateOffThread(token, op, startA, datum, prevRpm);
+    } else {
+      result = generateJobOp(op, { ...genCtx, datumAngle: datum, startA, prevRpm });
+    }
+    if (result === null || genWorker.currentToken() !== token) return; // superseded
+    setGenNote(null);
     if (result.error) console.warn(`[simple.cam] op "${op.kind}" failed: ${result.error}`);
     const next = { ...generated, [id]: result };
     setGenerated(next);
@@ -1316,6 +1381,7 @@ export function App() {
               onSelectFeatures={toggleOpFeatures}
               onRecalcOne={recalcOne}
               onRecalcAll={recalcAll}
+              generating={genNote}
               onToggleExpanded={(id) => setExpandedOpId(expandedOpId === id ? null : id)}
               onClearToolpaths={() => {
                 setGenerated({});
@@ -1340,6 +1406,7 @@ export function App() {
           modelName={geometry ? modelName : null}
           onRecalcOne={recalcOne}
           onRecalculateAll={recalcAll}
+          generating={genNote}
           onClose={() => setShowExport(false)}
         />
       )}

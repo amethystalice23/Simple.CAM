@@ -33,8 +33,11 @@ interface Props {
    * fresh result through the generated prop */
   onRecalcOne: (id: string) => void;
   /** recalculate every op (the ops page's Recalculate All) — fresh results
-   * arrive through the generated prop, rows and totals update in place */
+   *  arrive through the generated prop, rows and totals update in place */
   onRecalculateAll: () => void;
+  /** in-flight generation status ("Generating Waterline contour…"), null
+   *  when idle — recalculation is disabled while a pass runs */
+  generating?: string | null;
   onClose: () => void;
 }
 
@@ -299,7 +302,8 @@ export function ExportDialog(props: Props) {
                 <button
                   type="button"
                   className="icon-btn"
-                  title="Recalculate this toolpath"
+                  title={props.generating ?? 'Recalculate this toolpath'}
+                  disabled={!!props.generating}
                   onClick={() => props.onRecalcOne(op.id)}
                 >
                   ↻
@@ -327,14 +331,20 @@ export function ExportDialog(props: Props) {
         </label>
 
         <div className="buttons">
-          <button
-            type="button"
-            className="secondary"
-            onClick={props.onRecalculateAll}
-            title="Regenerate every op's toolpath (same as Recalculate on the Ops tab) — rows, times, and the total update in place"
-          >
-            Recalculate All
-          </button>
+          {props.generating ? (
+            <span className="hint generating" title="Heavy operations run in a background worker — the app stays responsive">
+              {props.generating}
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="secondary"
+              onClick={props.onRecalculateAll}
+              title="Regenerate every op's toolpath (same as Recalculate on the Ops tab) — rows, times, and the total update in place"
+            >
+              Recalculate All
+            </button>
+          )}
           <button
             type="button"
             onClick={exportAndDownload}

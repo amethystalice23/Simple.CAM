@@ -460,12 +460,21 @@ unwrapped (x,θ) frame; the Web Worker hosting (generation is
 synchronous — the ~300k-raycast fine-grid case is the worker's charter);
 scallop-height step-over derivation (a plain mm knob for now).
 
-**Phase C — 4-axis relief** — the same core in the unwrapped (x, θ)
-frame: dexel r(x,θ) = surface radius per cell (rays outward from the
-rotation axis; BVH-accelerated), same dilation (unwrap distortion is
+**Phase C — 4-axis relief (rotary carve)** — the same core in the unwrapped
+(x, θ) frame: dexel r(x,θ) = surface radius per cell (rays outward from
+the rotation axis; BVH-accelerated), same dilation (unwrap distortion is
 small while tool ≪ stock radius — carry a small safety margin until cuts
-say otherwise), stock = the bar (cut below stock radius only). Three
-path strategies, all through the existing spiral-family emission:
+say otherwise), stock = the bar (cut below stock radius only). **ONE op
+does roughing AND finishing** (Alice's call, 2026-10-26): the ladder
+semantics are Makera Studio's — a COMPLETE full-wrap sweep at each depth
+level (constant cut radius, skipping cells whose model surface rises
+above the plane) before descending to the next, and the ladder ends at
+the first level with NOTHING LEFT TO CUT (the cut radius reaches the
+dilated surface everywhere — below it is the finishing pass's job, so a
+deep part legitimately takes multiple full wraps). `finishingOnly` = the
+same toggle the other ten ladder ops carry: skip the ladder, cut only
+the final surface pass. Three path strategies per sweep, all through the
+existing spiral-family emission:
 - **horizontal** (default): cut along X at real feed, rapid the A step —
   time spent in fast linear motion;
 - **vertical**: continuous A cutting — every coordinated move runs G93
@@ -475,6 +484,10 @@ path strategies, all through the existing spiral-family emission:
 Blocked-cell reporting: cells the dexel cannot reach (radial shadow,
 normal ∥ X) are REPORTED ("these cells are unreachable: …"), never left
 as silent mystery material. Cylinder stock + on-axis model only.
+Generation runs in the app's SECOND Web Worker use — the genWorker
+(relief batch, 2026-10-26) already hosts the heavy kinds; rotary carve
+joins HEAVY_GEN_KINDS (its ~300k outward raycasts are exactly the
+worker's charter).
 
 **Phase D (later, exactness)** — machine-frame gouge + shank/holder
 collision validation per pose (three-mesh-bvh `closestPointToGeometry`
