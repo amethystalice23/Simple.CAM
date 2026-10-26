@@ -76,6 +76,34 @@ export class VoxelGrid {
       this.fillCylinder(stock);
     }
 
+    // TRUE-SPAN CLIP (Alice's 2026-10-26 endcap report): the cell grid pads
+    // the stock's AABB up to whole cells, and at pitches that do not divide
+    // the stock evenly (her 0.3/0.45 over the 100mm bar) the last cells'
+    // centers sit PAST the real end — filled as phantom stock by the loops
+    // above (the cylinder fill never tests x; the box fill takes the whole
+    // grid) and unreachable by every tool (paths stay inside the stock),
+    // they rendered as a fabricated endcap standing proud of the end face
+    // while the divisor pitches stayed honest. Zero every cell whose CENTER
+    // lies outside the stock's true span: what renders is what can be cut.
+    for (let k = 0; k < this.nz; k++) {
+      const cz = sz[0] + (k + 0.5) * pitch;
+      const inZ = cz >= sz[0] && cz < sz[1];
+      for (let j = 0; j < this.ny; j++) {
+        const cy = sy[0] + (j + 0.5) * pitch;
+        const inY = cy >= sy[0] && cy < sy[1];
+        for (let i = 0; i < this.nx; i++) {
+          if (!inZ || !inY) {
+            this.occ[this.idx(i, j, k)] = 0;
+            continue;
+          }
+          const cx = sx[0] + (i + 0.5) * pitch;
+          if (!(cx >= sx[0] && cx < sx[1])) {
+            this.occ[this.idx(i, j, k)] = 0;
+          }
+        }
+      }
+    }
+
     this.columnTop = new Int32Array(this.nx * this.ny);
     this.columnBottom = new Int32Array(this.nx * this.ny);
     for (let j = 0; j < this.ny; j++) {

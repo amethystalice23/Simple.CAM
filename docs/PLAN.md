@@ -574,9 +574,26 @@ messages), and the worker posted one transferable-heavy message per
 dirty chunk per 8ms slice. Fixes: (1) Viewport keeps a built-map (chunk
 id → message object) and skips same-reference chunks — rebuilds only
 what changed; (2) the worker batches remeshed chunks ~32/message and
-gives the flush its own SLICE_MS budget per slice (leftovers stay dirty
-for later slices; `done` waits for the drain); (3) the initial
-full-stock post goes out ~64 chunks per message. SIM_BUILD b7-chunk-batch.
+gives the flush its own SLICE_MS budget per slice — checked PER CHUNK
+(the v1 between-batches check still let a ~130ms mesh burst outspend
+every 8ms carve slice; the browser run caught what the headless
+kernel pass missed); leftovers stay dirty for later slices, `done`
+waits for the drain; (3) the initial full-stock post goes out ~64
+chunks per message. Measured: the coupon#3 sim 0.1mm run completes in
+36.5s end-to-end (kernel baseline 12s). SIM_BUILD b8-flush-budget.
+**TRUE-SPAN CLIP (her four-way endcap report, same day):** the endcap
+at the +X end appears at pitches 0.3/0.45 but not 0.25/0.4/0.5 over
+the 100mm bar — exactly the non-divisor pitches, where the padded
+grid's last X-cells center PAST the end face and were filled as
+phantom stock (the cylinder fill never tests x; the box fill takes
+the whole grid). Unreachable by every tool (paths stay inside the
+stock), the whole last column rendered standing proud of the end —
+a full disc-face endcap, ~600-900mm³ fabricated vs ~38mm³ honest end
+slot at divisor pitches (probe-knight-endcap.ts pitch sweep). Fix:
+VoxelGrid zeroes every cell whose CENTER lies outside the stock's
+true span — what renders is what can be cut; the straddling-but-inside
+cells render flush within the bar. Grid-test pinned on cylinder AND
+box (all axes).
 The ghost overlay meshes per-vertex RGBA — yellow TRANSLUCENT (~0.45 —
 the voxel is gone, the cube is a ghost), red strong (~0.9 — still-solid
 contact); three.js consumes the 4-component color attribute directly.

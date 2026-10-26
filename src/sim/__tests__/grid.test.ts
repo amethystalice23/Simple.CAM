@@ -151,4 +151,48 @@ describe('VoxelGrid', () => {
     const [bx0, by0, bz0, bx1, by1, bz1] = big.chunkBounds(1);
     expect([bx0, by0, bz0, bx1, by1, bz1]).toEqual([32, 0, 0, 64, 10, 10]);
   });
+
+  it('true-span clip: a non-divisor pitch never fills cells past the stock end (the endcap artifact)', () => {
+    // Alice's 2026-10-26 four-way knight report: at pitches 0.3/0.45 over
+    // the 100mm bar the padded grid's last X-cells center PAST the end face,
+    // were filled as phantom stock (the cylinder fill never tests x), and —
+    // unreachable by every tool — rendered as a fabricated endcap standing
+    // proud of the end. Divisor pitches (0.25/0.4/0.5) stayed honest. The
+    // clip: a cell renders (and cuts) only when its CENTER is inside the
+    // stock's true span.
+    const cyl: Stock = {
+      kind: 'cylinder',
+      length: 10,
+      xOrigin: 'min',
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 5 },
+      axisMode: '4-axis',
+      materialId: 'test',
+    };
+    for (const pitch of [0.3, 0.45, 0.25, 0.4, 0.5]) {
+      const g = new VoxelGrid(cyl, pitch);
+      // no filled cell's center lies past the stock's true x span [0, 10)
+      for (let k = 0; k < g.nz; k++)
+        for (let j = 0; j < g.ny; j++)
+          for (let i = 0; i < g.nx; i++) {
+            if (!g.filled(i, j, k)) continue;
+            expect(g.originX + (i + 0.5) * pitch).toBeLessThan(10);
+          }
+      // the phantom last column (center ≥ 10) is exactly what 0.3/0.45 pad:
+      // it must now be empty while the divisor pitches' is inside anyway
+      const lastCenter = g.originX + (g.nx - 0.5) * pitch;
+      if (lastCenter >= 10) {
+        for (let k = 0; k < g.nz; k++)
+          for (let j = 0; j < g.ny; j++) expect(g.filled(g.nx - 1, j, k)).toBe(false);
+      }
+    }
+    // box stock gets the same honesty on every axis
+    const b = new VoxelGrid(boxStock(), 0.3); // 10mm box, nx = 34 → last center 10.05
+    for (let k = 0; k < b.nz; k++)
+      for (let j = 0; j < b.ny; j++) {
+        expect(b.filled(b.nx - 1, j, k)).toBe(false); // x past 10
+        for (let i = 0; i < b.nx; i++) expect(b.filled(i, b.ny - 1, k)).toBe(false); // y past 10
+      }
+    for (let i = 0; i < b.nx; i++)
+      for (let j = 0; j < b.ny; j++) expect(b.filled(i, j, b.nz - 1)).toBe(false); // z past 10
+  });
 });
