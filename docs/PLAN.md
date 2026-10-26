@@ -481,6 +481,13 @@ existing spiral-family emission:
   and clamps at the ~6.6 RPM rotary ceiling (one full wrap ≈ 9s floor);
 - **spiral wrap**: X advancing continuously while A turns — the strategy
   Makera does NOT have, and our G93 machinery already cuts it.
+  **2026-10-26 field report (Alice): NOT YET THIS — v1 emits ONE helix
+  spanning the whole axial range in a SINGLE revolution ("a quiet,
+  steeply angled curve that wiggles end to end, like string draped over
+  it"), not tight coils. The redesign, specced not built: a MULTI-COIL
+  helix, lead = stepOver per revolution, θ indexed to the sampling grid,
+  so the coils tile the surface the way the horizontal rows do. Park
+  until horizontal + vertical are validated on hardware.**
 Blocked-cell reporting: cells the dexel cannot reach (radial shadow,
 normal ∥ X) are REPORTED ("these cells are unreachable: …"), never left
 as silent mystery material. Cylinder stock + on-axis model only.
@@ -488,6 +495,17 @@ Generation runs in the app's SECOND Web Worker use — the genWorker
 (relief batch, 2026-10-26) already hosts the heavy kinds; rotary carve
 joins HEAVY_GEN_KINDS (its ~300k outward raycasts are exactly the
 worker's charter).
+**2026-10-26 field-report fixes (Alice's first run): (1) the
+blocked-cell detector originally used THREE.Raycaster.intersectObject,
+which IGNORES the boundsTree and walks every triangle per ray — 3-4
+MINUTES on the coin (both strategies; it runs before any strategy).
+Fix: MeshBVH.raycast (all hits, the same accelerated path as
+raycastFirst) → 0.4s, the raster's cost class. (2) The sweeps
+originally cut EVERY grid line (pitch = stepOver/2) — a 1.6mm step over
+cut at 0.8mm, double the passes. Fix: pass strides (rowStride/ringStride
+= round(stepOver/pitch), arc at the stock radius), the raster's stride
+convention. Also: horizontal/vertical are renamed "Rotary contour" in
+the UI (Alice's call — they ARE the raster on an unwrapped shape).**
 
 **Phase D (later, exactness)** — machine-frame gouge + shank/holder
 collision validation per pose (three-mesh-bvh `closestPointToGeometry`

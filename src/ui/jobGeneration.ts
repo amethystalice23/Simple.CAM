@@ -101,7 +101,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'waterline', label: 'Waterline contour' },
   { kind: 'rasterContour', label: 'Raster contour (3D finish)' },
-  { kind: 'rotaryCarve', label: 'Rotary carve (4-axis)', rotaryOnly: true },
+  { kind: 'rotaryCarve', label: 'Rotary contour (4-axis)', rotaryOnly: true },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'cylChamfer', label: 'Cylinder chamfer (4-axis)', rotaryOnly: true },
@@ -1468,10 +1468,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // (the datum rotation maps the part into the cutting frame).
         if (!ctx.geometry) return fail('needs a loaded model — the carve targets it');
         if (ctx.stock.kind !== 'cylinder') {
-          return fail('rotary carve needs cylinder stock (Stock tab)');
+          return fail('rotary contour needs cylinder stock (Stock tab)');
         }
         if (ctx.stock.axisMode !== '4-axis') {
-          return fail('rotary carve needs 4-axis mode (Stock tab)');
+          return fail('rotary contour needs 4-axis mode (Stock tab)');
         }
         const cal = rotaryCalibrationOf(ctx.stock);
         const [sx0, sx1] = stockSpan(ctx.stock, 'x');

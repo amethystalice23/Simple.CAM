@@ -169,14 +169,17 @@ export function buildDexelMap(
   return radii;
 }
 
-/** Material bands per material cell, for the shadow report: raycastAll
- * from outside, hits sorted by distance, merged into bands — a cell is
- * BLOCKED when material sits behind an air gap wider than
- * BLOCKED_GAP_MM: the tool meets the outer band first and this op never
- * programs a dive past an air pocket. Only material cells are probed
- * (air cells have no shadow to cast). Perf note: one all-hits raycast
- * per material cell is several single raycasts' cost — the generation
- * worker's charter, honest v1. */
+/** Material bands per material cell, for the shadow report: ALL radial
+ * hits along the ray (three-mesh-bvh `raycast` — the SAME accelerated
+ * path buildDexelMap's `raycastFirst` uses; a THREE.Raycaster here would
+ * IGNORE the boundsTree and walk every triangle per ray — the
+ * 2026-10-26 3-4-minute field report), sorted by distance, paired
+ * enter/exit into material bands — a cell is BLOCKED when material sits
+ * behind an air gap wider than BLOCKED_GAP_MM: the tool meets the outer
+ * band first and this op never programs a dive past an air pocket. Only
+ * material cells are probed (air cells have no shadow to cast);
+ * DoubleSide so inverted-winding meshes still hit (the tessellation-
+ * noise honesty the dexel map itself carries). */
 function countBlockedCells(
   positions: ArrayLike<number>,
   xMin: number,
@@ -190,24 +193,22 @@ function countBlockedCells(
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(positions), 3));
   const bvh = new MeshBVH(geo, { targetLeafSize: 1 });
-  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-  geo.boundsTree = bvh;
-  const raycaster = new THREE.Raycaster();
-  raycaster.firstHitOnly = false;
 
   let blocked = 0;
   const dTheta = (2 * Math.PI) / nTheta;
+  const ray = new THREE.Ray();
   for (let j = 0; j < nTheta; j++) {
     const theta = j * dTheta;
     const sin = Math.sin(theta);
     const cos = Math.cos(theta);
-    const ox = (radius + 10) * sin;
-    const oz = axisZ + (radius + 10) * cos;
+    // from OUTSIDE inward, the same launch point as the dexel map — a
+    // blocked cell's shadow hides strictly between the two surface hits
+    ray.direction.set(0, -sin, -cos);
+    ray.origin.set(0, (radius + 10) * sin, axisZ + (radius + 10) * cos);
     for (let i = 0; i < nx; i++) {
       if (!(radii[j * nx + i] < radius - 1e-9)) continue; // air: nothing shadowed
-      raycaster.ray.origin.set(xMin + i * pitchX, ox, oz);
-      raycaster.ray.direction.set(0, -sin, -cos);
-      const hits = raycaster.intersectObject(mesh, false);
+      ray.origin.x = xMin + i * pitchX;
+      const hits = bvh.raycast(ray, THREE.DoubleSide);
       if (hits.length < 2) continue;
       // hits alternate enter/exit on a closed manifold — pair them into
       // material bands ([h0,h1], [h2,h3], …); a gap BETWEEN pairs is real
@@ -442,17 +443,48 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     return runs;
   };
 
+  // Pass stride: rows/rings SPAN `stepOver` of real surface — the grid
+  // pitch (stepOver/2) is only the SAMPLING density (the raster's
+  // convention: its stride = round(stepOver/pitch) cuts every other
+  // grid line, leaving the odd grid line as interpolation headroom).
+  // A stride of 1 here doubled Alice's passes on the 2026-10-26 field
+  // report (1.6mm step over cut at 0.8mm).
+  const rowStride = Math.max(1, Math.round(o.stepOver / pitchX));
+  const arcPerCell = (refRadiusArc = ((2 * Math.PI * o.radius) / nTheta)) => refRadiusArc;
+  const ringStride = Math.max(
+    1,
+    Math.round(o.stepOver / arcPerCell()),
+  );
+
+  /** the θ row indices a horizontal sweep cuts: every `rowStride`-th row
+   *  around the full wrap, phase-shifted per level so successive rungs
+   *  do not re-cut the same angular tracks (a raster row's step-over
+   *  offsets its neighbor rows; here the level ladder is the neighbor) */
+  const thetaRows = (phase: number) => {
+    const out: number[] = [];
+    for (let j = phase; j < nTheta; j += rowStride) out.push(j);
+    return out;
+  };
+
+  /** the X column indices a vertical sweep cuts: every `ringStride`-th
+   *  column across the grid span */
+  const xCols = () => {
+    const out: number[] = [];
+    for (let i = 0; i < nx; i += ringStride) out.push(i);
+    return out;
+  };
+
   /** A-only feed rate at a cutting radius: the surface feed converted to
    *  deg/min, capped by the rotary ceiling (the cylChamfer contract) */
   const degPerMin = (r: number) =>
     Math.min((o.feed * 360) / (2 * Math.PI * r), ROTARY_FEED_DEG_MIN);
 
   // ------------------------------------------------------------ rough levels
-  for (const rL of levels) {
+  levels.forEach((rL, levelIndex) => {
     const cutZ = o.axisZ + rL;
     wraps++;
     if (strategy === 'horizontal') {
-      for (let j = 0; j < nTheta; j++) {
+      for (const j of thetaRows((levelIndex * rowStride) % Math.max(rowStride, 1))) {
         adv(j);
         const runs = rowRuns(rL, j);
         if (runs.length === 0) continue; // the walk still advances row by row
@@ -471,7 +503,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         retract();
       }
     } else if (strategy === 'vertical') {
-      for (let i = 0; i < nx; i++) {
+      for (const i of xCols()) {
         const runs = ringRuns(rL, i);
         if (runs.length === 0) continue;
         rows++;
@@ -515,7 +547,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       minutes += passMinutes;
       rows++;
     }
-  }
+  });
 
   // ----------------------------------------------------------- the finish
   // The surface pass follows the compensated radius per cell (allowance
@@ -527,7 +559,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
 
   if (strategy === 'horizontal') {
     let rowFlip = false;
-    for (let j = 0; j < nTheta; j++) {
+    for (const j of thetaRows(0)) {
       adv(j);
       const runs = rowRuns(null, j);
       if (runs.length === 0) continue;
@@ -567,7 +599,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       }
     }
   } else if (strategy === 'vertical') {
-    for (let i = 0; i < nx; i++) {
+    for (const i of xCols()) {
       const runs = ringRuns(null, i);
       if (runs.length === 0) continue;
       rows++;
