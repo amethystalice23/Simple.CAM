@@ -74,5 +74,10 @@ export interface SimResult {
 export type WorkerMsg =
   | { type: 'ready'; token: number; build: string; nx: number; ny: number; nz: number; pitch: number; originX: number; originY: number; originZ: number; chunkX: number; chunkY: number; chunkZ: number; totalMoves: number }
   | { type: 'chunk'; token: number; chunk: ChunkMesh }
+  /** a batch of remeshed chunks in ONE message (the 2026-10-26 coupon
+   *  crawl: one transferable-heavy post per dirty chunk per slice drowned
+   *  the main thread in per-message map copies and effect runs — batches
+   *  amortize them). Supersedes 'chunk'; the client accepts both. */
+  | { type: 'chunks'; token: number; chunks: ChunkMesh[] }
   | { type: 'progress'; token: number; move: number; totalMoves: number; removedVoxels: number }
   | { type: 'done'; token: number; result: SimResult };

@@ -108,6 +108,14 @@ export function useCarveSim(): CarveSim {
             chunks.set(msg.chunk.id, msg.chunk);
             return { ...s, chunks };
           });
+        } else if (msg.type === 'chunks') {
+          // the worker batches remeshed chunks per slice — ONE state update
+          // (one map copy + one effect run) per batch, not per chunk
+          setState((s) => {
+            const chunks = new Map(s.chunks);
+            for (const c of msg.chunks) chunks.set(c.id, c);
+            return { ...s, chunks };
+          });
         } else if (msg.type === 'progress') {
           setState((s) => ({
             ...s,

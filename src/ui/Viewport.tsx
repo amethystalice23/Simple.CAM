@@ -942,6 +942,12 @@ export function Viewport({
   /** the classification-ghost overlay material (vertexColors) — same
    *  lifecycle rules as simMatRef (never disposed mid-run) */
   const simGhostMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  /** chunk id → the message object its mesh was built from. The effect
+   *  re-runs per worker message and iterates the WHOLE chunk map; without
+   *  this it would dispose+rebuild every mesh (576 of them on the coupon)
+   *  for every single updated chunk — the "simulation won't run" crawl of
+   *  2026-10-26. A same-reference chunk is unchanged: skip. */
+  const simBuiltRef = useRef(new Map<number, import('../sim/protocol').ChunkMesh>());
   useEffect(() => {
     const datum = datumGroupRef.current;
     if (!datum) return;
@@ -957,6 +963,7 @@ export function Viewport({
       simMatRef.current = null;
       simGhostMatRef.current?.dispose();
       simGhostMatRef.current = null;
+      simBuiltRef.current.clear();
       return;
     }
     let group = simGroupRef.current;
@@ -987,6 +994,8 @@ export function Viewport({
     const mat = simMatRef.current;
     const ghostMat = simGhostMatRef.current;
     for (const [id, chunk] of simChunks) {
+      if (simBuiltRef.current.get(id) === chunk) continue; // unchanged
+      simBuiltRef.current.set(id, chunk);
       let mesh = group.children.find(
         (c) => (c as THREE.Mesh).name === `chunk-${id}`,
       ) as THREE.Mesh | undefined;

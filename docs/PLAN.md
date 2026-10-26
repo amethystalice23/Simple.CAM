@@ -554,6 +554,20 @@ worker build stamp in the Simulate progress line proves which copy is
 live (the "still opaque" yellow was a stale dev-server worker serving
 the old RGB-stride mesh to the new itemSize-4 attribute: alpha read the
 next vertex's R=255 → solid).
+**Chunk-stream batching + incremental mesh rebuild (2026-10-26, her
+coupon#3 report: "simulation won't run"):** the sim is NOT model-gated —
+the Simulate… button gates on previewMoves (recalculated toolpaths), so
+a freshly opened job greys it until Recalculate. The real failure was
+performance on the coupon's derived 0.1mm pitch (13.4M-cell grid,
+576 chunks): the Viewport effect disposed+rebuilt EVERY chunk mesh on
+EVERY per-chunk worker message (576 geometries × thousands of
+messages), and the worker posted one transferable-heavy message per
+dirty chunk per 8ms slice. Fixes: (1) Viewport keeps a built-map (chunk
+id → message object) and skips same-reference chunks — rebuilds only
+what changed; (2) the worker batches remeshed chunks ~32/message and
+gives the flush its own SLICE_MS budget per slice (leftovers stay dirty
+for later slices; `done` waits for the drain); (3) the initial
+full-stock post goes out ~64 chunks per message. SIM_BUILD b7-chunk-batch.
 The ghost overlay meshes per-vertex RGBA — yellow TRANSLUCENT (~0.45 —
 the voxel is gone, the cube is a ghost), red strong (~0.9 — still-solid
 contact); three.js consumes the 4-component color attribute directly.

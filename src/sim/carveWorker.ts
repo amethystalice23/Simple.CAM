@@ -13,7 +13,7 @@
  * once per run (re-sends just re-target, idempotent for the same target).
  */
 
-import type { ClientMsg, WorkerMsg } from './protocol';
+import type { ChunkMesh, ClientMsg, WorkerMsg } from './protocol';
 import { VoxelGrid } from './grid';
 import { buildToolSpec, type ToolSpec } from './toolShape';
 import { movesToPoses, type Pose } from './poses';
@@ -25,7 +25,16 @@ import type { Stock, Tool } from '../core/types';
 /** build stamp — the `ready` message carries it so the client can PROVE
  *  which worker version is running (the 2026-10-25 gaps debugging: a
  *  stale dev-server worker copy was a live suspect) */
-const SIM_BUILD = 'b6-quadrants';
+const SIM_BUILD = 'b8-flush-budget';
+
+/** cooperative-slice budget, ms — carving AND mesh flushing each stay
+ *  within one of these per slice so neither starves the message queue
+ *  (the 2026-10-26 coupon crawl: unbounded per-slice remeshing of a
+ *  576-chunk grid) */
+const SLICE_MS = 8;
+/** chunks per batched `chunks` message (each ~4ms to mesh on a 32³ grid —
+ *  the budget loop checks between batches) */
+const CHUNK_BATCH = 32;
 
 interface RunState {
   token: number;
@@ -53,52 +62,76 @@ const post = (msg: WorkerMsg, transfer: Transferable[] = []) =>
   // DOM lib types postMessage(message, targetOrigin) — the worker's
   // (message, transfer[]) form matches the runtime; options overload is
   // the closest declared signature
-  self.postMessage(msg, { transfer });/** mesh a chunk and post it (shared by full-mesh dumps and dirty flushes);
- *  the chunk's classification ghosts (yellow/red) ride along */
-function postChunk(r: RunState, id: number) {
+  self.postMessage(msg, { transfer });
+/** mesh ONE dirty chunk (clearing its flag) into a message payload + its
+ * transferables; the classification ghosts (yellow/red) ride along */
+function meshChunk(r: RunState, id: number): { chunk: ChunkMesh; transfer: Transferable[] } {
   const geom = greedyMeshChunk(r.grid, id);
   const ghost = ghostMeshChunk(r.grid, id);
   r.grid.clearChunkDirty(id);
   const hasGhost = ghost.indices.length > 0;
-  post(
-    {
-      token: r.token,
-      type: 'chunk',
-      chunk: {
-        id,
-        positions: geom.positions,
-        normals: geom.normals,
-        indices: geom.indices,
-        ...(hasGhost
-          ? {
-              ghostPositions: ghost.positions,
-              ghostNormals: ghost.normals,
-              ghostColors: ghost.colors,
-              ghostIndices: ghost.indices,
-            }
-          : {}),
-      },
+  const transfer: Transferable[] = [geom.positions.buffer, geom.normals.buffer, geom.indices.buffer];
+  if (hasGhost) {
+    transfer.push(
+      ghost.positions.buffer,
+      ghost.normals.buffer,
+      ghost.colors.buffer,
+      ghost.indices.buffer,
+    );
+  }
+  return {
+    chunk: {
+      id,
+      positions: geom.positions,
+      normals: geom.normals,
+      indices: geom.indices,
+      ...(hasGhost
+        ? {
+            ghostPositions: ghost.positions,
+            ghostNormals: ghost.normals,
+            ghostColors: ghost.colors,
+            ghostIndices: ghost.indices,
+          }
+        : {}),
     },
-    hasGhost
-      ? [
-          geom.positions.buffer,
-          geom.normals.buffer,
-          geom.indices.buffer,
-          ghost.positions.buffer,
-          ghost.normals.buffer,
-          ghost.colors.buffer,
-          ghost.indices.buffer,
-        ]
-      : [geom.positions.buffer, geom.normals.buffer, geom.indices.buffer],
-  );
+    transfer,
+  };
 }
 
-/** re-mesh every dirty chunk (carve updates) */
-function flushChunks(r: RunState) {
-  for (const id of r.grid.dirtyChunkIds()) postChunk(r, id);
+/** post a batch of pre-meshed chunks in ONE message — one post per dirty
+ * chunk per slice drowned the main thread in per-message map copies and
+ * effect runs (the 2026-10-26 coupon crawl) */
+function postChunks(r: RunState, batch: { chunk: ChunkMesh; transfer: Transferable[] }[]) {
+  if (batch.length === 0) return;
+  const chunks: ChunkMesh[] = batch.map((b) => b.chunk);
+  const transfer: Transferable[] = batch.flatMap((b) => b.transfer);
+  post({ token: r.token, type: 'chunks', chunks }, transfer);
 }
 
-/** one cooperative slice: ≤ ~8ms of carving, then flush + progress */
+/** re-mesh dirty chunks within a meshing budget, checked PER CHUNK — the
+ * v1 budget checked between whole 32-chunk batches, so each 8ms carve
+ * slice still paid a ~130ms meshing burst and the coupon's 12s carve
+ * became minutes. Whatever doesn't fit stays dirty for a later slice;
+ * the visual stream lags a little, the message queue never starves.
+ * Returns the chunks still pending. */
+function flushChunks(r: RunState, budgetMs: number): number {
+  const ids = r.grid.dirtyChunkIds();
+  const t0 = performance.now();
+  let batch: { chunk: ChunkMesh; transfer: Transferable[] }[] = [];
+  let i = 0;
+  for (; i < ids.length; i++) {
+    batch.push(meshChunk(r, ids[i]));
+    if (batch.length >= CHUNK_BATCH) {
+      postChunks(r, batch);
+      batch = [];
+    }
+    if (performance.now() - t0 > budgetMs) break;
+  }
+  postChunks(r, batch);
+  return ids.length - i;
+}
+
+/** one cooperative slice: ≤ SLICE_MS of carving, then a budgeted flush */
 function slice(r: RunState) {
   const t0 = performance.now();
   while (r.cursor < r.poses.length) {
@@ -106,9 +139,9 @@ function slice(r: RunState) {
     if (p.moveIndex > r.target) break;
     carvePoses(r.grid, r.specs, [p], r.stats, r.moveStepDown);
     r.cursor++;
-    if (performance.now() - t0 > 8) break;
+    if (performance.now() - t0 > SLICE_MS) break;
   }
-  flushChunks(r);
+  const pending = flushChunks(r, SLICE_MS);
   const total = r.poses.length ? r.poses[r.poses.length - 1].moveIndex + 1 : 0;
   const atEnd = r.cursor >= r.poses.length;
   post({
@@ -118,7 +151,7 @@ function slice(r: RunState) {
     totalMoves: total,
     removedVoxels: r.stats.removed,
   });
-  if (atEnd) {
+  if (atEnd && pending === 0) {
     post({
       type: 'done',
       token: r.token,
@@ -205,8 +238,19 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
     // whole remaining stock, and carve updates replace chunks as they're
     // touched. Without this, only tool-touched chunks render and untouched
     // material is missing from the display entirely (the "gaps" regression
-    // — the grid was always right; the POSTED chunk set wasn't).
-    for (const id of allChunkIds(grid)) postChunk(run, id);
+    // — the grid was always right; the POSTED chunk set wasn't). Batched —
+    // a 576-chunk grid as ~9 messages, not 576.
+    {
+      let batch: { chunk: ChunkMesh; transfer: Transferable[] }[] = [];
+      for (const id of allChunkIds(grid)) {
+        batch.push(meshChunk(run, id));
+        if (batch.length >= 64) {
+          postChunks(run, batch);
+          batch = [];
+        }
+      }
+      postChunks(run, batch);
+    }
     return;
   }
   if (!run) return;
@@ -226,8 +270,18 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
     run.target = -1;
     run.stats = emptyStats();
     run.startSeconds = performance.now() / 1000;
-    // the full stock re-posts (every chunk)
-    for (const id of allChunkIds(grid)) postChunk(run, id);
+    // the full stock re-posts (every chunk, batched)
+    {
+      let batch: { chunk: ChunkMesh; transfer: Transferable[] }[] = [];
+      for (const id of allChunkIds(grid)) {
+        batch.push(meshChunk(run, id));
+        if (batch.length >= 64) {
+          postChunks(run, batch);
+          batch = [];
+        }
+      }
+      postChunks(run, batch);
+    }
   }
 };
 
