@@ -22,7 +22,7 @@ G1 Z20 A450 F26.4 ; spiral step down 1.000mm radial
 G1 X100 A7950 F0.32
 G0 Z30
 G94
-; shrink work-coordinate A back to ±360
+; shrink work-coordinate A back to ±360 (was 7950.00)
 G92.4 A0 S0
 M05
 G28

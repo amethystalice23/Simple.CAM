@@ -154,6 +154,8 @@ export function postCarvera(input: PostInput): string {
     laserMode: boolean;
     pendingLaserM3: boolean;
     lastOp?: Move['op'];
+    /** last commanded work-coordinate A, degrees — drives the inter-op shrink */
+    lastA: number;
   } = {
     mode: 'G94',
     lastFeed: -1,
@@ -161,6 +163,7 @@ export function postCarvera(input: PostInput): string {
     lastPower: -1,
     laserMode: false,
     pendingLaserM3: false,
+    lastA: 0,
   };
 
   const setMode = (want: FeedMode) => {
@@ -188,6 +191,22 @@ export function postCarvera(input: PostInput): string {
         // Op boundary
         lines.push(`;@MKR|TOOLPATH_START|toolpath_number=${m.op.number}`);
         lines.push('');
+        // INTER-OP A SHRINK (Alice's 2026-10-26 call, ahead of the big
+        // continuous-rotary ops): `G92.4 A0 S0` subtracts WHOLE turns from
+        // the work-coordinate A so the counter lands back in ±360 — zero
+        // motion, zero EEPROM, and the fractional orientation a later op
+        // cares about is exactly preserved (registration is never at risk;
+        // only the whole-turn pile is dropped). Run at every op boundary
+        // after A accumulated past ±360 so a multi-op job's counter stays
+        // small throughout instead of growing to the footer. The plain
+        // `G92.4 A<deg>` reset is deliberately NOT used here: it sets work-A
+        // to an arbitrary value and could lose registration with the
+        // stock's current orientation if a later op assumed continuity.
+        if (opts.wrapA && Math.abs(st.lastA) > 360) {
+          lines.push(`; shrink work-coordinate A back to ±360 (was ${st.lastA.toFixed(2)})`);
+          lines.push('G92.4 A0 S0');
+          st.lastA = 0;
+        }
 
         // Tool change?
         const prevToolNum = prevOp?.toolNumber;
@@ -254,6 +273,11 @@ export function postCarvera(input: PostInput): string {
 
     const simultaneous = isSimultaneous(m);
 
+    // track the accumulated work-coordinate A for the inter-op shrink (a
+    // move's A word is absolute in the work frame — the last one commanded
+    // is the running value)
+    if (m.words.a !== undefined) st.lastA = m.words.a;
+
     if (m.rapid) {
       lines.push(`G0 ${wordsLine(m, false)}${m.comment ? ` ; ${m.comment}` : ''}`);
     } else {
@@ -291,8 +315,11 @@ export function postCarvera(input: PostInput): string {
     lines.push('M322');
   }
   if (st.mode === 'G93') lines.push('G94');
-  if (opts.wrapA && usedA) {
-    lines.push('; shrink work-coordinate A back to ±360');
+  // the footer wrap: only when the LAST op's pile never met a boundary
+  // shrink (the inter-op shrink above handles op boundaries; a no-op
+  // shrink on small-A jobs is dropped — the firmware only acts past ±360)
+  if (opts.wrapA && usedA && Math.abs(st.lastA) > 360) {
+    lines.push(`; shrink work-coordinate A back to ±360 (was ${st.lastA.toFixed(2)})`);
     lines.push('G92.4 A0 S0');
   }
   lines.push('M05');

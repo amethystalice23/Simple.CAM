@@ -14,7 +14,7 @@ G1 A360 F2376
 G1 Z7.5 F200
 G1 A720 F2376
 G0 Z13.18
-; shrink work-coordinate A back to ±360
+; shrink work-coordinate A back to ±360 (was 720.00)
 G92.4 A0 S0
 M05
 G28

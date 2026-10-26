@@ -240,3 +240,68 @@ describe('Carvera multi-op post', () => {
     expect(flat).not.toContain('G0 Y0');
   });
 });
+
+describe('inter-op A shrink (G92.4 A0 S0 at op boundaries)', () => {
+  it('shrinks work-A at an op boundary once it exceeds ±360, preserving the fractional orientation', () => {
+    // Alice's 2026-10-26 call, ahead of the big continuous-rotary ops:
+    // the S-shrink (whole-turn subtraction, no motion, no EEPROM) at op
+    // boundaries where the counter has piled past ±360, so a multi-op job
+    // stays small throughout; the fractional orientation a later op
+    // continues from is exactly preserved. The plain G92.4 A<deg> reset is
+    // deliberately avoided — it could lose registration.
+    const op = (n: number) => ({
+      number: n,
+      name: `Op${n}`,
+      toolNumber: 1,
+    });
+    const gcode = postCarvera({
+      moves: [
+        // op 1: a continuous spiral accumulating 540° of work-A
+        { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op: op(1) },
+        { words: { x: 10, a: 540 }, feed: 1, op: op(1) },
+        // op 2: boundary — the accumulated 540° trips the shrink
+        { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op: op(2) },
+        { words: { z: -1 }, feed: 200, op: op(2) },
+        // op 3: another boundary — A was shrunk, no second shrink
+        { words: { x: 5, y: 5, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op: op(3) },
+        { words: { z: -2 }, feed: 200, op: op(3) },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'inter-op-shrink' },
+    });
+    const lines = gcode.split('\n');
+    const shrinks = lines.filter((l) => l === 'G92.4 A0 S0');
+    // exactly ONE shrink: at the op2 boundary (after the 540° pile), and
+    // the footer keeps its own — no, the footer emits only when usedA and
+    // the counter is dirty again; here op2/op3 carry no A, so the footer
+    // shrink is skipped (lastA was reset to 0 at the boundary)... assert
+    // the boundary one sits right after the op2 marker
+    expect(shrinks.length).toBe(1);
+    const marker2 = lines.findIndex((l) => l.includes('toolpath_number=2'));
+    expect(marker2).toBeGreaterThan(-1);
+    const shrinkAt = lines.indexOf('G92.4 A0 S0', marker2);
+    expect(shrinkAt).toBeGreaterThan(marker2);
+    expect(lines[shrinkAt - 1]).toMatch(/shrink work-coordinate A back/i);
+    // nothing after op3's marker shrinks (no A accumulated since)
+    const marker3 = lines.findIndex((l) => l.includes('toolpath_number=3'));
+    const shrink3 = lines.indexOf('G92.4 A0 S0', marker3);
+    expect(shrink3).toBe(-1);
+  });
+
+  it('never shrinks when A stayed inside ±360', () => {
+    const op = { number: 1, name: 'Index', toolNumber: 1 };
+    const gcode = postCarvera({
+      moves: [
+        { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op },
+        { words: { a: 180 }, feed: 0, rapid: true, op },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'small-a-no-shrink' },
+    });
+    // 180 < 360: the boundary/footer stays clean of inter-op shrinks (the
+    // footer's own wrap only fires on usedA — a pure index rapid sets it)
+    expect(gcode).not.toMatch(/shrink work-coordinate A back/i);
+  });
+});

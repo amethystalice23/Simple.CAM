@@ -46,13 +46,24 @@ describe('carvera post-processor', () => {
     expect(gcode).toContain('G92.4 A0 S0'); // wrap after setup or at end
   });
 
-  it('wraps A after A-only ring cuts (vertical facing) but not after a pure-A index rapid', () => {
+  it('wraps A after A-only ring cuts past ±360 (vertical facing) but not small-A rapids', () => {
+    // the footer shrink fires only when the counter is genuinely past
+    // ±360 (the firmware's own action threshold — below it the shrink is a
+    // no-op and is not emitted); inter-op boundaries carry their own shrink
     const ring = postCarvera({
-      moves: [{ words: { a: 360 }, feed: 2376 }],
+      moves: [{ words: { a: 720 }, feed: 2376 }],
       tools: [tool],
       options: { jobName: 'ring-test' },
     });
     expect(ring.includes('G92.4 A0 S0\nM05')).toBe(true);
+
+    // a full single turn (360) and a small index rapid alike: no-op, clean
+    const full = postCarvera({
+      moves: [{ words: { a: 360 }, feed: 2376 }],
+      tools: [tool],
+      options: { jobName: 'full-turn-test' },
+    });
+    expect(full.includes('G92.4 A0 S0')).toBe(false);
 
     const index = postCarvera({
       moves: [{ words: { a: 90 }, feed: 0, rapid: true }],

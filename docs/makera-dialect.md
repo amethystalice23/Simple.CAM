@@ -310,6 +310,19 @@ code copied). Two versions matter:
   was never a misread of R0. It is **not** a datum-set, though, so it must
   not be used as the header/`A0`-datum line the way our post currently
   does.
+  **Firmware action threshold: the shrink only acts when |work-A| > 360**
+  (`Robot.cpp:796`) — at or under a full turn it is a no-op, so our post
+  (2026-10-26, Alice's huge-continuous-rotary ask) emits it only when the
+  counter is genuinely past ±360: at **op boundaries** once the previous
+  op's accumulation exceeds it (each op re-establishes its own datum
+  anyway, and the fractional orientation a later op continues from is
+  exactly preserved — only the whole-turn pile is dropped), and at the
+  **footer** for the last op's pile, which never meets a boundary. The
+  plain `G92.4 A<deg>` reset (no R/S) is deliberately NOT used as a
+  counter reset mid-job: it sets work-A to an arbitrary value and could
+  lose registration with the stock's current orientation — Alice's
+  safety call ("does not mean there isn't a later again op that does
+  care").
 
 ### G93 inverse-time (`Robot.cpp:903-904, 1442-1458`)
 
