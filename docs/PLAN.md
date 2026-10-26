@@ -581,6 +581,17 @@ kernel pass missed); leftovers stay dirty for later slices, `done`
 waits for the drain; (3) the initial full-stock post goes out ~64
 chunks per message. Measured: the coupon#3 sim 0.1mm run completes in
 36.5s end-to-end (kernel baseline 12s). SIM_BUILD b8-flush-budget.
+**Display-pace correction (same day, her "certain layers get left solid
+until the end of this op" report):** the flush budget was WRONG — the
+carve dirties chunks far faster than a bounded flush clears them
+(~2 chunks per 8ms slice vs dozens dirtied), so the backlog aged
+upper-layer chunks solid on screen the whole run, catching up only at
+the end-of-run drain. The released beta.7's unbudgeted flush always
+kept pace (the crawl was the per-chunk posts + the Viewport's
+all-meshes-per-message rebuild, both fixed by batching + the
+built-map). The flush is UNBUDGETED again — every slice clears all
+its dirt, batched; the worker still yields between slices for control
+messages. SIM_BUILD b9-flush-unbudgeted.
 **TRUE-SPAN CLIP (her four-way endcap report, same day):** the endcap
 at the +X end appears at pitches 0.3/0.45 but not 0.25/0.4/0.5 over
 the 100mm bar — exactly the non-divisor pitches, where the padded

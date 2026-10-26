@@ -25,15 +25,22 @@ import type { Stock, Tool } from '../core/types';
 /** build stamp — the `ready` message carries it so the client can PROVE
  *  which worker version is running (the 2026-10-25 gaps debugging: a
  *  stale dev-server worker copy was a live suspect) */
-const SIM_BUILD = 'b8-flush-budget';
+const SIM_BUILD = 'b9-flush-unbudgeted';
 
-/** cooperative-slice budget, ms — carving AND mesh flushing each stay
- *  within one of these per slice so neither starves the message queue
- *  (the 2026-10-26 coupon crawl: unbounded per-slice remeshing of a
- *  576-chunk grid) */
+/** cooperative-slice budget, ms — the CARVE stays within one of these per
+ *  slice so the worker yields often enough to serve control messages
+ *  (setup/carve/reset) promptly. The flush is NOT budgeted (see
+ *  flushChunks): a budget here starved the display — carving dirties
+ *  chunks faster than a bounded flush clears them, the backlog aged upper
+ *  layers solid on screen until the end-of-run drain (Alice's 2026-10-26
+ *  report: "certain layers get left solid until the end of this op").
+ *  The worker is a background thread; a long slice only delays the next
+ *  control-message check by that slice, and batching keeps the main
+ *  thread from flooding. */
 const SLICE_MS = 8;
 /** chunks per batched `chunks` message (each ~4ms to mesh on a 32³ grid —
- *  the budget loop checks between batches) */
+ *  the batching is what protects the main thread: one state update per
+ *  batch, not per chunk) */
 const CHUNK_BATCH = 32;
 
 interface RunState {
@@ -108,30 +115,31 @@ function postChunks(r: RunState, batch: { chunk: ChunkMesh; transfer: Transferab
   post({ token: r.token, type: 'chunks', chunks }, transfer);
 }
 
-/** re-mesh dirty chunks within a meshing budget, checked PER CHUNK — the
- * v1 budget checked between whole 32-chunk batches, so each 8ms carve
- * slice still paid a ~130ms meshing burst and the coupon's 12s carve
- * became minutes. Whatever doesn't fit stays dirty for a later slice;
- * the visual stream lags a little, the message queue never starves.
- * Returns the chunks still pending. */
-function flushChunks(r: RunState, budgetMs: number): number {
+/** re-mesh every dirty chunk, batched — UNBUDGETED on purpose: the display
+ * must keep pace with the carve (each slice's dirt is fully cleared
+ * within that slice, batched ~32 per post). A budget here outpaced
+ * nothing: the carve dirties chunks faster than a bounded flush clears
+ * them, and the growing backlog aged upper layers solid on screen until
+ * the end-of-run drain (Alice's 2026-10-26 report: "certain layers get
+ * left solid until the end of this op"). The coupon CRAWL was never the
+ * flush's cost — it was per-chunk posts + the Viewport rebuilding every
+ * mesh per post, both fixed; batching is the guard. */
+function flushChunks(r: RunState) {
   const ids = r.grid.dirtyChunkIds();
-  const t0 = performance.now();
   let batch: { chunk: ChunkMesh; transfer: Transferable[] }[] = [];
-  let i = 0;
-  for (; i < ids.length; i++) {
+  for (let i = 0; i < ids.length; i++) {
     batch.push(meshChunk(r, ids[i]));
     if (batch.length >= CHUNK_BATCH) {
       postChunks(r, batch);
       batch = [];
     }
-    if (performance.now() - t0 > budgetMs) break;
   }
   postChunks(r, batch);
-  return ids.length - i;
 }
 
-/** one cooperative slice: ≤ SLICE_MS of carving, then a budgeted flush */
+/** one cooperative slice: ≤ SLICE_MS of carving, then a full batched
+ *  flush — the display stays current; the worker still yields between
+ *  slices to serve control messages */
 function slice(r: RunState) {
   const t0 = performance.now();
   while (r.cursor < r.poses.length) {
@@ -141,7 +149,7 @@ function slice(r: RunState) {
     r.cursor++;
     if (performance.now() - t0 > SLICE_MS) break;
   }
-  const pending = flushChunks(r, SLICE_MS);
+  flushChunks(r);
   const total = r.poses.length ? r.poses[r.poses.length - 1].moveIndex + 1 : 0;
   const atEnd = r.cursor >= r.poses.length;
   post({
@@ -151,7 +159,7 @@ function slice(r: RunState) {
     totalMoves: total,
     removedVoxels: r.stats.removed,
   });
-  if (atEnd && pending === 0) {
+  if (atEnd) {
     post({
       type: 'done',
       token: r.token,
