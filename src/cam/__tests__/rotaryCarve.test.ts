@@ -90,7 +90,7 @@ describe('rotaryCarve', () => {
     expect(() => rotaryCarve(opts(cylinder(5, 20), { allowance: -1 }))).toThrow(/allowance/);
   });
 
-  it('the ladder follows Makera semantics: full sweeps at R − k·stepDown until nothing is left', () => {
+  it('the ladder follows Makera semantics: COMPLETE sweeps at R − k·stepDown until nothing is left', () => {
     // cylinder Ø10 in a Ø24 stock: surface radius ~5, so planes 10, 8, 6
     // cut and 4 has nothing left below it — three levels, stop.
     const res = rotaryCarve(opts(cylinder(5, 20)));
@@ -101,6 +101,36 @@ describe('rotaryCarve', () => {
     for (const level of [10, 8, 6]) expect(zs).toContain(level);
     // never below the tessellated surface
     expect(Math.min(...cutZs(res.moves))).toBeGreaterThanOrEqual(TESS - 1e-6);
+    // COMPLETE sweep (Alice's 2026-10-26 knight report): the level rings
+    // run crown-parallel across the WHOLE stock span, not partial bands
+    // hugging the part — leftover stock around the outer edge is what
+    // rubbed the finish's flanks into walls of yellow
+    const roughX = res.moves
+      .filter((m) => !m.rapid && m.words.x !== undefined)
+      .map((m) => Math.abs(m.words.x!));
+    expect(Math.max(...roughX)).toBeGreaterThan(14.5);
+  });
+
+  it('waste stock clears flat at the model floor (the raster clearToStock analog)', () => {
+    // the model (Ø10, 20mm) leaves 10mm of bare stock at each X end:
+    // those cells are WASTE — no model within the tool's reach — and a
+    // complete Makera pass clears them flat at the waste floor = the
+    // model's deepest compensated point, the same plane the ladder
+    // bottoms near (the raster's clearFloorZ = model-floor analog)
+    const res = rotaryCarve(opts(cylinder(5, 20), { finishingOnly: true }));
+    // a far-X cell is waste: its finish z sits exactly at the floor
+    const farZs = res.moves
+      .filter((m) => !m.rapid && m.words.x !== undefined && Math.abs(m.words.x!) > 12)
+      .map((m) => m.words.z)
+      .filter((z): z is number => z !== undefined);
+    expect(farZs.length).toBeGreaterThan(0);
+    expect(Math.max(...farZs)).toBeCloseTo(TESS, 3); // flat at the floor
+    // and the sweep spans the whole stock, waste included
+    const xs = res.moves
+      .filter((m) => !m.rapid && m.words.x !== undefined)
+      .map((m) => m.words.x!);
+    expect(Math.min(...xs)).toBeLessThan(-14.5);
+    expect(Math.max(...xs)).toBeGreaterThan(14.5);
   });
 
   it('finishingOnly skips the ladder and follows the surface', () => {
@@ -108,9 +138,8 @@ describe('rotaryCarve', () => {
     expect(res.stats.levels).toBe(0);
     expect(res.moves.length).toBeGreaterThan(0);
     // on the body the flat disc's max rides the tessellation vertices (5);
-    // in the PAD beside the part's end the disc sees only the body-edge
-    // sample, so the surface dips to the sampled flank radius — the
-    // honest flush-beside-the-part cut. Never deeper than the samples.
+    // waste cells clear flat at the model-floor plane (≈TESS, the
+    // chord-midpoint minimum) — never deeper than the samples
     const zs = cutZs(res.moves);
     expect(zs.every((z) => z >= TESS - 1e-6 && z <= 5 + 1e-6)).toBe(true);
     expect(Math.max(...zs)).toBeCloseTo(5, 3);

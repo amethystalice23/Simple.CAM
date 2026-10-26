@@ -39,11 +39,13 @@ export interface GhostGeom {
   indices: Uint32Array;
 }
 
-/** ghost colors (rgba 0–255): yellow = wrongly removed (TRANSLUCENT —
- * Alice's 2026-10-26 ask: those voxels are gone, the cube is a ghost of
- * material that was removed, just not intentionally), red = shank contact
- * (still solid — stays strong so it reads as a hit on the surface) */
-const GHOST_YELLOW: [number, number, number, number] = [255, 200, 0, 115];
+/** ghost colors (rgba 0–255): yellow = wrongly removed (BARELY THERE —
+ * Alice's 2026-10-26 second pass: those voxels are gone, the cube is a
+ * ghost of removed material, and a strong tint hides the carved surface
+ * underneath it — α26 ≈ 10%, a wash rather than a wall), red = shank
+ * contact (still solid — stays strong so it reads as a hit on the
+ * surface) */
+const GHOST_YELLOW: [number, number, number, number] = [255, 200, 0, 26];
 const GHOST_RED: [number, number, number, number] = [255, 32, 32, 230];
 
 /**

@@ -70,7 +70,7 @@ describe('ghostMeshChunk (classification overlay)', () => {
     for (let v = 0; v < g.colors.length; v += 4) {
       seen.add(`${g.colors[v]},${g.colors[v + 1]},${g.colors[v + 2]},${g.colors[v + 3]}`);
     }
-    expect(seen.has('255,200,0,115')).toBe(true); // translucent yellow
+    expect(seen.has('255,200,0,26')).toBe(true); // barely-there yellow wash (Alice 2026-10-26: 10%)
     expect(seen.has('255,32,32,230')).toBe(true); // strong red
     expect(seen.size).toBe(2);
     const vertCount = g.positions.length / 3;

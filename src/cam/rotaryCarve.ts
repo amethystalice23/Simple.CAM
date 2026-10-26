@@ -314,12 +314,13 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   if (o.feed <= 0 || o.plungeFeed <= 0) throw new Error('feeds must be positive');
 
   const strategy = o.strategy ?? 'horizontal';
-  const toolR = o.tool.diameter / 2;
   const safeZ = o.axisZ + o.radius + o.safeClearance;
 
-  // Grid: the model's axial extent grown by the tool radius (dilation
-  // spreads the surface exactly that far) plus a pitch, clamped to the
-  // stock span. θ always covers the full circle.
+  // Grid: the FULL stock axial span — the sweep is a COMPLETE Makera
+  // pass (Alice's 2026-10-26 knight report: partial bands hugging the
+  // part left "lots of leftover stock close to the outer edge" standing
+  // around the model, which the finish's flanks then rubbed into walls
+  // of yellow). θ always covers the full circle.
   let minX = Infinity;
   let maxX = -Infinity;
   for (let i = 0; i < o.positions.length; i += 3) {
@@ -327,11 +328,12 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
   }
+  if (maxX <= o.x0 || minX >= o.x1) {
+    throw new Error('the model does not overlap the stock span');
+  }
   const pitchX = o.stepOver / 2;
-  const pad = toolR + pitchX;
-  const gx0 = Math.max(o.x0, minX - pad);
-  const gx1 = Math.min(o.x1, maxX + pad);
-  if (gx1 <= gx0) throw new Error('the model does not overlap the stock span');
+  const gx0 = o.x0;
+  const gx1 = o.x1;
   const nx = Math.floor((gx1 - gx0) / pitchX) + 1;
   const nTheta = Math.max(16, Math.round((2 * Math.PI * o.radius) / pitchX));
   const thetaStepDeg = 360 / nTheta;
@@ -354,15 +356,26 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   );
 
   // the compensated map the whole op targets: dilation + allowance, the
-  // raster's both-axis lift
+  // raster's both-axis lift. WASTE cells (air — no model within the
+  // tool's reach) target the WASTE FLOOR = the model's deepest
+  // compensated point, the same plane the ladder bottoms near (the
+  // raster's clearFloorZ = model-floor analog): a complete Makera sweep
+  // clears every bit of stock that is not the part, in layers from the
+  // CROWN DOWN — the partial bands that hugging the part left standing
+  // rinds around the outer edge are gone.
   const comp = new Float64Array(nx * nTheta);
-  let minComp = o.radius;
+  let wasteFloor = o.radius;
   for (let k = 0; k < comp.length; k++) {
-    // −Infinity = the kernel saw no material anywhere (air) — nothing to
-    // cut; +Infinity would poison the min
-    comp[k] = dilated[k] === -Infinity ? Infinity : dilated[k] + o.allowance;
-    if (comp[k] < minComp) minComp = comp[k];
+    if (dilated[k] !== -Infinity && dilated[k] + o.allowance < wasteFloor) {
+      wasteFloor = dilated[k] + o.allowance;
+    }
   }
+  for (let k = 0; k < comp.length; k++) {
+    // −Infinity = air = WASTE: not nothing-to-cut — stock that clears
+    // flat to the floor alongside the part
+    comp[k] = dilated[k] === -Infinity ? wasteFloor : dilated[k] + o.allowance;
+  }
+  const minComp = wasteFloor;
 
   // The roughing ladder (Makera semantics): full sweeps at R − k·stepDown
   // while the plane has material below it — the first plane at/below the
@@ -423,27 +436,45 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   const skimClearance = 0.5;
 
   /** plunge straight from the current height to a cut radius at the
-   *  destination, charging the emitted descent + `band` of material at
-   *  the plunge feed. The caller must already have lifted the tool to
-   *  a height that clears the rapid legs (goCut below does that). */
-  const plungeFromTo = (fromZ: number, cutZ: number, band: number) => {
+   *  destination, charging the emitted descent at the plunge feed. The
+   *  caller must already have lifted the tool to a height that clears
+   *  the rapid legs (goCut below does that). */
+  const plungeFromTo = (fromZ: number, cutZ: number) => {
     moves.push({ words: { z: cutZ }, feed: o.plungeFeed });
-    minutes += (Math.max(0, fromZ - cutZ) + band) / o.plungeFeed;
+    minutes += Math.max(0, fromZ - cutZ) / o.plungeFeed;
     z = cutZ;
   };
 
-  /** standing height at a cell for transition clearances: the
-   *  compensated surface, with AIR cells reading the STOCK radius —
-   *  uncut stock IS standing material, a leg crossing it must clear it */
-  const cellTopR = (i: number, j: number) => {
+  /** Standing stock radius at a cell — NOT the compensated target: what
+   *  the tool would actually hit passing over the cell NOW. `phase` =
+   *  the roughing levels completed so far (the finish runs after them
+   *  all): a WASTE cell was planed by every level (standing = the last
+   *  plane), a MODEL cell by the deepest level that sat above its
+   *  surface (or never — stock stands at the crown down to it). The
+   *  old comp-based read was the 2026-10-26 skim bug: it credited cells
+   *  as clear BEFORE the planes cut them, so transitions could clip
+   *  the rough's own leftover ledges. */
+  const standingR = (i: number, j: number, phase: number) => {
     const c = comp[j * nx + i];
-    return Number.isFinite(c) ? c : o.radius;
+    // finishingOnly: no ladder of its own — the documented "bulk already
+    //  cleared ahead" assumption (the raster's), warned by the deep-
+    //  plunge note, reads the cells as cleared to their targets
+    if (levels.length === 0) return c;
+    const waste = dilated[j * nx + i] === -Infinity;
+    if (phase <= 0) return o.radius; // nothing planed yet
+    const last = Math.min(phase, levels.length) - 1;
+    if (waste) return levels[last]; // every plane cleared it
+    // the deepest level that still sat above this surface, else stock
+    for (let m = last; m >= 0; m--) {
+      if (levels[m] > c) return levels[m];
+    }
+    return o.radius; // no plane reached above: stock stands down to it
   };
   /** tallest standing height over an X span at one θ row (a traverse leg) */
-  const spanMaxR = (ia: number, ib: number, j: number) => {
+  const spanMaxR = (ia: number, ib: number, j: number, phase: number) => {
     let m = -Infinity;
     for (let i = Math.min(ia, ib); i <= Math.max(ia, ib); i++) {
-      const c = cellTopR(i, j);
+      const c = standingR(i, j, phase);
       if (c > m) m = c;
     }
     return m;
@@ -451,11 +482,11 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   /** tallest standing height over a θ arc at one X column (a rotate
    *  leg), walking forward from ja to jb inclusive (the cursor's
    *  direction — the arc the A rapid actually sweeps) */
-  const arcMaxR = (ja: number, jb: number, i: number) => {
+  const arcMaxR = (ja: number, jb: number, i: number, phase: number) => {
     let m = -Infinity;
     const steps = (jb - ja + nTheta) % nTheta;
     for (let s = 0; s <= steps; s++) {
-      const c = cellTopR(i, (ja + s) % nTheta);
+      const c = standingR(i, (ja + s) % nTheta, phase);
       if (c > m) m = c;
     }
     return m;
@@ -471,16 +502,26 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
    *  lift (pure Z) ONLY to the tallest thing the rapid legs cross —
    *  the rotate leg at the old column, the traverse leg at the new row
    *  — plus a small gap; up-then-across when the next cut sits higher,
-   *  across-then-down when it sits lower. The legs' scans make the rule
-   *  exact: the skim never crosses below a surface it passes over, it
-   *  just no longer pays the crown toll every ring. */
-  const goCut = (toJ: number | null, toI: number, targetR: number, band: number) => {
-    const rotLeg =
-      col < 0 || toJ === null ? -Infinity : arcMaxR(jc, toJ, col);
-    const travLeg = col < 0 ? -Infinity : spanMaxR(col, toI, toJ === null ? jc : toJ);
+   *  across-then-down when it sits lower. `phase` = levels completed:
+   *  the legs cross what the rough has ACTUALLY cleared so far, and
+   *  when nothing has (the op entry) the crown is the truth. */
+  const goCut = (
+    toJ: number | null,
+    toI: number,
+    targetR: number,
+    phase: number,
+  ) => {
+    const rotLeg = col < 0 || toJ === null ? -Infinity : arcMaxR(jc, toJ, col, phase);
+    const travLeg =
+      col < 0 ? -Infinity : spanMaxR(col, toI, toJ === null ? jc : toJ, phase);
     const skimZ =
       o.axisZ +
-      Math.max(rotLeg, travLeg, targetR, col < 0 ? o.radius : -Infinity) +
+      Math.max(
+        rotLeg,
+        travLeg,
+        targetR,
+        col < 0 || (phase <= 0 && levels.length > 0) ? o.radius : -Infinity,
+      ) +
       skimClearance;
     if (z < skimZ) zTo(skimZ); // up first — never below the legs
     if (toJ !== null) {
@@ -490,7 +531,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     if (col !== toI) {
       moves.push({ words: { x: gx0 + toI * pitchX }, feed: 0, rapid: true });
     }
-    plungeFromTo(z, o.axisZ + targetR, band);
+    plungeFromTo(z, o.axisZ + targetR);
     col = toI;
   };
 
@@ -574,7 +615,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         for (const [r0, r1] of runs) {
           const i0 = fwd ? r0 : r1;
           const i1 = fwd ? r1 : r0;
-          goCut(first ? j : null, i0, rL, o.stepDown);
+          goCut(first ? j : null, i0, rL, levelIndex);
           first = false;
           moves.push({ words: { x: gx0 + i1 * pitchX }, feed: o.feed });
           minutes += ((i1 - i0) * pitchX) / o.feed;
@@ -586,7 +627,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         if (runs.length === 0) continue;
         rows++;
         for (const [j0, j1] of runs) {
-          goCut(j0, i, rL, o.stepDown);
+          goCut(j0, i, rL, levelIndex);
           const sweep = (j1 - j0 + 1) * thetaStepDeg;
           advPast(j1);
           moves.push({ words: { a }, feed: degPerMin(rL) });
@@ -606,7 +647,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       retract();
       moves.push({ words: { a }, feed: 0, rapid: true });
       moves.push({ words: { x: gx0 }, feed: 0, rapid: true });
-      plungeFromTo(z, cutZ, o.stepDown);
+      plungeFromTo(z, cutZ);
       const passMinutes = Math.max(
         Math.hypot(2 * Math.PI * rL, span) / o.feed,
         1 / MAX_ROTARY_RPM,
@@ -648,7 +689,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         const rStart = comp[j * nx + i0];
         const plunge = o.radius - rStart;
         if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
-        goCut(first ? j : null, i0, rStart, o.allowance);
+        goCut(first ? j : null, i0, rStart, levels.length);
         first = false;
         let lastR = rStart;
         let px = gx0 + i0 * pitchX;
@@ -679,7 +720,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         const rStart = comp[j0 * nx + i];
         const plunge = o.radius - rStart;
         if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
-        goCut(j0, i, rStart, o.allowance);
+        goCut(j0, i, rStart, levels.length);
         let lastA = a;
         let lastR = rStart;
         for (let j = j0 + 1; j <= j1; j++) {
@@ -737,7 +778,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       const rStart = compAt(iFirst);
       const plunge = o.radius - rStart;
       if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
-      plungeFromTo(z, o.axisZ + rStart, o.allowance);
+      plungeFromTo(z, o.axisZ + rStart);
       // θ from the helix's own start, so the wrap closes exactly over the
       // material span (air-trimmed at both ends)
       const nCols = iLast - iFirst;

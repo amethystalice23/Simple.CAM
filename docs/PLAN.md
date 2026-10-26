@@ -522,7 +522,24 @@ legs cross (rotate leg at the old column, traverse leg at the new row,
 scanned over the compensated map with air reading as standing stock) +
 0.5mm; the plunge charge is now the honest emitted descent. Crown is
 entry/exit only. Pinned by tests: the skim bound + the per-source
-angular reach.**
+angular reach. THIRD ROUND (same day, her knight sim run): (5) the
+"complete sweep" was implemented as PARTIAL bands hugging the part
+(runs of cells with comp < plane) — waste stock (air cells: no model
+within the tool's reach) was NEVER cleared, leaving "lots of leftover
+stock close to the outer edge" that the finish's flanks then rubbed
+into walls of yellow. Fix: COMPLETE Makera passes — the grid spans the
+FULL stock axial span and WASTE cells target the WASTE FLOOR = the
+model's deepest compensated point (the raster's clearFloorZ =
+model-floor analog), cleared by every plane (layers from the CROWN
+DOWN) and flat at the floor by the finish. Default on — the op's
+charter is "rough + finish the whole bar". (6) The transition legs
+originally read the compensated TARGET as the standing height — cells
+were credited as clear BEFORE the planes cut them, so skims could clip
+the rough's own leftover ledges. Fix: phase-aware standingR (what the
+rough has ACTUALLY planed so far; finishingOnly reads targets — the
+documented "bulk already cleared ahead" assumption, deep-plunge
+warned). (7) The yellow gouge ghost α115 → α26 (~10%, Alice's ask — a
+wash, not a wall).**
 
 **Phase D (later, exactness)** — machine-frame gouge + shank/holder
 collision validation per pose (three-mesh-bvh `closestPointToGeometry`
