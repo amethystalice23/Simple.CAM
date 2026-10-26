@@ -18,6 +18,7 @@ import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
 import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
+import { rotaryCarve } from '../cam/rotaryCarve';
 import { difference, offsetInward, offsetOutward } from '../cam/clipper';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
@@ -100,6 +101,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'waterline', label: 'Waterline contour' },
   { kind: 'rasterContour', label: 'Raster contour (3D finish)' },
+  { kind: 'rotaryCarve', label: 'Rotary carve (4-axis)', rotaryOnly: true },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'cylChamfer', label: 'Cylinder chamfer (4-axis)', rotaryOnly: true },
@@ -291,6 +293,20 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepDown,
         clearToStock: false, // the model's column only; the toggle clears to the stock edge
         cutBeyondStock: false, // row centers stay inside the declared stock
+      };
+    case 'rotaryCarve':
+      // Phase C (PLAN.md): one op roughs AND finishes (Makera's ladder —
+      // full wrap per depth level until nothing is left, then the surface
+      // pass). Rough-vs-finish is the finishingOnly toggle + allowance;
+      // the panel zeroes the allowance on tick (the raster precedent).
+      return {
+        ...base,
+        kind,
+        allowance: 0.2,
+        stepDown: Math.max(stepDown, 0.5), // a rung below the allowance degenerates the ladder
+        stepOver: defaultStepOver(tool),
+        strategy: 'horizontal',
+        finishingOnly: false,
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
@@ -1439,6 +1455,98 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : ', to size') +
             (op.clearToStock ? ', excess cleared to the stock edge' : '') +
             (op.cutBeyondStock ? ', tail stock cut-over' : '') +
+            `, ~${res.estimatedMinutes.toFixed(1)} min` +
+            (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
+        };
+      }
+      case 'rotaryCarve': {
+        // Phase C 4-axis relief (PLAN.md): the raster core in the unwrapped
+        // (x, θ) frame — ONE op roughs and finishes (Makera's ladder: a
+        // complete full-wrap sweep per depth level until nothing is left,
+        // then the surface pass). No selection: the whole model on the
+        // stock's rotation axis is the target, indexed like the waterline
+        // (the datum rotation maps the part into the cutting frame).
+        if (!ctx.geometry) return fail('needs a loaded model — the carve targets it');
+        if (ctx.stock.kind !== 'cylinder') {
+          return fail('rotary carve needs cylinder stock (Stock tab)');
+        }
+        if (ctx.stock.axisMode !== '4-axis') {
+          return fail('rotary carve needs 4-axis mode (Stock tab)');
+        }
+        const cal = rotaryCalibrationOf(ctx.stock);
+        const [sx0, sx1] = stockSpan(ctx.stock, 'x');
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
+        const positions = rotate
+          ? (() => {
+              const out = new Float32Array(positions0.length);
+              for (let i = 0; i < positions0.length; i += 3) {
+                const v = rotate({
+                  x: positions0[i],
+                  y: positions0[i + 1],
+                  z: positions0[i + 2],
+                });
+                out[i] = v.x;
+                out[i + 1] = v.y;
+                out[i + 2] = v.z;
+              }
+              return out;
+            })()
+          : positions0;
+        // the carve cannot touch anything at or above the stock radius —
+        // model surfaces sticking out of the stock are unreachable, said
+        // up front rather than left as mystery material
+        let maxRadial = 0;
+        for (let i = 0; i < positions.length; i += 3) {
+          const r = Math.hypot(positions[i + 1], positions[i + 2] - cal.axisZ);
+          if (r > maxRadial) maxRadial = r;
+        }
+        const res = rotaryCarve({
+          positions,
+          x0: sx0,
+          x1: sx1,
+          radius: cal.effectiveRadius,
+          axisZ: cal.axisZ,
+          tool,
+          stepDown: op.stepDown,
+          stepOver: op.stepOver,
+          allowance: op.allowance,
+          finishingOnly: op.finishingOnly,
+          strategy: op.strategy,
+          datumAngle: ctx.datumAngle,
+          startA: ctx.startA,
+          feed,
+          plungeFeed,
+          safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+        });
+        if (res.moves.length === 0) {
+          return fail('nothing to carve — the model already sits at the stock surface');
+        }
+        const notes = [...res.warnings];
+        if (maxRadial > cal.effectiveRadius + 1e-6) {
+          notes.push(
+            `the model extends ${(
+              maxRadial - cal.effectiveRadius
+            ).toFixed(1)}mm above the stock radius — that part cannot be cut`,
+          );
+        }
+        const strategyNote =
+          op.strategy === 'vertical'
+            ? ', vertical rings'
+            : op.strategy === 'spiralWrap'
+              ? ', spiral wrap'
+              : '';
+        return {
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
+          error: null,
+          summary:
+            (op.finishingOnly
+              ? 'finishing pass only'
+              : `${res.stats.levels} rough level(s), `) +
+            `${res.stats.wraps} wrap(s)` +
+            strategyNote +
+            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };

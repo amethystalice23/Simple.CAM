@@ -113,7 +113,12 @@ function throughBothSides(
 
 describe('generation worker protocol', () => {
   it('routes exactly the heavy kinds', () => {
-    expect([...HEAVY_GEN_KINDS].sort()).toEqual(['rasterContour', 'slicePocket', 'waterline']);
+    expect([...HEAVY_GEN_KINDS].sort()).toEqual([
+      'rasterContour',
+      'rotaryCarve',
+      'slicePocket',
+      'waterline',
+    ]);
     const everyKind = newJobOp('pocket', tool, 'aluminum-6061', boxStock);
     expect(isHeavyGenOp(everyKind)).toBe(false);
     expect(isHeavyGenOp(newJobOp('waterline', tool, 'aluminum-6061', boxStock))).toBe(true);
@@ -158,6 +163,33 @@ describe('generation worker protocol', () => {
     const { app } = throughBothSides(brick, op, boxStock, [smallTool]);
     expect(app.error).toBeNull();
     expect(app.summary).toContain('raster row');
+  });
+
+  it('rotaryCarve: worker context reproduces the main-thread result', () => {
+    const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
+      kind: 'cylinder',
+      length: 30,
+      xOrigin: 'mid',
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+      axisMode: '4-axis',
+      materialId: 'aluminum-6061',
+    };
+    const g = new THREE.CylinderGeometry(4, 4, 20, 32).toNonIndexed();
+    g.rotateZ(Math.PI / 2); // on the rotation axis
+    const op = {
+      id: 'rc',
+      toolId: 't3',
+      featureIds: [],
+      kind: 'rotaryCarve',
+      stepDown: 1,
+      stepOver: 1,
+      allowance: 0,
+      strategy: 'horizontal' as const,
+    };
+    const { app, worker } = throughBothSides(g, op as JobOp, cylStock, [smallTool]);
+    expect(app.error).toBeNull();
+    expect(worker.error).toBeNull();
+    expect(app.moves.length).toBeGreaterThan(0);
   });
 
   it('slicePocket: worker context resolves a ⇩ floor pick identically (the sources reconstruction)', () => {

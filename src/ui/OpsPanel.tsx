@@ -708,6 +708,51 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'rotaryCarve':
+      return (
+        <>
+          <NumberField label="Allowance (mm)" value={op.allowance} min={0} step={0.05} onCommit={(v) => upd({ allowance: v } as Partial<JobOp>)} />
+          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck
+            op={op}
+            upd={upd}
+            allowanceKey="allowance"
+            title="The single surface pass, no roughing ladder. Unchecked = the Makera-style ladder first: a complete full-wrap sweep at each depth level, descending until a level has nothing left to cut — then the finishing pass on the surface"
+          />
+          {!op.finishingOnly && (
+            <NumberField
+              label="Step down (mm)"
+              value={op.stepDown}
+              min={0.1}
+              step={0.1}
+              onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)}
+            />
+          )}
+          <label className="field" title="How each sweep crosses the surface. Horizontal cuts along X at full feed and rapids the A step between rows; vertical cuts continuous A rings at constant X (rotary-ceiling limited); spiral wrap advances X continuously while A turns — the strategy Makera Studio does not have">
+            <span>Strategy</span>
+            <select
+              value={op.strategy}
+              onChange={(e) =>
+                upd({ strategy: e.target.value as 'horizontal' | 'vertical' | 'spiralWrap' } as Partial<JobOp>)
+              }
+            >
+              <option value="horizontal">horizontal — X passes, rapid A steps</option>
+              <option value="vertical">vertical — continuous A rings</option>
+              <option value="spiralWrap">spiral wrap — one helix per sweep</option>
+            </select>
+          </label>
+          <p className="hint">
+            the raster core in the unwrapped (x, θ) frame: a dexel map of the model's OUTER surface
+            radius is taken by radial raycasts, dilated with the tool's kernel, and ONE op roughs and
+            finishes — a complete full-wrap sweep at each depth level before descending the ladder,
+            ending at the first level with nothing left to cut, then the finishing pass follows the
+            compensated surface itself. No selection: the whole model on the stock's rotation axis is
+            the target. A accumulates across wraps (the post keeps the counter small); material behind
+            an air gap along a ray is reported, never left as a silent mystery. Cylinder stock, model on
+            its axis, 4-axis mode
+          </p>
+        </>
+      );
     case 'spiralCarve':
       return (
         <>
@@ -1074,6 +1119,7 @@ export function OpsPanel(props: Props) {
         case 'slicePocket':
         case 'waterline':
         case 'faceCylinder':
+        case 'rotaryCarve':
           next = { ...next, stepDown, stepOver } as JobOp;
           break;
         case 'rasterContour':
@@ -1283,13 +1329,13 @@ export function OpsPanel(props: Props) {
                   {gen?.error && <p className="error">{gen.error}</p>}
                   {gen?.summary && <p className="hint">{gen.summary}</p>}
                   {!gen && <p className="hint">not calculated yet</p>}
-                  {(op.kind === 'slicePocket' || op.kind === 'waterline' || op.kind === 'rasterContour') && !props.hasModel && (
+                  {(op.kind === 'slicePocket' || op.kind === 'waterline' || op.kind === 'rasterContour' || op.kind === 'rotaryCarve') && !props.hasModel && (
                     <p className="hint">needs a model — the geometry comes from the loaded STL</p>
                   )}
-                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && op.kind !== 'waterline' && op.kind !== 'rasterContour' && (
+                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && op.kind !== 'waterline' && op.kind !== 'rasterContour' && op.kind !== 'rotaryCarve' && (
                     <p className="hint">needs a model or a primitive to select from</p>
                   )}
-                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread' || op.kind === 'cylChamfer') && props.axisMode !== '4-axis' && (
+                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread' || op.kind === 'cylChamfer' || op.kind === 'rotaryCarve') && props.axisMode !== '4-axis' && (
                     <p className="hint">needs 4-axis mode (Stock tab)</p>
                   )}
                 </div>

@@ -25,6 +25,7 @@ export const HEAVY_GEN_KINDS: ReadonlySet<JobOp['kind']> = new Set([
   'slicePocket',
   'waterline',
   'rasterContour',
+  'rotaryCarve',
 ]);
 
 export function isHeavyGenOp(op: JobOp): boolean {

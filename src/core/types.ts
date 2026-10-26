@@ -1012,6 +1012,36 @@ export type JobOp =
        *  grows by the tool radius, so row centers may cross the stock edge
        *  for clean exits. Absent = centers stay inside the footprint. */
       cutBeyondStock?: boolean;
+    })
+  | (JobOpBase & {
+      kind: 'rotaryCarve';
+      /**
+       * Rotary relief carving (PLAN.md Phase C) — the raster core in the
+       * unwrapped (x, θ) frame: the whole model on the stock's rotation
+       * axis is the target, no selection. A dexel map of the OUTER surface
+       * radius is taken by radial raycasts, dilated with the tool's
+       * kernel, and ONE op roughs AND finishes: the Makera-style ladder
+       * runs a COMPLETE full-wrap sweep at each depth level (constant cut
+       * radius, a cell cut where the compensated surface sits below the
+       * plane) before descending, ending at the first level with nothing
+       * left to cut — then the finishing pass follows the compensated
+       * surface itself. `finishingOnly` skips the ladder (the panel
+       * zeroes the allowance on tick, the raster precedent).
+       *
+       * Three path strategies per sweep: 'horizontal' rows along X with
+       * rapid A steps; 'vertical' continuous-A rings at constant X;
+       * 'spiralWrap' one helix per sweep (X advancing while A turns — the
+       * strategy Makera Studio does NOT have). A accumulates monotonically
+       * across wraps; the post's inter-op G92.4 shrink keeps the counter
+       * small. Cylinder stock + a model on its axis; 4-axis mode.
+       */
+      stepDown: number;
+      stepOver: number;
+      allowance: number;
+      strategy: 'horizontal' | 'vertical' | 'spiralWrap';
+      /** FINISHING PASS ONLY: the single surface pass, no roughing ladder.
+       *  Absent = unchecked (old saves byte-identical, the spin precedent). */
+      finishingOnly?: boolean;
     });
 
 /**
