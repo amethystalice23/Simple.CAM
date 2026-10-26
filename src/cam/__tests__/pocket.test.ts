@@ -99,6 +99,38 @@ describe('pocket2d', () => {
     expect(unique).toEqual(['-1.000', '-2.000', '-2.500']);
   });
 
+  it('approach rapids stay above the standing material (the sim yellow-streak fix)', () => {
+    // step-down 1 > the 0.5 approach clearance: levelZ + 0.5 sits BELOW the
+    // standing surface, so every loop-start rapid plowed the band — in the
+    // carve sim that painted a yellow streak at each contour's plunge point
+    // (Alice, 2026-10-26). The approach plane must clear the SURFACE at the
+    // first level and the PREVIOUS level's cut after that.
+    const o = op({ topZ: 0, floorZ: -2.5, stepDown: 1 });
+    const res = pocket2d(o, tool);
+    const safeZ = o.travelZ ?? o.topZ + o.safeClearance;
+    let standing = o.topZ; // nothing in-region stands above the surface… yet
+    const approachZ = new Set<string>();
+    const offenders: string[] = [];
+    for (const m of res.moves) {
+      const z = m.words.z;
+      if (z === undefined) continue;
+      if (m.rapid) {
+        if (z >= safeZ - 1e-6) continue; // the travel retract, not an approach
+        approachZ.add(z.toFixed(3));
+        if (z < standing + 0.5 - 1e-6) {
+          offenders.push(`G0 Z${z} descends below standing ${standing} + 0.5`);
+        }
+      } else {
+        // feed z words are plunge targets: after level N's plunges, the
+        // region stands no higher than the deepest one seen
+        standing = Math.min(standing, z);
+      }
+    }
+    expect(offenders).toEqual([]);
+    // one approach plane per level: surface + 0.5, then previous cut + 0.5
+    expect([...approachZ].map(Number).sort((a, b) => a - b)).toEqual([-1.5, -0.5, 0.5]);
+  });
+
   it('clears around islands (holes grow as passes shrink)', () => {
     const outer = square(0, 10);
     const hole: Vec2[] = [...square(3, 4)].reverse(); // CW hole
@@ -150,8 +182,11 @@ describe('pocket2d', () => {
         len += Math.hypot(q.x - p.x, q.y - p.y);
       }
     }
-    // plunges: passes × approach depth at plungeFeed; loops at cut feed
-    expect(res.estimatedMinutes).toBeCloseTo(len / 500 + (res.passes * 0.5) / 200, 5);
+    // plunges: passes × (approach-plane → cut depth) at plungeFeed; loops at
+    // cut feed. The approach plane sits APPROACH_CLEARANCE above the
+    // STANDING material (topZ at the first level — never a rapid through
+    // stock), so the plunge feeds 1.5 (0.5 air + the 1mm band) per pass
+    expect(res.estimatedMinutes).toBeCloseTo(len / 500 + (res.passes * 1.5) / 200, 5);
   });
 
   it('drops closed passes shorter than minLoopPerimeter, counting them', () => {

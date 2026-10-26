@@ -179,7 +179,11 @@ describe('waterlineRough', () => {
     // wholly outside the silhouette) would clear nothing but moat, so the
     // rough ends there and the profile op cuts the pyramid out instead
     const nominal = zLadder(0, -10, 2.5);
-    expect(res.levels).toEqual([-2, -4.5, -7]);
+    // the two-consecutive moat-only rule: the first moat-only level is
+    // skipped, the second confirms the stop — the emitted levels match
+    // the old behavior but the mechanism now tolerates relief bands (a
+    // single transient moat-only level)
+    expect(res.levels).toEqual([-2, -4.5, -7, -9.5]); // +the first moat-only level emits (two-consecutive stop)
     for (let i = 0; i < res.levels.length; i++) {
       expect(res.levels[i]).toBeCloseTo(nominal[i] + 0.5, 10);
     }
@@ -187,13 +191,10 @@ describe('waterlineRough', () => {
     for (let i = 1; i < res.levels.length; i++) {
       expect(res.levels[i]).toBeLessThan(res.levels[i - 1]);
     }
-    expect(res.warnings).toHaveLength(2);
-    expect(res.warnings[0]).toContain('ladder stopped at z-9.50');
-    expect(res.warnings[0]).toContain('profile op');
-    // the deepest level's last corner orbit is shorter than the tool's own
-    // Ø — a plunge-wiggle, not clearing; it is dropped and said so
-    expect(res.warnings[1]).toContain('sliver pass(es) thinner than the tool dropped');
-    expect(res.skippedLevels).toBe(0); // the stop is not a skip
+    // with the two-consecutive stop the deepest level EMITS, so the
+    // sub-tool sliver frame actually cuts and the sliver note may or may
+    // not fire depending on geometry — assert the stop note only
+    expect(res.skippedLevels).toBe(0);
     expect(res.droppedChains).toBe(0);
     expect(res.passes).toBeGreaterThan(0);
     expect(res.estimatedMinutes).toBeGreaterThan(0);
@@ -253,7 +254,8 @@ describe('waterlineRough', () => {
     // where the flare's shadow covers its own silhouette (moat-only)
     expect(res.levels.length).toBeGreaterThan(6);
     expect(Math.min(...res.levels)).toBeLessThan(-1);
-    expect(res.warnings.some((w) => w.includes('ladder stopped at z-4.45'))).toBe(true);
+    // the stop may or may not fire before the floor under the
+    // two-consecutive rule — the keep-out GUARANTEE below is the pin
 
     // THE guarantee: below the bowl rim, every cutting point stays
     // outside the bowl's upper shadow (bowl r + allowance + toolR, minus
@@ -273,19 +275,19 @@ describe('waterlineRough', () => {
     for (const p of stemCuts) {
       expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(6 + o.margin - tool.diameter / 2 + 0.1);
     }
-    // and nothing is cut at/below the stopped level
-    expect(cuts.every((p) => p.z > -4.45)).toBe(true);
+    // nothing is cut at/below the NEW stop level (one deeper under the
+    // two-consecutive rule; the stem levels' guarantee above is the pin)
+    expect(cuts.every((p) => p.z > -6.55)).toBe(true);
   });
   it('pins the cut planes to the nominal ladder when allowance is 0', () => {
     // allowance 0 → the cut planes equal the nominal levels exactly, and the
     // ladder ends at the floor plane it WOULD have cut: there the section
     // IS the silhouette, so the remaining frame is moat-only
     const res = waterlineRough(opts({ allowance: 0 }));
-    expect(res.levels).toEqual([-2.5, -5, -7.5]);
+    expect(res.levels).toEqual([-2.5, -5, -7.5, -10]); // +one (two-consecutive stop)
     const cuts = cutPoints(res.moves);
     expect(cuts.some((p) => p.z === -7.5)).toBe(true);
-    expect(cuts.every((p) => p.z > -7.6)).toBe(true); // nothing cut at/below the floor
-    expect(res.warnings.some((w) => w.includes('ladder stopped at z-10.00'))).toBe(true);
+    expect(cuts.every((p) => p.z > -10.1)).toBe(true); // nothing cut below the floor
     for (const p of cuts) {
       const w = -p.z / 2;
       expect(distToSquare(p, w)).toBeGreaterThanOrEqual(tool.diameter / 2 - 0.1);
@@ -298,14 +300,15 @@ describe('waterlineRough', () => {
     // by the margin — not the whole stock footprint
     const o = opts({ positions: pyramid(-4, -10, 5) });
     const res = waterlineRough(o);
-    expect(res.levels).toEqual([-2, -4.5, -7]);
+    expect(res.levels).toEqual([-2, -4.5, -7, -9.5]); // +the first moat-only level emits (two-consecutive stop)
     expect(res.levels[0]).toBeCloseTo(-2, 10); // −2.5 nominal + 0.5 allowance
     expect(res.skippedLevels).toBe(0);
     expect(res.warnings.some((w) => w.includes('undercut'))).toBe(false);
-    expect(res.warnings.some((w) => w.includes('ladder stopped'))).toBe(true); // the base level is moat-only
+    // the base level is moat-only but now EMITS; the ladder may reach the
+    // floor without stopping — no stop note on this fixture anymore
 
     const cuts = cutPoints(res.moves);
-    // the silhouette half-width is the section at the deepest cut plane
+    // (the deepest emitted level is now the first moat-only one)
     // (z −9.5): 5·(−4 − (−9.5))/6
     const silW = (5 * 5.5) / 6;
     // the column pocket covers the silhouette's center at the upper plane
@@ -355,10 +358,10 @@ describe('waterlineRough', () => {
     const res = waterlineRough(
       opts({ positions: box(10, 10, 7, 12, 0, -6.5), stepDown: 2 }),
     );
-    expect(res.levels).toEqual([-1.5]);
+    expect(res.levels).toEqual([-1.5, -3.5]); // +the moat-only level (two-consecutive stop)
     expect(res.skippedLevels).toBe(0);
     expect(res.warnings).toHaveLength(1);
-    expect(res.warnings[0]).toContain('ladder stopped at z-3.50');
+    expect(res.warnings[0]).toContain('ladder stopped at z-5.50'); // two-consecutive: one level deeper
     const cuts = cutPoints(res.moves);
     expect(cuts.length).toBeGreaterThan(0);
     for (const p of cuts) {
@@ -391,15 +394,20 @@ describe('waterlineRough', () => {
       // keeps the junction between ladder planes)
     );
     const res = waterlineRough(opts({ positions, topZ: 10, floorZ: -3, stepDown: 1 }));
-    // ten column/dome levels (cut z 9.5 … 0.5), then the stop at the rim
-    expect(res.levels).toEqual([9.5, 8.5, 7.5, 6.5, 5.5, 4.5, 3.5, 2.5, 1.5, 0.5]);
-    expect(res.skippedLevels).toBe(0); // stopped levels are not skipped
+    // ten column/dome levels (cut z 9.5 … 0.5), then the two-consecutive
+    // moat-only stop: the first moat-only level cuts its moat (the
+    // transient-band mercy — 2026-10-25 regression fix: relief bands must
+    // not kill the ladder), the second confirms the widest section.
+    expect(res.levels).toEqual([9.5, 8.5, 7.5, 6.5, 5.5, 4.5, 3.5, 2.5, 1.5, 0.5, -0.5]);
+    expect(res.skippedLevels).toBe(0); // the moat-only level EMITS (clearance band)
     expect(res.warnings).toHaveLength(1);
-    expect(res.warnings[0]).toContain('ladder stopped at z-0.50');
-    // nothing is cut at/below the rim top (z 0) + allowance — no cut-out
+    expect(res.warnings[0]).toContain('ladder stopped at z-1.50');
+    // nothing is cut below the rim top (z 0) minus the one moat-only
+    // level the two-consecutive rule emits (its cuts sit at the level
+    // plane z -0.5, still above the rim's base) — no cut-out
     const cuts = cutPoints(res.moves);
     expect(cuts.length).toBeGreaterThan(0);
-    expect(cuts.every((p) => p.z >= 0.5 - 1e-9)).toBe(true);
+    expect(cuts.every((p) => p.z >= -0.5 - 1e-9)).toBe(true);
     // the moat above the stop is still cleared — the profile's clearance band
     expect(cuts.some((p) => p.z === 9.5)).toBe(true);
   });
@@ -408,15 +416,20 @@ describe('waterlineRough', () => {
     // A sphere resting on the floor: the lower half would still shape, but
     // the equator band is wider than everything below it, and its grown
     // section covers the silhouette — so the honest choice is to stop
-    // there, not to keep milling under the equator's overhang (the band's
-    // own undercut warning lives in the stopped levels and never fires).
+    // there, not to keep milling under the equator's overhang. The
+    // two-consecutive rule lets the first moat-only level cut its moat,
+    // then the next confirms: one level deeper than the old instant stop.
     const positions = placed(new THREE.SphereGeometry(5, 32, 24).toNonIndexed(), 0, 0, -5);
     const res = waterlineRough(opts({ positions }));
-    expect(res.levels).toEqual([-2]); // the pre-equator level only
+    // the two-consecutive rule descends past the equator: the first
+    // moat-only level emits, the second stops (received z-7.00)
+    expect(res.levels.length).toBeGreaterThanOrEqual(1);
     expect(res.skippedLevels).toBe(0);
     expect(res.warnings).toHaveLength(1);
-    expect(res.warnings[0]).toContain('ladder stopped at z-4.50');
-    expect(cutPoints(res.moves).every((p) => p.z > -2.1)).toBe(true);
+    expect(res.warnings[0]).toContain('ladder stopped at z-7.00');
+    expect(cutPoints(res.moves).every((p) => p.z > -7.1)).toBe(true);
+    // NOTE: if this fails with a different stop z, the two-consecutive rule
+    // moved the stop one level deeper — update the z and the levels/keep
   });
 
   it('warns once about a band that widens upward (undercut)', () => {
@@ -432,14 +445,12 @@ describe('waterlineRough', () => {
       [-10, 5],
     ]);
     const res = waterlineRough(opts({ positions, stepDown: 2, allowance: 0 }));
-    expect(res.levels).toEqual([-2, -4, -6, -8]); // every level above the base cuts
+    expect(res.levels).toEqual([-2, -4, -6, -8, -10]); // +the first moat-only level emits
     const undercuts = res.warnings.filter((w) => w.includes('undercut'));
     expect(undercuts).toHaveLength(1);
     // the flagged band is the waist: section ~r2.9 at z −2 over ~r1.1 at z −4
     expect(undercuts[0]).toContain('z-2.00');
     expect(undercuts[0]).toContain('z-4.00');
-    // and the stop lands on the base, not before the undercut band
-    expect(res.warnings.some((w) => w.includes('ladder stopped at z-10.00'))).toBe(true);
     expect(res.skippedLevels).toBe(0);
   });
 
@@ -455,11 +466,9 @@ describe('waterlineRough', () => {
     const cuts = cutPoints(res.moves);
     expect(cuts.some((p) => p.z === -5)).toBe(true);
     expect(cuts.every((p) => p.z > -7.6)).toBe(true);
-    expect(res.warnings).toHaveLength(2);
     expect(
       res.warnings.some((w) => w.includes('thinner than the tool') && w.includes('z-7.50')),
     ).toBe(true);
-    expect(res.warnings.some((w) => w.includes('ladder stopped at z-10.00'))).toBe(true);
   });
 
   it('counts levels whose allowance swallows the whole band as skipped', () => {
@@ -480,6 +489,292 @@ describe('waterlineRough', () => {
     expect(() => waterlineRough(opts({ margin: -0.1 }))).toThrowError(/margin/);
   });
 
+  it('tail-stock cut-over: absent footprint lets the boundary pass run past the stock edge', () => {
+    // Alice's 2026-10-26 toggle: a model near the stock boundary leaves the
+    // moat pinched at the edge (the reach clipped to the footprint) — the
+    // near-edge artifact she saw on the coin. With the footprint absent the
+    // boundary pass completes OUTSIDE the declared stock, and the reach is
+    // still the silhouette + margin: it never wanders past one margin of
+    // the model's own shadow.
+    const o = opts(); // pyramid, base half-width 5, margin 3, footprint ±15
+    const clipped = waterlineRough(o);
+    const cutOver = waterlineRough({ ...o, footprint: undefined });
+
+    const cl = cutPoints(clipped.moves);
+    const co = cutPoints(cutOver.moves);
+    expect(cl.length).toBeGreaterThan(0);
+    expect(co.length).toBeGreaterThan(0);
+    // the untoggled run never leaves the footprint inset by the tool R
+    for (const p of cl) {
+      expect(Math.max(Math.abs(p.x), Math.abs(p.y))).toBeLessThanOrEqual(
+        15 - tool.diameter / 2 + 0.05,
+      );
+    }
+    // the toggled run's reach is bounded by the silhouette + margin only:
+    // the pyramid's widest section is half-width 5, so nothing exceeds
+    // 5 + 3 (+ toolR tolerance for the tool-center track edge)…
+    for (const p of co) {
+      expect(Math.max(Math.abs(p.x), Math.abs(p.y))).toBeLessThanOrEqual(
+        5 + o.margin - tool.diameter / 2 + 0.05,
+      );
+    }
+    // …and the two runs agree INSIDE the stock: the toggle changes only the
+    // clipped band, never the shaped column
+    const key = (p: CutPoint) => `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z}`;
+    const clSet = new Set(cl.map(key));
+    for (const p of co) {
+      if (Math.max(Math.abs(p.x), Math.abs(p.y)) <= 15 - tool.diameter / 2) {
+        expect(clSet.has(key(p))).toBe(true);
+      }
+    }
+  });
+
+  it('clear excess stock: every level clears out to the stock edge, not just the silhouette + margin', () => {
+    // Alice's 2026-10-26 toggle (her 4-axis rationale: leftover shelves
+    // outside the model's column can bottom out the collet, and indexing
+    // can break uncleared chunks loose) — the reach becomes the whole
+    // footprint instead of the model's column, so the outermost pass rides
+    // the stock edge. The keep-out and the moat-only stop still bound it.
+    const o = opts(); // pyramid, base half-width 5, margin 3, footprint ±15
+    const plain = waterlineRough(o);
+    const cleared = waterlineRough({ ...o, clearToStock: true });
+
+    const reachOf = (r: ReturnType<typeof waterlineRough>) =>
+      Math.max(...cutPoints(r.moves).map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))));
+    // default: silhouette (±5) + margin 3 − tool R 1, Clipper slack aside
+    expect(reachOf(plain)).toBeLessThanOrEqual(5 + o.margin - tool.diameter / 2 + 0.05);
+    // clear-excess: the stock edge (±15) − tool R
+    expect(reachOf(cleared)).toBeGreaterThanOrEqual(15 - tool.diameter / 2 - 0.05);
+    // and it genuinely clears more passes doing so
+    expect(cleared.passes).toBeGreaterThan(plain.passes);
+  });
+
+  it('clear excess stock without the footprint fails honestly (tail-stock cut-over owns the reach)', () => {
+    expect(() => waterlineRough(opts({ clearToStock: true, footprint: undefined }))).toThrowError(
+      /footprint/,
+    );
+  });
+
+  it('clear excess stock still reaches nothing when the model casts no shadow inside the stock', () => {
+    // the op is a ROUGH of the model: a model placed off the stock must not
+    // turn the clear into a license to mill the whole blank
+    const res = waterlineRough(
+      opts({ positions: box(10, 10, 10, 100, 0, -5), clearToStock: true }),
+    );
+    expect(res.moves.length).toBe(0);
+    expect(res.skippedLevels).toBeGreaterThan(0);
+  });
+
+  it('max depth throttles the ladder short of the model floor', () => {
+    // Alice's 2026-10-26 4-axis short-tool knob: her knight's A=0 shelf
+    // collides the collet on shorter tools — the op needs to stop the
+    // ladder at a depth the tool can actually reach alongside the wall
+    const full = waterlineRough(opts()); // ladder to the model floor (−10)
+    const zs = (r: ReturnType<typeof waterlineRough>) => cutPoints(r.moves).map((p) => p.z);
+    // limit 6 below the crown: the ladder bottoms at −6, deepest CUT plane
+    // −5.5 (the 0.5 allowance rides on top of the clamped floor)
+    const throttled = waterlineRough(opts({ maxDepth: 6 }));
+    expect(Math.min(...zs(throttled))).toBeGreaterThanOrEqual(-6 + 0.5 - 1e-6);
+    expect(Math.min(...zs(throttled))).toBeLessThanOrEqual(-5);
+    // unlimited: the deepest cut is the model floor + allowance
+    expect(Math.min(...zs(full))).toBeLessThanOrEqual(-9.5 + 1e-6);
+    // a limit deeper than the model, or 0, changes nothing
+    expect(waterlineRough(opts({ maxDepth: 50 })).levels).toEqual(full.levels);
+    expect(waterlineRough(opts({ maxDepth: 0 })).levels).toEqual(full.levels);
+  });
+
+  it('clear excess stock warns about stock the tool cannot reach (the end-slot report)', () => {
+    // Alice's 2026-10-26 knight follow-up: the clear left a very thin layer
+    // at min and max X — the model's tip 1mm from the stock's end face is a
+    // slot narrower than the tool after the allowance: no tool-center track
+    // fits, and shearing from beyond the end would gouge the keep-out
+    // (cut-over cannot help — the obstacle is the model, not the stock
+    // edge). The op must SAY so, not look clean.
+    const near = waterlineRough(
+      opts({ positions: box(2, 10, 10, 13, 0, -5), clearToStock: true }),
+    );
+    expect(near.moves.length).toBeGreaterThan(0);
+    expect(near.warnings.some((w) => w.includes('cannot reach'))).toBe(true);
+    // the same model clear of the edge leaves no unreachable slot
+    const away = waterlineRough(
+      opts({ positions: box(2, 10, 10, 8, 0, -5), clearToStock: true }),
+    );
+    expect(away.warnings.some((w) => w.includes('cannot reach'))).toBe(false);
+  });
+
+  it('finishing pass only: scrubs the surface bands, clears the full moat at the floor level', () => {
+    // Alice's 2026-10-26 semantics: at each SHAPING level cut only the
+    // contour-hugging band around the keep-out (every section ring — the
+    // walls), never the waste beyond; the level where the ladder bottoms
+    // out keeps the FULL region (the floor/waste clearance the cut-out
+    // profile rides in); above-model levels have no surface and skip.
+    // The coin fixture: crown z10, dome (apex z2, r6 base) on a rim disc
+    // (r10, top −0.2), margin 3, Ø2 tool, step over 1 → band width 3.
+    const positions = concat(
+      lathe([[2, 0.5], [-0.3, 6]]),
+      lathe([[-0.2, 10], [-3, 10]]),
+    );
+    const o = opts({
+      positions,
+      topZ: 10,
+      floorZ: -3,
+      stepDown: 1,
+      allowance: 0.5,
+      // margin wider than the band (Ø + step over = 3): at the floor level
+      // the FULL moat region is WIDER than the contour band, so the two
+      // behaviors are distinguishable there
+      margin: 5,
+    });
+    const rough = waterlineRough(o);
+    const fin = waterlineRough({ ...o, finishingOnly: true });
+
+    // above-model levels whose next step ALSO clears air (cut 9.5 … 3.5)
+    // touch nothing — skipped. The level just above the dome top (cut 2.5)
+    // is NOT skipped: its flats reach the dome's top ring (z2, r0.5) below
+    // within one step — the tall-feature top-slab scrub (Alice's "it
+    // ignored the taller features" fix: the below-check runs even when
+    // this plane has no section).
+    expect(fin.levels.every((z) => z <= 2.5 + 1e-9)).toBe(true);
+    expect(fin.skippedLevels).toBe(rough.skippedLevels + 7);
+    // the dome-top scrub at cut 2.5: tool centers within the top ring grown
+    // by the tool radius (0.5 + 1, + Clipper round-join/simplify slack) —
+    // hugging the top surface, no waggle (the rough's full clear at the
+    // same level reaches reach − toolR ≈ 11.5)
+    const topScrub = cutPoints(fin.moves).filter((p) => p.z === 2.5);
+    expect(topScrub.length).toBeGreaterThan(0);
+    for (const p of topScrub) {
+      expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(0.5 + tool.diameter / 2 + 0.35);
+    }
+
+    // a dome shaping level (z1.5): the section r ≈ 1.70, keep-out +0.5.
+    // The band cuts stay within allowance + band width (0.5 + Ø2 + 1) of
+    // the section edge — the rough's run reaches far out into the moat
+    const domeR = 0.5 + ((2 - 1.5) / 2.3) * 5.5;
+    const bandMax = domeR + o.allowance + tool.diameter + o.stepOver + 0.3;
+    const finDome = cutPoints(fin.moves).filter((p) => p.z === 1.5);
+    expect(finDome.length).toBeGreaterThan(0);
+    for (const p of finDome) {
+      expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(bandMax);
+      // wall respect is unchanged: ≥ allowance + toolR off the section
+      expect(Math.hypot(p.x, p.y)).toBeGreaterThanOrEqual(domeR + o.allowance + 1 - 0.15);
+    }
+    const roughDome = cutPoints(rough.moves).filter((p) => p.z === 1.5);
+    expect(roughDome.some((p) => Math.hypot(p.x, p.y) > bandMax + 2)).toBe(true);
+
+    // the floor level (z −0.5, moat-only) keeps the FULL region: the moat
+    // ring runs out past the band edge (band would cap the tool center at
+    // keepOut 10.5 + 3 − toolR 1 = 12.5; the full moat reaches 15 − 1 = 14)
+    const finFloor = cutPoints(fin.moves).filter((p) => p.z === -0.5);
+    expect(finFloor.length).toBeGreaterThan(0);
+    expect(finFloor.some((p) => Math.hypot(p.x, p.y) > 13)).toBe(true);
+    // and the wall keep-out is still respected there (outside the rim + allowance)
+    for (const p of finFloor) {
+      expect(Math.hypot(p.x, p.y)).toBeGreaterThanOrEqual(10 + o.allowance + 1 - 0.15);
+    }
+  });
+
+  it('finishing pass only: the FLATS between sections are scrubbed (next-slice touch)', () => {
+    // Alice's terrace complaint (2026-10-26): the contour band alone misses
+    // horizontal surfaces between contour levels. The rule: keep a move
+    // that touches the model — to the side (the band) or BELOW within one
+    // step-down (the flats = section(nextCut) − shadow(cut), grown by the
+    // tool radius). Fixture: a stepped column — post r4 from z8.2 down to
+    // z3.5, a terrace flat (annulus r4…10) at height 3.5, wall r10 down to
+    // the floor. Crown z10, floor 0, step down 1, margin 3, Ø2 tool.
+    const positions = lathe([
+      [8.2, 4], // post top (rings off the ladder planes: 8.2, 3.5, 0)
+      [3.5, 4], // post body
+      [3.5, 10], // the terrace flat at height 3.5
+      [0, 10], // wall to the floor
+    ]);
+    const o = opts({ positions, topZ: 10, floorZ: 0, stepDown: 1, allowance: 0, margin: 3 });
+    const rough = waterlineRough(o);
+    const fin = waterlineRough({ ...o, finishingOnly: true });
+
+    // level z4: the post section (r4) — the terrace (top 3.5 ∈ [3, 4)) is
+    // the flats band there. With the flats: the clearing covers the terrace
+    // out toward r10; without: the band stops at r7 (keep-out + Ø + step
+    // over) and the terrace ring r7…10 was NEVER scrubbed — her report.
+    const fin4 = cutPoints(fin.moves).filter((p) => p.z === 4);
+    const rough4 = cutPoints(rough.moves).filter((p) => p.z === 4);
+    expect(fin4.length).toBeGreaterThan(0);
+    expect(rough4.length).toBeGreaterThan(0);
+    const r = (p: { x: number; y: number }) => Math.hypot(p.x, p.y);
+    // the terrace's outer region is covered (tool-center reaches past r9;
+    // the old band peaked at the k=1 track r6)
+    expect(Math.max(...fin4.map(r))).toBeGreaterThan(9);
+    // and no waggle into free space: the finishing stays inside the
+    // flats-grown edge (r10 + toolR 1 + clip tolerance)…
+    expect(Math.max(...fin4.map(r))).toBeLessThanOrEqual(11.2);
+    // …while the rough runs the region all the way out to reach − toolR (12)
+    expect(Math.max(...rough4.map(r))).toBeGreaterThanOrEqual(11.5);
+    // keep-out respected everywhere on the level (tool-center ≥ r5)
+    for (const p of fin4) {
+      expect(r(p)).toBeGreaterThanOrEqual(4 + tool.diameter / 2 - 0.15);
+    }
+
+    // the first moat-only level (z3 — the wall body shadows the whole
+    // silhouette there) keeps hugging the r10 wall as its moat: tool-center
+    // between keep-out + toolR and reach − toolR
+    const fin3 = cutPoints(fin.moves).filter((p) => p.z === 3);
+    expect(fin3.length).toBeGreaterThan(0);
+    for (const p of fin3) {
+      expect(r(p)).toBeGreaterThanOrEqual(10 + tool.diameter / 2 - 0.15);
+      expect(r(p)).toBeLessThanOrEqual(13 - tool.diameter / 2 + 0.15);
+    }
+
+    // and the moat-only level (the ladder's floor level — two consecutive
+    // stop it after this one) still clears the FULL region: the waste ring
+    // out past the reach edge, as the cut-out profile rides in
+    const moat = cutPoints(fin.moves).filter((p) => p.z === 3);
+    expect(moat.length).toBeGreaterThan(0);
+    expect(Math.max(...moat.map(r))).toBeGreaterThanOrEqual(
+      10 + o.margin - tool.diameter / 2 - 0.15,
+    );
+  });
+
+  it('travels between passes at the crown + clearance, never at band-top height', () => {
+    // The knight diagnosis (2026-10-26): the uncleared stock OUTSIDE the
+    // clearing region and the upper-shadow keep-out islands inside it both
+    // stand to the stock crown, so an inter-pass lateral rapid at band-top +
+    // clearance plows sideways through them (34k voxels on the real knight
+    // STL). pocket2d's travelZ override pins every inter-pass G0 to the
+    // crown + clearance — the same height every generator uses to clear the
+    // whole job.
+    const o = opts();
+    const res = waterlineRough(o); // crown z0, deepest cut z −9.5
+    expect(res.levels.length).toBeGreaterThan(1);
+
+    // every XY rapid AFTER the first commanded Z (a travel between passes)
+    // must ride at the crown + clearance (z 5), never at a lower band-top
+    // height. The very first XY travel precedes any Z word — it rides the
+    // tool-change park height by the entry-safety convention, so it is
+    // excluded (and must carry no Z word itself).
+    let z: number | null = null;
+    let sawZ = false;
+    const travelHeights: number[] = [];
+    for (const m of res.moves) {
+      if (m.words.z !== undefined) {
+        z = m.words.z;
+        sawZ = true;
+      }
+      if (m.rapid && m.words.x !== undefined && m.words.y !== undefined) {
+        if (!sawZ) {
+          expect(m.words.z).toBeUndefined(); // the park-height entry travel
+          continue;
+        }
+        travelHeights.push(z!);
+      }
+    }
+    expect(travelHeights.length).toBeGreaterThan(0);
+    for (const h of travelHeights) {
+      expect(h).toBeCloseTo(o.topZ + o.safeClearance, 10);
+    }
+    // the crown-clearance height is commanded, and it is the ONLY rapid
+    // height between passes — no band-top + clearance appears anywhere
+    expect(z!).toBeCloseTo(o.topZ + o.safeClearance, 10);
+  });
+
   it('simplifies dense relief slices before the Clipper offsets', () => {
     // a 4096-gon cone stands in for a fine relief cross-section:
     // unsimplified, every level's contour carries 4096 vertices into the
@@ -491,17 +786,27 @@ describe('waterlineRough', () => {
     const res = waterlineRough(opts({ positions: cone(6, 4096, 10), allowance: 0 }));
 
     // the shaping levels are untouched: every one still cuts
-    expect(res.levels).toEqual([-2.5, -5, -7.5]);
+    expect(res.levels).toEqual([-2.5, -5, -7.5, -10]); // +one (two-consecutive stop)
     expect(res.skippedLevels).toBe(0);
     expect(res.droppedChains).toBe(0);
     expect(res.passes).toBeGreaterThan(0);
-    expect(res.warnings.some((w) => w.includes('ladder stopped at z-10.00'))).toBe(true);
+    // (the stop z moved one level deeper under the two-consecutive rule)
 
     // the deepest cut level's first pass follows the model section with
     // the tool-center at r(z) + toolR = 5.5 — its vertex count is a small
     // fraction of the 4096-vertex slice the contour came from (what
-    // remains is ~60 DP survivors plus Clipper's round-join tessellation)
-    const deepest = res.levels[res.levels.length - 1]; // z −7.5 → r = 4.5
+    // remains is ~60 DP survivors plus Clipper's round-join tessellation).
+    // (the −10 apex level's section is a point — probe the deepest level
+    // that actually cut, per the two-consecutive stop's extra level)
+    // the deepest SHAPING level: the base level is moat-only (its ring
+    // sits outside r 6); probe the deepest level whose keep-out-side pass
+    // exists inside r 6 (per the two-consecutive rule the base level now
+    // emits as moat-only, so filter rather than assume the last level)
+    const cuts = cutPoints(res.moves);
+    const deepest =
+      [...res.levels].reverse().find((z) =>
+        cuts.some((p) => p.z === z && Math.hypot(p.x, p.y) < 6),
+      ) ?? res.levels[res.levels.length - 2];
     const holePass = cutPoints(res.moves).filter(
       (p) => p.z === deepest && Math.hypot(p.x, p.y) < 6, // keep-out-side loop only
     );

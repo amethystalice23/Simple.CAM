@@ -54,6 +54,8 @@ import { decimateForDetection } from '../cam/decimate';
 import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
 import { CalibrationDialog } from './CalibrationDialog';
+import { SimulateDialog } from './SimulateDialog';
+import { useCarveSim } from './useCarveSim';
 import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -112,6 +114,11 @@ export function App() {
   const [showCalibration, setShowCalibration] = useState(false);
   /** the about box is open (click the product name in the header) */
   const [showAbout, setShowAbout] = useState(false);
+  /** the carve simulator dialog is open (top-bar "Simulate…") */
+  const [showSimulate, setShowSimulate] = useState(false);
+  /** the carve simulator hook — chunk meshes flow to the Viewport while
+   *  the dialog runs; cleared (dispose) on exit */
+  const carveSim = useCarveSim();
   /** ops whose toolpath is hidden from the preview (the export dialog
    * selects the ops that go into the .nc separately) */
   const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
@@ -121,8 +128,18 @@ export function App() {
   const [tab, setTab] = useState<Tab>('stock');
   const [tools, setTools] = useState<Tool[]>(loadToolLibrary);
   const [toolId, setToolId] = useState<string>(() => defaultToolId(loadToolLibrary()));
-  const [showFeatures, setShowFeatures] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
+  /** viewport display layers (Alice's 2026-10-25 consolidation): the
+   *  top-right Layers dropdown is the ONE place visibility is controlled
+   *  — stock/model/features/paths/simulation ticks, replacing the
+   *  scattered Model-tab "Show detected features" and Ops-tab "Display
+   *  paths" checkboxes (features/paths stay App state: overlays + picking
+   *  read them beyond the Viewport) */
+  const [showFeatures, setShowFeatures] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
+  const [showStock, setShowStock] = useState(true);
+  const [showModel, setShowModel] = useState(true);
+  const [showSim, setShowSim] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>('model');
@@ -142,7 +159,6 @@ export function App() {
   const autosavedModelRef = useRef<Uint8Array | null>(null);
   const restoredRef = useRef(false); // autosave waits for the mount restore
   const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
-  const [showPreview, setShowPreview] = useState(true);
   /** the job: ordered operations, each with its own selection and params */
   const [ops, setOps] = useState<JobOp[]>([]);
   const [generated, setGenerated] = useState<Record<string, GeneratedOp>>({});
@@ -628,6 +644,53 @@ export function App() {
     return { angle, axisZ: rotaryCalibrationOf(stock).axisZ };
   }, [ops, expandedOpId, stock]);
 
+  /** the carve simulator's tool lookup: moveIndex → tool-table index over
+   *  the SAME flatten the preview uses (previewMoves = visible ops'
+   *  moves). buildToolSpec indexes the same table, so tool 0xffff (no
+   *  tool) carves nothing. */
+  const simToolOf = useMemo(() => {
+    const toolIndex = new Map<string, number>();
+    tools.forEach((t, i) => toolIndex.set(t.id, i));
+    let mi = 0;
+    const perMove: number[] = [];
+    for (const o of ops) {
+      if (hiddenOps.has(o.id)) continue;
+      const ti = toolIndex.get(o.toolId) ?? 0xffff;
+      const len = generated[o.id]?.moves.length ?? 0;
+      for (let k = 0; k < len; k++) perMove[mi + k] = ti;
+      mi += len;
+    }
+    return (moveIndex: number) => perMove[moveIndex] ?? 0xffff;
+  }, [ops, hiddenOps, generated, tools]);
+
+  /** the carve simulator's per-move step-down (the owning op's stepDown /
+   *  peckDepth — drives the 3-class classification: removal deeper than
+   *  the op's own step-down of the standing surface paints yellow). 0 =
+   *  the kernel's one-pitch default (finish ops / single-pass ops). Same
+   *  flatten as simToolOf. */
+  const simStepDown = useMemo(() => {
+    let mi = 0;
+    let total = 0;
+    for (const o of ops) {
+      if (hiddenOps.has(o.id)) continue;
+      total += generated[o.id]?.moves.length ?? 0;
+    }
+    const perMove = new Float32Array(total);
+    for (const o of ops) {
+      if (hiddenOps.has(o.id)) continue;
+      const len = generated[o.id]?.moves.length ?? 0;
+      const sd =
+        o.kind === 'drill'
+          ? o.peckDepth
+          : 'stepDown' in o
+            ? (o.stepDown as number | undefined) ?? 0
+            : 0;
+      for (let k = 0; k < len; k++) perMove[mi + k] = sd;
+      mi += len;
+    }
+    return perMove;
+  }, [ops, hiddenOps, generated]);
+
   /** show/hide one op's toolpath — display only, the export dialog decides
    * what goes into the .nc */
   const toggleOpVisible = (id: string) => {
@@ -656,6 +719,10 @@ export function App() {
     setGenerated(next);
     updateJobOutput(next);
     setShowPreview(true); // recalculate turns the path display on
+    // the sim carved the OLD moves — a recalc invalidates it (Alice's
+    // 2026-10-25 rule: any toolpath lifecycle change clears the sim layer)
+    carveSim.dispose();
+    setShowSim(false);
     setError(null);
   };
 
@@ -690,6 +757,9 @@ export function App() {
     setGenerated(next);
     updateJobOutput(next);
     setShowPreview(true);
+    // the sim carved the OLD moves — any toolpath lifecycle change clears it
+    carveSim.dispose();
+    setShowSim(false);
     setError(null);
   };
 
@@ -839,6 +909,8 @@ export function App() {
       setEditingOpId(null);
       setSelectedObjectId('model');
       setPreviewMoves(null);
+      carveSim.dispose(); // the sim carved the old model's moves
+      setShowSim(false);
       setTab('model');
       setError(null);
     } catch (e) {
@@ -886,6 +958,8 @@ export function App() {
     setSelection([]);
     setSelectedObjectId(job.model ? 'model' : (job.primitives[0]?.id ?? null));
     setPreviewMoves(null);
+    carveSim.dispose(); // the sim carved the previous job's moves
+    setShowSim(false);
     if (job.model) {
       const bytes = decodeStl(job.model.stlBase64);
       setModelBytes(bytes);
@@ -961,6 +1035,8 @@ export function App() {
     setSelection([]);
     setSelectedObjectId(null); // no model, no primitives yet
     setPreviewMoves(null);
+    carveSim.dispose(); // the sim carved the previous job's moves
+    setShowSim(false);
     lastSavedRef.current = jobFingerprint(
       saveJobFile({
         stock: initialStock,
@@ -1062,6 +1138,14 @@ export function App() {
           >
             Calibration…
           </button>
+          <button
+            type="button"
+            title="Carve the generated toolpaths out of a voxel stock and view the result"
+            disabled={!previewMoves}
+            onClick={() => setShowSimulate(true)}
+          >
+            Simulate…
+          </button>
           <button type="button" onClick={() => setShowExport(true)}>
             Export g-code
           </button>
@@ -1095,17 +1179,30 @@ export function App() {
             transform={transform}
             sources={sources}
             selectedObjectId={selectedObjectId}
-            showFeatures={showFeatures}
             measureMode={measureMode}
             edgePickingEnabled={editingOpId === null}
             opSelection={resolvedSelection}
             primitives={primitives}
             previewMoves={previewMoves}
-            showPreview={showPreview}
             slicePreview={slicePreview}
             viewDatum={viewDatum}
             pickKind={featurePick?.kind ?? null}
             facePreview={facePreview}
+            simChunks={showSim && carveSim.state.chunks.size > 0 ? carveSim.state.chunks : null}
+            displayLayers={{
+              stock: showStock,
+              model: showModel,
+              features: showFeatures,
+              paths: showPreview,
+              simulation: showSim,
+            }}
+            onToggleLayer={(layer, v) => {
+              if (layer === 'stock') setShowStock(v);
+              else if (layer === 'model') setShowModel(v);
+              else if (layer === 'features') setShowFeatures(v);
+              else if (layer === 'paths') setShowPreview(v);
+              else setShowSim(v);
+            }}
             onToggleSelect={toggleSelect}
             onClearSelection={clearSelection}
           />
@@ -1149,9 +1246,7 @@ export function App() {
                 featurePick?.kind === 'wrapDiameter' && featurePick.opId === selectedObjectId
               }
               onPickWrapDiameter={toggleWrapDiameterPick}
-              showFeatures={showFeatures}
               measureMode={measureMode}
-              onShowFeaturesChange={setShowFeatures}
               onMeasureModeChange={(v) => {
                 setMeasureMode(v);
                 if (!v) setEditingOpId(null); // leaving measure mode stops op editing
@@ -1178,7 +1273,6 @@ export function App() {
               generated={generated}
               editingOpId={editingOpId}
               expandedOpId={expandedOpId}
-              showPreview={showPreview}
               hasModel={!!geometry}
               axisMode={stock.axisMode}
               stock={stock}
@@ -1202,6 +1296,13 @@ export function App() {
                 const nextHidden = new Set(hiddenOps);
                 nextHidden.delete(id);
                 setOps(nextOps);
+                if (carveSim.state.chunks.size > 0) {
+                  // the carved overlay belongs to the whole move stream —
+                  // deleting an op invalidates it like any other toolpath
+                  // lifecycle change
+                  carveSim.dispose();
+                  setShowSim(false);
+                }
                 setGenerated(nextGen);
                 setHiddenOps(nextHidden);
                 if (editingOpId === id) setEditingOpId(null);
@@ -1216,7 +1317,12 @@ export function App() {
               onRecalcOne={recalcOne}
               onRecalcAll={recalcAll}
               onToggleExpanded={(id) => setExpandedOpId(expandedOpId === id ? null : id)}
-              onTogglePreview={setShowPreview}
+              onClearToolpaths={() => {
+                setGenerated({});
+                setPreviewMoves(null);
+                carveSim.dispose(); // the sim carved the wiped moves
+                setShowSim(false);
+              }}
               hiddenOps={hiddenOps}
               onToggleVisible={toggleOpVisible}
             />
@@ -1245,6 +1351,22 @@ export function App() {
           initialToolId={lastToolId}
           onClose={() => setShowCalibration(false)}
           onGenerate={generateCalibration}
+        />
+      )}
+      {showSimulate && (
+        <SimulateDialog
+          stock={stock}
+          tools={tools}
+          moves={previewMoves ?? []}
+          toolOf={simToolOf}
+          stepDown={simStepDown}
+          sim={carveSim}
+          onRun={() => {
+            setShowSim(true); // the Simulation layer goes on with the run
+            setShowPreview(false); // paths obscure the voxels being drawn
+            setShowSimulate(false); // dismiss — the result is a viewport layer
+          }}
+          onClose={() => setShowSimulate(false)}
         />
       )}
     </div>

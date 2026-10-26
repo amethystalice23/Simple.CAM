@@ -29,7 +29,6 @@ interface Props {
   generated: Record<string, GeneratedOp>;
   editingOpId: string | null;
   expandedOpId: string | null;
-  showPreview: boolean;
   hasModel: boolean;
   /** machine capability — gates the rotary ops (index, face cylinder) */
   axisMode: AxisMode;
@@ -59,8 +58,10 @@ interface Props {
   onSelectFeatures: (id: string | null) => void;
   onRecalcOne: (id: string) => void;
   onRecalcAll: () => void;
+  /** discard all calculated toolpaths (the Clear button — ops keep their
+   *  parameters, the preview + export inputs empty until recalculated) */
+  onClearToolpaths: () => void;
   onToggleExpanded: (id: string) => void;
-  onTogglePreview: (v: boolean) => void;
 }
 
 /** "Ø4.0 hole · 10×4 +2 more" style snippet of an op's selected features. */
@@ -340,6 +341,52 @@ function TabsFields(props: {
   );
 }
 
+/**
+ * The 'Finishing pass only' toggle (Alice, 2026-10-26): skip the step-down
+ * ladder — go straight down and cut only the finishing pass at the final
+ * depth, assuming the bulk is already cleared (a roughing op, or a previous
+ * run). One consistent switch across every ladder op; the waterline's
+ * semantics differ (scrub the surface, not the depth) and it passes its
+ * own title. Checked also HIDES the meaningless step-down field (the
+ * waterline keeps its — level density still matters there).
+ *
+ * `allowanceKey`: the op's roughing-allowance field, ZEROED when the box is
+ * ticked ON (a finishing pass cuts to size — the allowance was roughing
+ * stock for exactly the ladder being skipped; Alice, 2026-10-26). The user
+ * can set it back afterwards; unticking restores nothing.
+ */
+function FinishingOnlyCheck(props: {
+  /** one of the ten ladder ops (structural — index/drill/chamfer never call this) */
+  op: { finishingOnly?: boolean };
+  upd: (p: Partial<JobOp>) => void;
+  title?: string;
+  /** the op's allowance field name, zeroed on tick-ON; absent = the op has none */
+  allowanceKey?: 'allowance' | 'finishAllowance';
+}) {
+  return (
+    <label
+      className="check"
+      title={
+        props.title ??
+        'Skip the roughing ladder — go straight down and cut only the finishing pass at the final depth. Assumes the bulk is already cleared (a roughing op, or a previous run)'
+      }
+    >
+      <input
+        type="checkbox"
+        checked={props.op.finishingOnly ?? false}
+        onChange={(e) => {
+          const checked = e.target.checked;
+          props.upd({
+            finishingOnly: checked,
+            ...(checked && props.allowanceKey ? { [props.allowanceKey]: 0 } : {}),
+          } as Partial<JobOp>);
+        }}
+      />
+      <span>finishing pass only</span>
+    </label>
+  );
+}
+
 /** The per-type parameter fields for an open op panel. */
 function ParamFields(props: {
   op: JobOp;
@@ -407,17 +454,22 @@ function ParamFields(props: {
               ⇩
             </button>
           </div>
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
-          <NumberField
-            label="Step over (mm)"
-            // null = derived; show the 0.5·tool Ø default (a 6mm flat's 3.0
-            // when the tool id dangles) so the box is never empty
-            value={op.stepOver ?? (props.tool ? defaultFaceStepOver(props.tool) : 3.0)}
-            min={0.1}
-            step={0.1}
-            onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)}
-          />
-          <NumberField label="Finish allowance (mm)" value={op.finishAllowance} min={0} step={0.05} onCommit={(v) => upd({ finishAllowance: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="finishAllowance" />
+          {!op.finishingOnly && (
+            <>
+              <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+              <NumberField
+                label="Step over (mm)"
+                // null = derived; show the 0.5·tool Ø default (a 6mm flat's 3.0
+                // when the tool id dangles) so the box is never empty
+                value={op.stepOver ?? (props.tool ? defaultFaceStepOver(props.tool) : 3.0)}
+                min={0.1}
+                step={0.1}
+                onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)}
+              />
+              <NumberField label="Finish allowance (mm)" value={op.finishAllowance} min={0} step={0.05} onCommit={(v) => upd({ finishAllowance: v } as Partial<JobOp>)} />
+            </>
+          )}
           <label className="field">
             <span>Pattern</span>
             <select value={op.pattern} onChange={(e) => upd({ pattern: e.target.value as 'vertical' | 'horizontal' | 'spiral' })}>
@@ -460,7 +512,10 @@ function ParamFields(props: {
             />
             <span>flatten — cut across interior voids</span>
           </label>
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="allowance" />
+          {!op.finishingOnly && (
+            <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          )}
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
         </>
       );
@@ -503,7 +558,10 @@ function ParamFields(props: {
             onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="allowance" />
+          {!op.finishingOnly && (
+            <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          )}
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
           <p className="hint">
             the region is the cross-section at the slice depth — put it where the body is
@@ -528,22 +586,59 @@ function ParamFields(props: {
             step={0.1}
             onCommit={(v) => upd({ margin: v } as Partial<JobOp>)}
           />
+          <label className="check" title="This allows the tool tip to pass outside of the defined stock's area">
+            <input
+              type="checkbox"
+              checked={op.cutBeyondStock}
+              onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>allow tail stock cut-over</span>
+          </label>
+          <label
+            className="check"
+            title="Clear all stock outside the model, right out to the stock edge, as each level descends — essential in 4-axis: leftover shelves can bottom out the collet or head, and indexing can break uncleared chunks loose"
+          >
+            <input
+              type="checkbox"
+              checked={op.clearToStock ?? false}
+              onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>clear excess stock</span>
+          </label>
+          <NumberField
+            label="Max depth (mm)"
+            // 0 = down to the model floor; the box reads clean when unlimited
+            value={op.maxDepth ?? 0}
+            min={0}
+            step={0.5}
+            title="Stops the ladder this deep below the crown — 0 = down to the model floor. The 4-axis short-tool throttle: limit each orientation's op to the depth its tool can reach alongside tall features (the simulation's red marks show where the collet would hit)"
+            onCommit={(v) => upd({ maxDepth: v > 0 ? v : null } as Partial<JobOp>)}
+          />
+          <FinishingOnlyCheck
+            op={op}
+            upd={upd}
+            allowanceKey="allowance"
+            title="Scrub only where the tool TOUCHES the model — the contour band around every section ring (walls, islands, interior contours) plus the flats exposed to the next slice (horizontal surfaces between levels, touched from below within one step-down); free space the rough already cleared is skipped. Waste is cleared only at the level where the ladder bottoms out (the floor, for the cut-out profile to ride in). A flat is scrubbed at the level plane above its surface — a sub-step-down skin can remain unless a plane lands on it (the raster, or a finer step-down, finishes it)"
+          />
           <p className="hint">
-            roughs the whole model in constant-Z waterline levels from the stock crown down to the
-            model floor — no selection needed. Works in 4-axis indexed mode too (the op follows the
-            datum rotation; run several with index rotations between them to rough around a part).
-            Each level clears everything the tool
-            can reach: the model's silhouette plus this margin (default: tool Ø + allowance +
-            step over — a moat wide enough that mesh noise on the model's wall cannot pinch the
-            perimeter pass into plunge-per-sliver arcs; the surrounding stock stays for a cut-out
-            profile to ride in), minus the union of every cross-section ABOVE the level's cut
-            plane — so overhangs are keep-out and nothing is ever programmed underneath them.
-            Allowance is BOTH-axis roughing stock for a finishing op: every level's cut plane
-            rises by it and its clearing region insets from the model contour. Follow with a
-            finishing op (allowance 0). The ladder needs no depth-stop knob: it ends at the
-            model's own floor and at its widest section — whichever comes first — so the stock
+            roughs the whole model in constant-Z waterline levels from the stock crown down to
+            the model floor — or the max depth, if set. No selection needed; works in 4-axis
+            indexed mode too (the op follows the datum rotation — run several with index
+            rotations between them to rough around a part). Each level clears everything the
+            tool can reach around the model's section, minus the union of every cross-section
+            ABOVE the level's cut plane — overhangs are keep-out, nothing is ever programmed
+            underneath them. Allowance is BOTH-axis roughing stock for a finishing op: every
+            level's cut plane rises by it and its clearing region insets from the model contour.
+            Follow with a finishing op (allowance 0)
+          </p>
+          <p className="hint detail">
+            the ladder ends at the model's own floor and at its widest section — whichever
+            comes first (the max-depth box only throttles it for short tools) — so the stock
             below the part (its holder, in 4-axis mode) is never cleared, and the rough never
-            cuts the part free: that is the profile op's job, tabs and all
+            cuts the part free: that is the profile op's job, tabs and all. The boundary margin
+            (default: tool Ø + allowance + step over) keeps the moat two tool passes wide, so
+            mesh noise on the model's wall cannot pinch the perimeter pass into
+            plunge-per-sliver arcs
           </p>
         </>
       );
@@ -552,12 +647,49 @@ function ParamFields(props: {
         <>
           <NumberField label="Allowance (mm)" value={op.allowance} min={0} step={0.05} onCommit={(v) => upd({ allowance: v } as Partial<JobOp>)} />
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck
+            op={op}
+            upd={upd}
+            allowanceKey="allowance"
+            title="The single surface pass, no flat roughing levels — replaces the old step-down-0 convention. Unchecked = rough in flat levels at the step-down first, then the finishing pass on the surface"
+          />
+          {!op.finishingOnly && (
+            <NumberField
+              label="Step down (mm)"
+              value={op.stepDown ?? 0}
+              min={0.1}
+              step={0.1}
+              onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)}
+            />
+          )}
           <NumberField
             label="Row angle (°)"
             value={op.angle ?? 0}
             step={5}
             onCommit={(v) => upd({ angle: v } as Partial<JobOp>)}
           />
+          <label
+            className="check"
+            title="Clear all stock outside the model, right out to the stock edge — waste cells finish flat at the model's own floor (the same plane the waterline ladder bottoms at). Mind that this frees the part from the surrounding stock: the deliberate cut-out stays the profile op's job, tabs and all"
+          >
+            <input
+              type="checkbox"
+              checked={op.clearToStock ?? false}
+              onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>clear excess stock</span>
+          </label>
+          <label
+            className="check"
+            title="This allows the tool tip to pass outside of the defined stock's area"
+          >
+            <input
+              type="checkbox"
+              checked={op.cutBeyondStock ?? false}
+              onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>allow tail stock cut-over</span>
+          </label>
           <p className="hint">
             the paired SURFACE pass to the waterline contour: a heightmap of the model is taken by
             downward raycasts, dilated with the tool's kernel (flat disc / ball hemisphere) so every
@@ -635,7 +767,10 @@ function ParamFields(props: {
                 : `the groove is the tool's own ${round2(props.tool?.diameter ?? 0)}mm width`}
             </p>
           )}
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck op={op} upd={upd} />
+          {!op.finishingOnly && (
+            <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          )}
           <label className="field">
             <span>Rotation</span>
             <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
@@ -701,7 +836,10 @@ function ParamFields(props: {
           <NumberField label="Pitch (mm)" value={op.pitch} min={0.1} step={0.25} onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)} />
           <NumberField label="Starts" value={op.starts} min={1} step={1} onCommit={(v) => upd({ starts: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
           <NumberField label="Tolerance (mm)" value={op.tolerance} min={0} step={0.05} onCommit={(v) => upd({ tolerance: Math.max(v, 0) } as Partial<JobOp>)} />
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck op={op} upd={upd} />
+          {!op.finishingOnly && (
+            <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          )}
           <NumberField
             // null = the stock surface; show the stock Ø until set
             label="Surface Ø (mm)"
@@ -776,7 +914,10 @@ function ParamFields(props: {
             onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="allowance" />
+          {!op.finishingOnly && (
+            <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          )}
           <TabsFields op={op} upd={upd} />
         </>
       );
@@ -847,7 +988,10 @@ function ParamFields(props: {
             step={0.1}
             onCommit={(v) => upd({ depth: Math.max(v, 0) } as Partial<JobOp>)}
           />
-          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <FinishingOnlyCheck op={op} upd={upd} />
+          {!op.finishingOnly && (
+            <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          )}
           <label className="field">
             <span>Rotation</span>
             <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' })}>
@@ -883,13 +1027,16 @@ function ParamFields(props: {
                 step={0.1}
                 onCommit={(v) => upd({ depth: v })}
               />
-              <NumberField
-                label="Step down (mm)"
-                value={op.stepDown}
-                min={0.05}
-                step={0.1}
-                onCommit={(v) => upd({ stepDown: v })}
-              />
+              <FinishingOnlyCheck op={op} upd={upd} />
+              {!op.finishingOnly && (
+                <NumberField
+                  label="Step down (mm)"
+                  value={op.stepDown}
+                  min={0.05}
+                  step={0.1}
+                  onCommit={(v) => upd({ stepDown: v })}
+                />
+              )}
             </>
           )}
           <p className="hint">
@@ -914,10 +1061,30 @@ export function OpsPanel(props: Props) {
     let next: JobOp = { ...op, toolId };
     if (t) {
       const stepDown = defaultStepDown(t, props.materialId);
-      if (op.kind === 'pocket') {
-        next = { ...next, stepDown, stepOver: defaultStepOver(t) } as JobOp;
-      } else if (op.kind === 'profile' || op.kind === 'faceCylinder' || op.kind === 'cylChamfer') {
-        next = { ...next, stepDown } as JobOp;
+      const stepOver = defaultStepOver(t);
+      // per-kind fields (types.ts is the source of truth): every kind with
+      // a stepDown gets the new cutter's default, and every stepOver-bearing
+      // kind re-derives it — a stale Ø-derived stepOver from the OLD tool is
+      // the bug Alice caught 2026-10-25
+      switch (op.kind) {
+        case 'pocket':
+        case 'slicePocket':
+        case 'waterline':
+        case 'faceCylinder':
+          next = { ...next, stepDown, stepOver } as JobOp;
+          break;
+        case 'rasterContour':
+          next = { ...next, stepOver } as JobOp;
+          break;
+        case 'profile':
+        case 'cylChamfer':
+        case 'spiralCarve':
+        case 'thread':
+        case 'engrave':
+          next = { ...next, stepDown } as JobOp;
+          break;
+        default:
+          break; // drill/chamfer/index carry no step fields
       }
     }
     props.onChangeOp(next);
@@ -1132,14 +1299,13 @@ export function OpsPanel(props: Props) {
           <button type="button" onClick={props.onRecalcAll}>
             Recalculate
           </button>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={props.showPreview}
-              onChange={(e) => props.onTogglePreview(e.target.checked)}
-            />
-            <span>Display paths</span>
-          </label>
+          <button
+            type="button"
+            title="Discard all calculated toolpaths (the ops keep their parameters; nothing is exported until recalculated)"
+            onClick={props.onClearToolpaths}
+          >
+            Clear
+          </button>
         </div>
       )}
     </section>

@@ -54,14 +54,22 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     throw new Error(`tool Ø${tool.diameter} does not fit the pocket region`);
   }
 
-  const safeZ = op.topZ + op.safeClearance;
+  const safeZ = op.travelZ ?? op.topZ + op.safeClearance;
   const moves: Move[] = [];
   let cur: Vec2 | null = null;
   let passes = 0;
   let minutes = 0;
   let droppedLoops = 0;
+  // the highest material a plunge in this level can meet: the surface at the
+  // first level, the previous level's cut plane after that (this level's
+  // region was cleared down to it). The approach rapid must stop
+  // APPROACH_CLEARANCE above THIS, not above the cut level — a step-down
+  // taller than the clearance had the rapid itself plowing the band at every
+  // loop start (the yellow streak at each contour's plunge, Alice 2026-10-26)
+  let standingZ = op.topZ;
 
   for (const levelZ of levels) {
+    const approachZ = Math.max(levelZ, standingZ) + APPROACH_CLEARANCE;
     // passes from the wall inward in stepOver increments, until the region
     // vanishes under the offset
     for (let k = 0; k < 10000; k++) {
@@ -96,14 +104,15 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
           comment: `level z${levelZ.toFixed(2)} pass ${k + 1}`,
         });
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-        // rapid down to the approach plane, then feed the last stretch
-        moves.push({ words: { z: levelZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
+        // rapid down to the approach plane (clear of the standing material),
+        // then feed the last stretch
+        moves.push({ words: { z: approachZ }, feed: 0, rapid: true });
         moves.push({
           words: { z: levelZ },
           feed: op.plungeFeed,
           comment: `plunge ${(op.topZ - levelZ).toFixed(2)}mm below surface`,
         });
-        minutes += APPROACH_CLEARANCE / op.plungeFeed;
+        minutes += (approachZ - levelZ) / op.plungeFeed;
 
         let prev = start;
         for (let i = 1; i <= loop.length; i++) {
@@ -118,6 +127,9 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
         passes++;
       }
     }
+    // this level cleared its region down to levelZ — the next level's
+    // plunges meet nothing above that
+    standingZ = levelZ;
   }
 
   return { moves, levels: levels.length, passes, estimatedMinutes: minutes, droppedLoops };

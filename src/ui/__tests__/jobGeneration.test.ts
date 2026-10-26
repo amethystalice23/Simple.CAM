@@ -5,6 +5,7 @@ import { ROTARY_FEED_DEG_MIN } from '../../cam/faceCylinder';
 import type { AxisWords, JobOp, Move, Stock, Tool } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import { opEdgeSource, sourcesFor } from '../featureSources';
+import { normalizeJobOps } from '../jobFile';
 import type { Primitive } from '../../core/types';
 import {
   datumAngleBefore,
@@ -1013,6 +1014,7 @@ describe('slice pocket (section plane + band)', () => {
       stepDown: 2,
       stepOver: 1,
       margin: null,
+      cutBeyondStock: false,
     };
     const res = generateJobOp(op, barCtx);
     expect(res.error).toBeNull();
@@ -1023,11 +1025,14 @@ describe('slice pocket (section plane + band)', () => {
     // Y length, past its ±10 ends
     const maxY = Math.max(...cuts.map((m) => Math.abs(m.words.y ?? 0)));
     expect(maxY).toBeGreaterThan(10.5);
-    // the ladder ended at the bar's top: the deepest cut sits at the
-    // first cut plane above the bar, never near its floor (z −2) or the
-    // stock bottom (z −25)
+    // the ladder ended at the bar's top: the deepest cut sits above the
+    // bar's body — under the two-consecutive moat-only stop the ladder
+    // descends one level past the widest section, so the deepest cut is
+    // its plane (z 1.2 = bar top 2 − stepDown 0.5 + allowance 0.2 − one
+    // more level 0.5... the pin: strictly between the bar top and its
+    // floor (−2), never near the stock bottom (−25)
     const minZ = Math.min(...cuts.map((m) => m.words.z ?? Infinity));
-    expect(minZ).toBeGreaterThan(2);
+    expect(minZ).toBeGreaterThan(1);
     expect(minZ).toBeLessThan(4);
   });
 
@@ -1888,5 +1893,341 @@ describe('honest time estimate (wrapper overhead)', () => {
     expect(ovh).toBeGreaterThan(0); // the rapid travel is charged
     expect(Math.abs(cold.minutes - (quotedCutting(cold) * 1.1 + ovh))).toBeLessThanOrEqual(0.06);
     expect(cold.minutes).toBeGreaterThan(quotedCutting(cold));
+  });
+});
+
+describe("'Finishing pass only' (Alice, 2026-10-26 — one explicit rough/finish switch, every ladder op)", () => {
+  /** distinct commanded cut-Z values on a feed move (the level count) */
+  const cutPlanes = (res: ReturnType<typeof generateJobOp>): Set<string> =>
+    new Set(
+      res.moves
+        .filter((m) => !m.rapid && m.words.z !== undefined)
+        .map((m) => m.words.z!.toFixed(3)),
+    );
+
+  it('pocket: one level at the floor, straight down', () => {
+    const rough = generateJobOp({ ...pocketOp, startDepth: 0, endDepth: 6, stepDown: 0.5 }, ctx);
+    const fin = generateJobOp(
+      { ...pocketOp, startDepth: 0, endDepth: 6, stepDown: 0.5, finishingOnly: true },
+      ctx,
+    );
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    expect(rough.summary).toContain('/ 12 level(s)');
+    expect(fin.summary).toContain('/ 1 level(s)');
+    expect(fin.summary).toContain('finishing pass only');
+    expect(cutPlanes(fin).size).toBe(1); // straight down to the −6 floor
+    expect([...cutPlanes(fin)][0]).toBeCloseTo(-6, 2);
+  });
+
+  it('profile: one full-depth wall level', () => {
+    const rough = generateJobOp({ ...profileOp, startDepth: 4, endDepth: 5 }, ctx);
+    const fin = generateJobOp(
+      { ...profileOp, startDepth: 4, endDepth: 5, finishingOnly: true },
+      ctx,
+    );
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    expect(rough.summary).toContain('/ 2 level(s)');
+    expect(fin.summary).toContain('/ 1 level(s)');
+    expect(fin.summary).toContain('finishing pass only');
+  });
+
+  it('slice pocket: the whole band in one level (ring + appended waste frame)', () => {
+    // the plate-with-hole section (r5 disc) at 2 below the crown on the
+    // 60×40 box: outside ring + the clearToStock waste frame, both
+    // collapsing to the single floor level
+    const op: Extract<JobOp, { kind: 'slicePocket' }> = {
+      id: 'sf',
+      toolId: 't3',
+      featureIds: [],
+      kind: 'slicePocket',
+      regionMode: 'outside',
+      sliceDepth: 5, // plane z −5: inside the plate body (caps −6…−4)
+      startDepth: 0,
+      endDepth: 4,
+      allowance: 0,
+      stepDown: 1,
+      stepOver: 2,
+      floorFeatureId: null,
+      clearToStock: true,
+      tabs: null,
+    };
+    const rough = generateJobOp(op, ctx);
+    const fin = generateJobOp({ ...op, finishingOnly: true }, ctx);
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    expect(rough.summary).toContain('waste cleared to the stock edge');
+    expect(fin.summary).toContain('finishing pass only');
+    expect(cutPlanes(rough).size).toBe(4);
+    expect(cutPlanes(fin).size).toBe(1); // ring AND frame on one plane
+  });
+
+  it('face cylinder: the roughing ladder skipped — one pass to the target Ø', () => {
+    const mk = (finishingOnly: boolean) =>
+      ({
+        ...newJobOp('faceCylinder', tool, cylStock.materialId, cylStock),
+        targetDiameter: 49, // surface Ø50 → 0.5mm radial total
+        stepDown: 0.3,
+        finishAllowance: 0.2,
+        finishingOnly,
+      }) as JobOp;
+    const rough = generateJobOp(mk(false), { ...ctx, stock: cylStock });
+    const fin = generateJobOp(mk(true), { ...ctx, stock: cylStock });
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    // count the distinct plunge planes: surface z25 − depth
+    const planes = (r: ReturnType<typeof generateJobOp>) =>
+      new Set(
+        r.moves
+          .filter((m) => !m.rapid && m.words.z !== undefined)
+          .map((m) => m.words.z!.toFixed(3)),
+      );
+    // rough: 0.3 at the finish-allowance plane (z24.7) + the 0.5 finish (z24.5)
+    expect(planes(rough).size).toBe(2);
+    expect(planes(rough).has('24.500')).toBe(true);
+    // finishing: straight to 0.5 (z24.5), nothing else
+    expect(planes(fin).size).toBe(1);
+    expect([...planes(fin)][0]).toBe('24.500');
+    expect(fin.summary).toContain('finishing pass only');
+  });
+
+  it('spiral carve: one full-depth sweep per strand (no retrace ladder)', () => {
+    const mk = (finishingOnly: boolean): Extract<JobOp, { kind: 'spiralCarve' }> => ({
+      kind: 'spiralCarve',
+      id: 'op-fin-sc',
+      toolId: 't1',
+      featureIds: [],
+      surfaceDiameter: 50,
+      xStart: -20,
+      xEnd: 20,
+      spiralAngle: 45,
+      count: 1,
+      depth: 1,
+      width: 3,
+      stepDown: 0.5, // rough retraces: [0.5, 1]
+      finishingOnly,
+      rotation: 'cw',
+    });
+    const scCtx: GenContext = { ...ctx, stock: cylStock, datumAngle: 0, startA: 0 };
+    const rough = generateJobOp(mk(false), scCtx);
+    const fin = generateJobOp(mk(true), scCtx);
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    expect(rough.summary).toContain('2 sweep(s)');
+    expect(fin.summary).toContain('1 sweep(s)');
+    expect(fin.summary).toContain('finishing pass only');
+  });
+
+  it('thread: the groove at full depth once, plus the spring pass', () => {
+    const mk = (finishingOnly: boolean): Extract<JobOp, { kind: 'thread' }> => ({
+      kind: 'thread',
+      id: 'op-fin-th',
+      toolId: 't5', // the 90° chamfer bit
+      featureIds: [],
+      nominalDiameter: 20,
+      xStart: -10,
+      xEnd: 10,
+      pitch: 2, // groove depth = (2/4)/tan45 = 0.5
+      starts: 1,
+      tolerance: 0,
+      stepDown: 0.2, // rough: [0.2, 0.4, 0.5]
+      finishingOnly,
+      rotation: 'cw',
+      surfaceDiameter: 20, // pre-turned Ø20 rod: no air descent
+    });
+    const thCtx: GenContext = {
+      ...ctx,
+      stock: cylStock,
+      tools: [...ctx.tools, chamferTool],
+      datumAngle: 0,
+      startA: 0,
+    };
+    const rough = generateJobOp(mk(false), thCtx);
+    const fin = generateJobOp(mk(true), thCtx);
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    const sweeps = (r: ReturnType<typeof generateJobOp>) =>
+      Number(/(\d+) sweep\(s\)/.exec(r.summary!)![1]);
+    expect(sweeps(rough)).toBe(4); // 3 levels + spring
+    expect(sweeps(fin)).toBe(2); // full depth + spring
+    expect(fin.summary).toContain('finishing pass only');
+  });
+
+  it('engrave: one full-depth pass along the paths', () => {
+    const art: Primitive = {
+      kind: 'artwork',
+      id: 'prim-fin-art',
+      paths: [[{ x: 0, y: 0 }, { x: 100, y: 0 }]],
+      width: 100,
+      height: 50,
+      presentation: 'flat',
+      wrapDiameter: 16,
+      wrapAngle: 90,
+      transform: { ...identityTransform(), position: { x: 0, y: 0, z: 10 } },
+    };
+    const artCtx: GenContext = {
+      stock: cylStock,
+      geometry: null,
+      features: null,
+      transform: identityTransform(),
+      tools: [tool],
+      primitives: [art],
+      sources: sourcesFor(null, null, identityTransform(), [art]),
+      datumAngle: 0,
+      startA: 0,
+    };
+    const mk = (finishingOnly: boolean): Extract<JobOp, { kind: 'engrave' }> => ({
+      kind: 'engrave',
+      id: 'op-fin-eng',
+      toolId: 't1',
+      featureIds: ['p:prim-fin-art:path:0'],
+      depth: 1,
+      stepDown: 0.25, // rough: [0.25, 0.5, 0.75, 1]
+      finishingOnly,
+    });
+    const rough = generateJobOp(mk(false), artCtx);
+    const fin = generateJobOp(mk(true), artCtx);
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    expect(cutPlanes(rough).size).toBe(4);
+    expect(cutPlanes(fin).size).toBe(1);
+    expect(fin.summary).toContain('finishing pass only');
+  });
+
+  it('cylinder chamfer: one revolution at the final flank depth', () => {
+    // a face-op step edge (Ø40 circle): depth 0 anchors ON it and the
+    // ladder descends the 5mm wall (surface r25 → tip r20) in 1mm levels
+    const faceOp: JobOp = {
+      id: 'jobop-1',
+      toolId: 't1',
+      featureIds: [],
+      kind: 'faceCylinder',
+      targetDiameter: 40,
+      xStart: -30,
+      xEnd: 30,
+      stepDown: 1,
+      finishingOnly: false,
+      stepOver: null,
+      finishAllowance: 0.2,
+      rotation: 'cw',
+      pattern: 'spiral',
+    };
+    const edgeCtx: GenContext = {
+      ...ctx,
+      stock: cylStock,
+      geometry: null,
+      features: null,
+      primitives: [],
+      sources: [opEdgeSource([faceOp], cylStock)!],
+      tools: [...ctx.tools, chamferTool],
+      datumAngle: 0,
+      startA: 0,
+    };
+    const mk = (finishingOnly: boolean): Extract<JobOp, { kind: 'cylChamfer' }> => ({
+      id: 'op-fin-cc',
+      toolId: 't5',
+      featureIds: ['o:face:jobop-1:start'],
+      kind: 'cylChamfer',
+      depth: 0, // anchor on the Ø40 circle — ladder the 5mm wall above it
+      stepDown: 1,
+      finishingOnly,
+      rotation: 'cw',
+    });
+    const rough = generateJobOp(mk(false), edgeCtx);
+    const fin = generateJobOp(mk(true), edgeCtx);
+    expect(rough.error).toBeNull();
+    expect(fin.error).toBeNull();
+    const sweeps = (r: ReturnType<typeof generateJobOp>) =>
+      r.moves.filter((m) => m.words.a !== undefined && !m.rapid).length;
+    expect(sweeps(rough)).toBe(5); // r24, 23, 22, 21, 20
+    expect(sweeps(fin)).toBe(1); // straight to r20
+    expect(fin.summary).toContain('finishing pass only');
+  });
+
+  it('raster contour: old step-down-0 saves migrate to the checked toggle', () => {
+    // the replaced convention: stepDown 0 (or absent) WAS finishing-only
+    const base = {
+      id: 'r1',
+      toolId: 't3',
+      featureIds: [],
+      kind: 'rasterContour' as const,
+      allowance: 0,
+      stepOver: 1,
+      angle: 0,
+    };
+    expect(normalizeJobOps([{ ...base, stepDown: 0 } as JobOp])[0]).toMatchObject({
+      finishingOnly: true,
+    });
+    expect(normalizeJobOps([{ ...base } as JobOp])[0]).toMatchObject({ finishingOnly: true });
+    expect(normalizeJobOps([{ ...base, stepDown: 0.6 } as JobOp])[0]).toMatchObject({
+      finishingOnly: false,
+    });
+    // an explicit flag always wins over the derivation
+    expect(
+      normalizeJobOps([{ ...base, stepDown: 0.6, finishingOnly: true } as JobOp])[0],
+    ).toMatchObject({ finishingOnly: true });
+    // other kinds: absent stays absent — old jobs round-trip byte-identical
+    const pocket = normalizeJobOps([{ ...pocketOp, id: 'pk' } as JobOp])[0];
+    expect((pocket as { finishingOnly?: boolean }).finishingOnly).toBeUndefined();
+  });
+
+  it('waterline finishing: step-down ≤ allowance is legal (rung density, never a skip)', () => {
+    // Alice's report (2026-10-26): "it gets very confused if the step-down
+    // is the same or smaller than the allowance and says 'nothing to rough' —
+    // which is wrong. Step-down is how fine the rungs on the ladder are;
+    // allowance is simply raising the model by that amount and applying an
+    // offset." In finishing mode the allowance-skip is GONE: every level
+    // scrubs, and allowance only raises/offsets.
+    const bar = new THREE.BoxGeometry(8, 8, 20).toNonIndexed();
+    const barFeatures = detectFeatures(bar);
+    const barCtx: GenContext = {
+      ...ctx,
+      geometry: bar,
+      features: barFeatures,
+      sources: sourcesFor(bar, barFeatures, identityTransform(), []),
+    };
+    const mk = (finishingOnly: boolean): Extract<JobOp, { kind: 'waterline' }> => ({
+      id: 'wl-fin',
+      toolId: 't3',
+      featureIds: [],
+      kind: 'waterline',
+      allowance: 0.5,
+      stepDown: 0.5, // == allowance: rough self-skips, finishing does not
+      stepOver: 1,
+      margin: 3,
+      cutBeyondStock: false,
+      finishingOnly,
+    });
+    const rough = generateJobOp(mk(false), barCtx);
+    expect(rough.error).toMatch(/nothing to rough|allowance/); // honest for roughing
+    const fin = generateJobOp(mk(true), barCtx);
+    expect(fin.error).toBeNull(); // the confusion is gone
+    expect(fin.moves.length).toBeGreaterThan(0);
+    expect(fin.summary).toContain('finishing pass only');
+  });
+
+  it('raster contour: new ops default to the single surface pass', () => {
+    const op = newJobOp('rasterContour', smallTool, boxStock.materialId, boxStock);
+    if (op.kind !== 'rasterContour') throw new Error('kind');
+    expect(op.finishingOnly).toBe(true);
+    expect(op.stepDown).toBeGreaterThan(0); // the roughing preset for when unchecked
+    // finishing-only generation ignores the step-down: a single surface pass
+    const res = generateJobOp(
+      { ...op, stepDown: 0.01 },
+      (() => {
+        const brick = new THREE.BoxGeometry(10, 10, 4).toNonIndexed();
+        return {
+          ...ctx,
+          geometry: brick,
+          features: detectFeatures(brick),
+          sources: sourcesFor(brick, detectFeatures(brick), identityTransform(), []),
+          transform: { ...identityTransform(), position: { x: 0, y: 0, z: -4 } },
+        };
+      })(),
+    );
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('finishing pass only');
+    expect(res.summary).not.toContain('step down');
   });
 });

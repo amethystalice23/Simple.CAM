@@ -10,7 +10,7 @@ import { DEFAULT_STEP_OVER_FACTOR, faceCylinder, SAFE_CLEARANCE, shortestATo } f
 import { cylChamfer } from '../cam/cylChamfer';
 import { engrave } from '../cam/engrave';
 import { spiralCarve } from '../cam/spiralCarve';
-import { thread } from '../cam/thread';
+import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
 import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
@@ -176,6 +176,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         xStart,
         xEnd,
         stepDown,
+        finishingOnly: false, // the roughing ladder; the panel toggle skips it
         /** null = derive 0.5·tool Ø at generation (job files stay tool-agnostic) */
         stepOver: null,
         finishAllowance: 0.2,
@@ -197,6 +198,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         depth: 1,
         width: 3,
         stepDown: Math.max(stepDown, 0.5),
+        finishingOnly: false,
         rotation: 'cw',
       };
     }
@@ -214,6 +216,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         starts: 1,
         tolerance: 0,
         stepDown,
+        finishingOnly: false,
         rotation: 'cw',
         surfaceDiameter: null, // ladder from the stock surface
       };
@@ -227,6 +230,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         endDepth: 2,
         allowance: 0,
         stepDown,
+        finishingOnly: false,
         stepOver: defaultStepOver(tool),
         floorFeatureId: null,
         flatten: false, // islands preserved unless asked
@@ -241,6 +245,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         endDepth: 2,
         allowance: 0,
         stepDown,
+        finishingOnly: false,
         stepOver: defaultStepOver(tool),
         floorFeatureId: null,
         clearToStock: false, // outline ring only unless asked
@@ -261,6 +266,10 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepDown: Math.max(stepDown, 0.5),
         stepOver: defaultStepOver(tool),
         margin: null, // derive tool Ø + allowance + step over at generation
+        cutBeyondStock: false, // the tool stays inside the declared stock
+        clearToStock: false, // the model's column only; the toggle clears to the stock edge
+        maxDepth: null, // to the model floor; the 4-axis short-tool throttle
+        finishingOnly: false, // full clearing per level; the toggle scrubs surfaces only
       };
     case 'rasterContour':
       // the paired SURFACE pass (PLAN.md Phase B): default allowance 0 —
@@ -268,13 +277,20 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       // and "rough vs finish" is this one knob. Grid pitch ≈ stepOver/2
       // (PLAN.md) derived at generation; step-over from the tool Ø.
       // angle absent = 0 = rows along X (the spiral-spin precedent: old
-      // saves and goldens stay byte-identical).
+      // saves and goldens stay byte-identical). Finishing-only is the
+      // DEFAULT (the old stepDown-0 convention) — the roughing ladder is
+      // the explicit choice now; stepDown carries the preset for when the
+      // box is unchecked.
       return {
         ...base,
         kind,
         allowance: 0,
         stepOver: defaultStepOver(tool),
         angle: 0,
+        finishingOnly: true,
+        stepDown,
+        clearToStock: false, // the model's column only; the toggle clears to the stock edge
+        cutBeyondStock: false, // row centers stay inside the declared stock
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
@@ -283,9 +299,9 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
     case 'cylChamfer':
       // depth 0 = anchor on the selected circle (cut up-and-out) — the
       // rod-end cases set a depth from the rim instead
-      return { ...base, kind, depth: 0, stepDown, rotation: 'cw' };
+      return { ...base, kind, depth: 0, stepDown, finishingOnly: false, rotation: 'cw' };
     case 'engrave':
-      return { ...base, kind, depth: 0.5, stepDown: 0.25 };
+      return { ...base, kind, depth: 0.5, stepDown: 0.25, finishingOnly: false };
     case 'index':
       return { ...base, kind, angle: 90 };
     case 'profile':
@@ -297,6 +313,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         endDepth: 2,
         allowance: 0,
         stepDown,
+        finishingOnly: false,
         side: 'outside',
         floorFeatureId: null,
         clearToStock: false, // outline ring only unless asked
@@ -622,6 +639,7 @@ export function materializeTestPattern(
         xStart: rt.face.xStart,
         xEnd: rt.face.xEnd,
         stepDown: rt.face.stepDown,
+        finishingOnly: false,
         stepOver: rt.face.stepOver,
         finishAllowance: 0,
         rotation: 'cw',
@@ -648,6 +666,7 @@ export function materializeTestPattern(
           depth: p.stepDown, // the tested DOC IS the groove depth
           width: Math.max(p.stepOver, tool.diameter), // single pass at tool width
           stepDown: p.stepDown, // one full-depth pass — the v4 verdict
+          finishingOnly: false, // explicit; the panel toggle is the user's
           rotation: 'cw',
           spin: s * rt.spinStep,
           rates: { feed: p.feed, spindleRpm: p.spindleRpm, plungeFeed },
@@ -696,6 +715,7 @@ export function materializeTestPattern(
           endDepth: f.totalDepth,
           allowance: 0,
           stepDown: p.stepDown,
+          finishingOnly: false, // the matrix tests the step-down axis
           stepOver: p.stepOver,
           floorFeatureId: null,
           flatten: false,
@@ -878,6 +898,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             xStart: op.xStart,
             xEnd: op.xEnd,
             stepDown: op.stepDown,
+            finishingOnly: op.finishingOnly,
             stepOver: op.stepOver ?? defaultFaceStepOver(tool),
             finishAllowance: op.finishAllowance,
             plungeFeed: plungeFeed,
@@ -894,7 +915,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes (${op.pattern}) → Ø${op.targetDiameter.toFixed(1)}mm, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary:
+            `${res.passes} passes (${op.pattern}) → Ø${op.targetDiameter.toFixed(1)}mm, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}` +
+            (op.finishingOnly ? ', finishing pass only' : '') +
+            `, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
@@ -913,7 +937,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               count: op.count,
               depth: op.depth,
               width: op.width,
-              stepDown: op.stepDown,
+              // finishing-only collapses the retrace ladder to one
+              // full-depth sweep per strand (depthLadder: stepDown ≥ depth)
+              stepDown: op.finishingOnly ? op.depth : op.stepDown,
               rotation: op.rotation,
               spin: op.spin,
               feed,
@@ -931,7 +957,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             error: null,
             summary:
               `${op.count} strand(s) × ${res.passes / op.count} sweep(s), ${op.spiralAngle}° helix, ` +
-              `${op.depth}mm deep × ${op.width === 0 ? 'following the lines' : `${op.width}mm wide`}, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ` +
+              `${op.depth}mm deep × ${op.width === 0 ? 'following the lines' : `${op.width}mm wide`}` +
+              (op.finishingOnly ? ', finishing pass only' : '') +
+              `, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ` +
               `~${res.estimatedMinutes.toFixed(1)} min`,
           };
         } catch (e) {
@@ -942,6 +970,19 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
       case 'thread': {
         if (ctx.stock.axisMode !== '4-axis') return fail('threading needs 4-axis mode (Stock tab)');
         try {
+          // finishing-only collapses the groove depth ladder to the full
+          // depth (single groove sweep per start + the spring pass)
+          const fullGroove =
+            op.finishingOnly && tool.vAngle
+              ? (() => {
+                  const cal = rotaryCalibrationOf(ctx.stock);
+                  const depth = threadDepth(op.pitch, tool.vAngle, op.tolerance);
+                  const rootR = threadFaceDiameter(op.nominalDiameter, op.tolerance) / 2 - depth;
+                  const startR =
+                    op.surfaceDiameter !== null ? op.surfaceDiameter / 2 : cal.effectiveRadius;
+                  return startR - rootR; // the ladder's full span
+                })()
+              : NaN;
           const res = thread(
             {
               kind: 'thread',
@@ -953,7 +994,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               pitch: op.pitch,
               starts: op.starts,
               tolerance: op.tolerance,
-              stepDown: op.stepDown,
+              stepDown: fullGroove > 0 ? fullGroove : op.stepDown,
               rotation: op.rotation,
               feed,
               plungeFeed,
@@ -973,8 +1014,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               `Ø${op.nominalDiameter} × ${op.pitch}mm pitch` +
               (op.starts > 1 ? ` (${op.starts} starts)` : '') +
               `, crest Ø${res.faceDiameter.toFixed(2)}, ${res.depth.toFixed(2)}mm grooves, ` +
-              `${res.passes} sweep(s) + spring, ` +
-              `X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
+              `${res.passes} sweep(s) + spring` +
+              (op.finishingOnly ? ', finishing pass only' : '') +
+              `, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ~${res.estimatedMinutes.toFixed(1)} min`,
           };
         } catch (e) {
           return fail(e instanceof Error ? e.message : String(e));
@@ -1027,6 +1069,13 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (cutRegions.length === 0) {
           return fail('the side allowance exceeds the selected region — nothing left to cut');
         }
+        // finishing-only: collapse the step-down ladder to ONE level at the
+        // floor (zLadder with stepDown ≥ span) — the explicit version of the
+        // old start = end trick, keeping the start depth as the travel
+        // reference. Assumes the bulk above is already gone.
+        const finStep = op.finishingOnly
+          ? Math.max(range.topZ - range.floorZ + 1e-6, 0.1)
+          : op.stepDown;
         const res = pocket2d(
           {
             kind: 'pocket',
@@ -1035,7 +1084,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             regions: cutRegions,
             topZ: range.topZ,
             floorZ: range.floorZ,
-            stepDown: op.stepDown,
+            stepDown: finStep,
             stepOver: op.stepOver,
             feed,
             plungeFeed,
@@ -1047,7 +1096,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}${op.allowance > 0 ? `, ${op.allowance}mm allowance` : ''}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary:
+            `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
+            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+            (op.finishingOnly ? ', finishing pass only' : '') +
+            `, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 
@@ -1091,6 +1144,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           );
         }
         const dropped = slice.droppedChains;
+        // finishing-only: ONE level at the floor across the band (both the
+        // ring/profile branch and the interior pocket below)
+        const finStep = op.finishingOnly
+          ? Math.max(range.topZ - range.floorZ + 1e-6, 0.1)
+          : op.stepDown;
 
         if (op.regionMode === 'inside') {
           // pocket the section's interior over the whole band
@@ -1107,7 +1165,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               regions,
               topZ: range.topZ,
               floorZ: range.floorZ,
-              stepDown: op.stepDown,
+              stepDown: finStep,
               stepOver: op.stepOver,
               feed,
               plungeFeed,
@@ -1119,7 +1177,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             moves: res.moves,
             minutes: res.estimatedMinutes,
             error: null,
-            summary: sliceSummary(op, range, res.passes, res.estimatedMinutes, dropped, 'pocket'),
+            summary:
+              sliceSummary(op, range, res.passes, res.estimatedMinutes, dropped, 'pocket') +
+              (op.finishingOnly ? ' · finishing pass only' : ''),
           };
         }
 
@@ -1139,7 +1199,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             allowance: op.allowance,
             topZ: range.topZ,
             floorZ: range.floorZ,
-            stepDown: op.stepDown,
+            stepDown: finStep,
             tabs: op.tabs ?? undefined,
             feed,
             plungeFeed,
@@ -1153,7 +1213,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         let wasteNote = '';
         if (op.clearToStock) {
           const cleared = clearanceResult(
-            op, tool, slice.contours, range, op.stepOver, feed, plungeFeed, ctx,
+            // the waste frame rides the same collapsed ladder in
+            // finishing-only mode
+            op.finishingOnly ? ({ ...op, stepDown: finStep } as typeof op) : op,
+            tool, slice.contours, range, op.stepOver, feed, plungeFeed, ctx,
             ctx.datumAngle !== 0,
           );
           if (cleared) {
@@ -1171,7 +1234,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           error: null,
           summary:
             sliceSummary(op, range, passes, minutes, dropped, 'profile') +
-
+            (op.finishingOnly ? ' · finishing pass only' : '') +
             wasteNote +
             (ring.warnings.length > 0 ? ` · ${ring.warnings.join(' · ')}` : ''),
         };
@@ -1236,12 +1299,23 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         }
         const res = waterlineRough({
           positions,
-          footprint: stockFootprint(ctx.stock, ctx.datumAngle !== 0),
+          // null footprint = the tail-stock cut-over toggle: skip the reach
+          // clip so the boundary pass may run outside the declared stock.
+          // Clear-excess-stock WINS over it: the clear needs the footprint
+          // (every level clears out to the stock edge — clearToStock is
+          // about reaching the edge, cutBeyondStock about leaving it).
+          footprint:
+            op.clearToStock || !op.cutBeyondStock
+              ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
+              : undefined,
           topZ: crown,
           floorZ,
           stepDown: op.stepDown,
           stepOver: op.stepOver,
           allowance: op.allowance,
+          finishingOnly: op.finishingOnly,
+          clearToStock: op.clearToStock,
+          maxDepth: op.maxDepth ?? undefined,
           // null = derive Ø + allowance + step over at generation (job files
           // stay tool-agnostic): the moat is two tool passes wide, so its
           // tool-center track keeps a step-over of width even at the
@@ -1273,7 +1347,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `z${crown.toFixed(1)} → z${deepest.toFixed(1)}` +
             (res.skippedLevels > 0 ? `, ${res.skippedLevels} level(s) skipped` : '') +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
-
+            (op.clearToStock ? ', excess cleared to the stock edge' : '') +
+            (op.maxDepth && op.maxDepth > 0 ? `, ${op.maxDepth}mm max depth` : '') +
+            (op.finishingOnly ? ', finishing pass only (surface scrub, waste cleared at the floor level)' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
@@ -1307,6 +1383,13 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               return out;
             })()
           : positions0;
+        // model floor in the cutting frame — the clear-excess waste floor
+        // (the same plane the waterline ladder bottoms at; the stock bottom
+        // clamps it when the model hangs below)
+        let modelMinZ = Infinity;
+        for (let i = 2; i < positions.length; i += 3) {
+          if (positions[i] < modelMinZ) modelMinZ = positions[i];
+        }
         const res = rasterContour({
           positions,
           // PLAN.md: grid pitch ≈ stepover/2
@@ -1314,8 +1397,23 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           stepOver: op.stepOver,
           allowance: op.allowance,
           angleDeg: op.angle ?? 0,
+          // finishing-only = the single surface pass (the old stepDown-0
+          // convention, now the explicit toggle); unchecked = the flat
+          // roughing ladder at the op's step-down
+          stepDown: op.finishingOnly
+            ? undefined
+            : op.stepDown && op.stepDown > 0
+              ? op.stepDown
+              : undefined,
           topZ: crown,
           bottomZ: stockBottom,
+          // the waterline's clear-excess, the raster's semantics: waste
+          // cells clear flat at the model floor; cut-over widens the waste
+          // domain so row centers may cross the stock edge
+          clearToStock: op.clearToStock,
+          footprint: op.clearToStock ? stockFootprint(ctx.stock, ctx.datumAngle !== 0) : undefined,
+          clearFloorZ: Number.isFinite(modelMinZ) ? Math.max(modelMinZ, stockBottom) : stockBottom,
+          cutBeyondStock: op.cutBeyondStock,
           tool,
           feed,
           plungeFeed,
@@ -1333,7 +1431,14 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${res.rows} raster row(s) at ${op.stepOver}mm step over` +
             (angle !== 0 ? `, rows at ${angle}°` : '') +
+            (op.finishingOnly
+              ? ', finishing pass only'
+              : (op.stepDown ?? 0) > 0
+                ? `, ${op.stepDown}mm step down`
+                : '') +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : ', to size') +
+            (op.clearToStock ? ', excess cleared to the stock edge' : '') +
+            (op.cutBeyondStock ? ', tail stock cut-over' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
@@ -1417,7 +1522,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         }
         // the wall passes always run (the ring may cross the stock edge
         // — settled: leaving the stock is fine); the waste-stock toggle
-        // APPENDS clearing of whatever waste remains inside the stock
+        // APPENDS clearing of whatever waste remains inside the stock.
+        // Finishing-only: ONE full-depth level at the floor.
+        const finStep = op.finishingOnly
+          ? Math.max(range.topZ - range.floorZ + 1e-6, 0.1)
+          : op.stepDown;
         const res = profile2d(
           {
             kind: 'profile',
@@ -1428,7 +1537,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             allowance: op.allowance, // wall stock (path offset from the line)
             topZ: range.topZ,
             floorZ: range.floorZ, // floor raised by the same allowance
-            stepDown: op.stepDown,
+            stepDown: finStep,
             tabs: op.tabs ?? undefined,
             feed,
             plungeFeed,
@@ -1441,7 +1550,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         let wasteNote = '';
         if (op.clearToStock && op.side === 'outside') {
           const cleared = clearanceResult(
-            op, tool, contours, range, defaultStepOver(tool), feed, plungeFeed, ctx,
+            // the waste frame rides the same collapsed ladder
+            op.finishingOnly ? ({ ...op, stepDown: finStep } as typeof op) : op,
+            tool, contours, range, defaultStepOver(tool), feed, plungeFeed, ctx,
             ctx.datumAngle !== 0,
           );
           if (cleared) {
@@ -1459,7 +1570,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
-
+            (op.finishingOnly ? ', finishing pass only' : '') +
             `, ~${minutes.toFixed(1)} min` +
             wasteNote +
             (res.warnings.length > 0 ? ` · ${res.warnings.join(' · ')}` : ''),
@@ -1539,6 +1650,20 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           if (src) edges.push(...src.edges);
         }
         if (edges.length === 0) return fail(SEL);
+        // finishing-only collapses each edge's radial ladder to one level at
+        // the final flank depth (levelRadii: stepDown ≥ span → [bottom]).
+        // The span is per-edge: the stock-surface-to-anchor descent for a
+        // 0-depth anchor, the slide-below-the-circle for a depth.
+        const finSpan = op.finishingOnly
+          ? Math.max(
+              ...edges.map((e) => {
+                const anchorR = e.diameter / 2;
+                const top = op.depth <= 1e-9 ? cal.effectiveRadius : anchorR;
+                return top - (anchorR - op.depth);
+              }),
+              0.1,
+            )
+          : NaN;
         const res = cylChamfer(
           {
             kind: 'cylChamfer',
@@ -1546,7 +1671,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             toolId: tool.id,
             edges,
             depth: op.depth,
-            stepDown: op.stepDown,
+            stepDown: op.finishingOnly ? finSpan : op.stepDown,
             rotation: op.rotation,
             plungeFeed,
             clearance: op.rates?.clearance,
@@ -1564,6 +1689,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             (op.depth <= 1e-9
               ? 'up-and-out from the anchor Ø'
               : `${op.depth.toFixed(2)}mm below the rim (${res.width.toFixed(2)}mm wide)`) +
+            (op.finishingOnly ? ', finishing pass only' : '') +
             `, ${res.chamferAngleDeg.toFixed(0)}° from the bit, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
@@ -1651,7 +1777,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           toolId: tool.id,
           paths,
           depth: op.depth,
-          stepDown: op.stepDown,
+          // finishing-only collapses the depth ladder to one full-depth pass
+          // (depthLadder: stepDown ≥ depth)
+          stepDown: op.finishingOnly ? op.depth : op.stepDown,
           feed,
           plungeFeed,
           clearance: op.rates?.clearance ?? SAFE_CLEARANCE,
@@ -1687,7 +1815,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${paths.length} path(s), ${op.depth}mm deep${limited}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary: `${paths.length} path(s), ${op.depth}mm deep${op.finishingOnly ? ', finishing pass only' : ''}${limited}, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

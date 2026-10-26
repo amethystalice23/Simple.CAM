@@ -179,6 +179,10 @@ button.secondary:disabled:hover { background: #31373e; }
 }
 .hint { font-size: 12px; color: #7d8891; }
 .hint.warn { color: #e0785a; }
+/* the fine-print twin of a hint block: the same info, demoted — italic and
+ * dimmer than the operational text above it (Alice's 2026-10-26 ask: the
+ * long-winded detail stays, but must not read as loud as the essentials) */
+.hint.detail { font-style: italic; color: #5f6970; }
 
 .check {
   display: flex;
@@ -508,6 +512,50 @@ pre {
 }
 .projection-pill:hover { border-color: #4d94c9; color: #fff; }
 
+/* ---- display-layers dropdown (viewport top-right) ---- */
+.layers-button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(16, 20, 26, 0.92);
+  border: 1px solid #31373e;
+  border-radius: 8px;
+  color: #9aa4ad;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 3;
+}
+.layers-button:hover { border-color: #4d94c9; color: #fff; }
+.layers-button.active { color: #fff; border-color: #4d94c9; }
+.layers-menu {
+  position: absolute;
+  top: 38px;
+  right: 12px;
+  background: rgba(22, 27, 34, 0.97);
+  border: 1px solid #31373e;
+  border-radius: 8px;
+  padding: 6px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 130px;
+}
+.layers-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #d8dde2;
+  cursor: pointer;
+  user-select: none;
+}
+.layers-menu label:hover { background: #2a3038; }
+.layers-menu input { accent-color: #4d94c9; }
+
 /* calibration coupon dialog: wider than the export modal (the ladders
  * need room), ladder tables, and the Cancel/Generate footer */
 .cal-modal { width: 720px; }
@@ -550,3 +598,39 @@ pre {
   gap: 8px;
   margin-top: 14px;
 }
+/* ---- carve simulator ---- */
+.sim-modal { width: 520px; }
+.sim-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+.sim-progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: #2a3038;
+  overflow: hidden;
+}
+.sim-progress-fill {
+  height: 100%;
+  background: #7fae6f;
+  transition: width 0.15s ease-out;
+}
+.sim-progress span {
+  font-size: 12px;
+  color: #d8dde2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sim-result p { margin: 4px 0; font-size: 13px; }
+.sim-buttons {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+}
+.sim-warning { color: #e0a94f; }
+.sim-note { color: #9aa4ad; }
+.sim-ok { color: #7fae6f; }

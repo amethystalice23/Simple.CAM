@@ -51,6 +51,22 @@ export function normalizeStock(stock: Stock): Stock {
  */
 export function normalizeJobOps(ops: JobOp[]): JobOp[] {
   return ops.map((op) => {
+    // 'Finishing pass only' (Alice, 2026-10-26): the field is optional on
+    // every ladder op — absent = unchecked everywhere EXCEPT raster
+    // contour, where stepDown 0 (or absent) WAS the finishing-only
+    // convention and migrates to checked. (Runs first, and reassigns
+    // `op`, so every per-kind block below sees the normalized shape —
+    // the tabs-era lesson: never an early return.)
+    if (op.kind === 'rasterContour') {
+      const raw = (op as { finishingOnly?: unknown }).finishingOnly;
+      if (raw !== true && raw !== false) {
+        const sd = (op as { stepDown?: unknown }).stepDown;
+        op = {
+          ...op,
+          finishingOnly: !(typeof sd === 'number' && sd > 0),
+        } as JobOp;
+      }
+    }
     // pre-surfaceDiameter thread saves: ladder from the stock surface
     if (op.kind === 'thread') {
       const rawSurf = (op as { surfaceDiameter?: unknown }).surfaceDiameter;
@@ -62,14 +78,21 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
     // tool Ø + allowance + step over at generation. Saves from the
     // tabs-era interim build may also carry a `tabs` field — dropped (the
     // upper-shadow keep-out made the rough provably unable to sever, so
-    // waterline tabs guarded a scenario that cannot occur).
+    // waterline tabs guarded a scenario that cannot occur). Pre-cut-over
+    // saves (2026-10-26) carry no cutBeyondStock — the tool stays inside.
     if (op.kind === 'waterline') {
       const rawMargin = (op as { margin?: unknown }).margin;
       const rawTabs = (op as { tabs?: unknown }).tabs;
+      const rawCut = (op as { cutBeyondStock?: unknown }).cutBeyondStock;
       const marginOk = typeof rawMargin === 'number' || rawMargin === null;
-      if (!marginOk || rawTabs !== undefined) {
+      const cutOk = rawCut === true || rawCut === false;
+      if (!marginOk || rawTabs !== undefined || !cutOk) {
         const { tabs: _tabsEra, ...rest } = op as typeof op & { tabs?: unknown };
-        return { ...rest, margin: marginOk ? rawMargin : null } as JobOp;
+        return {
+          ...rest,
+          margin: marginOk ? rawMargin : null,
+          cutBeyondStock: cutOk ? rawCut : false,
+        } as JobOp;
       }
     }
     // pre-tabs profile/slicePocket saves: no bridges. ASSIGN, never return —

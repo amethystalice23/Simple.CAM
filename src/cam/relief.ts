@@ -23,8 +23,9 @@
 
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import type { Move, Tool } from '../core/types';
+import type { Move, Tool, Vec2 } from '../core/types';
 import { APPROACH_CLEARANCE } from './paths';
+import { offsetOutward } from './clipper';
 
 export interface RasterContourOptions {
   /** machine-space xyz triples, non-indexed (transformedPositions output,
@@ -56,6 +57,42 @@ export interface RasterContourOptions {
    *  variant of this op will want orthogonal to X. A grid-frame rotation
    *  only: the mesh is never copied or rotated, the raycast grid is. */
   angleDeg?: number;
+  /** Z step-down ladder, mm — when set (with allowance) the raster runs
+   *  MULTIPLE PASSES: flat levels stepping down from the crown by
+   *  stepDown, roughing at each level (cells whose surface lies below the
+   *  level cut flat AT the level — bulk material removal), with the final
+   *  pass at the compensated surface itself (the finish). Rough-vs-finish
+   *  with one op: stepDown + allowance = rough, stepDown 0/undefined =
+   *  the single finish pass (today's behavior). */
+  stepDown?: number;
+  /**
+   * CLEAR EXCESS STOCK (Alice, 2026-10-26 — the waterline's option, the
+   * raster's semantics): cells inside the `footprint` whose compensated
+   * surface is AIR (the tool's kernel touches nothing — pure waste outside
+   * the model's column) clear flat down to `clearFloorZ` instead of being
+   * skipped, so the pass finishes the WHOLE stock out to the edge, not
+   * just the model's neighborhood. Model-adjacent cells keep their dilated
+   * surface (the tool-compensated target — sub-tool gaps against the
+   * model, e.g. between it and the stock's end face, clear exactly as
+   * deep as the tool can reach without gouging: no region math needed).
+   * Absent = today's behavior (the model's column only, old saves
+   * byte-identical).
+   */
+  clearToStock?: boolean;
+  /** the stock footprint in machine XY, outer CCW contours — the
+   *  waste-clearing domain when clearToStock is set */
+  footprint?: Vec2[][];
+  /** waste floor, machine Z — what clearToStock's flat waste cells cut
+   *  down to (the caller passes the model's own floor: max(modelMinZ,
+   *  stockBottom), the same plane the waterline ladder bottoms at) */
+  clearFloorZ?: number;
+  /**
+   * CUT-OVER (tail stock, Alice, 2026-10-26): let the tool CENTER cross
+   * the stock edge — the waste domain grows by the tool radius, so rows
+   * pass beyond the declared stock for clean exits at the boundary.
+   * Without it the centers stay inside the footprint.
+   */
+  cutBeyondStock?: boolean;
 }
 
 export interface RasterContourResult {
@@ -76,6 +113,22 @@ export interface RasterContourResult {
  * ahead of this op.
  */
 const DEEP_WARN_MM = 2;
+
+/** Even-odd point-in-polygon over a contour SET (holes work: crossings
+ *  against every contour XOR together). */
+function insideContours(x: number, y: number, contours: Vec2[][]): boolean {
+  let inside = false;
+  for (const c of contours) {
+    for (let i = 0, j = c.length - 1; i < c.length; j = i++) {
+      const yi = c[i].y;
+      const yj = c[j].y;
+      if ((yi > y) !== (yj > y) && x < ((c[j].x - c[i].x) * (y - yi)) / (yj - yi) + c[i].x) {
+        inside = !inside;
+      }
+    }
+  }
+  return inside;
+}
 
 /**
  * Z word emission threshold, mm — surface steps smaller than this ride the
@@ -253,8 +306,47 @@ export function rasterContour(o: RasterContourOptions): RasterContourResult {
   vMin -= pad;
   uMax += pad;
   vMax += pad;
+
+  // CLEAR EXCESS STOCK: the waste domain — the footprint (grown by the
+  // tool radius + a pitch when cut-over lets the CENTER cross the stock
+  // edge) — must be covered by the grid, and remembered as a per-cell mask
+  // for surfaceZ. Without the option none of this runs: the grid, the
+  // heightmap, and every emitted move are byte-identical to before.
+  const domain: Vec2[][] | null =
+    o.clearToStock && o.footprint && o.footprint.length > 0
+      ? o.cutBeyondStock
+        ? offsetOutward(o.footprint, r + o.pitch)
+        : o.footprint
+      : null;
+  if (domain) {
+    // grid coverage: the domain's vertices in the (u, v) frame (+ a pitch
+    // so boundary cell centers land inside)
+    for (const c of domain) {
+      for (const p of c) {
+        const u = toU(p.x, p.y);
+        const v = toV(p.x, p.y);
+        if (u - o.pitch < uMin) uMin = u - o.pitch;
+        if (u + o.pitch > uMax) uMax = u + o.pitch;
+        if (v - o.pitch < vMin) vMin = v - o.pitch;
+        if (v + o.pitch > vMax) vMax = v + o.pitch;
+      }
+    }
+  }
   const nx = Math.floor((uMax - uMin) / o.pitch) + 1;
   const ny = Math.floor((vMax - vMin) / o.pitch) + 1;
+  let waste: Uint8Array | null = null;
+  if (domain) {
+    waste = new Uint8Array(nx * ny);
+    for (let j = 0; j < ny; j++) {
+      const v = vMin + j * o.pitch;
+      for (let i = 0; i < nx; i++) {
+        const u = uMin + i * o.pitch;
+        const x = u * cosA - v * sinA;
+        const y = u * sinA + v * cosA;
+        if (insideContours(x, y, domain)) waste[j * nx + i] = 1;
+      }
+    }
+  }
 
   const raw = rawHeightmap(o.positions, uMin, vMin, nx, ny, o.pitch, cosA, sinA);
   const comp = dilate(raw, nx, ny, o.pitch, o.tool);
@@ -272,13 +364,21 @@ export function rasterContour(o: RasterContourOptions): RasterContourResult {
   let clampedCells = 0;
   let rowFlip = false;
 
-  /** Cut Z at a grid cell, or null when the cell is air / allowance-only:
-   *  the compensated surface + allowance, clamped at the stock bottom.
-   *  Air (no kernel contact anywhere: −Infinity) is air — never clamped
-   *  to the bottom, which would mill the whole raster area flat. */
-  const cutZ = (i: number, j: number): number | null => {
+  /** Cut Z at a grid cell (the SURFACE pass), or null when the cell is
+   *  air / allowance-only: the compensated surface + allowance, clamped at
+   *  the stock bottom. Air (no kernel contact anywhere: −Infinity) is air —
+   *  never clamped to the bottom, which would mill the whole raster area
+   *  flat. EXCEPT with clear-excess: air cells inside the footprint are
+   *  WASTE — they clear flat at the floor, out to the stock edge. */
+  const surfaceZ = (i: number, j: number): number | null => {
     const compZ = comp[j * nx + i];
-    if (compZ === -Infinity) return null; // air: the tool reaches nothing
+    if (compZ === -Infinity) {
+      if (waste !== null && waste[j * nx + i] === 1) {
+        const z = Math.max(o.clearFloorZ ?? o.bottomZ, o.bottomZ);
+        return z < o.topZ - 1e-9 ? z : null; // floor above the crown: air
+      }
+      return null; // air: the tool reaches nothing
+    }
     const z = compZ + o.allowance;
     if (!(z < o.topZ - 1e-9)) return null; // air, or the allowance fills it
     if (z < o.bottomZ) {
@@ -288,93 +388,131 @@ export function rasterContour(o: RasterContourOptions): RasterContourResult {
     return z;
   };
 
-  for (let j = 0; j < ny; j += stride) {
-    const v = vMin + j * o.pitch;
-    const fwd = !rowFlip;
-    rowFlip = !rowFlip;
-
-    // segments: runs of consecutive cut cells, in travel order
-    const segs: { i0: number; i1: number }[] = [];
-    for (let n = 0; n < nx; n++) {
-      const i = fwd ? n : nx - 1 - n;
-      const isCut = cutZ(i, j) !== null;
-      const last = segs.length - 1;
-      if (isCut) {
-        if (last >= 0 && segs[last].i1 === (fwd ? i - 1 : i + 1)) {
-          segs[last].i1 = i; // extend the run
-        } else {
-          segs.push({ i0: i, i1: i });
-        }
+  // the Z ladder: with stepDown set the op ROUGHS in flat levels down
+  // from the crown (each level at topZ − k·stepDown, floored at the stock
+  // bottom) and FINISHES on the surface itself; without stepDown it is the
+  // single finish pass (the original surface-op behavior). Rough-vs-
+  // finish is the user's choice, not the op kind's.
+  const stepDown = o.stepDown && o.stepDown > 0 ? o.stepDown : 0;
+  const levels: (number | null)[] = []; // null = the final surface pass
+  if (stepDown > 0) {
+    let deepest = Infinity;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const z = surfaceZ(i, j);
+      if (z !== null && z < deepest) deepest = z;
+    }
+    if (deepest < Infinity) {
+      for (let z = o.topZ - stepDown; z > deepest + 1e-9; z -= stepDown) {
+        levels.push(Math.max(z, o.bottomZ));
       }
     }
-    if (segs.length === 0) continue;
-    rows++;
+    levels.push(null); // the finishing pass on the surface itself
+  } else {
+    levels.push(null);
+  }
 
-    for (const { i0, i1 } of segs) {
-      // the segment's polyline: start, z changes, and the far end — cells
-      // whose z rides the last emitted move within Z_EMIT_TOL fold in.
-      // Points live in grid u; the machine x AND y both derive from (u, v)
-      // at emission, only here.
-      const u0 = uMin + i0 * o.pitch;
-      const u1 = uMin + i1 * o.pitch;
-      const z0 = cutZ(i0, j)!;
-      const pts: { u: number; z: number }[] = [{ u: u0, z: z0 }];
-      const step = fwd ? 1 : -1;
-      let lastZ = z0;
-      for (let i = i0 + step; i !== i1 + step; i += step) {
-        const z = cutZ(i, j);
-        if (z === null) continue; // guarded by the run's construction
-        if (Math.abs(z - lastZ) > Z_EMIT_TOL) {
-          pts.push({ u: uMin + i * o.pitch, z });
-          lastZ = z;
+  /** Cut z at (i,j) for the given level: flat at the level plane while
+   *  the surface lies below it (roughing a flat shelf), the surface z when
+   *  the surface is above the level (finishing what's exposed), null when
+   *  the cell is air or its surface already sits above the level (nothing
+   *  to remove at this level). level null = the finishing pass. */
+  const levelCutZ = (level: number | null, i: number, j: number): number | null => {
+    const s = surfaceZ(i, j);
+    if (s === null) return null;
+    if (level === null) return s; // the finishing pass: to surface
+    if (s >= level - 1e-9) return null; // surface above the level: nothing to remove
+    return level; // rough flat at the level plane
+  };
+
+  for (const currentLevel of levels) {
+    for (let j = 0; j < ny; j += stride) {
+      const v = vMin + j * o.pitch;
+      const fwd = !rowFlip;
+      rowFlip = !rowFlip;
+
+      // segments: runs of consecutive cut cells, in travel order
+      const segs: { i0: number; i1: number }[] = [];
+      for (let n = 0; n < nx; n++) {
+        const i = fwd ? n : nx - 1 - n;
+        const isCut = levelCutZ(currentLevel, i, j) !== null;
+        const last = segs.length - 1;
+        if (isCut) {
+          if (last >= 0 && segs[last].i1 === (fwd ? i - 1 : i + 1)) {
+            segs[last].i1 = i; // extend the run
+          } else {
+            segs.push({ i0: i, i1: i });
+          }
         }
       }
-      if (pts[pts.length - 1].u !== u1) {
-        pts.push({ u: u1, z: cutZ(i1, j)! });
-      }
+      if (segs.length === 0) continue;
+      rows++;
 
-      // entry-safety convention (the pocket's): travel at height, descend
-      // at the destination, feed the last approach stretch
-      const x0 = u0 * cosA - v * sinA;
-      const y0 = u0 * sinA + v * cosA;
-      moves.push({
-        words: { x: x0, y: y0 },
-        feed: 0,
-        rapid: true,
-        comment: `raster row y${y0.toFixed(2)}`,
-      });
-      moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-      const plunge = o.topZ - pts[0].z;
-      if (plunge > maxPlunge) maxPlunge = plunge;
-      if (plunge > DEEP_WARN_MM) deepCells++;
-      moves.push({ words: { z: pts[0].z + APPROACH_CLEARANCE }, feed: 0, rapid: true });
-      moves.push({
-        words: { z: pts[0].z },
-        feed: o.plungeFeed,
-        comment: `plunge ${plunge.toFixed(2)}mm below surface`,
-      });
-      minutes += Math.min(APPROACH_CLEARANCE, Math.max(0, o.topZ - pts[0].z)) / o.plungeFeed;
+      for (const { i0, i1 } of segs) {
+        // the segment's polyline: start, z changes, and the far end — cells
+        // whose z rides the last emitted move within Z_EMIT_TOL fold in.
+        // Points live in grid u; the machine x AND y both derive from (u, v)
+        // at emission, only here.
+        const u0 = uMin + i0 * o.pitch;
+        const u1 = uMin + i1 * o.pitch;
+        const z0 = levelCutZ(currentLevel, i0, j)!;
+        const pts: { u: number; z: number }[] = [{ u: u0, z: z0 }];
+        const step = fwd ? 1 : -1;
+        let lastZ = z0;
+        for (let i = i0 + step; i !== i1 + step; i += step) {
+          const z = levelCutZ(currentLevel, i, j);
+          if (z === null) continue; // guarded by the run's construction
+          if (Math.abs(z - lastZ) > Z_EMIT_TOL) {
+            pts.push({ u: uMin + i * o.pitch, z });
+            lastZ = z;
+          }
+        }
+        if (pts[pts.length - 1].u !== u1) {
+          pts.push({ u: u1, z: levelCutZ(currentLevel, i1, j)! });
+        }
 
-      let px = x0;
-      let py = y0;
-      let pz = pts[0].z;
-      for (let k = 1; k < pts.length; k++) {
-        const p = pts[k];
-        const x = p.u * cosA - v * sinA;
-        const y = p.u * sinA + v * cosA;
-        const words: { x: number; y?: number; z?: number } = { x };
-        // y drifts along an angled row; fold it under the same rounding
-        // mercy as z (at α = 0 the drift is exactly 0 → modal, as today).
-        // x stays on every feed move, as today.
-        if (Math.abs(y - py) > Y_EMIT_TOL) words.y = y;
-        if (Math.abs(p.z - pz) > 1e-9) words.z = p.z;
-        moves.push({ words, feed: o.feed });
-        minutes += Math.hypot(x - px, y - py, p.z - pz) / o.feed;
-        px = x;
-        py = y;
-        pz = p.z;
+        // entry-safety convention (the pocket's): travel at height, descend
+        // at the destination, feed the last approach stretch
+        const x0 = u0 * cosA - v * sinA;
+        const y0 = u0 * sinA + v * cosA;
+        moves.push({
+          words: { x: x0, y: y0 },
+          feed: 0,
+          rapid: true,
+          comment: `raster row y${y0.toFixed(2)}`,
+        });
+        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+        const plunge = o.topZ - pts[0].z;
+        if (plunge > maxPlunge) maxPlunge = plunge;
+        if (plunge > DEEP_WARN_MM) deepCells++;
+        moves.push({ words: { z: pts[0].z + APPROACH_CLEARANCE }, feed: 0, rapid: true });
+        moves.push({
+          words: { z: pts[0].z },
+          feed: o.plungeFeed,
+          comment: `plunge ${plunge.toFixed(2)}mm below surface`,
+        });
+        minutes += Math.min(APPROACH_CLEARANCE, Math.max(0, o.topZ - pts[0].z)) / o.plungeFeed;
+
+        let px = x0;
+        let py = y0;
+        let pz = pts[0].z;
+        for (let k = 1; k < pts.length; k++) {
+          const p = pts[k];
+          const x = p.u * cosA - v * sinA;
+          const y = p.u * sinA + v * cosA;
+          const words: { x: number; y?: number; z?: number } = { x };
+          // y drifts along an angled row; fold it under the same rounding
+          // mercy as z (at α = 0 the drift is exactly 0 → modal, as today).
+          // x stays on every feed move, as today.
+          if (Math.abs(y - py) > Y_EMIT_TOL) words.y = y;
+          if (Math.abs(p.z - pz) > 1e-9) words.z = p.z;
+          moves.push({ words, feed: o.feed });
+          minutes += Math.hypot(x - px, y - py, p.z - pz) / o.feed;
+          px = x;
+          py = y;
+          pz = p.z;
+        }
+        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
       }
-      moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
     }
   }
 

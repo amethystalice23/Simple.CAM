@@ -401,6 +401,64 @@ describe('rasterContour', () => {
     const pos = rasterContour(opts({ topZ: 1, pitch: 0.2, stepOver: 0.4, angleDeg: 270 }));
     expect(JSON.stringify(neg.moves)).toBe(JSON.stringify(pos.moves));
   });
+
+  it('clear excess stock: waste cells outside the model clear flat at the floor, out to the footprint edge', () => {
+    // Alice's 2026-10-26 ask — the waterline's option on the paired surface
+    // pass. The footprint spans ±20, the model (r5 disc, top at 0) sits in
+    // the middle under a 1mm crown: the waste ring beyond the tool kernel's
+    // reach clears flat at clearFloorZ, rows sweep the whole footprint, and
+    // the model-adjacent cells keep their DILATED surface (the tool-comped
+    // target — no region math, no gouging).
+    const fp = [
+      [
+        { x: -20, y: -20 },
+        { x: 20, y: -20 },
+        { x: 20, y: 20 },
+        { x: -20, y: 20 },
+      ],
+    ];
+    const cleared = rasterContour(
+      opts({ topZ: 1, clearToStock: true, footprint: fp, clearFloorZ: -4 }),
+    );
+    const cuts = cutPoints(cleared.moves);
+    expect(cuts.length).toBeGreaterThan(0);
+    // the waste ring cuts flat at the floor plane, well outside the model
+    expect(cuts.some((p) => Math.abs(p.z - -4) < 1e-9 && Math.hypot(p.x, p.y) > 8)).toBe(true);
+    // rows reach the footprint edge (the last cell centers inside ±20)
+    expect(Math.max(...cuts.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))))).toBeGreaterThan(
+      19,
+    );
+    // the model's own top still cuts at its SURFACE (0), not the floor: the
+    // z-0 moves exist and end on the disc's dilated footprint (a flat
+    // plateau folds to its edge transitions — no interior points emitted)
+    const topCuts = cuts.filter((p) => Math.abs(p.z) < 1e-9);
+    expect(topCuts.length).toBeGreaterThan(0);
+    for (const p of topCuts) expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(6.5);
+    // and nothing cuts below the floor
+    expect(Math.min(...cuts.map((p) => p.z))).toBeGreaterThanOrEqual(-4 - 1e-9);
+  });
+
+  it('cut-over: the waste domain grows past the stock edge so row centers cross it', () => {
+    // the waterline's tail-stock toggle, the raster's semantics: without it
+    // the tool CENTERS stay inside the footprint; with it the domain grows
+    // by the tool radius + a pitch and the centers cross the stock edge
+    const fp = [
+      [
+        { x: -10, y: -10 },
+        { x: 10, y: -10 },
+        { x: 10, y: 10 },
+        { x: -10, y: 10 },
+      ],
+    ];
+    const base = { topZ: 1, clearToStock: true, footprint: fp, clearFloorZ: -4 };
+    const inside = rasterContour(opts(base));
+    const over = rasterContour(opts({ ...base, cutBeyondStock: true }));
+    const reachOf = (r: ReturnType<typeof rasterContour>) =>
+      Math.max(...cutPoints(r.moves).map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))));
+    expect(reachOf(inside)).toBeLessThanOrEqual(10 + 1e-9);
+    expect(reachOf(over)).toBeGreaterThan(10.5);
+    expect(reachOf(over)).toBeLessThanOrEqual(10 + 1 + 0.25 + 0.5);
+  });
 });
 
 /** angleDeg 45 over the sunk disc, at the shared default options — the

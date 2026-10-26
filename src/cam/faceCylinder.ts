@@ -118,7 +118,10 @@ export function faceCylinder(
   const roughDepths: number[] = [];
   for (let k = 1; k * op.stepDown < roughTarget; k++) roughDepths.push(k * op.stepDown);
   if (roughTarget > 0 && roughDepths.length === 0) roughDepths.push(roughTarget);
-  const depths = [...roughDepths, totalDepth];
+  // FINISHING PASS ONLY (Alice, 2026-10-26): skip the roughing ladder —
+  // one pass straight to the target Ø (the step-down and finish allowance
+  // are meaningless without roughing; the op assumes the bulk is gone).
+  const depths = op.finishingOnly ? [totalDepth] : [...roughDepths, totalDepth];
 
   const stepOver = op.stepOver;
   const revs = span / stepOver;

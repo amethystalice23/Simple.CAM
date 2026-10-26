@@ -218,6 +218,12 @@ export interface FaceCylinderOp {
   /** radial depth per roughing pass, mm */
   stepDown: number;
   /**
+   * FINISHING PASS ONLY (Alice, 2026-10-26): skip the roughing ladder —
+   * one pass straight to the target Ø. The step-down is ignored; the op
+   * assumes the bulk is already gone (a roughing op or a previous run).
+   */
+  finishingOnly?: boolean;
+  /**
    * Step-over, mm — the shared pass spacing for all patterns: axial ring
    * spacing ('vertical'), indexed-pass arc length at the cut radius
    * ('horizontal'), axial advance per revolution ('spiral').
@@ -480,6 +486,15 @@ export interface PocketOp {
   regions: Vec2[][];
   /** machine Z the pocket starts from (surface) */
   topZ: number;
+  /**
+   * Machine Z for INTER-PASS RAPID TRAVEL, mm — default topZ + safeClearance.
+   * Set by callers whose cut band sits below standing material the surface
+   * reference doesn't account for (the waterline rough: its bands descend
+   * the model, but the uncleared stock OUTSIDE the clearing region and the
+   * keep-out islands inside it both stand to the stock crown — a travel at
+   * band-top height sweeps laterally through them).
+   */
+  travelZ?: number;
   /** machine Z of the pocket floor */
   floorZ: number;
   /** axial depth per level, mm */
@@ -657,6 +672,9 @@ export type JobOp =
       xStart: number;
       xEnd: number;
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the roughing ladder —
+       *  one pass straight to the target Ø. Assumes the bulk is gone. */
+      finishingOnly?: boolean;
       /** step-over mm (ring spacing / pass arc / per-rev advance); null = derive (0.5·tool Ø) */
       stepOver: number | null;
       finishAllowance: number;
@@ -682,6 +700,9 @@ export type JobOp =
       width: number;
       /** axial depth-per-level ladder, mm */
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the depth ladder —
+       *  one full-depth sweep per strand. Assumes the bulk is gone. */
+      finishingOnly?: boolean;
       rotation: 'cw' | 'ccw';
       /** starting A of strand 1, degrees — rotates the whole strand pattern
        *  around the cylinder; stacks additively with the index datum.
@@ -705,6 +726,9 @@ export type JobOp =
       tolerance: number;
       /** depth-per-level ladder for the grooves, mm */
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the depth ladder —
+       *  cut the groove at full depth once (+ the spring pass). */
+      finishingOnly?: boolean;
       rotation: 'cw' | 'ccw';
       /** the surface the ladder starts from (the faced crest Ø when a
        * facing op precedes); null = the stock surface */
@@ -737,6 +761,9 @@ export type JobOp =
       depth: number;
       /** radial step-per-level, mm */
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the radial ladder —
+       *  one revolution at the final flank depth. */
+      finishingOnly?: boolean;
       rotation: 'cw' | 'ccw';
     })
   | (JobOpBase & {
@@ -755,6 +782,11 @@ export type JobOp =
       /** roughing stock left on the floor and walls, mm; 0 = finish to size */
       allowance: number;
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the step-down ladder —
+       *  go straight down and cut only the finishing level at the floor.
+       *  Assumes the bulk is already cleared (a roughing op, or a previous
+       *  run). The explicit version of the old start = end trick. */
+      finishingOnly?: boolean;
       stepOver: number;
       /**
        * The ⇩ floor pick (edge-tracing §5): a live-linked plane/circle whose
@@ -795,6 +827,9 @@ export type JobOp =
       depth: number;
       /** depth-per-level ladder, mm */
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the depth ladder —
+       *  one full-depth pass along the paths. */
+      finishingOnly?: boolean;
     })
   | (JobOpBase & {
       kind: 'profile';
@@ -806,6 +841,9 @@ export type JobOp =
       /** roughing stock left on the floor and walls, mm; 0 = finish to size */
       allowance: number;
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the step-down ladder —
+       *  one full-depth wall pass at the floor. Assumes the bulk is gone. */
+      finishingOnly?: boolean;
       side: 'outside' | 'inside' | 'online';
       /** the ⇩ floor pick — see the pocket variant */
       floorFeatureId: string | null;
@@ -843,6 +881,9 @@ export type JobOp =
        * interior walls and floor (inside mode), mm */
       allowance: number;
       stepDown: number;
+      /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the step-down ladder —
+       *  cut the whole band in one level at the floor. */
+      finishingOnly?: boolean;
       stepOver: number;
       /** the ⇩ floor pick — see the pocket variant */
       floorFeatureId: string | null;
@@ -876,6 +917,40 @@ export type JobOp =
        * passes wide, so mesh noise on the model's wall cannot pinch the
        * perimeter pass into plunge-per-sliver arcs (2026-10-25) */
       margin: number | null;
+      /** Allow tail stock cut-over (Alice, 2026-10-26): skip the stock-
+       * footprint clip on the clearing reach, so the boundary pass may run
+       * OUTSIDE the declared stock instead of pinching off at its edge —
+       * kills the near-edge artifacts where the model approaches the
+       * boundary, at the price of the tool tip passing beyond the stock
+       * (mind what physically sits there: tail stock, fixtures). */
+      cutBeyondStock: boolean;
+      /**
+       * CLEAR EXCESS STOCK (Alice, 2026-10-26): every level clears the
+       * waste right out to the stock edge (footprint − keep-out) instead of
+       * stopping at the silhouette + margin — essential in 4-axis, where
+       * leftover shelves can bottom out the collet and indexing can break
+       * uncleared chunks loose. Absent = off (the model's column only).
+       */
+      clearToStock?: boolean;
+      /**
+       * MAX DEPTH below the crown, mm — the ladder stops here instead of at
+       * the model floor (Alice, 2026-10-26): the 4-axis short-tool throttle.
+       * Limit each orientation's op to the depth its tool can reach
+       * alongside tall features (the sim's red marks show where the collet
+       * would hit). Absent/null/0 = unlimited.
+       */
+      maxDepth?: number | null;
+      /**
+       * FINISHING PASS ONLY (Alice, 2026-10-26): scrub only where the tool
+       * touches the model SURFACE — a contour-hugging band around every
+       * section ring at each level (walls, islands, interior contours),
+       * ignoring pure stock clearance — with the FULL region cleared only
+       * at the level where the ladder bottoms out (the floor/waste
+       * clearance the cut-out profile rides in). Levels above the model
+       * have no surface to scrub and are skipped. Assumes a rough at
+       * allowance ran ahead; the step-down still sets the level density.
+       */
+      finishingOnly?: boolean;
     })
   | (JobOpBase & {
       kind: 'rasterContour';
@@ -901,6 +976,32 @@ export type JobOp =
       stepOver: number;
       /** row angle, degrees — absent = 0 = rows along X */
       angle?: number;
+      /**
+       * FINISHING PASS ONLY (Alice, 2026-10-26): the single surface pass
+       * with NO flat roughing levels — replaces the old "step down 0"
+       * convention (job files with stepDown 0/absent migrate to checked).
+       * Unchecked = rough in flat levels at `stepDown` + the final
+       * finishing pass on the surface.
+       */
+      finishingOnly?: boolean;
+      /** Z step-down for the roughing levels, mm — used only when
+       *  finishingOnly is OFF */
+      stepDown?: number;
+      /**
+       * CLEAR EXCESS STOCK (Alice, 2026-10-26 — the waterline's option on
+       * the paired surface pass): cells inside the stock footprint whose
+       * tool-compensated surface is air are WASTE — they clear flat at the
+       * model's own floor, so the pass finishes the whole stock out to the
+       * edge. Model-adjacent cells keep the dilated surface (sub-tool gaps
+       * against the model clear exactly as deep as the tool can reach
+       * without gouging — no region math needed). Absent = the model's
+       * column only.
+       */
+      clearToStock?: boolean;
+      /** allow tail stock cut-over (Alice, 2026-10-26): the waste domain
+       *  grows by the tool radius, so row centers may cross the stock edge
+       *  for clean exits. Absent = centers stay inside the footprint. */
+      cutBeyondStock?: boolean;
     });
 
 /**

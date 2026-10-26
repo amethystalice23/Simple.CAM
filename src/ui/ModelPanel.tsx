@@ -29,9 +29,7 @@ interface Props {
    * click on a circular feature becomes its wrap Ø */
   pickingWrapDiameter: boolean;
   onPickWrapDiameter: (primId: string) => void;
-  showFeatures: boolean;
   measureMode: boolean;
-  onShowFeaturesChange: (v: boolean) => void;
   onMeasureModeChange: (v: boolean) => void;
 }
 
@@ -422,17 +420,9 @@ export function ModelPanel(props: Props) {
             + Box
           </button>
         </div>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={props.showFeatures}
-            onChange={(e) => props.onShowFeaturesChange(e.target.checked)}
-          />
-          <span>
-            Show detected features
-            <span className="legend">edges red · circles green · holes cyan</span>
-          </span>
-        </label>
+        {/* the features/measure toggles live in the viewport's Layers
+         * dropdown + this measure tick (display options consolidated
+         * 2026-10-25 — see the Viewport's top-right dropdown) */}
         <label className="check">
           <input
             type="checkbox"

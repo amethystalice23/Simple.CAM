@@ -118,7 +118,6 @@ interface Props {
    * renders clearly picked — tinted model, brightened primitive volumes,
    * lit-up artwork line work */
   selectedObjectId: string | null;
-  showFeatures: boolean;
   measureMode: boolean;
   /** false while an op's feature selection is active: straight lines are
    * not operation targets (reserved for the later line-follow engrave) */
@@ -127,7 +126,6 @@ interface Props {
   primitives: Primitive[];
   /** generated moves to draw (PLAN.md "Toolpath preview") */
   previewMoves: Move[] | null;
-  showPreview: boolean;
   /** the expanded slice-pocket op's section plane (edge-tracing §5): the
    * machine Z to draw the plane + contour at, the datum rotation for
    * slicing the rotated part, and the callback a drag of the plane
@@ -157,6 +155,15 @@ interface Props {
     axisZ: number;
     marks: { x: number; y: number; z: number }[][] | null;
   } | null;
+  /** the carve simulator's chunk meshes, when the Simulation layer is on
+   *  (PLAN "cutting simulator"): stock-frame greedy-meshed voxels keyed by
+   *  chunk id, machine-space positions baked in. The meshes parent into
+   *  datumGroup so index rotation is free. */
+  simChunks: Map<number, import('../sim/protocol').ChunkMesh> | null;
+  /** display layers (the top-right Layers dropdown) + its toggle —
+   *  Stock/Model/Features/Paths/Simulation visibility in one place */
+  displayLayers: { stock: boolean; model: boolean; features: boolean; paths: boolean; simulation: boolean };
+  onToggleLayer: (layer: 'stock' | 'model' | 'features' | 'paths' | 'simulation', v: boolean) => void;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
 }
@@ -176,22 +183,25 @@ export function Viewport({
   transform,
   sources,
   selectedObjectId,
-  showFeatures,
   measureMode,
   edgePickingEnabled,
   opSelection,
   primitives,
   previewMoves,
-  showPreview,
   slicePreview,
   viewDatum,
   pickKind,
   facePreview,
+  simChunks,
+  displayLayers,
+  onToggleLayer,
   onToggleSelect,
   onClearSelection,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
+  /** the stock group (hidden while the simulator shows carved chunks) */
+  const stockGroupRef = useRef<THREE.Group | null>(null);
   const featureGroupRef = useRef<THREE.Group | null>(null);
   /** renderer/camera/controls of the scene effect — shared with the
    * slice-plane effect below */
@@ -693,6 +703,7 @@ export function Viewport({
       center.copy(box.position);
     }
     datumGroup.add(stockGroup);
+    stockGroupRef.current = stockGroup;
 
     // 4-axis only: the A0-direction marker — a small amber arrow hint at
     // X=0 (with the machine axes), rising from the stock axis toward the
@@ -913,6 +924,152 @@ export function Viewport({
     g.position.copy(off).sub(p);
   }, [viewDatum, stock]);
 
+  // ---- carve simulator: chunk meshes in the stock frame ----
+  // The grid IS the display frame (un-rotated stock at A=0 — the same
+  // frame movesToSegments maps previews into), so chunk positions are
+  // plain machine coords. Parent into datumGroup so index rotation
+  // applies for free, exactly like the stock/model/preview. Rebuilds
+  // incrementally: each worker `chunk` message replaces one mesh; a
+  // chunk whose mesh comes back EMPTY is hidden (fully carved away).
+  const simGroupRef = useRef<THREE.Group | null>(null);
+  /** the sim chunk material — created once per sim session and shared by
+   *  every chunk mesh; NEVER disposed on effect re-runs (chunk messages
+   *  re-fire the effect per message, and disposing the shared material
+   *  mid-run invalidated every mesh built so far — the "huge gaps" bug:
+   *  meshes with a disposed material render blank in three.js once the GPU
+   *  resources are reclaimed. Disposal happens only on sim exit below.) */
+  const simMatRef = useRef<THREE.MeshStandardMaterial | null>(null);
+  /** the classification-ghost overlay material (vertexColors) — same
+   *  lifecycle rules as simMatRef (never disposed mid-run) */
+  const simGhostMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  useEffect(() => {
+    const datum = datumGroupRef.current;
+    if (!datum) return;
+    if (!simChunks || simChunks.size === 0) {
+      // leaving sim mode: dispose every chunk mesh + the shared materials
+      simGroupRef.current?.traverse((o) => {
+        const m = o as THREE.Mesh;
+        m.geometry?.dispose();
+      });
+      simGroupRef.current?.removeFromParent();
+      simGroupRef.current = null;
+      simMatRef.current?.dispose();
+      simMatRef.current = null;
+      simGhostMatRef.current?.dispose();
+      simGhostMatRef.current = null;
+      return;
+    }
+    let group = simGroupRef.current;
+    if (!group) {
+      group = new THREE.Group();
+      group.name = 'sim-chunks';
+      datum.add(group);
+      simGroupRef.current = group;
+    }
+    if (!simMatRef.current) {
+      simMatRef.current = new THREE.MeshStandardMaterial({ color: 0x9c7b52, flatShading: true });
+    }
+    if (!simGhostMatRef.current) {
+      // vertexColors carries the yellow/red classification WITH per-vertex
+      // alpha (the mesher's RGBA attribute — yellow translucent, red strong),
+      // so the material itself stays at full opacity; slight polygon offset
+      // keeps the overlay from z-fighting the solid mesh
+      simGhostMatRef.current = new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      });
+    }
+    const mat = simMatRef.current;
+    const ghostMat = simGhostMatRef.current;
+    for (const [id, chunk] of simChunks) {
+      let mesh = group.children.find(
+        (c) => (c as THREE.Mesh).name === `chunk-${id}`,
+      ) as THREE.Mesh | undefined;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(chunk.positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(chunk.normals, 3));
+      geo.setIndex(new THREE.BufferAttribute(chunk.indices, 1));
+      if (chunk.indices.length === 0) {
+        // fully carved away — an empty mesh keeps it hidden cheaply
+        if (mesh) mesh.geometry.dispose(), (mesh.geometry = geo);
+        else {
+          mesh = new THREE.Mesh(geo, mat);
+          mesh.name = `chunk-${id}`;
+          mesh.visible = false;
+          group.add(mesh);
+        }
+      } else if (mesh) {
+        mesh.geometry.dispose();
+        mesh.geometry = geo;
+        mesh.visible = true;
+      } else {
+        mesh = new THREE.Mesh(geo, mat);
+        mesh.name = `chunk-${id}`;
+        group.add(mesh);
+      }
+      // the classification ghost overlay (yellow gouge / red shank
+      // contact) rides on the same chunk message
+      const ghostName = `chunk-ghost-${id}`;
+      if (chunk.ghostIndices && chunk.ghostIndices.length > 0) {
+        const ggeo = new THREE.BufferGeometry();
+        ggeo.setAttribute('position', new THREE.BufferAttribute(chunk.ghostPositions!, 3));
+        ggeo.setAttribute('normal', new THREE.BufferAttribute(chunk.ghostNormals!, 3));
+        ggeo.setAttribute('color', new THREE.BufferAttribute(chunk.ghostColors!, 4, true));
+        ggeo.setIndex(new THREE.BufferAttribute(chunk.ghostIndices!, 1));
+        let gmesh = group.children.find((c) => (c as THREE.Mesh).name === ghostName) as
+          | THREE.Mesh
+          | undefined;
+        if (gmesh) {
+          gmesh.geometry.dispose();
+          gmesh.geometry = ggeo;
+        } else {
+          gmesh = new THREE.Mesh(ggeo, ghostMat);
+          gmesh.name = ghostName;
+          gmesh.renderOrder = 1;
+          group.add(gmesh);
+        }
+      } else {
+        // no ghosts this update — drop any stale overlay mesh
+        const stale = group.children.find((c) => (c as THREE.Mesh).name === ghostName);
+        if (stale) {
+          ((stale as THREE.Mesh).geometry)?.dispose();
+          group.remove(stale);
+        }
+      }
+    }
+  }, [simChunks, stock]);
+
+  // sim mode: the carved chunks replace the translucent stock, and the
+  // Layer visibility (the Layers dropdown): Stock/Model ticks, and the
+  // model ghosts while simulation chunks are displayed (comparison mode —
+  // the same mesh instance, material swap only)
+  const simActive = (simChunks?.size ?? 0) > 0 && displayLayers.simulation;
+  useEffect(() => {
+    const stockG = stockGroupRef.current;
+    const model = modelRef.current;
+    if (!stockG || !model) return;
+    const mat = model.material as THREE.MeshStandardMaterial;
+    // the sim overlay REPLACES the stock view; the stock tick wins only
+    // when there are no sim chunks to show
+    stockG.visible = displayLayers.stock && !simActive;
+    if (displayLayers.model) {
+      const ghost = simActive;
+      mat.transparent = ghost;
+      mat.opacity = ghost ? 0.25 : 1;
+      mat.depthWrite = !ghost;
+    } else {
+      mat.transparent = true;
+      mat.opacity = 0;
+      mat.depthWrite = false;
+    }
+    mat.needsUpdate = true;
+  }, [simActive, displayLayers.stock, displayLayers.model, stock, geometry]);
+
   // Feature overlays: static outlines + the measure-mode hover line, one
   // overlay per source (model + primitives). Runs after the scene effect
   // (which owns the feature group) and re-runs when the stock rebuilds
@@ -933,13 +1090,13 @@ export function Viewport({
     }));
     for (const entry of entries) {
       const { data } = entry;
-      data.edgeLines.visible = showFeatures;
-      data.circleLines.visible = showFeatures;
-      data.holeLines.visible = showFeatures;
+      data.edgeLines.visible = displayLayers.features;
+      data.circleLines.visible = displayLayers.features;
+      data.holeLines.visible = displayLayers.features;
       // artwork line work is the OBJECT's body — an authored primitive
       // must not vanish with the features toggle (there is no volume to
       // render; the amber lines are it)
-      data.pathLines.visible = showFeatures || entry.source.artworkFrame !== undefined;
+      data.pathLines.visible = displayLayers.features || entry.source.artworkFrame !== undefined;
       // ... and the lines are also the artwork's selection surface: the
       // picked artwork's strokes light up amber-bright
       if (entry.source.artworkFrame) {
@@ -1039,12 +1196,12 @@ export function Viewport({
       overlaysRef.current = [];
       hoverLineRef.current = null;
     };
-  }, [sources, stock, showFeatures, opSelection, selectedObjectId]);
+  }, [sources, stock, displayLayers.features, opSelection, selectedObjectId]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR
   useEffect(() => {
     const group = featureGroupRef.current;
-    if (!group || !previewMoves || !showPreview) return;
+    if (!group || !previewMoves || !displayLayers.paths) return;
     const segs = movesToSegments(previewMoves, stock);
     const mk = (pts: number[], color: number, opacity: number, order: number) => {
       const g = new THREE.BufferGeometry();
@@ -1058,8 +1215,10 @@ export function Viewport({
       return line;
     };
     const objects: THREE.LineSegments[] = [];
+    // feed cuts: amber. Rapids: RED — air moves unmistakable at a glance
+    // (Alice's 2026-10-26 ask: diagnose travel collisions by eye)
     if (segs.feed.length > 0) objects.push(mk(segs.feed, 0xffd27f, 0.95, 8));
-    if (segs.rapid.length > 0) objects.push(mk(segs.rapid, 0x5a86a8, 0.5, 8));
+    if (segs.rapid.length > 0) objects.push(mk(segs.rapid, 0xe05a5a, 0.9, 9));
     return () => {
       for (const l of objects) {
         group.remove(l);
@@ -1067,7 +1226,7 @@ export function Viewport({
         (l.material as THREE.Material).dispose();
       }
     };
-  }, [previewMoves, showPreview, stock]);
+  }, [previewMoves, displayLayers.paths, stock]);
 
   // slice-pocket cut plane (edge-tracing §5): a translucent violet quad at
   // the slice Z + the contour outline there, and a grab pill on the plane's
@@ -1474,6 +1633,10 @@ export function Viewport({
           {label.text}
         </div>
       )}
+      {/* display layers — the ONE place viewport visibility is controlled
+       * (Alice's 2026-10-25 consolidation: Stock/Model/Features/Paths/
+       * Simulation move out of the scattered panel checkboxes) */}
+      <LayersDropdown layers={displayLayers} onToggle={onToggleLayer} />
       {opSelection.map((s, i) => (
         <div
           key={`${s.sourceId}:${s.kind}:${s.index}`}
@@ -1485,5 +1648,65 @@ export function Viewport({
       ))}
       {opSelection.length === 2 && <div ref={distLabelRef} className="measure-label dist" />}
     </>
+  );
+}
+
+/** top-right viewport dropdown: every display layer's tick in one place.
+ *  Closes on outside click or Escape; the button highlights when open. */
+function LayersDropdown(props: {
+  layers: { stock: boolean; model: boolean; features: boolean; paths: boolean; simulation: boolean };
+  onToggle: (layer: 'stock' | 'model' | 'features' | 'paths' | 'simulation', v: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+  const ENTRIES: [keyof typeof props.layers, string][] = [
+    ['stock', 'Stock'],
+    ['model', 'Model'],
+    ['features', 'Features'],
+    ['paths', 'Paths'],
+    ['simulation', 'Simulation'],
+  ];
+  const onCount = ENTRIES.filter(([k]) => props.layers[k]).length;
+  return (
+    <div ref={ref}>
+      <button
+        type="button"
+        className={`layers-button${open ? ' active' : ''}`}
+        onClick={() => setOpen((o) => !o)}
+        title="Display layers — Stock, Model, Features, Paths, Simulation"
+      >
+        ▼ Layers
+      </button>
+      {open && (
+        <div className="layers-menu" role="menu">
+          {ENTRIES.map(([key, label]) => (
+            <label key={key}>
+              <input
+                type="checkbox"
+                checked={props.layers[key]}
+                onChange={(e) => props.onToggle(key, e.target.checked)}
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+          <span className="legend" style={{ padding: '2px 6px' }}>{onCount}/5 on</span>
+        </div>
+      )}
+    </div>
   );
 }

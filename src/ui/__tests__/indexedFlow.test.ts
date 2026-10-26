@@ -127,6 +127,9 @@ describe('indexed job flow: top pocket, index 180, bottom pocket', () => {
     }
     expect(bottomZs.length).toBeGreaterThan(0);
     expect(Math.max(...bottomZs)).toBeLessThanOrEqual(-23); // over the boss face
-    expect(Math.min(...bottomZs)).toBeGreaterThanOrEqual(-25); // above its floor
+    // the deepest feed z is the first plunge's APPROACH plane: 0.5 above the
+    // surface (in air — rapids never descend below the standing material),
+    // i.e. 0.5 past the boss face in the display frame
+    expect(Math.min(...bottomZs)).toBeGreaterThanOrEqual(-25.5);
   });
 });

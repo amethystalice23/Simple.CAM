@@ -107,6 +107,55 @@ pocket's outside mode could clear to the stock wall when the frame fits
 the tool), OFF clamps regions within the stock footprint
 (docs/edge-tracing.md §2).
 
+**"Finishing pass only" (2026-10-26, Alice's call — the rough/finish split
+is the user's artistic choice per op, never implicit in the op kind):** one
+checkbox on every op with a depth/radial ladder — Pocket, Profile, Slice
+pocket, Face cylinder, Spiral carve, Thread, Engrave, Cylinder chamfer,
+Raster contour, Waterline. Checked = skip the ladder and cut only the
+finishing pass at the final depth, assuming the bulk is already cleared (a
+roughing op or a previous run); the Step-down field hides while checked
+(the explicit version of the old start = end trick). Ticking the box ON
+also ZEROES the op's allowance (the ops that carry one — pocket/profile/
+slice-pocket/waterline/raster's allowance, face-cylinder's finish
+allowance): a finishing pass cuts to size, and the allowance was roughing
+stock for exactly the ladder being skipped; the user can set it back
+afterwards, and unticking restores nothing (Alice's 2026-10-26 call).
+Per-op mechanics:
+pocket/profile/slice-pocket collapse zLadder to one floor level;
+face-cylinder gets a real generator option (its rough-level fallback would
+otherwise force two passes); spiral/thread/engrave/cyl-chamfer collapse
+their depth ladders via a full-span step-down (thread keeps its spring
+pass). The **waterline's semantics differ** (Alice's design): scrub only
+where the tool TOUCHES THE MODEL — per shaping level the clearing region
+is the contour band around the keep-out (every section ring: walls,
+islands, interior contours; width tool Ø + step over) UNION the FLATS:
+`section(nextCut) − shadow(cut)` grown by the tool radius — the
+horizontal surfaces exposed between this slice and the next, touched from
+below within one step-down. Everything else is free space the rough
+already cleared — no waggle. The BELOW-CHECK RUNS FIRST (Alice's
+"it ignored the taller features" fix, 2026-10-26): a level whose cut
+plane has no section — including the level just above the model top,
+where the tall features' top surfaces sit within a step below — still
+scrubs the top slab through its flats; a level is skipped only when it
+touches NOTHING (side empty AND below empty). The level where the ladder
+bottoms out (moat-only / the floor) keeps the FULL region, the waste
+clearance the cut-out profile rides in; the step-down stays visible
+(wall-finish level density); the stop rule and warnings run on the full
+region exactly as in roughing mode. The allowance-skip (`cut ≥ bandTop`)
+is a ROUGHING concept, suppressed in finishing mode — the step-down is
+pure rung density and the allowance a raise-plus-offset, "entirely
+unrelated" (Alice); a finishing level with no band scrubs AT its cut plane
+(pocket2d topZ clamps to the cut). Physics
+honesty: a flat is scrubbed at the level plane ABOVE its surface (a
+constant-Z pass cannot ride an arbitrary height), so a sub-step-down
+skin can remain on it unless a plane lands exactly on the surface — the
+raster (or a finer step-down) finishes it. The **raster's old "step down 0 =
+single surface pass" convention is REPLACED** by the checkbox: old saves
+with stepDown 0/absent migrate to checked (jobFile normalizeJobOps), new
+raster ops default to checked with the preset step-down carried for the
+unchecked ladder. Excluded: Drill (pecking is chip clearance, not
+rough/finish), Chamfer (already single-pass), Index.
+
 ### Engrave + artwork import (spec, 2026-10-22)
 
 Logo/drawing work from imported vectors — the one deferred Phase-1 op.
@@ -302,6 +351,59 @@ pass, not N waterline levels). Multiple waterline ops with index
 rotations between them compose — each bounded by its own orientation's
 geometry, and the rough can never free the part. Continuous/multi-
 orientation rotary roughing remains future work.
+**Travel height (2026-10-26, the knight diagnosis):** inter-pass rapids
+travel at the STOCK CROWN + clearance, never at band-top + clearance —
+the uncleared stock outside the clearing region and the upper-shadow
+keep-out islands inside it both stand to the crown, so a lateral rapid
+at band-top height plows sideways through them (Alice's real 4-axis
+knight: 34,427 gouged voxels, worst single move 14k — after the fix, 3,
+all sub-0.2mm³ approach-graze noise). pocket2d gained `travelZ` for this
+(PocketOp field, default unchanged for every other caller); pinned by a
+waterline test. **Approach plane (2026-10-26, the sim yellow-streak fix):**
+pocket2d's per-loop approach rapid descends to APPROACH_CLEARANCE above the
+STANDING material — `max(levelZ, previous level's cut) + 0.5`, topZ + 0.5 at
+the first level — never `levelZ + 0.5`: a step-down taller than the 0.5mm
+clearance (her coin: 0.8) had every loop-start rapid plowing the band, which
+the carve sim painted as a yellow streak at each contour's starting plunge
+(16 rapid moves, 1898 voxels → 0 after the fix; pinned by a pocket test).
+**Tail-stock cut-over (2026-10-26, Alice's toggle):**
+the waterline panel carries "allow tail stock cut-over" — skips the
+footprint clip on the clearing reach so the boundary pass may run
+OUTSIDE the declared stock instead of pinching off at its edge (the
+coin's near-boundary artifacts; tooltip: "This allows the tool tip to
+pass outside of the defined stock's area"). Off (default) keeps the
+tool inside; the unclipped reach is still silhouette + margin, so the
+rough never wanders past one margin of the model's own shadow.
+**Clear excess stock (2026-10-26, Alice's 4-axis ask):** `clearToStock`
+on the waterline panel makes every level's reach the whole stock
+FOOTPRINT (footprint − keep-out) instead of the silhouette + margin —
+the waste is cleared right out to the stock edge as the ladder
+descends, so no shelf of uncleared stock survives outside the model's
+column (her rationale: in 4-axis a leftover shelf can bottom out the
+collet/head, and indexing can break uncleared chunks loose). The
+keep-out, the moat-only stop, and the never-sever guarantee are
+untouched; the option wins over tail-stock cut-over (the clear NEEDS
+the footprint), and a model casting no shadow inside the stock still
+roughs nothing — never a license to mill the whole blank.
+Probe follow-up (her knight, same day): "left a very thin layer at
+min and max X" — the model's X tips sit 0.9mm from the stock's end
+faces (0.7 after the allowance): a slot NO tool fits, and shearing it
+from beyond the end would gouge the keep-out — cut-over cannot help,
+the obstacle is the model (the surrounding lanes ARE swept clean).
+The honest fix is a warning, computed per clear-excess level as the
+morphological OPENING of the region by the tool (erode toolR, regrow
+toolR = exactly the disc-swept area): region − opening over 1mm²
+warns "stock the tool cannot reach — a gap narrower than the tool
+(e.g. between the model and the stock end); left standing". **Max depth
+(2026-10-26, the 4-axis short-tool throttle):** `maxDepth` mm below the
+crown stops the ladder ahead of the model floor — her knight's A=0
+shelf collides the collet on shorter tools, and the sim's red marks had
+no op knob to prevent; limit each orientation's op to the depth its
+tool can reach alongside the wall (null/0 = to the floor, old saves
+byte-identical). The waterline panel's info block is split: a short
+operational hint + the long-winded detail demoted to an italic, dimmer
+`.hint.detail` (Alice's wording: "too much verbiage — the debug section
+can stay, but italicize it or give it a subtly different colour").
 
 **Phase B — Raster contour (3D; the paired surface pass — 'finish' is an allowance choice)** — new pure core
 `src/cam/relief.ts`: (1) dense surface heightmap via BVH raycasts
@@ -340,7 +442,20 @@ rotation: a Z-rotation commutes with the downward raycasts, so the same
 BVH is sampled on a rotated grid and machine coords emitted at the
 edges — angle 0 reproduces the unrotated grid byte-identically, and the
 isotropic dilation kernel is untouched. The Phase C rotational op
-composes from these same directions.** Not yet: the Phase C
+composes from these same directions.** CLEAR EXCESS STOCK + TAIL-STOCK
+CUT-OVER (Alice's 2026-10-26 ask — both waterline options carried to
+the raster): `clearToStock` turns footprint cells whose compensated
+surface is AIR into WASTE — they clear flat at `clearFloorZ` (the
+caller passes the MODEL's own floor, max(modelMinZ, stockBottom) — the
+same plane the waterline ladder bottoms at), so the pass finishes the
+whole stock out to the edge; model-adjacent cells keep the DILATED
+surface, which is what makes the raster the right tool for the
+waterline's unmachinable end slots — the kernel's dilation clears
+them exactly as deep as the disc can reach without gouging, no region
+math at all. `cutBeyondStock` grows the waste domain by tool Ø/2 + a
+pitch so row CENTERS may cross the stock edge (clean exits); without
+it the centers stay inside the footprint. Both optional: absent =
+byte-identical to before. Not yet: the Phase C
 unwrapped (x,θ) frame; the Web Worker hosting (generation is
 synchronous — the ~300k-raycast fine-grid case is the worker's charter);
 scallop-height step-over derivation (a plain mm knob for now).
@@ -390,6 +505,61 @@ estimate before anyone commits a 3-hour bar.
 cylinder + finish directly into round stock, vs. an unwrapped-frame
 waterline rough); adaptive clearing (trochoidal — a named contour type to add, with raster contour/waterline contour the family so far); adaptive Δz levels; slope-split finishing; how the
 long-running worker integrates with the recalc/preview pipeline.
+
+**Carve simulator (2026-10-25, landed) — the app's FIRST Web Worker.**
+Top-bar "Simulate…" → src/sim worker carves the generated Move[] out of
+a voxel stock and the viewport swaps the translucent stock for the
+carved chunks, ghosting the model for comparison (Alice's design call;
+plan approved same day). Architecture: Cartesian occupancy grid
+(Uint8) in the MATERIAL frame (the un-rotated stock at A=0 — the same
+frame movesToSegments maps previews into; 4-axis rotates the TOOL POSE
+per sample, never the grid), per-pose tool-kernel stamping with
+air-skip (columnTop cache: skip columns whose material top is below
+the tool's lowest extent) and free GOUGE DETECTION (a rapid that
+removes voxels = bad clearance — surfaced as count + first move), 32³
+greedy-meshed chunks transferred to the client on dirty. Core modules
+pure + vitest-covered (grid/toolShape/poses/carve/mesher/pitch — zero
+three.js); carveWorker.ts is the thin shell (cooperative ~8ms slices,
+self-driving to the armed target, time-agnostic move-index protocol —
+v2 playback = a client clock over the same messages, moveDurations
+already pure+tested). KEY LESSON (probe-verified): the pose stream's
+modal Z must seed at the TOOL-CHANGE PARK (stockTopZ + clearance, passed
+via setup.startZ) — a z=0 seed fabricates a phantom plunge sweep on the
+first rapid and phantom-gouges (the coin's "31 gouges at move 1" was
+exactly this; after the fix: zero). **3-CLASS CUTTING (2026-10-26,
+Alice's spec, superseding v1's rapid-gouge-only detection):** every
+removal/contact is classified per voxel — FINE (flute removal within the
+owning op's step-down of the pre-move standing surface: unmarked), YELLOW
+GOUGE (removed deeper than the step-down, or by any RAPID — "removed,
+just not intentionally"), RED COLLISION (shank contact on standing
+material: not removed, move counted once). Per-move step-down threads
+from the owning op (App.simStepDown; drill → peckDepth; 0 = one pitch).
+**The standing surface follows the pose's FAMILY (2026-10-26, her
+two-waterline + 90°-index report: the second op's deliberate passes
+painted ALL yellow):** a tool lying along ±Y (a ±90°-indexed op) reads
+the Y-LINE ends (grid.columnTopY / columnBottomY, maintained like
+columnTop) instead of the vertical columns — its "material above the
+cut" runs along the stock's Y axis. Exact for 0/±90; in-between angles
+keep the vertical approximation (documented). Probe-proven on the
+knight: indexed op 2 went from all-yellow to 1.6k sub-voxel slivers out
+of 2.1M removals. Her four-angle follow-up caught the last quadrant:
+at **180° the stock is upside down — the tool approaches from BELOW**,
+so the vertical family reads the column BOTTOM (grid.columnBottom,
+maintained like the rest); the four-angle knight replay is clean at
+every angle (A0 2607 / A90 1161 / A180 1093 / A270 138 sliver-class
+yellow of 8.19M removals, probe-knight-2ops.ts — which also threads
+the index DATUM per op; an earlier draft generated every waterline in
+the A0 frame). SIM_BUILD bumped per change (now b6-quadrants) — the
+worker build stamp in the Simulate progress line proves which copy is
+live (the "still opaque" yellow was a stale dev-server worker serving
+the old RGB-stride mesh to the new itemSize-4 attribute: alpha read the
+next vertex's R=255 → solid).
+The ghost overlay meshes per-vertex RGBA — yellow TRANSLUCENT (~0.45 —
+the voxel is gone, the cube is a ghost), red strong (~0.9 — still-solid
+contact); three.js consumes the 4-component color attribute directly.
+v1 deliberately excludes: playback transport, scrub-back, laser burn
+modeling (skipped + noted). Real-coin bench: 12.6k moves → 1.58M voxels in ~3s
+at 0.25mm pitch (400×200×200 grid).
 
 ## License policy (hard rule)
 
