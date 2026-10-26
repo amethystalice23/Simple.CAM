@@ -539,7 +539,20 @@ the rough's own leftover ledges. Fix: phase-aware standingR (what the
 rough has ACTUALLY planed so far; finishingOnly reads targets — the
 documented "bulk already cleared ahead" assumption, deep-plunge
 warned). (7) The yellow gouge ghost α115 → α26 (~10%, Alice's ask — a
-wash, not a wall).**
+wash, not a wall). FOURTH ROUND (same day, her knight sim): (8) THE
+STRIDED θ SWEEP WAS THE "ENTIRE SHELL OF YELLOW" — rowStride=2 left the
+intermediate angular rows UN-PLANED at full height, and the tool's own
+Ø shaved that skin at FULL DEPTH in one pass (33% of all removals
+painted yellow; the x:0 return traverses gouged 530mm³ each). Fix:
+nTheta = 2π·radius/stepOver (arc-spaced) and EVERY row cut — a
+"row" is an angular position of the PART, not a spatial neighbor; the
+only honest θ stride is 1. X-column ring stride stays (a genuine
+linear step-over). (9) advPast's %nTheta ERASED the full-circle
+advance (jt+1≡jc mod nTheta → 0 steps) — every full-wrap vertical ring
+emitted G1 a:0 and cut a POINT ("peculiar spikes"). Fix: raw forward
+steps, +nTheta only when negative. (10) skimClearance 0.5 → 1mm.
+Post-fix knight sim: gouge-rapids 0 (both), yellow 33% → 7% (plunge
+approach overshoot only), red 0-429 (fat-shank contacts, honest).**
 
 **Phase D (later, exactness)** — machine-frame gouge + shank/holder
 collision validation per pose (three-mesh-bvh `closestPointToGeometry`

@@ -335,7 +335,17 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   const gx0 = o.x0;
   const gx1 = o.x1;
   const nx = Math.floor((gx1 - gx0) / pitchX) + 1;
-  const nTheta = Math.max(16, Math.round((2 * Math.PI * o.radius) / pitchX));
+  // The θ grid: rows spaced `stepOver` of ARC at the stock radius, EVERY
+  // row cut (Alice's 2026-10-26 third-round report — "an entire shell of
+  // yellow"): a strided θ sweep (every 2nd row) leaves the intermediate
+  // angular rows un-planed at full height, and the tool's own Ø then
+  // shaves that skin at FULL DEPTH in one pass — a gouge the length of
+  // the sweep, all of it yellow. In the rotary frame a "row" is an
+  // angular position of the PART, not a spatial neighbor: the only
+  // honest stride is 1. Step-over spacing (arc ≤ stepOver, tool Ø
+  // covers the shaving between rows at ≤ the plane's depth) comes from
+  // nTheta, not from skipping rows.
+  const nTheta = Math.max(24, Math.round((2 * Math.PI * o.radius) / o.stepOver));
   const thetaStepDeg = 360 / nTheta;
 
   const raw = buildDexelMap(o.positions, gx0, pitchX, nx, nTheta, o.radius, o.axisZ);
@@ -401,16 +411,31 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   // row 0 of the NEXT revolution, so the part never rotates backward.
   let a = (o.startA ?? 0) + shortestATo(o.datumAngle, o.startA ?? 0);
   let jc = 0;
-  /** forward A walk onto θ row `jt` of the current revolution (never
-   *  backward: (jt − jc) mod nTheta steps) */
+  /** forward A walk onto θ row `jt` of the current revolution — never
+   *  backward, and NEVER modulo-erased: a walk onto row nTheta−1 from
+   *  row 0 is (nTheta−1) steps, but a walk PAST row nTheta−1 (advPast,
+   *  closing a full ring) is nTheta steps — the % nTheta form erased
+   *  exactly that case, and every full-circle ring emitted a
+   *  zero-degree A move (2026-10-26 "vertical spikes": rings cut
+   *  points, not circles) */
+  const fwdSteps = (to: number) => {
+    let steps = to - jc;
+    if (steps < 0) steps += nTheta;
+    return steps;
+  };
   const adv = (jt: number) => {
-    a += ((jt - jc + nTheta) % nTheta) * thetaStepDeg;
+    a += fwdSteps(jt) * thetaStepDeg;
     jc = jt;
   };
-  /** advance past row `jt` (to jt+1), for after a cut AT that row */
+  /** advance past row `jt` (to jt+1), for after a cut AT that row —
+   *  jt+1 === nTheta wraps the cursor to 0 while ADDING the full
+   *  remaining step count (a closed ring advanced a whole wrap) */
   const advPast = (jt: number) => {
-    a += ((jt + 1 - jc + nTheta) % nTheta) * thetaStepDeg;
-    jc = jt + 1 === nTheta ? 0 : jt + 1;
+    const to = jt + 1 === nTheta ? 0 : jt + 1;
+    let steps = to - jc;
+    if (steps <= 0) steps += nTheta; // closing the wrap adds the full circle
+    a += steps * thetaStepDeg;
+    jc = to;
   };
 
   let z = safeZ; // the tool starts at whatever height the last op left;
@@ -433,7 +458,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
    *  go up-then-across when the next cut sits higher, across-then-down
    *  when it sits lower; the planar cross-sections the rapid rides over
    *  are what actually bound the safe height, not the crown. */
-  const skimClearance = 0.5;
+  const skimClearance = 1;
 
   /** plunge straight from the current height to a cut radius at the
    *  destination, charging the emitted descent at the plunge feed. The
@@ -565,26 +590,21 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     return runs;
   };
 
-  // Pass stride: rows/rings SPAN `stepOver` of real surface — the grid
-  // pitch (stepOver/2) is only the SAMPLING density (the raster's
-  // convention: its stride = round(stepOver/pitch) cuts every other
-  // grid line, leaving the odd grid line as interpolation headroom).
-  // A stride of 1 here doubled Alice's passes on the 2026-10-26 field
-  // report (1.6mm step over cut at 0.8mm).
-  const rowStride = Math.max(1, Math.round(o.stepOver / pitchX));
-  const arcPerCell = (refRadiusArc = ((2 * Math.PI * o.radius) / nTheta)) => refRadiusArc;
-  const ringStride = Math.max(
-    1,
-    Math.round(o.stepOver / arcPerCell()),
-  );
+  // Pass stride: the θ grid itself is already spaced `stepOver` of arc
+  // (nTheta above), so horizontal sweeps cut EVERY row — a θ stride is
+  // the 2026-10-26 "entire shell of yellow" bug: a strided sweep leaves
+  // the intermediate angular rows un-planed at full height, and the
+  // tool's own Ø then shaves that skin at FULL DEPTH in one pass. The
+  // X columns (vertical rings) are a LINEAR axis — the stride there is
+  // a genuine step-over (tool Ø covers between rings).
+  const arcPerCell = (2 * Math.PI * o.radius) / nTheta;
+  const ringStride = Math.max(1, Math.round(o.stepOver / arcPerCell));
 
-  /** the θ row indices a horizontal sweep cuts: every `rowStride`-th row
-   *  around the full wrap, phase-shifted per level so successive rungs
-   *  do not re-cut the same angular tracks (a raster row's step-over
-   *  offsets its neighbor rows; here the level ladder is the neighbor) */
-  const thetaRows = (phase: number) => {
+  /** the θ row indices a horizontal sweep cuts: every row around the
+   *  full wrap — a complete Makera sweep (Alice's semantics) */
+  const thetaRows = () => {
     const out: number[] = [];
-    for (let j = phase; j < nTheta; j += rowStride) out.push(j);
+    for (let j = 0; j < nTheta; j++) out.push(j);
     return out;
   };
 
@@ -606,7 +626,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     const cutZ = o.axisZ + rL;
     wraps++;
     if (strategy === 'horizontal') {
-      for (const j of thetaRows((levelIndex * rowStride) % Math.max(rowStride, 1))) {
+      for (const j of thetaRows()) {
         const runs = rowRuns(rL, j);
         if (runs.length === 0) continue; // the walk still advances row by row
         rows++;
@@ -675,7 +695,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
 
   if (strategy === 'horizontal') {
     let rowFlip = false;
-    for (const j of thetaRows(0)) {
+    for (const j of thetaRows()) {
       const runs = rowRuns(null, j);
       if (runs.length === 0) continue;
       rows++;

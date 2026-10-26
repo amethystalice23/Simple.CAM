@@ -209,13 +209,13 @@ describe('rotaryCarve', () => {
     expect(inner.length).toBeGreaterThan(0);
     // the skim rides ≈ the compensated body surface (the disc kernel's
     // vertex radius 5) + the 0.5 gap — well below the 27 crown
-    expect(Math.max(...inner)).toBeLessThanOrEqual(5.5 + 1e-6);
+    expect(Math.max(...inner)).toBeLessThanOrEqual(6.0 + 1e-6);
     // and the vertical sweep skims too
     const vres = rotaryCarve(opts(cylinder(5, 20), { finishingOnly: true, strategy: 'vertical' }));
     const vrapidZs = vres.moves
       .filter((m) => m.rapid && m.words.z !== undefined)
       .map((m) => m.words.z!);
-    expect(vrapidZs.slice(1, -1).every((z) => z <= 5.5 + 1e-6)).toBe(true);
+    expect(vrapidZs.slice(1, -1).every((z) => z <= 6.0 + 1e-6)).toBe(true);
   });
 
   it('dilation: a feature lifts only within its TRUE angular reach (the knight sideways-bulge fix)', () => {
