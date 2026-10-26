@@ -240,11 +240,20 @@ function countBlockedCells(
  * (the radius-frame image of relief.ts's lifted-tip heightmap: the tip
  * sits ABOVE the touched surface's radius, the max kernel picks the
  * binding constraint). Air neighbors (raw +Infinity) contribute
- * nothing; cells whose whole kernel sees air stay +Infinity. Angular
- * offsets convert to arc length at `refRadius` — the model's minimum
- * surface radius, the conservative scale (a smaller circle means more
- * cells per arc millimeter, so the kernel errs wide — the spec's
- * unwrap-distortion safety margin, built into the scale). */
+ * nothing; cells whose whole kernel sees air stay +Infinity.
+ *
+ * ARC SCALE, per SOURCE cell (2026-10-26 knight field report — the
+ * sideways-bulge fix): the angular offset dθ converts to arc length at
+ * the SOURCE SAMPLE'S OWN radius s, not one global constant. A single
+ * global scale (the model's min radius) smeared the kernel ~10× too
+ * far around the circumference wherever the surface sat wide of the
+ * floor (the knight's core runs near the axis while the head rides at
+ * 15-22mm — the head's features bulged sideways into neighboring θ).
+ * Per-source conversion is also the physically exact form: the tool
+ * touches the surface AT the sample, so the local circumference is the
+ * one that matters. The scan window is bounded using `refRadius` (the
+ * STOCK radius — the widest circumference needs the most θ neighbors);
+ * each source then filters by its own, tighter distance. */
 export function dilateRotary(
   raw: Float64Array,
   nx: number,
@@ -255,9 +264,12 @@ export function dilateRotary(
 ): Float64Array {
   const r = tool.diameter / 2;
   const ball = tool.type === 'ball';
-  const arc = (refRadius * 2 * Math.PI) / nTheta;
+  const dThetaRad = (2 * Math.PI) / nTheta;
   const kX = Math.ceil(r / pitchX);
-  const kTheta = Math.ceil(r / arc);
+  // the widest arc per cell (at the stock radius) sets the window; each
+  // source then filters by its own, tighter distance
+  const arcMax = (refRadius * 2 * Math.PI) / nTheta;
+  const kTheta = Math.ceil(r / arcMax) + 1;
   // −Infinity = no kernel contact yet (air); raw air is +Infinity and is
   // SKIPPED as a kernel source — two different sentinels, as in relief.ts
   const out = new Float64Array(nx * nTheta).fill(-Infinity);
@@ -265,7 +277,11 @@ export function dilateRotary(
     for (let i = 0; i < nx; i++) {
       const s = raw[j * nx + i];
       if (s === Infinity) continue;
-      for (let dj = -kTheta; dj <= kTheta; dj++) {
+      // THIS sample's arc scale: the circumference the tool actually
+      // rides when it touches the surface here
+      const arc = s * dThetaRad;
+      const djMax = arc > 0 ? Math.min(kTheta, Math.ceil(r / arc)) : kTheta;
+      for (let dj = -djMax; dj <= djMax; dj++) {
         const jj = ((j + dj) % nTheta + nTheta) % nTheta; // θ wraps
         for (let di = -kX; di <= kX; di++) {
           const ii = i + di;
@@ -321,15 +337,11 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   const thetaStepDeg = 360 / nTheta;
 
   const raw = buildDexelMap(o.positions, gx0, pitchX, nx, nTheta, o.radius, o.axisZ);
-  let refRadius = o.radius;
-  for (let k = 0; k < raw.length; k++) {
-    if (raw[k] < refRadius) refRadius = raw[k];
-  }
-  // floor the scale: a model reaching the axis (a cone's tip) would make
-  // the arc per θ cell 0 and the kernel extent infinite — below the tool
-  // radius the unwrap distortion is moot anyway (the tool cannot fit)
-  refRadius = Math.max(refRadius, toolR, pitchX);
-  const dilated = dilateRotary(raw, nx, nTheta, pitchX, refRadius, o.tool);
+  // the dilation's scan-window bound: the STOCK radius (the widest
+  // circumference any sample can ride — per-source arc conversion below
+  // does the real work; this only caps the neighbor scan). The old
+  // min-surface-radius scale was the 2026-10-26 sideways-bulge bug.
+  const dilated = dilateRotary(raw, nx, nTheta, pitchX, o.radius, o.tool);
   const blockedCells = countBlockedCells(
     o.positions,
     gx0,
@@ -401,16 +413,85 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   };
   const retract = () => zTo(safeZ);
 
-  /** plunge from the safe radius to a cut radius at the destination,
-   *  charging the clearance lift + `band` mm of material at the plunge
-   *  feed (a rough level's band is its rung; the finish's is the
-   *  allowance the rough left — with no rough, the full depth, warned) */
-  const plungeTo = (cutZ: number, band: number) => {
-    retract();
-    zTo(o.axisZ + o.radius + Math.min(0.5, Math.max(0, o.safeClearance)));
+  /** the clearance plane the transitions skim at: the highest Z the
+   *  rapid legs will cross (the rotate leg's arc + the traverse leg's
+   *  start), plus a small approach gap. Alice's 2026-10-26 rule: a
+   *  finishing pass never needs the whole crown lift between rings —
+   *  go up-then-across when the next cut sits higher, across-then-down
+   *  when it sits lower; the planar cross-sections the rapid rides over
+   *  are what actually bound the safe height, not the crown. */
+  const skimClearance = 0.5;
+
+  /** plunge straight from the current height to a cut radius at the
+   *  destination, charging the emitted descent + `band` of material at
+   *  the plunge feed. The caller must already have lifted the tool to
+   *  a height that clears the rapid legs (goCut below does that). */
+  const plungeFromTo = (fromZ: number, cutZ: number, band: number) => {
     moves.push({ words: { z: cutZ }, feed: o.plungeFeed });
+    minutes += (Math.max(0, fromZ - cutZ) + band) / o.plungeFeed;
     z = cutZ;
-    minutes += (o.safeClearance + band) / o.plungeFeed;
+  };
+
+  /** standing height at a cell for transition clearances: the
+   *  compensated surface, with AIR cells reading the STOCK radius —
+   *  uncut stock IS standing material, a leg crossing it must clear it */
+  const cellTopR = (i: number, j: number) => {
+    const c = comp[j * nx + i];
+    return Number.isFinite(c) ? c : o.radius;
+  };
+  /** tallest standing height over an X span at one θ row (a traverse leg) */
+  const spanMaxR = (ia: number, ib: number, j: number) => {
+    let m = -Infinity;
+    for (let i = Math.min(ia, ib); i <= Math.max(ia, ib); i++) {
+      const c = cellTopR(i, j);
+      if (c > m) m = c;
+    }
+    return m;
+  };
+  /** tallest standing height over a θ arc at one X column (a rotate
+   *  leg), walking forward from ja to jb inclusive (the cursor's
+   *  direction — the arc the A rapid actually sweeps) */
+  const arcMaxR = (ja: number, jb: number, i: number) => {
+    let m = -Infinity;
+    const steps = (jb - ja + nTheta) % nTheta;
+    for (let s = 0; s <= steps; s++) {
+      const c = cellTopR(i, (ja + s) % nTheta);
+      if (c > m) m = c;
+    }
+    return m;
+  };
+
+  /** the tool's current X grid column (−1 = not yet positioned — the op
+   *  entry rides the tool-change park height, the crown, from the last
+   *  op's exit) */
+  let col = -1;
+
+  /** Alice's 2026-10-26 skim transition (replaces the full crown
+   *  retract between every ring): read the height the next cut sits at;
+   *  lift (pure Z) ONLY to the tallest thing the rapid legs cross —
+   *  the rotate leg at the old column, the traverse leg at the new row
+   *  — plus a small gap; up-then-across when the next cut sits higher,
+   *  across-then-down when it sits lower. The legs' scans make the rule
+   *  exact: the skim never crosses below a surface it passes over, it
+   *  just no longer pays the crown toll every ring. */
+  const goCut = (toJ: number | null, toI: number, targetR: number, band: number) => {
+    const rotLeg =
+      col < 0 || toJ === null ? -Infinity : arcMaxR(jc, toJ, col);
+    const travLeg = col < 0 ? -Infinity : spanMaxR(col, toI, toJ === null ? jc : toJ);
+    const skimZ =
+      o.axisZ +
+      Math.max(rotLeg, travLeg, targetR, col < 0 ? o.radius : -Infinity) +
+      skimClearance;
+    if (z < skimZ) zTo(skimZ); // up first — never below the legs
+    if (toJ !== null) {
+      adv(toJ);
+      moves.push({ words: { a }, feed: 0, rapid: true });
+    }
+    if (col !== toI) {
+      moves.push({ words: { x: gx0 + toI * pitchX }, feed: 0, rapid: true });
+    }
+    plungeFromTo(z, o.axisZ + targetR, band);
+    col = toI;
   };
 
   /** cutting runs along X at constant θ (a row): [i0, i1] cell ranges.
@@ -485,42 +566,33 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     wraps++;
     if (strategy === 'horizontal') {
       for (const j of thetaRows((levelIndex * rowStride) % Math.max(rowStride, 1))) {
-        adv(j);
         const runs = rowRuns(rL, j);
         if (runs.length === 0) continue; // the walk still advances row by row
         rows++;
         const fwd = j % 2 === 0; // serpentine along X
-        retract();
-        moves.push({ words: { a }, feed: 0, rapid: true });
+        let first = true;
         for (const [r0, r1] of runs) {
           const i0 = fwd ? r0 : r1;
           const i1 = fwd ? r1 : r0;
-          moves.push({ words: { x: gx0 + i0 * pitchX }, feed: 0, rapid: true });
-          plungeTo(cutZ, o.stepDown);
+          goCut(first ? j : null, i0, rL, o.stepDown);
+          first = false;
           moves.push({ words: { x: gx0 + i1 * pitchX }, feed: o.feed });
           minutes += ((i1 - i0) * pitchX) / o.feed;
         }
-        retract();
       }
     } else if (strategy === 'vertical') {
       for (const i of xCols()) {
         const runs = ringRuns(rL, i);
         if (runs.length === 0) continue;
         rows++;
-        retract();
-        moves.push({ words: { x: gx0 + i * pitchX }, feed: 0, rapid: true });
         for (const [j0, j1] of runs) {
-          adv(j0);
-          moves.push({ words: { a }, feed: 0, rapid: true });
-          plungeTo(cutZ, o.stepDown);
+          goCut(j0, i, rL, o.stepDown);
           const sweep = (j1 - j0 + 1) * thetaStepDeg;
           advPast(j1);
           moves.push({ words: { a }, feed: degPerMin(rL) });
           minutes += sweep / degPerMin(rL);
-          retract();
         }
       }
-      adv(0); // close the wrap before the next level
     } else {
       // spiralWrap: one complete helix per level — X advances over the
       // grid span while A turns a full wrap (the complete sweep, Makera's
@@ -529,10 +601,12 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       // length at the cutting radius over the surface feed, floored by
       // the rotary ceiling's minutes per wrap.
       const span = (nx - 1) * pitchX;
+      // PARKED strategy (2026-10-26: single-revolution "draped string"
+      // redesign specced in PLAN.md) — still crown-based transitions
       retract();
       moves.push({ words: { a }, feed: 0, rapid: true });
       moves.push({ words: { x: gx0 }, feed: 0, rapid: true });
-      plungeTo(cutZ, o.stepDown);
+      plungeFromTo(z, cutZ, o.stepDown);
       const passMinutes = Math.max(
         Math.hypot(2 * Math.PI * rL, span) / o.feed,
         1 / MAX_ROTARY_RPM,
@@ -546,6 +620,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       });
       minutes += passMinutes;
       rows++;
+      col = nx - 1;
     }
   });
 
@@ -560,23 +635,21 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   if (strategy === 'horizontal') {
     let rowFlip = false;
     for (const j of thetaRows(0)) {
-      adv(j);
       const runs = rowRuns(null, j);
       if (runs.length === 0) continue;
       rows++;
       const fwd = rowFlip;
       rowFlip = !rowFlip;
-      retract();
-      moves.push({ words: { a }, feed: 0, rapid: true });
+      let first = true;
       for (const [r0, r1] of runs) {
         const i0 = fwd ? r0 : r1;
         const i1 = fwd ? r1 : r0;
         const step = fwd ? 1 : -1;
-        moves.push({ words: { x: gx0 + i0 * pitchX }, feed: 0, rapid: true });
         const rStart = comp[j * nx + i0];
         const plunge = o.radius - rStart;
         if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
-        plungeTo(o.axisZ + rStart, o.allowance);
+        goCut(first ? j : null, i0, rStart, o.allowance);
+        first = false;
         let lastR = rStart;
         let px = gx0 + i0 * pitchX;
         for (let i = i0 + step; i !== i1 + step; i += step) {
@@ -595,7 +668,6 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
           moves.push({ words: { x: xe, z: o.axisZ + c }, feed: o.feed });
           minutes += Math.hypot(xe - px, c - lastR) / o.feed;
         }
-        retract();
       }
     }
   } else if (strategy === 'vertical') {
@@ -603,15 +675,11 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       const runs = ringRuns(null, i);
       if (runs.length === 0) continue;
       rows++;
-      retract();
-      moves.push({ words: { x: gx0 + i * pitchX }, feed: 0, rapid: true });
       for (const [j0, j1] of runs) {
-        adv(j0);
-        moves.push({ words: { a }, feed: 0, rapid: true });
         const rStart = comp[j0 * nx + i];
         const plunge = o.radius - rStart;
         if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
-        plungeTo(o.axisZ + rStart, o.allowance);
+        goCut(j0, i, rStart, o.allowance);
         let lastA = a;
         let lastR = rStart;
         for (let j = j0 + 1; j <= j1; j++) {
@@ -643,7 +711,6 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
           moves.push({ words: { a, z: o.axisZ + c }, feed: 1 / passMinutes });
           minutes += passMinutes;
         }
-        retract();
       }
     }
   } else {
@@ -662,6 +729,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     let iLast = nx - 1;
     while (iLast > iFirst && !(compAt(iLast) < o.radius - 1e-9)) iLast--;
     if (compAt(iFirst) < o.radius - 1e-9) {
+      // PARKED strategy (see the rough block note) — crown-based entry
       retract();
       adv(0);
       moves.push({ words: { a }, feed: 0, rapid: true });
@@ -669,7 +737,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       const rStart = compAt(iFirst);
       const plunge = o.radius - rStart;
       if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
-      plungeTo(o.axisZ + rStart, o.allowance);
+      plungeFromTo(z, o.axisZ + rStart, o.allowance);
       // θ from the helix's own start, so the wrap closes exactly over the
       // material span (air-trimmed at both ends)
       const nCols = iLast - iFirst;
@@ -696,8 +764,13 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       }
       jc = 0; // the wrap closed
       rows++;
+      col = iLast;
     }
   }
+
+  // leave the tool at the crown — the next op's entry ride and the
+  // export footer both expect a safe exit height
+  retract();
 
   if (blockedCells > 0) {
     warnings.push(

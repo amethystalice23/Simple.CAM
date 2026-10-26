@@ -505,7 +505,24 @@ originally cut EVERY grid line (pitch = stepOver/2) — a 1.6mm step over
 cut at 0.8mm, double the passes. Fix: pass strides (rowStride/ringStride
 = round(stepOver/pitch), arc at the stock radius), the raster's stride
 convention. Also: horizontal/vertical are renamed "Rotary contour" in
-the UI (Alice's call — they ARE the raster on an unwrapped shape).**
+the UI (Alice's call — they ARE the raster on an unwrapped shape).
+SECOND ROUND (same day, her knight run — "contours faintly similar but
+not the same, a Z bulge for the head that also bulges sideways"):
+(3) the dilation's angular offsets originally converted to arc at the
+model's MIN surface radius — on the knight (core near the axis, head at
+15-22mm) that smeared the tool kernel ~10× too far around the
+circumference, lifting the path sideways around every feature and even
+painting PHANTOM cut cells into air near the axis. Fix: PER-SOURCE arc
+conversion (each sample rides its own circumference — physically
+exact), scan window bounded at the stock radius. (4) The sweeps
+retracted to the CROWN between every ring (Alice: "read the height you
+are moving to on the next ring — up then across, across then down").
+Fix: skim transitions (goCut): lift only to the tallest thing the rapid
+legs cross (rotate leg at the old column, traverse leg at the new row,
+scanned over the compensated map with air reading as standing stock) +
+0.5mm; the plunge charge is now the honest emitted descent. Crown is
+entry/exit only. Pinned by tests: the skim bound + the per-source
+angular reach.**
 
 **Phase D (later, exactness)** — machine-frame gouge + shank/holder
 collision validation per pose (three-mesh-bvh `closestPointToGeometry`

@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { Tool } from '../../core/types';
 import { MAX_ROTARY_RPM, ROTARY_FEED_DEG_MIN } from '../faceCylinder';
-import { rotaryCarve, type RotaryCarveOptions } from '../rotaryCarve';
+import { dilateRotary, rotaryCarve, type RotaryCarveOptions } from '../rotaryCarve';
 
 const flatTool: Tool = { id: 'tf', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
 const ballTool: Tool = { id: 'tb', name: '2mm ball', type: 'ball', diameter: 2, spindleRpm: 18000 };
@@ -162,6 +162,55 @@ describe('rotaryCarve', () => {
     const xCuts = res.moves.filter((m) => !m.rapid && m.words.x !== undefined);
     expect(xCuts.length).toBeGreaterThan(0);
     expect(xCuts.every((m) => m.feed === 300)).toBe(true);
+  });
+
+  it('finishing skims, never pays the crown toll between rings (Alice 2026-10-26)', () => {
+    // a smooth cylinder: every transition leg crosses material at most
+    // TESS tall, so the skim rides ≈ TESS + 0.5 — the crown (27) is for
+    // entry/exit only
+    const res = rotaryCarve(opts(cylinder(5, 20), { finishingOnly: true }));
+    const rapidZs = res.moves
+      .filter((m) => m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z!);
+    expect(rapidZs.length).toBeGreaterThan(0);
+    // entry descends from the park height, the exit retracts to it — the
+    // in-between skims stay near the surface
+    expect(Math.max(...rapidZs)).toBeLessThan(27); // crown reached only at exit
+    const inner = rapidZs.slice(1, -1);
+    expect(inner.length).toBeGreaterThan(0);
+    // the skim rides ≈ the compensated body surface (the disc kernel's
+    // vertex radius 5) + the 0.5 gap — well below the 27 crown
+    expect(Math.max(...inner)).toBeLessThanOrEqual(5.5 + 1e-6);
+    // and the vertical sweep skims too
+    const vres = rotaryCarve(opts(cylinder(5, 20), { finishingOnly: true, strategy: 'vertical' }));
+    const vrapidZs = vres.moves
+      .filter((m) => m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z!);
+    expect(vrapidZs.slice(1, -1).every((z) => z <= 5.5 + 1e-6)).toBe(true);
+  });
+
+  it('dilation: a feature lifts only within its TRUE angular reach (the knight sideways-bulge fix)', () => {
+    // synthetic dexel: a body at 5 with a narrow angular band at 8.
+    // Per-source arc conversion: the band's sources ride THEIR OWN
+    // circumference (8·dθ ≈ 0.5mm/cell, tool r 1.5875 → reach ≈ 3 cells),
+    // so the lift stops exactly 3 cells out — the old global
+    // min-radius scale smeared it far wider (the "Z bulge that also
+    // bulges sideways").
+    const nx = 7;
+    const nTheta = 100;
+    const raw = new Float64Array(nx * nTheta).fill(5);
+    for (let j = 48; j <= 52; j++) {
+      for (let i = 0; i < nx; i++) raw[j * nx + i] = 8;
+    }
+    const tool: Tool = { id: 't', name: '3.175 flat', type: 'flat', diameter: 3.175, spindleRpm: 18000 };
+    const d = dilateRotary(raw, nx, nTheta, 0.5, 12, tool);
+    const dθ = (2 * Math.PI) / nTheta;
+    // within reach: dj·8·dθ ≤ 1.5875 → dj ≤ 3 → j=55 (from band edge 52) lifts
+    expect(3 * dθ * 8).toBeLessThanOrEqual(1.5875);
+    expect(4 * dθ * 8).toBeGreaterThan(1.5875);
+    expect(d[55 * nx + 3]).toBeCloseTo(8, 6);
+    // beyond reach: j=56 (dj=4 → arc 2.01mm) keeps the body surface
+    expect(d[56 * nx + 3]).toBeCloseTo(5, 6);
   });
 
   it('horizontal: A advances monotonically, levels start at the datum of the NEXT revolution', () => {
