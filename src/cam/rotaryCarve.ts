@@ -169,18 +169,17 @@ export function buildDexelMap(
   return radii;
 }
 
-/** Material bands per material cell, for the shadow report: ALL radial
- * hits along the ray (three-mesh-bvh `raycast` — the SAME accelerated
- * path buildDexelMap's `raycastFirst` uses; a THREE.Raycaster here would
- * IGNORE the boundsTree and walk every triangle per ray — the
- * 2026-10-26 3-4-minute field report), sorted by distance, paired
- * enter/exit into material bands — a cell is BLOCKED when material sits
- * behind an air gap wider than BLOCKED_GAP_MM: the tool meets the outer
- * band first and this op never programs a dive past an air pocket. Only
- * material cells are probed (air cells have no shadow to cast);
- * DoubleSide so inverted-winding meshes still hit (the tessellation-
- * noise honesty the dexel map itself carries). */
-function countBlockedCells(
+/** Material bands per dexel cell, for the shadow map: ALL radial hits
+ *  along the ray paired enter/exit — a cell is SHADOWED when material sits
+ *  behind an air gap wider than BLOCKED_GAP_MM (band ≥ 2). Shadowed
+ *  material is unreachable by anything this op does (the tool meets the
+ *  outer band first; a cut past an air pocket is never programmed), so it
+ *  is KEPT: runs never sweep across shadow cells and the rough predicate
+ *  never cuts them — Alice's 2026-10-27 knight report: the vertical rings
+ *  swept long θ arcs straight through the head's shadowed core at the
+ *  plane, ~58.5k model voxels removed from material no tool can reach.
+ *  Only material cells are probed (air casts no shadow). */
+export function shadowMap(
   positions: ArrayLike<number>,
   xMin: number,
   pitchX: number,
@@ -189,12 +188,12 @@ function countBlockedCells(
   radius: number,
   axisZ: number,
   radii: Float64Array,
-): number {
+): Uint8Array {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(positions), 3));
   const bvh = new MeshBVH(geo, { targetLeafSize: 1 });
 
-  let blocked = 0;
+  const shadowed = new Uint8Array(nx * nTheta);
   const dTheta = (2 * Math.PI) / nTheta;
   const ray = new THREE.Ray();
   for (let j = 0; j < nTheta; j++) {
@@ -202,7 +201,8 @@ function countBlockedCells(
     const sin = Math.sin(theta);
     const cos = Math.cos(theta);
     // from OUTSIDE inward, the same launch point as the dexel map — a
-    // blocked cell's shadow hides strictly between the two surface hits
+    // shadowed cell's hidden material sits strictly between two surface
+    // hits the dexel map cannot see
     ray.direction.set(0, -sin, -cos);
     ray.origin.set(0, (radius + 10) * sin, axisZ + (radius + 10) * cos);
     for (let i = 0; i < nx; i++) {
@@ -214,18 +214,18 @@ function countBlockedCells(
       // material bands ([h0,h1], [h2,h3], …); a gap BETWEEN pairs is real
       // air (the gap between a solid's entry and exit sheets is interior,
       // hitless and solid — a naive chain of raw gaps would call every
-      // solid part blocked). Open shells can leave an odd tail: it counts
+      // solid part shadowed). Open shells can leave an odd tail: it counts
       // as its own zero-width band (honest approximation, documented).
       const ds = hits.map((h) => h.distance).sort((p, q) => p - q);
       let bands = 1;
       for (let k = 1; 2 * k < ds.length; k++) {
         if (ds[2 * k] - ds[2 * k - 1] > BLOCKED_GAP_MM) bands++;
       }
-      if (bands >= 2) blocked++;
+      if (bands >= 2) shadowed[j * nx + i] = 1;
     }
   }
   geo.dispose();
-  return blocked;
+  return shadowed;
 }
 
 /** Dilate the raw dexel with the tool's kernel, unwrapped: the
@@ -354,7 +354,11 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   // does the real work; this only caps the neighbor scan). The old
   // min-surface-radius scale was the 2026-10-26 sideways-bulge bug.
   const dilated = dilateRotary(raw, nx, nTheta, pitchX, o.radius, o.tool);
-  const blockedCells = countBlockedCells(
+  // SHADOW MAP (2026-10-27): cells whose ray shows material behind an air
+  // gap — unreachable by anything this op programs (the tool meets the
+  // outer band first). Runs must never sweep across one and the rough
+  // predicate never cuts one; the blocked-cell count below is its sum.
+  const shadow = shadowMap(
     o.positions,
     gx0,
     pitchX,
@@ -364,6 +368,8 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     o.axisZ,
     raw,
   );
+  let blockedCells = 0;
+  for (let k = 0; k < shadow.length; k++) blockedCells += shadow[k];
 
   // the compensated map the whole op targets: dilation + allowance, the
   // raster's both-axis lift. WASTE cells (air — no model within the
@@ -562,7 +568,14 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
 
   /** cutting runs along X at constant θ (a row): [i0, i1] cell ranges.
    *  level null = the finishing pass (cut wherever material exists);
-   *  a number = the rough plane (cut where the surface sits below it). */
+   *  a number = the rough plane (cut where the surface sits below it).
+   *  SHADOW cells are REPORTED, never excluded (the 2026-10-27 committee
+   *  verdict): a shadowed cell's own OUTER band (raw) is reachable — the
+   *  unreachable material is the hidden core behind the air gap, and the
+   *  cut predicate comp < level already guarantees the plane never dips
+   *  below raw (comp ≥ raw everywhere the flute reaches, per-source
+   *  dilation), so exclusion deletes only legitimate cuts and strands
+   *  stock (the knight hole core + head flanks). */
   const rowRuns = (level: number | null, j: number): [number, number][] => {
     const runs: [number, number][] = [];
     for (let i = 0; i < nx; i++) {
@@ -576,7 +589,8 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     return runs;
   };
 
-  /** cutting runs around θ at constant X (a ring): [j0, j1] cell ranges */
+  /** cutting runs around θ at constant X (a ring): [j0, j1] cell ranges —
+   *  the rowRuns predicate, radialized */
   const ringRuns = (level: number | null, i: number): [number, number][] => {
     const runs: [number, number][] = [];
     for (let j = 0; j < nTheta; j++) {
@@ -711,23 +725,22 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
         goCut(first ? j : null, i0, rStart, levels.length);
         first = false;
-        let lastR = rStart;
         let px = gx0 + i0 * pitchX;
+        let lastC = rStart;
+        // FULL POLYLINE — one vertex per cell (2026-10-27 knight report:
+        // R_EMIT_TOL folding kept vertices >0.005 apart, and the straight
+        // CHORD between two kept vertices dove through material wherever
+        // comp dipped between them — worst knight move rode a 20mm Z dive
+        // over 1.6mm of X as a cut; the polyline through every cell stays
+        // above the surface, a chord cuts the corner). The count is small
+        // (runs are ≤nx cells) and F is modal on G1, so every cell emits.
         for (let i = i0 + step; i !== i1 + step; i += step) {
           const c = comp[j * nx + i];
-          if (Math.abs(c - lastR) > R_EMIT_TOL) {
-            const x = gx0 + i * pitchX;
-            moves.push({ words: { x, z: o.axisZ + c }, feed: o.feed });
-            minutes += Math.hypot(x - px, c - lastR) / o.feed;
-            px = x;
-            lastR = c;
-          }
-        }
-        const xe = gx0 + i1 * pitchX;
-        if (Math.abs(xe - px) > 1e-9) {
-          const c = comp[j * nx + i1];
-          moves.push({ words: { x: xe, z: o.axisZ + c }, feed: o.feed });
-          minutes += Math.hypot(xe - px, c - lastR) / o.feed;
+          const x = gx0 + i * pitchX;
+          moves.push({ words: { x, z: o.axisZ + c }, feed: o.feed });
+          minutes += Math.hypot(x - px, c - lastC) / o.feed;
+          px = x;
+          lastC = c;
         }
       }
     }
@@ -743,27 +756,14 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         goCut(j0, i, rStart, levels.length);
         let lastA = a;
         let lastR = rStart;
+        // FULL POLYLINE, radialized — one vertex per θ cell (the same
+        // 2026-10-27 chord bug: R_EMIT_TOL folding's chord dove through
+        // flank material wherever comp dipped between kept vertices).
+        // A+Z coordinated → G93 inverse time (the post's rule), every
+        // cell emitted, tail move included by the loop itself.
         for (let j = j0 + 1; j <= j1; j++) {
           const c = comp[j * nx + i];
           advPast(j - 1);
-          if (Math.abs(c - lastR) > R_EMIT_TOL) {
-            // A+Z coordinated → G93 inverse time (the post's rule)
-            const arc = Math.abs(a - lastA) * (Math.PI / 180) * Math.max(c, lastR);
-            const passMinutes = Math.max(
-              Math.hypot(arc, c - lastR) / o.feed,
-              Math.abs(a - lastA) / 360 / MAX_ROTARY_RPM,
-            );
-            moves.push({ words: { a, z: o.axisZ + c }, feed: 1 / passMinutes });
-            minutes += passMinutes;
-            lastA = a;
-            lastR = c;
-          }
-        }
-        // the tail: fold skipped the run's end — bring it up to row j1
-        // (a sits there from the last in-loop advance; never past, the
-        // next cell may not be a cut cell)
-        if (lastA !== a || Math.abs(comp[j1 * nx + i] - lastR) > 1e-9) {
-          const c = comp[j1 * nx + i];
           const arc = Math.abs(a - lastA) * (Math.PI / 180) * Math.max(c, lastR);
           const passMinutes = Math.max(
             Math.hypot(arc, c - lastR) / o.feed,
@@ -771,7 +771,10 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
           );
           moves.push({ words: { a, z: o.axisZ + c }, feed: 1 / passMinutes });
           minutes += passMinutes;
+          lastA = a;
+          lastR = c;
         }
+        // the loop already emitted the run's end (j1) — nothing to tail
       }
     }
   } else {
