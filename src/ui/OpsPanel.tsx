@@ -488,11 +488,21 @@ function ParamFields(props: {
               <option value="ccw">ccw</option>
             </select>
           </label>
+          <label className="field checkbox">
+            <input
+              type="checkbox"
+              checked={op.cutBeyondStock ?? false}
+              onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>allow tail stock cut-over</span>
+          </label>
           <p className="hint">
             X range and target Ø default from the stock — narrow the X range to avoid vice jaws;
             target Ø starts at a 0.5mm skim, set it to your finished size. Step over defaults to
             0.5·tool Ø — the radius, a conservative radial engagement (shown until you set it) —
-            and spaces rings, passes, or per-rev advance
+            and spaces rings, passes, or per-rev advance. Off (default): every level opens and
+            closes with a full 360° edge ring — both end walls cut sharp and flush (a rotary
+            pocket). On: the spiral may cut past the end faces.
           </p>
         </>
       );

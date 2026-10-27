@@ -170,7 +170,11 @@ describe('generator post goldens', () => {
     }),
   );
 
-  // spiral facing: step-downs in the cut, no safe-Z retracts between passes
+  // spiral facing: step-downs in the cut, no safe-Z retracts between passes.
+  // cutBeyondStock on = the raw spiral (this golden pins the OLD strategy's
+  // emitted dialect; the squared-edge default is a face-strategy change,
+  // pinned in faceCylinder.test.ts, and would churn this golden for no
+  // dialect reason)
   const spiralFaceOp = {
     kind: 'faceCylinder',
     id: 'op4',
@@ -185,6 +189,7 @@ describe('generator post goldens', () => {
     rotation: 'cw',
     pattern: 'spiral',
     feed: 600,
+    cutBeyondStock: true,
   } as const;
   const faceStock = {
     kind: 'cylinder',

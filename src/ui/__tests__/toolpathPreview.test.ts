@@ -57,6 +57,10 @@ describe('movesToSegments', () => {
       feed: 500,
       rotation: 'cw',
       pattern: 'spiral',
+      // tail stock cut-over: the raw spiral — the preview pins are against
+      // the helical entries, not the squared-edge ring sequence (which
+      // carries no X-word rings; cut-over keeps exactly the old shape)
+      cutBeyondStock: true,
     } as const;
     const tool = { id: 't1', name: '6mm flat', type: 'flat', diameter: 6, spindleRpm: 18000 } as const;
     const res = faceCylinder(op, cylinderStock.calibration, tool);

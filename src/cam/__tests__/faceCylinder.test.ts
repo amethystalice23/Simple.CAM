@@ -42,6 +42,10 @@ const op: FaceCylinderOp = {
   rotation: 'cw',
   pattern: 'spiral',
   feed: 600,
+  // tail stock cut-over: the raw spiral (helical entries, no edge rings) —
+  // the default (off) is the sharp rotary pocket, pinned in the describe
+  // below. This fixture keeps the original spiral pins intact.
+  cutBeyondStock: true,
 };
 
 // 1mm radial increments throughout, so every helical entry takes the same time
@@ -138,6 +142,83 @@ describe('faceCylinder: spiral', () => {
       (m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined,
     );
     expect(narrowSweeps.map((s) => s.words.x)).toEqual([90, 10, 90, 10, 90]);
+  });
+});
+
+describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', () => {
+  // Alice's 2026-10-27 rotary-pocket rule: with tail stock cut-over off,
+  // every level opens with a fixed-X plunge to passZ then a full 360° edge
+  // ring at the entry X (so the helical entry dives into PRE-CLEARED air —
+  // no helical groove scarred into the end wall) and closes with an exit
+  // ring at the sweep end (both ends flush). Rings run A-only at the G94
+  // rotary feed, one per level + per end.
+  const res = faceCylinder({ ...op, cutBeyondStock: false }, calibration, tool);
+  const edgeRings = res.moves.filter(
+    (m) =>
+      !m.rapid &&
+      m.words.a !== undefined &&
+      m.words.x === undefined &&
+      m.words.z === undefined &&
+      m.feed === ROTARY_FEED_DEG_MIN,
+  );
+  const plunges = res.moves.filter(
+    (m) => !m.rapid && m.words.z !== undefined && m.words.a === undefined && m.words.x === undefined,
+  );
+
+  it('opens and closes every level with a 360° edge ring', () => {
+    expect(edgeRings.length).toBe(10); // 5 levels × (entry ring + exit ring)
+    for (const r of edgeRings) {
+      expect(r.comment).toMatch(/entry ring 360|exit ring 360/);
+      expect(r.comment).toMatch(/X(0|100)/);
+    }
+  });
+
+  it('plunges to each level at FIXED X before its entry ring', () => {
+    // level 1 plunges from safe Z (the level-0 "surface"), the rest step
+    // down one increment at the previous level's sweep end — both at the
+    // entry X, straight (no A word), so the ring below cuts pre-cleared
+    expect(plunges.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20]);
+    expect(plunges.map((m) => m.feed)).toEqual(
+      Array.from({ length: 5 }, () => op.plungeFeed), // G94 mm/min, A stationary
+    );
+    // each plunge PRECEDES its level's entry ring
+    let pi = 0;
+    for (let ri = 0; ri < edgeRings.length; ri += 2) {
+      expect(res.moves.indexOf(plunges[pi])).toBeLessThan(res.moves.indexOf(edgeRings[ri]));
+      pi++;
+    }
+  });
+
+  it('squares both ends: ring X positions alternate with the sweep direction', () => {
+    const xs = edgeRings.map((r) => r.comment!.match(/X([\d.]+)/)![1]);
+    // levels alternate entry ends: 0,100,0,100,0 — the entry ring sits at
+    // the level's sweep start, the exit ring at its sweep end, so the
+    // pairs run (entry, exit) = (0,100), (100,0), (0,100)…
+    expect(xs).toEqual([
+      '0.0', '100.0', // level 1: entry X0, exit X100
+      '100.0', '0.0', // level 2: entry X100, exit X0
+      '0.0', '100.0',
+      '100.0', '0.0',
+      '0.0', '100.0',
+    ]);
+  });
+
+  it('charges each level honestly: plunge + 2 rings + entry + pass', () => {
+    const ringMinutes = 1 / MAX_ROTARY_RPM;
+    const passMinutes = (100 / 4.8) / MAX_ROTARY_RPM;
+    expect(res.estimatedMinutes).toBeCloseTo(
+      5 * (passMinutes + entryMinutes + 2 * ringMinutes + 1 / op.plungeFeed),
+      3,
+    );
+  });
+
+  it('keeps the helical entry (into pre-cleared air) and the retrace', () => {
+    const stepDowns = res.moves.filter(
+      (m) => !m.rapid && m.words.z !== undefined && m.words.a !== undefined && m.words.x === undefined,
+    );
+    expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20]);
+    const sweeps = res.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
+    expect(sweeps.map((s) => s.words.x)).toEqual([100, 0, 100, 0, 100]);
   });
 });
 

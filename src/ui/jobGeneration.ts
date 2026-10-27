@@ -184,6 +184,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         finishAllowance: 0.2,
         rotation: 'cw',
         pattern: 'spiral',
+        /** off = the sharp rotary pocket (edge rings square both ends) */
+        cutBeyondStock: false,
       };
     }
     case 'spiralCarve': {
@@ -922,6 +924,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             rotation: op.rotation,
             pattern: op.pattern,
             clearance: op.rates?.clearance,
+            cutBeyondStock: op.cutBeyondStock,
           },
           rotaryCalibrationOf(ctx.stock),
           tool,
@@ -934,6 +937,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${res.passes} passes (${op.pattern}) → Ø${op.targetDiameter.toFixed(1)}mm, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}` +
             (op.finishingOnly ? ', finishing pass only' : '') +
+            (op.cutBeyondStock ? ', tail stock cut-over' : ', squared edges') +
             `, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }

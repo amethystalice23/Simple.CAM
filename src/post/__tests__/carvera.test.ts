@@ -28,6 +28,10 @@ const op: FaceCylinderOp = {
   rotation: 'cw',
   pattern: 'spiral',
   feed: 600,
+  // this post test pins the G93/G94 FORMS on the raw spiral (helical entry
+  // + coordinated sweep); the squared-edge rings are a face-strategy change
+  // pinned in faceCylinder.test.ts — keep them out of the dialect pins
+  cutBeyondStock: true,
 };
 
 const gcode = postCarvera({

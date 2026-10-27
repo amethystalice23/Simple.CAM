@@ -259,6 +259,15 @@ export interface FaceCylinderOp {
   feed: number;
   /** rapid clearance above the stock surface, mm — ⚡ override, else the default */
   clearance?: number;
+  /**
+   * Allow the tool to cut past the stock's end faces (Alice, 2026-10-27):
+   * OFF (default) = a rotary pocket — every level opens and closes with a
+   * full 360° edge ring at the level's entry/exit X, so both end walls cut
+   * sharp and flush and the helical entries dive into pre-cleared air;
+   * ON = the spiral may overhang the ends (the helical ramp entries are
+   * the point, nothing past the end faces gets cleared).
+   */
+  cutBeyondStock?: boolean;
 }
 
 /**
@@ -691,6 +700,10 @@ export type JobOp =
       rotation: 'cw' | 'ccw';
       /** ring / indexed-pass / continuous-helix — same semantics as FaceCylinderOp.pattern */
       pattern: 'vertical' | 'horizontal' | 'spiral';
+      /** allow the tool past the stock's end faces (Alice, 2026-10-27): off =
+       *  rotary pocket (360° edge rings square both ends); on = the spiral
+       *  may overhang. Absent = off (old saves stay sharp). */
+      cutBeyondStock?: boolean;
     })
   | (JobOpBase & {
       kind: 'spiralCarve';

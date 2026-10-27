@@ -128,6 +128,9 @@ export function faceCylinder(
   const aAdvance = revs * 360;
   const passMinutes = revs / MAX_ROTARY_RPM;
   const aSign = op.rotation === 'cw' ? 1 : -1;
+  /** one full revolution, minutes — the entry/exit rings' cost
+   *  (1/MAX_ROTARY_RPM) and the rate the post times A-only cuts at */
+  const ringMinutes = 1 / MAX_ROTARY_RPM;
 
   // Z0 is the stock center (axis datum); the surface sits at axisZ + r0
   const surfaceZ = axisZ + r0;
@@ -137,6 +140,14 @@ export function faceCylinder(
   let minutes = 0;
   let passIndex = 0; // global: horizontal X zigzags across levels
   const rings = ringPositions(op.xStart, op.xEnd, stepOver);
+
+  /** entry/exit EDGE RINGS (Alice, 2026-10-27): with tail stock cut-over
+   *  OFF, every level opens and closes with a full 360° A ring at passZ —
+   *  a rotary pocket: the helical entry then descends into PRE-CLEARED
+   *  material at a fixed X (no helical groove scarred into the end wall),
+   *  and the closing ring squares the far edge. With cut-over ON the
+   *  overhang is the point — dive straight in and out of the spiral. */
+  const edgeRings = !op.cutBeyondStock;
 
   depths.forEach((depth, i) => {
     const isFinish = i === depths.length - 1;
@@ -174,6 +185,30 @@ export function faceCylinder(
       // thread and spiral-carve levels), so A oscillates around the phase
       // instead of piling up another aAdvance per level — the machine never
       // winds up to levels×(aAdvance+90) and has to unwind it afterwards.
+      if (edgeRings) {
+        // EDGE RINGS (Alice, 2026-10-27 — the rotary-pocket rule): the tool
+        // first descends to THIS level's passZ at the entry X (a straight
+        // plunge — at most one increment deep into pre-cleared material:
+        // everything above was ring-cleared last level), then one full 360°
+        // A ring at that fixed X brings the WHOLE circumference to passZ.
+        // Only then does the helical entry/sweep run — and every point it
+        // reaches is already pre-cleared AT THIS DEPTH, so no helical
+        // groove is scarred into the end wall; the entry edge stands sharp
+        // and flush. (A ring at the machine's current Z would clear air on
+        // level 1 and redundantly re-cut the previous level afterwards.)
+        moves.push({
+          words: { z: passZ },
+          feed: op.plungeFeed, // G94 mm/min, A stationary
+          comment: `plunge ${increment.toFixed(3)}mm radial`,
+        });
+        moves.push({
+          words: { a },
+          feed: ROTARY_FEED_DEG_MIN,
+          comment: `entry ring 360° at X${sweepStart.toFixed(1)} — squaring the edge`,
+        });
+        a += aSign * 360;
+        minutes += increment / op.plungeFeed + ringMinutes;
+      }
       a += aSign * PLUNGE_SWEEP_DEG;
       moves.push({
         words: { z: passZ, a },
@@ -191,6 +226,18 @@ export function faceCylinder(
         feed: 1 / passMinutes, // G93 inverse time
         comment: isFinish ? undefined : `rough to r=${(r0 - depth).toFixed(3)}`,
       });
+
+      if (edgeRings) {
+        // closing ring: the exit edge squared at passZ too — the level
+        // enters AND exits through ring-cleared circumference
+        moves.push({
+          words: { a },
+          feed: ROTARY_FEED_DEG_MIN,
+          comment: `exit ring 360° at X${sweepEnd.toFixed(1)} — squaring the edge`,
+        });
+        a += aSign * 360;
+        minutes += ringMinutes;
+      }
 
       if (isFinish) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
       minutes += entryMinutes + passMinutes;

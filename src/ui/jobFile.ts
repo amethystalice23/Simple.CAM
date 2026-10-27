@@ -167,8 +167,13 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
       raw === 'vertical' || raw === 'horizontal' || raw === 'spiral' ? raw : 'spiral';
     const rawStepOver = (op as { stepOver?: unknown }).stepOver;
     const stepOver = typeof rawStepOver === 'number' && rawStepOver > 0 ? rawStepOver : null;
-    const changed = pattern !== op.pattern || stepOver !== op.stepOver;
-    return changed ? { ...op, pattern, stepOver } : op;
+    // pre-cut-over saves (2026-10-27) carry no cutBeyondStock — the tool
+    // stays inside (off = the sharp rotary-pocket default)
+    const rawCut = (op as { cutBeyondStock?: unknown }).cutBeyondStock;
+    const cutBeyondStock = rawCut === true;
+    const changed =
+      pattern !== op.pattern || stepOver !== op.stepOver || cutBeyondStock !== op.cutBeyondStock;
+    return changed ? { ...op, pattern, stepOver, cutBeyondStock } : op;
   });
 }
 
