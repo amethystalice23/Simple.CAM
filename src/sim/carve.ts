@@ -49,6 +49,14 @@
  *    (occ untouched), contact per MOVE counted once.
  *  - a RAPID pose that removed > 0 (pose-shaped) bumps gouges and pins
  *    firstGougeMove once (unchanged semantics).
+ *  - RADIAL family (committee #6, Alice's spiral-groove report): a
+ *    continuous-rotary pose reads depth from the DEEP-WATER MARK — a
+ *    per-(x column, φ bin) field holding the min radius ever flute-carved
+ *    there (seeded from the stock surface, lowered ONLY at move boundaries
+ *    by re-minning the live carved field into the mark — never within a
+ *    move, or a plunge's own cells justify themselves). The per-column
+ *    Z-END radii the old code read are φ-blind: a cylinder column crosses
+ *    the stock TWICE and a groove is a MID-COLUMN TUNNEL.
  */
 
 import type { VoxelGrid } from './grid';
@@ -120,20 +128,37 @@ const baselines = new WeakMap<
     botY: Int32Array;
     stampY: Int32Array;
     journalY: number[];
-    /** RADIAL family caches (per MOVE — the baselines are per-move, so the
-     *  derived per-column standing radius and its valley-window minimum are
-     *  too): rs2 = the column's pre-move standing radius; stand = the
-     *  window-min over ±flute radius in x. Without the cache the window
-     *  rescans ±fluteR per REMOVED VOXEL — Ø-proportional, not
-     *  pitch-proportional: 42 hypots × 1.6M removals ≈ 68M redundant
-     *  hypots at 0.15mm voxels (Alice's >2× slowdown report, 2026-10-27) */
-    rs2: Float32Array;
-    rs2Stamp: Int32Array;
-    stand: Float32Array;
-    standStamp: Int32Array;
+    /** RADIAL family (committee #6, Alice's spiral-groove report): the
+     *  pre-move standing-radius field per (x column, φ bin) —
+     *  hmap[i·HMAP_PHI_BINS + φbin] = the MIN radius of pre-move standing
+     *  material at that (x, φ), seeded −1 (uncomputed). Per-move like the
+     *  other baselines: seeded lazily on first read, refreshed per move by
+     *  re-minning exactly the columns the previous move carved (the
+     *  journal). This replaces the committee #4/#5 valley-window over
+     *  per-column Z-END radii — a cylinder column crosses the stock TWICE
+     *  (φ and −φ) and a groove is a MID-COLUMN TUNNEL, so max(rTop,rBot)
+     *  read the far segment's virgin crown (ρ≈10.3) for every groove-floor
+     *  cell: the level-2 retrace — exactly 0.5 below its own level-1
+     *  floor, at tolerance — read ~1.0 deep against virgin stock and
+     *  painted 23,215 false yellows (measured @0.15, all tools, honest ray
+     *  referee: 23,208 of 23,215 genuinely fine). φ-resolved per (x,φ),
+     *  the reference IS the local surface; facing degenerates identically.
+     *  RAPIDS MUST NOT LOWER the field (a rapid gouge stays a gouge when
+     *  re-planned) — only flute removals re-min at move boundaries. */
+    hmap: Float32Array;
+    /** per x-column: 1 = the mark is STALE (a move carved it since its last
+     *  seed-min) — the next radial read re-mins the live standing field into
+     *  the mark (min, so the carved floor persists through the second pass;
+     *  a live-only reseed would lose it, no reseed lets a move's own cells
+     *  justify themselves — the plunge-bar failure) */
+    hmapSeedColumn: Uint8Array;
     serial: number;
   }
 >();
+
+/** radial-field φ resolution, bins over 0..360° (committee #6 M2's measured
+ *  720 works; 0.25° at 0.15 pitch is finer than the cell arc ~0.8°) */
+const HMAP_PHI_BINS = 720;
 
 export function carvePoses(
   grid: VoxelGrid,
@@ -272,10 +297,8 @@ function carvePose(
       botY: new Int32Array(grid.columnBottomY),
       stampY: new Int32Array(grid.nx * grid.nz).fill(-1),
       journalY: [],
-      rs2: new Float32Array(grid.nx * grid.ny),
-      rs2Stamp: new Int32Array(grid.nx * grid.ny).fill(-1),
-      stand: new Float32Array(grid.nx * grid.ny),
-      standStamp: new Int32Array(grid.nx * grid.ny).fill(-1),
+      hmap: new Float32Array(grid.nx * HMAP_PHI_BINS).fill(-1),
+      hmapSeedColumn: new Uint8Array(grid.nx),
       serial: 0,
     };
     baselines.set(grid, base);
@@ -284,15 +307,26 @@ function carvePose(
       const c = base.journal[e];
       base.top[c] = grid.columnTop[c];
       base.bot[c] = grid.columnBottom[c];
-      // the radial family's derived caches invalidate with the column
-      // baselines they were computed from — same journal, same move serial
-      base.rs2Stamp[c] = -1;
-      base.standStamp[c] = -1;
     }
     for (let e = 0; e < base.journalY.length; e++) {
       const l = base.journalY[e];
       base.topY[l] = grid.columnTopY[l];
       base.botY[l] = grid.columnBottomY[l];
+    }
+    // radial deep-water mark refresh: for every x-column the previous move
+    // carved (journal: deduped j·nx+i, so i = c mod nx), re-min the mark
+    // with the LIVE standing field (seedFromLive below) — min, never
+    // overwrite: a rebuild-from-live alone would raise the mark back to
+    // standing-only and lose the carved floor that makes a retrace's own
+    // channel the honest reference; no refresh at all lets one move's cells
+    // justify themself against the mark their own shallower cells just
+    // lowered (the plunge-bar failure: a 5mm rotary plunge painted 0).
+    // Unseeded columns stay unseeded (lazy seeding is still per-move
+    // honest: the seed runs at the first read of the NEXT move).
+    for (const c of base.journal) {
+      const i = c % grid.nx;
+      // staleness: the next move's first radial read re-mins this column
+      base.hmapSeedColumn[i] = 1;
     }
     base.move = pose.moveIndex;
     base.journal.length = 0;
@@ -308,12 +342,28 @@ function carvePose(
   const baselineBotY = base.botY;
   const stampY = base.stampY;
   const journalY = base.journalY;
-  // radial-family caches (per-move — see the baselines doc): the column's
-  // pre-move standing radius (rs2) and its valley-window minimum (stand)
-  const rs2Arr = base.rs2;
-  const rs2Stamp = base.rs2Stamp;
-  const standArr = base.stand;
-  const standStamp = base.standStamp;
+  // radial family: the per-(x,φ) pre-move standing-radius field (see the
+  // baselines doc) — lazily seeded per column, re-minned at move boundaries
+  const hmap = base.hmap;
+  // the next radial read re-mins the live standing field into the mark
+  const seedCol = base.hmapSeedColumn;
+  const seededCol = new Uint8Array(grid.nx); // per-CALL: fresh columns this pose
+  // (the per-move staleness is base.hmapSeedColumn; a column seeded THIS
+  // pose needs no re-min — the mark was honest when this move began)
+  for (let i = 0; i < grid.nx; i++) {
+    if (!seedCol[i]) continue;
+    seededCol[i] = 1; // stale → treat as unseeded-fresh once, then clear
+    seedCol[i] = 0;
+  }
+  // POSE-LOCAL sweep-progress field (the hybrid): a per-call copy of the
+  // mark that THIS move's own flute removals lower live, so the
+  // x-window reads the sweep's own fresh floors. Freed with the call —
+  // never persisted, never read by the next move (which reads the
+  // boundary-refreshed mark). sweptThisMove marks the columns this move
+  // has carved (the window gates on it).
+  const h2 = new Float32Array(grid.nx * HMAP_PHI_BINS);
+  const seededH2 = new Uint8Array(grid.nx);
+  const sweptThisMove = new Uint8Array(grid.nx);
   // the classification family. EXACT index angles keep the world-axis
   // formulas (byte-identical paths: 3-axis ops, the plunge/skim fixtures,
   // 0/180 vertical and ±90 Y-line indexed ops — committee #4's landing
@@ -330,7 +380,54 @@ function carvePose(
   // radial-branch constants (unused outside radialMode)
   const AXIS_Z = grid.rotaryAxisZ;
   const flR = Math.max(Math.abs(b[0]), Math.abs(b[1])); // flute radius, spec bounds
-  const radW = Math.ceil(flR / grid.pitch); // valley window half-width in cells
+  /** DEEP-WATER MARK (committee #6 — M4's design, validated by M2's bars):
+   *  hmap[i·BINS + φbin] = the MIN radius ever FLUTE-carved at that (x,φ)
+   *  — Infinity while nothing has been cut there (open sky above the
+   *  stock, an honest −∞-equivalent for depth), lowered only by non-rapid
+   *  flute removals. A groove is a MID-COLUMN TUNNEL: a pure
+   *  standing-surface field (min ρ of cells still standing) goes EMPTY in
+   *  the second pass's own footprint — the tool deepening its own channel
+   *  — and an empty own-bin must NOT read as a gouge (the retrace cuts
+   *  exactly one increment below its own last level). The mark holds the
+   *  honest pre-move floor: standing material where nothing was carved,
+   *  the carved floor where it was. RAPIDS DO NOT LOWER THE MARK (a
+   *  rapid gouge stays a gouge when re-planned; the removed material
+   *  still counts as the prior surface). Seeded lazily per column;
+   *  re-seeded at move boundaries for the carved columns (the journal). */
+  const seedColumn = (i: number): void => {
+    // re-seed-min (a stale column): min the LIVE standing field into the
+    // EXISTING mark — never overwrite, so the carved floor persists through
+    // the second pass. A fresh column (never seeded) initializes first.
+    if (!seededCol[i]) {
+      seededCol[i] = 1;
+      for (let p = 0; p < HMAP_PHI_BINS; p++) {
+        const cell = i * HMAP_PHI_BINS + p;
+        // the un-carved reference is the stock's own surface: every φ bin
+        // on the stock's axial span starts at the effective radius
+        // (Infinity only off the span — open sky, nothing to cut). An EMPTY
+        // bin inside the stock must not read as open sky or a retrace's
+        // own floor would look like a plunge from nowhere.
+        const wx = grid.originX + (i + 0.5) * grid.pitch;
+        const inSpan = wx >= grid.stockSpanX0 && wx < grid.stockSpanX1;
+        hmap[cell] = inSpan && Number.isFinite(AXIS_Z) ? grid.rotaryRadius : Infinity;
+      }
+    }
+    // min with the LIVE standing material (still-occupied cells may stand
+    // BELOW the initial surface where earlier moves carved — the mark is
+    // the min of the live field and the ever-carved history)
+    for (let j = 0; j < ny; j++) {
+      const wy = grid.originY + (j + 0.5) * grid.pitch;
+      for (let k = 0; k < grid.nz; k++) {
+        if (grid.occ[i + nx * (j + ny * k)] !== 1) continue;
+        const wz = grid.originZ + (k + 0.5) * grid.pitch;
+        const rho = Math.hypot(wy, wz - AXIS_Z);
+        const phi = ((Math.atan2(wy, wz - AXIS_Z) * 180) / Math.PI + 360) % 360;
+        const pb = Math.max(0, Math.min(HMAP_PHI_BINS - 1, Math.floor((phi / 360) * HMAP_PHI_BINS)));
+        const cell = i * HMAP_PHI_BINS + pb;
+        if (rho < hmap[cell]) hmap[cell] = rho;
+      }
+    }
+  };
 
   const { occ, columnTop, ghost, nx, ny } = grid;
   let poseRemoved = 0;
@@ -390,69 +487,73 @@ function carvePose(
             : voxelY - endY > stepDownTol;
         } else {
           // RADIAL family (committee #4 M2 — Alice's 2026-10-27 "ribbons at
-          // every cut depth" report): a continuous-rotary pose cuts into the
-          // standing CYLINDER radius field, so depth is radial at the
-          // voxel's own angle — the pre-move standing radius of this column
-          // (max ρ of its pre-move top/bottom cells, both already in the
-          // baselines), minus the VALLEY floor of the sweep: window-min of
-          // the standing radius along x over ±flute-radius (adjacent windings
-          // of one sweep sit at the same φ offset in x; the intended flat is
-          // the valley, not the previous winding's cusp ridge). The half-pitch
-          // term is the center-sampling correction: a cell whose CENTER sits
-          // within tol of the valley floor is a sampling artifact, not a
-          // gouge. Box-rotary stock never reaches here (radialMode gates on
-          // a finite axisZ). The standing radius and its window-min are
-          // PER-(row,column) functions of the pre-move baselines only —
-          // move-stable, so both ride the per-move caches (rs2/stand): the
-          // window scan runs once per (row,column) per move, not per voxel
-          // (Alice's 2026-10-27 >2× slowdown report: the window is
-          // Ø-proportional, not pitch-proportional — 42 hypots × every
-          // removal ≈ 68M redundant hypots at 0.15mm voxels).
+          // every cut depth" report; REWORKED by committee #6 M2 after her
+          // spiral-groove report): a continuous-rotary pose cuts into the
+          // standing CYLINDER radius field, so depth is radial AT THE
+          // VOXEL'S OWN ANGLE — the pre-move standing radius from the
+          // per-(x,φ) field (see the baselines doc), minus the voxel's ρ,
+          // minus the half-pitch center-sampling correction (a cell whose
+          // CENTER sits within tol of the local surface is a sampling
+          // artifact, not a gouge). The OLD reference — max(rTop,rBot) per
+          // column, window-minned over ±fluteR in x — read the column's
+          // Z-END radii: a cylinder column crosses the stock TWICE (φ and
+          // −φ) and a groove is a MID-COLUMN TUNNEL, so max() picked the far
+          // segment's virgin crown (ρ≈10.3) for every groove-floor cell and
+          // the honest 0.5-below-own-floor retrace painted 23,215 false
+          // yellows (all tools, @0.15 — Alice's spiral_test report).
+          // φ-resolved, the reference IS the local surface; facing
+          // degenerates identically (its every-move full-shell sweeps put
+          // the same value in every φ bin). Box-rotary stock never reaches
+          // here (radialMode gates on a finite axisZ).
           const wyV = grid.originY + (j + 0.5) * grid.pitch;
           const wzV = grid.originZ + (k + 0.5) * grid.pitch;
           const rhoV = Math.hypot(wyV, wzV - AXIS_Z);
-          const rc = j * nx + i;
-          let rStand: number;
-          if (standStamp[rc] === stampVal) {
-            rStand = standArr[rc];
-          } else {
-            let rTop = -1;
-            if (baseTop >= 0) {
-              rTop = Math.hypot(wyV, grid.originZ + (baseTop + 0.5) * grid.pitch - AXIS_Z);
-            }
-            let rBot = -1;
-            if (baseBot < grid.nz) {
-              rBot = Math.hypot(wyV, grid.originZ + (baseBot + 0.5) * grid.pitch - AXIS_Z);
-            }
-            rStand = Math.max(rTop, rBot);
-            for (let di2 = -radW; di2 <= radW; di2++) {
-              if (di2 === 0) continue;
-              const i2 = i + di2;
-              if (i2 < 0 || i2 >= nx) continue;
-              const rc2 = j * nx + i2;
-              let rs2: number;
-              if (rs2Stamp[rc2] === stampVal) {
-                rs2 = rs2Arr[rc2];
-              } else {
-                const bt2 = baselineTop[rc2];
-                const bb2 = baselineBot[rc2];
-                rs2 = -1;
-                if (bt2 >= 0) {
-                  rs2 = Math.hypot(wyV, grid.originZ + (bt2 + 0.5) * grid.pitch - AXIS_Z);
-                }
-                if (bb2 < grid.nz) {
-                  const rb2 = Math.hypot(wyV, grid.originZ + (bb2 + 0.5) * grid.pitch - AXIS_Z);
-                  if (rb2 > rs2) rs2 = rb2;
-                }
-                rs2Arr[rc2] = rs2;
-                rs2Stamp[rc2] = stampVal;
-              }
-              if (rs2 >= 0 && rs2 < rStand) rStand = rs2;
-            }
-            standArr[rc] = rStand;
-            standStamp[rc] = stampVal;
+          const phiV = ((Math.atan2(wyV, wzV - AXIS_Z) * 180) / Math.PI + 360) % 360;
+          const pbV = Math.max(0, Math.min(HMAP_PHI_BINS - 1, Math.floor((phiV / 360) * HMAP_PHI_BINS)));
+          const cellV = i * HMAP_PHI_BINS + pbV;
+          if (!seededCol[i]) seedColumn(i);
+          let rStand = hmap[cellV];
+          // SWEEP-PROGRESS WINDOW (the hybrid, Alice's 2026-10-27 "flecks at
+          // the base of each level ≥2" call): the φ-resolved pre-move floor
+          // alone reads the flute disc's sub-floor edge cells (up to half a
+          // pitch + engagement rounding BELOW the previous level's floor) as
+          // over-tolerance — level-1's floor is a full increment above them.
+          // The old window over LIVE neighboring tops forgave exactly that:
+          // as the sweep progresses through x, cells behind it measure
+          // against the sweep's OWN fresh floor upstream. Window-min the
+          // mark's φ-bins over the ±fluteR x-neighbors THAT THIS MOVE
+          // already carved (the journal of THIS move — pose-local, never
+          // persisted), so the forgiveness applies only where the sweep has
+          // genuinely passed, and the groove fix (the pre-move floor)
+          // otherwise stands. The window cannot resurrect the old groove
+          // bug: it reads the move's own φ-resolved floors, not far-side
+          // virgin crowns.
+          const halfW = Math.max(1, Math.ceil(flR / grid.pitch));
+          for (let d = -halfW; d <= halfW; d++) {
+            if (d === 0) continue;
+            const i2 = i + d;
+            if (i2 < 0 || i2 >= nx) continue;
+            if (!sweptThisMove[i2]) continue; // only the move's own swept columns
+            const cell2 = i2 * HMAP_PHI_BINS + pbV; // same φ bin — the helix drifts, the bin is per-column
+            const r2 = h2[cell2];
+            if (r2 < rStand) rStand = r2;
           }
-          gouged = rStand < 0 || rStand - rhoV - grid.pitch * 0.5 > stepDownTol;
+          gouged = !(rStand < Infinity) || rStand - rhoV - grid.pitch * 0.5 > stepDownTol;
+          // NO per-removal lowering of the PERSISTED mark within the move
+          // (a cell classified against a mark its own move's shallower cells
+          // just lowered justifies itself — the plunge-bar failure). The
+          // move's own swept floors ride the POSE-LOCAL h2 snapshot instead.
+          if (!pose.rapid) {
+            if (!seededH2[i]) {
+              seededH2[i] = 1;
+              // seed this column's pose-local floors from the live mark…
+              for (let p = 0; p < HMAP_PHI_BINS; p++) h2[i * HMAP_PHI_BINS + p] = hmap[i * HMAP_PHI_BINS + p];
+            }
+            if (rhoV < h2[cellV]) {
+              h2[cellV] = rhoV;
+              sweptThisMove[i] = 1; // this column now carries the move's floor
+            }
+          }
         }
         if (gouged) {
           ghost[idx] = 1;

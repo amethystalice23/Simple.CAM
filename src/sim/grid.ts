@@ -55,6 +55,13 @@ export class VoxelGrid {
    *  radial depth classification of continuous-4-axis poses — NaN when the
    *  stock has no rotary calibration (3-axis cylinder stock without one) */
   readonly rotaryAxisZ: number;
+  /** the stock's effective surface radius (cylinder cal; NaN for box) —
+   *  the radial classifier's un-carved reference surface */
+  readonly rotaryRadius: number;
+  /** the stock's true axial span (x in 4-axis) — the mark's arcs off the
+   *  stock read open sky, never the surface radius */
+  readonly stockSpanX0: number;
+  readonly stockSpanX1: number;
 
   constructor(stock: Stock, pitch: number) {
     if (!(pitch > 0) || !Number.isFinite(pitch)) {
@@ -63,7 +70,11 @@ export class VoxelGrid {
     this.pitch = pitch;
     this.rotaryAxisZ =
       stock.kind === 'cylinder' && stock.calibration ? stock.calibration.axisZ : NaN;
+    this.rotaryRadius =
+      stock.kind === 'cylinder' && stock.calibration ? stock.calibration.effectiveRadius : NaN;
     const sx = spanOf(stock, 'x');
+    this.stockSpanX0 = sx[0];
+    this.stockSpanX1 = sx[1];
     const sy = spanOf(stock, 'y');
     const sz = spanOf(stock, 'z');
     this.originX = sx[0];
