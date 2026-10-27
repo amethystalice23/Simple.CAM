@@ -71,6 +71,13 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
    *  state.progress still holds the PRE-reset value (the worker posts no
    *  progress during a reset), and showing it would snap the bar forward */
   const staleRef = useRef(false);
+  /** the max watch-loop's end-check twin of staleRef: true from arming a
+   *  fresh run at 'max' (play-from-end, resume, the pill) until that run's
+   *  FIRST progress arrives. Across a reset state.progress still holds the
+   *  PREVIOUS run's final move (= total) — the end-check reading it killed
+   *  playing on frame one and the replay carved on with a dead ▶ button
+   *  that needed two clicks to pause (Alice's 2026-10-27 report) */
+  const awaitingRef = useRef(false);
   const playingRef = useRef(false);
   playingRef.current = playing;
 
@@ -137,7 +144,14 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     const mps = minutesPerSecond(speedRef.current);
     if (mps === null) {
       // 'max': no clock — the worker was pointed at the end and runs flat
-      // out; the bar follows progress and the done-effect flips the button
+      // out; the bar follows progress and the done-effect flips the button.
+      // A fresh carve arms awaitingRef (above): until its FIRST progress
+      // arrives, state.progress holds the PREVIOUS run's final move —
+      // pausing on it kills the replay before it carves anything
+      if (awaitingRef.current) {
+        rafRef.current = requestAnimationFrame(loop);
+        return;
+      }
       if (staleRef.current || (progressRef.current?.move ?? 0) >= total) {
         setPlaying(false);
       } else {
@@ -149,6 +163,9 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     lastWallRef.current = now;
     clockRef.current += dt * mps;
     const totalMinutes = cumL[cumL.length - 1] ?? 0;
+    // finite speeds: a fresh clock re-arms awaitingRef the same way —
+    // a progress from THIS run arriving mid-flight is a bonus park check
+    awaitingRef.current = false;
     let target = moveAtSimMinutes(cumL, clockRef.current);
     if (clockRef.current >= totalMinutes) {
       // end reached: pause at the boundary — the worker finishes the final
@@ -198,6 +215,7 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
       carvedRef.current = 0;
       staleRef.current = false;
       postedTargetRef.current = 0;
+      awaitingRef.current = false;
     } else if (state.running) {
       setCommit(null);
       setSpeed('max');
@@ -208,6 +226,7 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
       carvedRef.current = 0;
       staleRef.current = false;
       postedTargetRef.current = Number.MAX_SAFE_INTEGER;
+      awaitingRef.current = true; // arm: progress may hold the last run's end
       startClock(); // the 'max' watch-loop (auto-pause at the end)
     } else {
       // done: keep the user's pill speed (a finished replay just pauses);
@@ -245,9 +264,12 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
       commitTo(0);
     }
     if (minutesPerSecond(speedRef.current) === null) {
-      // max: one flat-out carve to the end (from wherever the worker is)
+      // max: one flat-out carve to the end (from wherever the worker is) —
+      // await THIS run's first progress (the loop's end-check would
+      // otherwise read the pre-reset final move and kill the replay)
       postedTargetRef.current = Number.MAX_SAFE_INTEGER;
       staleRef.current = false;
+      awaitingRef.current = true;
       sendRef.current({ type: 'carve', throughMove: Number.MAX_SAFE_INTEGER });
     }
     // the bar follows the CARVED position while playing (per spec) — drop
@@ -314,6 +336,7 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
         // carved spot for a clean switch back
         clockRef.current = simMinutesAtMove(cumRef.current, carvedNow);
         postedTargetRef.current = Number.MAX_SAFE_INTEGER;
+        awaitingRef.current = true; // same arm: this is a fresh max carve
         sendRef.current({ type: 'carve', throughMove: Number.MAX_SAFE_INTEGER });
       } else if (minutesPerSecond(speedRef.current) === null) {
         // max → finite mid-flight: the worker was driving to MAX — park it
