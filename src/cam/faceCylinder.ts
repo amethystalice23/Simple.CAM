@@ -214,17 +214,23 @@ export function faceCylinder(
         // groove is scarred into the end wall; the entry edge stands sharp
         // and flush. (A ring at the machine's current Z would clear air on
         // level 1 and redundantly re-cut the previous level afterwards.)
+        // ADVANCE-BEFORE-PUSH (committee #5's wisp verdict): each ring move
+        // must carry its OWN +360° target — a push at the stale `a` is a
+        // dead move whose rotation the NEXT level's entry ring absorbs at
+        // one step-down too deep (the end wedges engaged at up to 2× the
+        // step-down; the sim flagged it yellow — honest paint of a
+        // toolpath defect, not an artifact).
         moves.push({
           words: { z: passZ },
           feed: op.plungeFeed, // G94 mm/min, A stationary
           comment: `plunge ${increment.toFixed(3)}mm radial`,
         });
+        a += aSign * 360;
         moves.push({
           words: { a },
           feed: ROTARY_FEED_DEG_MIN,
           comment: `entry ring 360° at X${sweepStart.toFixed(1)} — squaring the edge`,
         });
-        a += aSign * 360;
         minutes += increment / op.plungeFeed + ringMinutes;
       }
       a += aSign * PLUNGE_SWEEP_DEG;
@@ -247,13 +253,16 @@ export function faceCylinder(
 
       if (edgeRings) {
         // closing ring: the exit edge squared at passZ too — the level
-        // enters AND exits through ring-cleared circumference
+        // enters AND exits through ring-cleared circumference.
+        // ADVANCE-BEFORE-PUSH, same as the entry ring: a push at the
+        // stale `a` never rotates — the committee #5 wisp mechanism
+        // (the sim's yellow curve-inwards at both ends).
+        a += aSign * 360;
         moves.push({
           words: { a },
           feed: ROTARY_FEED_DEG_MIN,
           comment: `exit ring 360° at X${sweepEnd.toFixed(1)} — squaring the edge`,
         });
-        a += aSign * 360;
         minutes += ringMinutes;
       }
 
