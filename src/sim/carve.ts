@@ -289,14 +289,23 @@ function carvePose(
   const baselineBotY = base.botY;
   const stampY = base.stampY;
   const journalY = base.journalY;
-  // the classification family: a tool lying along ±Y (a ±90°-indexed op)
-  // measures "within the step-down of the standing surface" along the Y
-  // LINES; everything else reads the vertical columns. Ties (45°) keep the
-  // vertical family.
-  const famY = Math.abs(pose.ay) > Math.abs(pose.az);
-  const approachNegY = pose.ay < 0; // axis −Y → the tool comes from +Y
-  const approachPosZ = pose.az < 0; // axis −Z → from +Z; axis +Z (180°) → from below
+  // the classification family. EXACT index angles keep the world-axis
+  // formulas (byte-identical paths: 3-axis ops, the plunge/skim fixtures,
+  // 0/180 vertical and ±90 Y-line indexed ops — committee #4's landing
+  // rule). A CONTINUOUS-rotary pose (neither axis component near a world
+  // axis) approaches the stock RADIALLY, so its honest depth measure is
+  // radial (see the branch below); box-rotary stock has no axisZ and keeps
+  // the old vertical approximation.
+  const nearVert = Math.abs(az) >= 0.999;
+  const nearHoriz = !nearVert && Math.abs(ay) >= 0.999;
+  const radialMode = !nearVert && !nearHoriz && Number.isFinite(grid.rotaryAxisZ);
+  const approachNegY = ay < 0; // axis −Y → the tool comes from +Y
+  const approachPosZ = az < 0; // axis −Z → from +Z; axis +Z (180°) → from below
   const stepDownTol = moveStepDown && moveStepDown[pose.moveIndex] > 0 ? moveStepDown[pose.moveIndex] : grid.pitch;
+  // radial-branch constants (unused outside radialMode)
+  const AXIS_Z = grid.rotaryAxisZ;
+  const flR = Math.max(Math.abs(b[0]), Math.abs(b[1])); // flute radius, spec bounds
+  const radW = Math.ceil(flR / grid.pitch); // valley window half-width in cells
 
   const { occ, columnTop, ghost, nx, ny } = grid;
   let poseRemoved = 0;
@@ -331,19 +340,22 @@ function carvePose(
         occ[idx] = 0;
         // 3-class: within the step-down of the standing surface → fine;
         // deeper (or a rapid's removal) → yellow gouge ghost. The standing
-        // surface follows the pose's family: vertical columns, or the Y-line
-        // ends for a ±90°-indexed tool.
+        // surface follows the pose's approach: EXACT index angles keep the
+        // world-axis families (vertical columns / Y-lines — byte-identical
+        // to v1: 3-axis ops, the plunge/skim fixtures, 0/180 and ±90 indexed
+        // ops); continuous-rotary poses read the RADIAL surface.
         let gouged: boolean;
         if (pose.rapid) {
           gouged = true;
-        } else if (!famY) {
+        } else if (!radialMode && !nearHoriz) {
           // vertical family: against the column TOP (a downward tool) or
           // the BOTTOM (a 180°-indexed op approaching from below)
           const voxelZ = grid.originZ + (k + 0.5) * grid.pitch;
           gouged = approachPosZ
             ? baseTopZ - voxelZ > stepDownTol
             : voxelZ - baseBotZ > stepDownTol;
-        } else {
+        } else if (!radialMode) {
+          // ±90° Y-line family: against the line end the tool approaches
           const line = i + nx * k;
           const endJ = approachNegY ? baselineTopY[line] : baselineBotY[line];
           const endY = grid.originY + (endJ + 0.5) * grid.pitch;
@@ -351,6 +363,52 @@ function carvePose(
           gouged = approachNegY
             ? endY - voxelY > stepDownTol
             : voxelY - endY > stepDownTol;
+        } else {
+          // RADIAL family (committee #4 M2 — Alice's 2026-10-27 "ribbons at
+          // every cut depth" report): a continuous-rotary pose cuts into the
+          // standing CYLINDER radius field, so depth is radial at the
+          // voxel's own angle — the pre-move standing radius of this column
+          // (max ρ of its pre-move top/bottom cells, both already in the
+          // baselines), minus the VALLEY floor of the sweep: window-min of
+          // the standing radius along x over ±flute-radius (adjacent windings
+          // of one sweep sit at the same φ offset in x; the intended flat is
+          // the valley, not the previous winding's cusp ridge). The half-pitch
+          // term is the center-sampling correction: a cell whose CENTER sits
+          // within tol of the valley floor is a sampling artifact, not a
+          // gouge. Box-rotary stock never reaches here (radialMode gates on
+          // a finite axisZ).
+          const wyV = grid.originY + (j + 0.5) * grid.pitch;
+          const wzV = grid.originZ + (k + 0.5) * grid.pitch;
+          const rhoV = Math.hypot(wyV, wzV - AXIS_Z);
+          let rTop = -1;
+          if (baseTop >= 0) {
+            rTop = Math.hypot(wyV, grid.originZ + (baseTop + 0.5) * grid.pitch - AXIS_Z);
+          }
+          let rBot = -1;
+          if (baseBot < grid.nz) {
+            rBot = Math.hypot(wyV, grid.originZ + (baseBot + 0.5) * grid.pitch - AXIS_Z);
+          }
+          const rSelf = Math.max(rTop, rBot);
+          let rStand = rSelf;
+          if (rSelf >= 0) {
+            for (let di2 = -radW; di2 <= radW; di2++) {
+              if (di2 === 0) continue;
+              const i2 = i + di2;
+              if (i2 < 0 || i2 >= nx) continue;
+              const bt2 = baselineTop[j * nx + i2];
+              const bb2 = baselineBot[j * nx + i2];
+              let rs2 = -1;
+              if (bt2 >= 0) {
+                rs2 = Math.hypot(wyV, grid.originZ + (bt2 + 0.5) * grid.pitch - AXIS_Z);
+              }
+              if (bb2 < grid.nz) {
+                const rb2 = Math.hypot(wyV, grid.originZ + (bb2 + 0.5) * grid.pitch - AXIS_Z);
+                if (rb2 > rs2) rs2 = rb2;
+              }
+              if (rs2 >= 0 && rs2 < rStand) rStand = rs2;
+            }
+          }
+          gouged = rStand < 0 || rStand - rhoV - grid.pitch * 0.5 > stepDownTol;
         }
         if (gouged) {
           ghost[idx] = 1;

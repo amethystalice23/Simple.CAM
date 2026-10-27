@@ -376,4 +376,119 @@ describe('3-class classification', () => {
     expect(stats.removed).toBeGreaterThan(128); // op 2 really removed cells
     expect(stats.gougedVoxels).toBe(0); // and none of them painted yellow
   });
+
+  // ── continuous-rotary RADIAL family (committee #4 M2, Alice's
+  // 2026-10-27 "ribbons at every cut depth" report on a spiral facing
+  // job): a tool at an in-between angle approaches the stock RADIALLY,
+  // so the honest depth measure is radial at the voxel's own angle
+  // against the sweep's VALLEY floor — the old world-axis column read
+  // the previous winding's cusp ridge as overburden and painted ~2,300
+  // ribbon cells on her real job. Exact index angles stay byte-identical
+  // (the plunge/skim/Y-line pins above); box stock keeps the old
+  // approximation (no axisZ). ─────────────────────────────────────────
+  const rotaryStock = (r: number, axisZ = 0): { stock: Stock; grid: VoxelGrid } => {
+    const stock: Stock = {
+      kind: 'cylinder',
+      length: 40,
+      xOrigin: 'min',
+      calibration: { aOriginDeg: 0, axisZ, effectiveRadius: r },
+      axisMode: '4-axis',
+      materialId: 'test',
+    };
+    return { stock, grid: new VoxelGrid(stock, 0.5) };
+  };
+  /** the radial-approach pose: tool axis at angle θ in the Y-Z plane
+   * (axis = (0, −sinθ, −cosθ) — poses.ts's convention at A=θ), tip at
+   * radius rTip on the θ spoke */
+  const radialPose = (thetaDeg: number, rTip: number, moveIndex: number): Pose => {
+    const t = (thetaDeg * Math.PI) / 180;
+    return pose({
+      y: Math.sin(t) * rTip,
+      z: rTip * Math.cos(t),
+      ax: 0,
+      ay: -Math.sin(t),
+      az: -Math.cos(t),
+      moveIndex,
+    });
+  };
+
+  it('(f) rotary spiral sweep at θ=45°: a full-radius pass paints NO ribbons — depth is radial vs the valley floor', () => {
+    const R = 10;
+    const { grid } = rotaryStock(R);
+    const spec = buildToolSpec(flatTool);
+    const stats: CarveStats = emptyStats();
+    // two moves, one 0.5mm radial level each (a 2-level "ladder"):
+    // pass 1 skins 0.5 off the full standing radius, pass 2 another 0.5.
+    // stepDown 1 covers each increment → every removal must be FINE.
+    // The OLD world-axis column read at 45° measured depth along machine
+    // Z against the column top — 0.5 radial reads ~0.7+ at the diagonal,
+    // plus the ridge-vs-valley misread → ribbons (her report).
+    const stepDown = new Float32Array([1, 1]);
+    for (const [mi, rTip] of [0, 1].map((mi) => [mi, R - 0.5 - mi * 0.5] as const)) {
+      carvePoses(
+        grid,
+        [spec],
+        [radialPose(45, rTip, mi as number)],
+        stats,
+        stepDown,
+      );
+    }
+    expect(stats.removed).toBeGreaterThan(0); // really carved both passes
+    expect(stats.gougedVoxels).toBe(0); // and painted NOTHING — the fix
+  });
+
+  it('(g) a genuine rotary plunge through virgin stock at θ=45° paints the deep cells (radial family keeps recall)', () => {
+    const R = 10;
+    const { grid } = rotaryStock(R);
+    const spec = buildToolSpec(flatTool);
+    const stats: CarveStats = emptyStats();
+    // one move, tip 5mm deep radially at a 45° spoke — stepDown 1 →
+    // everything past ~1mm radial depth must paint, exactly like the
+    // vertical plunge pin (a) paints below the column top
+    carvePoses(
+      grid,
+      [spec],
+      [radialPose(45, R - 5, 0)],
+      stats,
+      new Float32Array([1]),
+    );
+    expect(stats.removed).toBeGreaterThan(0);
+    expect(stats.gougedVoxels).toBeGreaterThan(0); // the honest paint
+    // and a NEAR-INDEX angle (θ=89.9°) still rides the Y-line family —
+    // the 90°-indexed-ops path is byte-identical (≥0.999 gate)
+    const { grid: g2 } = rotaryStock(R);
+    const stats2: CarveStats = emptyStats();
+    carvePoses(
+      g2,
+      [spec],
+      [radialPose(89.9, R - 5, 0)],
+      stats2,
+      new Float32Array([1]),
+    );
+    expect(stats2.gougedVoxels).toBeGreaterThan(0); // still paints deep
+  });
+
+  it('(h) box-rotary stock keeps the world-axis approximation — radial mode needs an axisZ', () => {
+    // box stock on a rotary job: no calibration → rotaryAxisZ NaN → the
+    // in-between angles fall back to the vertical family (the old
+    // approximation), never the radial branch
+    const stock: Stock = {
+      kind: 'box',
+      sizeX: 40,
+      sizeY: 20,
+      sizeZ: 20,
+      origin: { x: 'min', y: 'mid', z: 'mid' },
+      axisMode: '4-axis',
+      materialId: 'test',
+    };
+    const grid = new VoxelGrid(stock, 0.5);
+    expect(Number.isFinite(grid.rotaryAxisZ)).toBe(false);
+    const spec = buildToolSpec(flatTool);
+    const stats: CarveStats = emptyStats();
+    carvePoses(grid, [spec], [radialPose(45, 8, 0)], stats, new Float32Array([1]));
+    expect(stats.removed).toBeGreaterThan(0);
+    // the fallback read the machine-Z column top at 45° — deep cells still
+    // paint (an approximation, but never a silent NaN path)
+    expect(stats.gougedVoxels).toBeGreaterThan(0);
+  });
 });

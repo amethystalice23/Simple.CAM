@@ -51,12 +51,18 @@ export class VoxelGrid {
   readonly chunkZ: number;
   /** index = chunkIdAt; 1 = needs remeshing */
   readonly chunkDirty: Uint8Array;
+  /** machine Z of the rotary stock's center (the rotation axis), for the
+   *  radial depth classification of continuous-4-axis poses — NaN when the
+   *  stock has no rotary calibration (3-axis cylinder stock without one) */
+  readonly rotaryAxisZ: number;
 
   constructor(stock: Stock, pitch: number) {
     if (!(pitch > 0) || !Number.isFinite(pitch)) {
       throw new Error(`voxel pitch must be a positive finite number, got ${pitch}`);
     }
     this.pitch = pitch;
+    this.rotaryAxisZ =
+      stock.kind === 'cylinder' && stock.calibration ? stock.calibration.axisZ : NaN;
     const sx = spanOf(stock, 'x');
     const sy = spanOf(stock, 'y');
     const sz = spanOf(stock, 'z');
