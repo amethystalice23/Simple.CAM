@@ -520,9 +520,16 @@ pre {
  * one row of glyph buttons + scrub + speed pill + readout ---- */
 .transport-bar {
   position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* sit clear of the two bottom-corner fixtures (Alice's 2026-10-27
+   * placement notes): the navcube owns bottom-right (NAV_MARGIN 12 +
+   * NAV_SIZE 96 = 108), and the drop-hint/dims readout owns bottom-left
+   * (bottom 12 + ~24 tall → 40 clears it with a hair to spare) */
+  bottom: 40px;
+  right: 108px;
+  /* span the rest of the viewport (NOT the old left:50%+translate
+   * shrink-to-fit: with no width, the scrub's flex-shrink absorbed the
+   * entire deficit and squashed the bar to ~zero) */
+  left: 24px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -546,7 +553,8 @@ pre {
 }
 .transport-btn:hover { background: #2a3038; color: #fff; }
 .transport-scrub {
-  flex: 0 1 260px;
+  flex: 1 1 auto;
+  min-width: 220px; /* appreciable width — the point of the span fix */
   height: 8px;
   border-radius: 4px;
   background: #2a3038;

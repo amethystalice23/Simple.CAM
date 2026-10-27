@@ -6,19 +6,25 @@
  * search over the cumulative move durations maps them to a carve target
  * the worker self-drives to (`carve` re-sends just re-target — idempotent).
  *
- * Scale: 1× = ONE simulated minute per wall-clock second (a real carve
- * takes minutes-to-hours; that factor makes the bar usable), N× scales
- * it, 'max' disables the clock entirely (one carve(totalMoves) and the
- * worker runs flat out — the bar then just follows progress messages).
+ * Scale: 1× = HONEST real time — one simulated SECOND per wall-clock
+ * second (moveDurations returns minutes, so 1× = 1/60 minutes per
+ * second). N× multiplies that. 'max' disables the clock entirely (one
+ * carve(MAX_SAFE_INTEGER) and the worker runs flat out — the bar then
+ * just follows progress messages).
+ *
+ * Ladder rationale (2026-10-27 revision): contour jobs run for HOURS
+ * (Alice's knight ≈ 10h real time) — real-time 1× is for watching a
+ * short op behave, and each doubling keeps the ladder short enough to
+ * cycle; 64× plays the knight back in ~10 min, and 'max' is flat-out.
  */
 
 import type { Move } from '../core/types';
 import { moveDurations } from '../sim/poses';
 
-export type PlaybackSpeed = 1 | 2 | 4 | 8 | 16 | 32 | 'max';
+export type PlaybackSpeed = 1 | 2 | 4 | 8 | 16 | 32 | 64 | 'max';
 
 /** the pill's cycle order — clicking walks this left to right, wrapping */
-export const SPEEDS: readonly PlaybackSpeed[] = [1, 2, 4, 8, 16, 32, 'max'];
+export const SPEEDS: readonly PlaybackSpeed[] = [1, 2, 4, 8, 16, 32, 64, 'max'];
 
 /** next speed in the pill cycle (max wraps to 1×) */
 export function cycleSpeed(s: PlaybackSpeed): PlaybackSpeed {
@@ -30,9 +36,10 @@ export function speedLabel(s: PlaybackSpeed): string {
   return s === 'max' ? 'max' : `${s}×`;
 }
 
-/** simulated minutes per wall-clock second; null = 'max' (clock off) */
+/** simulated minutes per wall-clock second; null = 'max' (clock off).
+ *  1/60 = real time (60 wall seconds per simulated minute). */
 export function minutesPerSecond(s: PlaybackSpeed): number | null {
-  return s === 'max' ? null : s;
+  return s === 'max' ? null : s / 60;
 }
 
 /** prefix sums: cum[i] = simulated minutes elapsed BEFORE move i starts,

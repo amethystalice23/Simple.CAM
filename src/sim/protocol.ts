@@ -79,5 +79,8 @@ export type WorkerMsg =
    *  the main thread in per-message map copies and effect runs — batches
    *  amortize them). Supersedes 'chunk'; the client accepts both. */
   | { type: 'chunks'; token: number; chunks: ChunkMesh[] }
+  /** `move` is the LAST CARVED move (or 0 before any pose / total at the
+   *  very end) — b10 semantics; the worker also PARKS once its cursor
+   *  passes the armed `carve` target instead of spinning (see the worker). */
   | { type: 'progress'; token: number; move: number; totalMoves: number; removedVoxels: number }
   | { type: 'done'; token: number; result: SimResult };

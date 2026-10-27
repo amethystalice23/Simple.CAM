@@ -2,7 +2,8 @@
  * Transport playback clock (2026-10-27, Alice's spec) — the client-side
  * half of the transport bar, sibling hook to useCarveSim: a
  * requestAnimationFrame loop advances simulated minutes at the chosen
- * speed (1× = one simulated minute per wall-clock second), maps them
+ * speed (1× = honest real time: one simulated second per wall-clock
+ * second, i.e. 1/60 simulated minutes per second), maps them
  * through the cumulative move durations (simPlayback.ts) to a carve
  * target, and re-targets the SAME worker with the SAME token (`carve`
  * re-sends just re-target, idempotent, self-driving — never supersede the
@@ -92,34 +93,6 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
   const positionRef = useRef(position);
   positionRef.current = position;
 
-  // run lifecycle (App.tsx's existing coupling disposes the sim on
-  // Clear/new job/model drop — the transport resets with it):
-  //  - disposed (build null): drop everything
-  //  - ready (running): the initial run's carve-to-end is armed — the bar
-  //    follows progress messages from move 0 up
-  //  - done: the whole job is carved; auto-pause, bar at the end. Does NOT
-  //    fire during playback (running/build don't change on re-targets) —
-  //    a finished replay re-posts done with the same deps, no refire.
-  useEffect(() => {
-    if (state.build === null) {
-      setPlaying(false);
-      setCommit(null);
-      clockRef.current = 0;
-      carvedRef.current = 0;
-      staleRef.current = false;
-      postedTargetRef.current = 0;
-    } else if (state.running) {
-      setPlaying(false);
-      setCommit(null);
-      clockRef.current = 0;
-      carvedRef.current = 0;
-      staleRef.current = false;
-      postedTargetRef.current = Number.MAX_SAFE_INTEGER;
-    } else {
-      setPlaying(false);
-      setCommit(null);
-    }
-  }, [state.running, state.build]);
   useEffect(() => {
     // progress confirms the carve — clears the post-reset staleness too
     if (!state.progress) return;
@@ -129,19 +102,24 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
 
   /** commit the position to `k` (pausing callers only): behind the carved
    *  position needs reset + re-carve (voxels cannot un-carve); ahead is an
-   *  incremental retarget the worker self-drives */
+   *  incremental retarget the worker self-drives. With the b10 worker the
+   *  retargets also SERIALIZE: each click posts one deterministic target,
+   *  the worker actions them in arrival order (parked → drive → parked). */
   const commitTo = useCallback((k: number) => {
     const total = totalRef.current;
     const target = Math.max(0, Math.min(k, total));
     clockRef.current = simMinutesAtMove(cumRef.current, target);
     postedTargetRef.current = target;
     setCommit(target);
-    if (target < carvedRef.current) {
+    // clamp reads to honest worker progress (b10 reports the last carved
+    // move, so this tracks exactly); a reset only when genuinely behind it
+    const carved = Math.min(carvedRef.current, total);
+    if (target < carved) {
       staleRef.current = true;
       carvedRef.current = 0;
       sendRef.current({ type: 'reset' });
       if (target > 0) sendRef.current({ type: 'carve', throughMove: target });
-    } else if (target > carvedRef.current) {
+    } else if (target > carved) {
       sendRef.current({ type: 'carve', throughMove: target });
     }
   }, []);
@@ -200,8 +178,59 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     rafRef.current = requestAnimationFrame(loop);
   }, [loop, stopClock]);
 
+  // run lifecycle (App.tsx's existing coupling disposes the sim on
+  // Clear/new job/model drop — the transport resets with it):
+  //  - disposed (build null): drop everything (the pill rests at 1×)
+  //  - ready (running): the initial run's carve-to-end is armed — the
+  //    transport OWNS that run (2026-10-27 revision): play at 'max' with
+  //    an honest pill (launch = flat out, and pause works on it), the bar
+  //    following progress messages from move 0 up
+  //  - done: the whole job is carved; auto-pause, bar at the end. Does NOT
+  //    fire during playback (running/build don't change on re-targets) —
+  //    a finished replay re-posts done with the same deps, no refire.
+  useEffect(() => {
+    if (state.build === null) {
+      stopClock();
+      setPlaying(false);
+      setCommit(null);
+      setSpeed(1);
+      clockRef.current = 0;
+      carvedRef.current = 0;
+      staleRef.current = false;
+      postedTargetRef.current = 0;
+    } else if (state.running) {
+      setCommit(null);
+      setSpeed('max');
+      speedRef.current = 'max'; // the loop reads the mirror — sync before the first frame
+      setPlaying(true);
+      playingRef.current = true; // …and the guard, before the first frame
+      clockRef.current = 0;
+      carvedRef.current = 0;
+      staleRef.current = false;
+      postedTargetRef.current = Number.MAX_SAFE_INTEGER;
+      startClock(); // the 'max' watch-loop (auto-pause at the end)
+    } else {
+      // done: keep the user's pill speed (a finished replay just pauses);
+      // the speed rests at 1× only after dispose (build null above)
+      stopClock();
+      setPlaying(false);
+      setCommit(null);
+    }
+  }, [state.running, state.build, startClock, stopClock]);
+
   const togglePlay = useCallback(() => {
     if (playingRef.current) {
+      stopClock();
+      if (minutesPerSecond(speedRef.current) === null) {
+        // 'max' pause (2026-10-27 revision): the worker is driving to MAX —
+        // retarget it DOWN to the carved position so it parks where it is
+        // (a lower target just stops it at its cursor — that is correct)
+        const carved = carvedRef.current;
+        postedTargetRef.current = carved;
+        sendRef.current({ type: 'carve', throughMove: carved });
+      }
+      // finite speeds: stop the rAF clock; the worker parks at its current
+      // posted target (the clock never got past it)
       setPlaying(false);
       return;
     }
@@ -217,16 +246,16 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     }
     if (minutesPerSecond(speedRef.current) === null) {
       // max: one flat-out carve to the end (from wherever the worker is)
-      postedTargetRef.current = totalRef.current;
+      postedTargetRef.current = Number.MAX_SAFE_INTEGER;
       staleRef.current = false;
-      sendRef.current({ type: 'carve', throughMove: totalRef.current });
+      sendRef.current({ type: 'carve', throughMove: Number.MAX_SAFE_INTEGER });
     }
     // the bar follows the CARVED position while playing (per spec) — drop
     // the paused commit, the clock owns the targets from here
     setCommit(null);
     setPlaying(true);
     startClock();
-  }, [commitTo, startClock]);
+  }, [commitTo, startClock, stopClock]);
 
   const returnToStart = useCallback(() => {
     setPlaying(false);
@@ -243,14 +272,31 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
   }, [commitTo, stopClock]);
 
   const stepForward = useCallback(() => {
-    if (playingRef.current) setPlaying(false);
+    if (playingRef.current) {
+      setPlaying(false);
+      if (minutesPerSecond(speedRef.current) === null) {
+        // stepping out of a max run parks the worker at the carved
+        // position (the same max-pause retarget) — otherwise it keeps
+        // carving to the end while the user steps
+        postedTargetRef.current = carvedRef.current;
+        sendRef.current({ type: 'carve', throughMove: carvedRef.current });
+      }
+    }
     stopClock();
     commitTo(positionRef.current + 1);
   }, [commitTo, stopClock]);
 
   const scrubTo = useCallback(
     (k: number) => {
-      setPlaying(false);
+      if (playingRef.current) {
+        setPlaying(false);
+        if (minutesPerSecond(speedRef.current) === null) {
+          // same max-park as step: the commit below decides behind/ahead
+          // against the parked position, not against a still-running one
+          postedTargetRef.current = carvedRef.current;
+          sendRef.current({ type: 'carve', throughMove: carvedRef.current });
+        }
+      }
       stopClock();
       commitTo(k);
     },
@@ -263,17 +309,17 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
       const carvedNow = carvedRef.current;
       const mps = minutesPerSecond(next);
       if (mps === null) {
-        // finite → max mid-flight: point the worker at the end, keep the
-        // clock synced to the carved spot for a clean switch back
+        // finite → max mid-flight: point the worker at the end (MAX, per
+        // the launch/resume semantics), keep the clock synced to the
+        // carved spot for a clean switch back
         clockRef.current = simMinutesAtMove(cumRef.current, carvedNow);
-        postedTargetRef.current = totalRef.current;
-        sendRef.current({ type: 'carve', throughMove: totalRef.current });
+        postedTargetRef.current = Number.MAX_SAFE_INTEGER;
+        sendRef.current({ type: 'carve', throughMove: Number.MAX_SAFE_INTEGER });
       } else if (minutesPerSecond(speedRef.current) === null) {
-        // max → finite mid-flight: the worker's real cursor ran AHEAD of
-        // the last reported progress (flat-out slices between messages);
-        // retargeting behind it just idles the worker until the clock
-        // climbs past its cursor — restart the clock at the reported
-        // position and let the rising re-targets pick the carve back up
+        // max → finite mid-flight: the worker was driving to MAX — park it
+        // at the carved position (a max-pause retarget), restart the clock
+        // at the reported position, and let the rising re-targets pick
+        // the carve back up
         clockRef.current = simMinutesAtMove(cumRef.current, carvedNow);
         postedTargetRef.current = carvedNow;
         sendRef.current({ type: 'carve', throughMove: carvedNow });

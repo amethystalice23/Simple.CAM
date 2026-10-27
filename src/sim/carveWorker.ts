@@ -25,7 +25,7 @@ import type { Stock, Tool } from '../core/types';
 /** build stamp — the `ready` message carries it so the client can PROVE
  *  which worker version is running (the 2026-10-25 gaps debugging: a
  *  stale dev-server worker copy was a live suspect) */
-const SIM_BUILD = 'b9-flush-unbudgeted';
+const SIM_BUILD = 'b10-transport-honest';
 
 /** cooperative-slice budget, ms — the CARVE stays within one of these per
  *  slice so the worker yields often enough to serve control messages
@@ -152,10 +152,17 @@ function slice(r: RunState) {
   flushChunks(r);
   const total = r.poses.length ? r.poses[r.poses.length - 1].moveIndex + 1 : 0;
   const atEnd = r.cursor >= r.poses.length;
+  // reachedTarget: the cursor sits on a pose BEYOND the armed target — the
+  // carve is done for this target and the worker should park
+  const reachedTarget = !atEnd && r.poses[r.cursor].moveIndex > r.target;
   post({
     type: 'progress',
     token: r.token,
-    move: atEnd ? total : (r.poses[r.cursor]?.moveIndex ?? 0),
+    // the LAST CARVED move (b10), not the next one: the client's carvedRef
+    // anchors pause/step/scrub — reporting the next move made every
+    // client-side behind/ahead comparison overshoot by one (spurious
+    // resets = the stock reappearing, and a frozen bar)
+    move: atEnd ? total : r.cursor > 0 ? r.poses[r.cursor - 1].moveIndex : 0,
     totalMoves: total,
     removedVoxels: r.stats.removed,
   });
@@ -174,6 +181,14 @@ function slice(r: RunState) {
         firstCollisionMove: r.stats.firstCollisionMove,
       },
     });
+    r.timer = null;
+    return;
+  }
+  if (reachedTarget) {
+    // PARK (b10): the armed target is carved — clear the timer and wait
+    // for the next `carve`. Re-arming unconditionally here was a 0ms
+    // busy-spin posting a progress per tick, flooding the client with
+    // setState and racing its commits (the rapid-click crash).
     r.timer = null;
     return;
   }

@@ -1,6 +1,6 @@
 /**
  * The simulation transport bar (2026-10-27, Alice's spec): a floating
- * widget across the viewport's BOTTOM-CENTER, visible only while the
+ * widget across the viewport's BOTTOM, visible only while the
  * Simulation layer tick is on AND a completed simulation exists. Left to
  * right: play/pause, return-to-start (NO step-back — dropped deliberately),
  * step-forward, scrub bar, speed pill (immediately adjacent to the bar's
@@ -110,7 +110,7 @@ export function TransportBar({ transport }: Props) {
       <button
         type="button"
         className="transport-speed"
-        title="Playback speed — simulated minutes per second of playback. 'max' runs the carve flat out."
+        title="Playback speed — 1× plays in honest real time, N× that many times faster. 'max' runs the carve flat out."
         onClick={cycleSpeed}
       >
         {label}

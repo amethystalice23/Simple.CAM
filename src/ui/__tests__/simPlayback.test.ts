@@ -33,27 +33,28 @@ const T3 = T2 + 2; // move 3 starts (the G93's inverse-time minuteS)
 const T4 = T3 + 1; // the end (move 4 is zero-duration)
 
 describe('speed pill', () => {
-  it('cycles 1→2→4→8→16→32→max→1 (the spec order, wrapping)', () => {
-    expect(SPEEDS).toEqual([1, 2, 4, 8, 16, 32, 'max']);
+  it('cycles 1→2→4→8→16→32→64→max→1 (the spec order, wrapping)', () => {
+    expect(SPEEDS).toEqual([1, 2, 4, 8, 16, 32, 64, 'max']);
     let s: (typeof SPEEDS)[number] = 1;
     const walked: (typeof SPEEDS)[number][] = [s];
     for (let i = 0; i < SPEEDS.length; i++) {
       s = cycleSpeed(s);
       walked.push(s);
     }
-    expect(walked).toEqual([1, 2, 4, 8, 16, 32, 'max', 1]);
+    expect(walked).toEqual([1, 2, 4, 8, 16, 32, 64, 'max', 1]);
   });
 
-  it('labels replace in place — 1× through 32×, then max', () => {
+  it('labels replace in place — 1× through 64×, then max', () => {
     expect(speedLabel(1)).toBe('1×');
-    expect(speedLabel(32)).toBe('32×');
+    expect(speedLabel(64)).toBe('64×');
     expect(speedLabel('max')).toBe('max');
   });
 
-  it("'max' disables the clock; N× is N simulated minutes per second", () => {
+  it("'max' disables the clock; 1× is HONEST real time (one simulated second per wall-clock second = 1/60 minutes/s)", () => {
     expect(minutesPerSecond('max')).toBeNull();
-    expect(minutesPerSecond(1)).toBe(1);
-    expect(minutesPerSecond(16)).toBe(16);
+    expect(minutesPerSecond(1)).toBeCloseTo(1 / 60, 15); // real time
+    expect(minutesPerSecond(16)).toBeCloseTo(16 / 60, 15);
+    expect(minutesPerSecond(64)).toBeCloseTo(64 / 60, 15); // ~10h knight ≈ 10 min
   });
 });
 
