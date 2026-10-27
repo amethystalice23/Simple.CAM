@@ -86,7 +86,12 @@ function wordsLine(m: Move, withFeed: boolean, sWord?: string): string {
   if (w.a !== undefined) parts.push(`A${fmt(w.a, 2)}`);
   // the laser's S rides motion lines like Makera's own: `S0.2 F100`
   if (sWord) parts.push(sWord);
-  if (withFeed) parts.push(`F${fmt(m.feed, 2)}`);
+  // F at 2 decimals rounds sub-0.005 down to a literal `F0` — undefined
+  // feed on real firmware (a stall mid-cut). G93 passes slower than 200
+  // min and sub-0.005 mm/min feeds cross it with legal op settings; clamp
+  // to the smallest honest 2-decimal feed instead (the field report
+  // audit, 2026-10-27).
+  if (withFeed) parts.push(`F${fmt(Math.max(m.feed, 0.01), 2)}`);
   return parts.join(' ');
 }
 

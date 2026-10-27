@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { postCarvera } from '../carvera';
 import { faceCylinder } from '../../cam/faceCylinder';
-import type { FaceCylinderOp, Stock, Tool } from '../../core/types';
+import type { FaceCylinderOp, Move, Stock, Tool } from '../../core/types';
 
 const tool: Tool = { id: 't1', name: '6mm flat', type: 'flat', diameter: 6, spindleRpm: 18000 };
 const stock: Extract<Stock, { kind: 'cylinder' }> = {
@@ -110,6 +110,32 @@ describe('carvera post-processor', () => {
       }
     }
     expect(offenders, offenders.join(' | ')).toEqual([]);
+  });
+
+  it('never emits F0/F0.00 — sub-0.005 feeds clamp to the smallest honest feed (the field-report F0 bug)', () => {
+    // A G93 pass slower than 200 min (span 133 @ stepOver 0.1 crosses it
+    // with legal op settings) formats at 2 decimals to a literal `F0` —
+    // undefined on real firmware, a stall mid-cut. Same for G94 feeds
+    // under 0.005 mm/min. The post clamps to F0.01 instead.
+    const slow: Move[] = [
+      { words: { z: 10 }, feed: 0, rapid: true },
+      { words: { z: 0 }, feed: 0.004 }, // G94 plunge, would round to F0
+      { words: { x: 133, a: 360 }, feed: 0.00496 }, // G93 sweep, would round to F0
+      { words: { x: 0 }, feed: 0.00496 }, // G94, would round to F0
+      { words: { x: 50 }, feed: 200 }, // normal G94 feed untouched
+    ];
+    const slowGcode = postCarvera({ moves: slow, tools: [tool], options: { jobName: 'f0-test' } });
+    const feedLines = slowGcode
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => /^G1 /.test(l));
+    expect(feedLines.every((l) => !/\bF0(\.0+)?(?![\d.])/.test(l)), feedLines.join(' | ')).toBe(true);
+    // the clamped lines read F0.01, the normal feed untouched
+    expect(feedLines.filter((l) => / F0\.01$/.test(l.replace(/\s*;.*$/, ''))).length).toBe(3);
+    expect(slowGcode).toContain('F200');
+    // and the whole-judge: the pinned golden corpus carries no F0 either
+    const corpus = [gcode, slowGcode].join('\n');
+    expect(corpus.split('\n').filter((l) => /\bF0(\.0+)?(?![\d.])/.test(l))).toEqual([]);
   });
 
   it('emits helical entry and coordinated sweep in G93', () => {
