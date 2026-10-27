@@ -113,6 +113,22 @@ export function faceCylinder(
   const span = Math.abs(op.xEnd - op.xStart);
   if (span <= 0) throw new Error('xStart and xEnd must differ');
 
+  // TOOL-CENTER PATH BOUNDS (Alice, 2026-10-27 "cutting too far" report):
+  // a path centered on xStart/xEnd overhangs the defined span by the tool
+  // radius at both ends — the flute cuts past the line. With tail stock
+  // cut-over OFF the defined span is the FINISHED FACE (the rotary-pocket
+  // rule): inset the tool-center travel by toolR so the flute's EDGE cuts
+  // exactly to the line. With cut-over ON the overhang is the point —
+  // the raw path bounds stand.
+  const toolR = tool.diameter / 2;
+  const pathX0 = op.cutBeyondStock
+    ? op.xStart
+    : Math.min(op.xStart + toolR, op.xEnd - toolR);
+  const pathX1 = op.cutBeyondStock
+    ? op.xEnd
+    : Math.max(op.xEnd - toolR, pathX0);
+  const pathSpan = Math.abs(pathX1 - pathX0);
+
   // Roughing depths: k * stepDown while below (total - allowance), capped.
   const roughTarget = Math.max(totalDepth - op.finishAllowance, 0);
   const roughDepths: number[] = [];
@@ -124,7 +140,7 @@ export function faceCylinder(
   const depths = op.finishingOnly ? [totalDepth] : [...roughDepths, totalDepth];
 
   const stepOver = op.stepOver;
-  const revs = span / stepOver;
+  const revs = pathSpan / stepOver;
   const aAdvance = revs * 360;
   const passMinutes = revs / MAX_ROTARY_RPM;
   const aSign = op.rotation === 'cw' ? 1 : -1;
@@ -139,7 +155,7 @@ export function faceCylinder(
   let a = startA; // accumulated machine A, degrees (post emits G92.4 A0 afterwards)
   let minutes = 0;
   let passIndex = 0; // global: horizontal X zigzags across levels
-  const rings = ringPositions(op.xStart, op.xEnd, stepOver);
+  const rings = ringPositions(pathX0, pathX1, stepOver);
 
   /** entry/exit EDGE RINGS (Alice, 2026-10-27): with tail stock cut-over
    *  OFF, every level opens and closes with a full 360° A ring at passZ —
@@ -163,9 +179,11 @@ export function faceCylinder(
 
     if (op.pattern === 'spiral') {
       // Alternate sweep direction between levels so each starts where the
-      // last one ended — no wasted rapids.
-      const sweepStart = i % 2 === 0 ? op.xStart : op.xEnd;
-      const sweepEnd = i % 2 === 0 ? op.xEnd : op.xStart;
+      // last one ended — no wasted rapids. PATH bounds (tool-center, inset
+      // by toolR with cut-over off — see pathX0/pathX1): the flute's EDGE,
+      // not its center, cuts to the defined line.
+      const sweepStart = i % 2 === 0 ? pathX0 : pathX1;
+      const sweepEnd = i % 2 === 0 ? pathX1 : pathX0;
 
       // approach once; afterwards depth steps happen in the cut at the
       // sweep ends, retracting only after the final level. Axis-separate
@@ -281,7 +299,7 @@ export function faceCylinder(
         }
       });
       if (isFinish) moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-      minutes += increment / op.plungeFeed + xs.length / MAX_ROTARY_RPM + span / op.feed;
+      minutes += increment / op.plungeFeed + xs.length / MAX_ROTARY_RPM + pathSpan / op.feed;
     } else {
       // Indexed passes: a full X sweep at each A, stepping A by the
       // step-over arc at the swept radius. X zigzags so A only ever advances
@@ -290,8 +308,10 @@ export function faceCylinder(
       const n = Math.ceil(360 / stepDeg);
       for (let k = 0; k < n; k++) {
         const forward = passIndex % 2 === 0;
-        const sweepStart = forward ? op.xStart : op.xEnd;
-        const sweepEnd = forward ? op.xEnd : op.xStart;
+        // path bounds (tool-center, inset by toolR with cut-over off — see
+        // pathX0/pathX1): the flute's edge, not its center, cuts to the line
+        const sweepStart = forward ? pathX0 : pathX1;
+        const sweepEnd = forward ? pathX1 : pathX0;
         // axis-separate repositioning (see thread): rotate in place and
         // travel at the machine's existing height (after a tool change,
         // the swap macro's high park), THEN descend — a coordinated
@@ -315,7 +335,7 @@ export function faceCylinder(
           comment: isFinish ? undefined : `rough to r=${(r0 - depth).toFixed(3)}`,
         });
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-        minutes += increment / op.plungeFeed + span / op.feed;
+        minutes += increment / op.plungeFeed + pathSpan / op.feed;
         a += aSign * stepDeg;
         passIndex++;
       }

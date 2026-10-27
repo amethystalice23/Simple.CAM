@@ -210,7 +210,9 @@ describe('generator post goldens', () => {
 
   // vertical facing: one straight plunge per level plus full-revolution
   // A-only cuts, which the post classifies G94 and runs at deg/min, with
-  // in-cut X steps between rings
+  // in-cut X steps between rings. No cutBeyondStock: the ring positions
+  // ride the TOOL-CENTER path bounds (inset by toolR — her "cutting too
+  // far" report), so this golden pins the inset bounds honestly.
   const ringFaceOp = {
     kind: 'faceCylinder',
     id: 'op5',
@@ -225,6 +227,7 @@ describe('generator post goldens', () => {
     rotation: 'cw',
     pattern: 'vertical',
     feed: 600,
+    cutBeyondStock: false, // explicit: the ring path IS the inset-bound path
   } as const;
   checkGolden(
     'face-vertical.nc',

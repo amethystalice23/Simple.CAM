@@ -151,8 +151,14 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
   // ring at the entry X (so the helical entry dives into PRE-CLEARED air —
   // no helical groove scarred into the end wall) and closes with an exit
   // ring at the sweep end (both ends flush). Rings run A-only at the G94
-  // rotary feed, one per level + per end.
+  // rotary feed, one per level + per end. PATH BOUNDS: the tool CENTER
+  // travels inset by toolR (3 for this fixture), so the flute's EDGE cuts
+  // exactly to the defined xStart/xEnd — never a radius past the line
+  // (her "you are cutting too far" report).
   const res = faceCylinder({ ...op, cutBeyondStock: false }, calibration, tool);
+  const toolR = tool.diameter / 2;
+  const pX0 = Math.min(op.xStart + toolR, op.xEnd - toolR); // path bounds
+  const pX1 = Math.max(op.xEnd - toolR, pX0);
   const edgeRings = res.moves.filter(
     (m) =>
       !m.rapid &&
@@ -169,7 +175,8 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     expect(edgeRings.length).toBe(10); // 5 levels × (entry ring + exit ring)
     for (const r of edgeRings) {
       expect(r.comment).toMatch(/entry ring 360|exit ring 360/);
-      expect(r.comment).toMatch(/X(0|100)/);
+      // rings sit ON the path bounds (tool-center inset by toolR)
+      expect(r.comment).toMatch(new RegExp(`X(${pX0.toFixed(1)}|${pX1.toFixed(1)})`));
     }
   });
 
@@ -191,21 +198,40 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
 
   it('squares both ends: ring X positions alternate with the sweep direction', () => {
     const xs = edgeRings.map((r) => r.comment!.match(/X([\d.]+)/)![1]);
-    // levels alternate entry ends: 0,100,0,100,0 — the entry ring sits at
-    // the level's sweep start, the exit ring at its sweep end, so the
-    // pairs run (entry, exit) = (0,100), (100,0), (0,100)…
+    // levels alternate entry ends — the entry ring sits at the level's
+    // sweep start (path bound), the exit ring at its sweep end
     expect(xs).toEqual([
-      '0.0', '100.0', // level 1: entry X0, exit X100
-      '100.0', '0.0', // level 2: entry X100, exit X0
-      '0.0', '100.0',
-      '100.0', '0.0',
-      '0.0', '100.0',
+      pX0.toFixed(1), pX1.toFixed(1), // level 1: entry then exit
+      pX1.toFixed(1), pX0.toFixed(1), // level 2 (reversed)
+      pX0.toFixed(1), pX1.toFixed(1),
+      pX1.toFixed(1), pX0.toFixed(1),
+      pX0.toFixed(1), pX1.toFixed(1),
     ]);
+  });
+
+  it('insets the tool-center path by toolR — the flute EDGE cuts to the line', () => {
+    // every X word the op emits stays inside [xStart+toolR, xEnd-toolR];
+    // the flute edge (center ± toolR) lands exactly on the defined lines
+    const xs = res.moves
+      .map((m) => m.words.x)
+      .filter((x): x is number => x !== undefined);
+    for (const x of xs) {
+      expect(x).toBeGreaterThanOrEqual(pX0 - 1e-9);
+      expect(x).toBeLessThanOrEqual(pX1 + 1e-9);
+    }
+    // the swept endpoints ARE the path bounds: edge = bound ± toolR = line
+    // (spiral sweeps coordinate X+A in G93 — the first sweep runs X0→X97)
+    const sweepEnds = res.moves
+      .filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined)
+      .map((m) => m.words.x as number);
+    expect(sweepEnds[0]).toBeCloseTo(pX1, 6);
+    expect(sweepEnds[0] + toolR).toBeCloseTo(op.xEnd, 6); // edge on the line
   });
 
   it('charges each level honestly: plunge + 2 rings + entry + pass', () => {
     const ringMinutes = 1 / MAX_ROTARY_RPM;
-    const passMinutes = (100 / 4.8) / MAX_ROTARY_RPM;
+    const pathSpan = pX1 - pX0;
+    const passMinutes = pathSpan / op.stepOver / MAX_ROTARY_RPM;
     expect(res.estimatedMinutes).toBeCloseTo(
       5 * (passMinutes + entryMinutes + 2 * ringMinutes + 1 / op.plungeFeed),
       3,
@@ -218,7 +244,8 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     );
     expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20]);
     const sweeps = res.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
-    expect(sweeps.map((s) => s.words.x)).toEqual([100, 0, 100, 0, 100]);
+    // sweeps alternate between the PATH bounds (not the raw xStart/xEnd)
+    expect(sweeps.map((s) => s.words.x)).toEqual([pX1, pX0, pX1, pX0, pX1]);
   });
 });
 
