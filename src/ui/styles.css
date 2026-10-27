@@ -515,6 +515,70 @@ pre {
 }
 .projection-pill:hover { border-color: #4d94c9; color: #fff; }
 
+/* ---- simulation transport bar (viewport bottom-center, Simulation tick
+ * + a completed sim only) — the projection-pill floating-widget pattern,
+ * one row of glyph buttons + scrub + speed pill + readout ---- */
+.transport-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(16, 20, 26, 0.92);
+  border: 1px solid #31373e;
+  border-radius: 8px;
+  padding: 5px 8px;
+  z-index: 3;
+}
+.transport-btn {
+  /* the global button style is the blue dialog button — the floating
+   * widgets override to the dark pill look (projection-pill's recipe) */
+  background: transparent;
+  border: none;
+  color: #9aa4ad;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.transport-btn:hover { background: #2a3038; color: #fff; }
+.transport-scrub {
+  flex: 0 1 260px;
+  height: 8px;
+  border-radius: 4px;
+  background: #2a3038;
+  overflow: hidden;
+  cursor: pointer;
+  touch-action: none; /* the drag owns the pointer, not the scroll */
+}
+.transport-scrub-fill {
+  height: 100%;
+  background: #7fae6f; /* the sim-progress-fill green — same carve story */
+  pointer-events: none; /* the bar handles the drag, not the fill */
+}
+.transport-speed {
+  background: rgba(42, 48, 56, 0.9);
+  border: 1px solid #31373e;
+  border-radius: 8px;
+  color: #d8dde2;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+}
+.transport-speed:hover { border-color: #4d94c9; color: #fff; }
+.transport-readout {
+  font-size: 11px;
+  color: #7d8891; /* muted — trails last, least important per spec */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-right: 2px;
+}
+
 /* ---- display-layers dropdown (viewport top-right) ---- */
 .layers-button {
   position: absolute;

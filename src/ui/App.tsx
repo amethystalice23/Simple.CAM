@@ -59,6 +59,8 @@ import { ExportDialog } from './ExportDialog';
 import { CalibrationDialog } from './CalibrationDialog';
 import { SimulateDialog } from './SimulateDialog';
 import { useCarveSim } from './useCarveSim';
+import { useSimTransport } from './useSimTransport';
+import { TransportBar } from './TransportBar';
 import { OpsPanel } from './OpsPanel';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -167,6 +169,13 @@ export function App() {
   const autosavedModelRef = useRef<Uint8Array | null>(null);
   const restoredRef = useRef(false); // autosave waits for the mount restore
   const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
+  /** the carve simulator's transport playback clock (2026-10-27): over the
+   *  SAME move stream the sim ran (previewMoves) — a completed sim + the
+   *  Simulation tick show the bar; Clear/new job/model drop dispose the
+   *  sim and the transport resets with it (its running/build effect drops
+   *  the clock state). Declared after previewMoves' useState; hooks stay
+   *  unconditionally called. */
+  const transport = useSimTransport(carveSim, previewMoves);
   /** the job: ordered operations, each with its own selection and params */
   const [ops, setOps] = useState<JobOp[]>([]);
   const [generated, setGenerated] = useState<Record<string, GeneratedOp>>({});
@@ -1271,6 +1280,12 @@ export function App() {
             onToggleSelect={toggleSelect}
             onClearSelection={clearSelection}
           />
+          {/* the sim transport: only while the Simulation tick is on AND a
+            * completed/running simulation exists (a fresh sim has chunks —
+            * the bar appears with the first carve and stays for playback) */}
+          {showSim && (carveSim.state.running || carveSim.state.result !== null) && (
+            <TransportBar transport={transport} />
+          )}
           <div className="drop-hint">
             {geometry
               ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`

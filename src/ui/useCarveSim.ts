@@ -30,6 +30,12 @@ export interface CarveSimState {
 
 export interface CarveSim {
   state: CarveSimState;
+  /** post a playback control message to the LIVE worker under the CURRENT
+   *  token (the transport's channel, 2026-10-27): `carve` re-sends just
+   *  re-target (idempotent, self-driving), `reset` rebuilds the grid and
+   *  re-posts the full stock. NEVER supersedes the token — the token
+   *  supersede path (a new `run`) is what KILLS a worker. */
+  send: (msg: { type: 'carve'; throughMove: number } | { type: 'reset' }) => void;
   /** kick off a run: builds the worker, sends setup + carve-to-end.
    *  moveStepDown (optional): per-move op step-down for the 3-class
    *  classification; omitted = one-pitch default everywhere. */
@@ -57,6 +63,14 @@ export function useCarveSim(): CarveSim {
   });
   const workerRef = useRef<Worker | null>(null);
   const tokenRef = useRef(0);
+  /** the transport's re-target channel: always the CURRENT worker + token
+   *  (a ref, so callers can hold the function across renders) */
+  const send = useCallback(
+    (msg: { type: 'carve'; throughMove: number } | { type: 'reset' }) => {
+      workerRef.current?.postMessage({ ...msg, token: tokenRef.current });
+    },
+    [],
+  );
 
   const dispose = useCallback(() => {
     workerRef.current?.postMessage({ type: 'dispose' });
@@ -123,8 +137,12 @@ export function useCarveSim(): CarveSim {
           }));
         } else if (msg.type === 'done') {
           setState((s) => ({ ...s, running: false, result: msg.result }));
-          worker.terminate();
-          workerRef.current = null;
+          // v1 terminated the worker here; playback (2026-10-27) needs it
+          // ALIVE after the run — return-to-start / scrub-behind post
+          // `reset` + `carve` to re-carve (voxels cannot un-carve). The
+          // worker now sits parked between runs; dispose (Clear / new
+          // job / model drop — the existing lifecycle coupling) tears it
+          // down, and a new run replaces it.
         }
       };
       worker.postMessage({ type: 'setup', setup: { stock, tools, moves, moveTool, pitch, startZ, moveStepDown }, token });
@@ -132,5 +150,5 @@ export function useCarveSim(): CarveSim {
     [],
   );
 
-  return { state, run, dispose };
+  return { state, send, run, dispose };
 }
