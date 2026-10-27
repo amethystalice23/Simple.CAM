@@ -120,6 +120,17 @@ const baselines = new WeakMap<
     botY: Int32Array;
     stampY: Int32Array;
     journalY: number[];
+    /** RADIAL family caches (per MOVE — the baselines are per-move, so the
+     *  derived per-column standing radius and its valley-window minimum are
+     *  too): rs2 = the column's pre-move standing radius; stand = the
+     *  window-min over ±flute radius in x. Without the cache the window
+     *  rescans ±fluteR per REMOVED VOXEL — Ø-proportional, not
+     *  pitch-proportional: 42 hypots × 1.6M removals ≈ 68M redundant
+     *  hypots at 0.15mm voxels (Alice's >2× slowdown report, 2026-10-27) */
+    rs2: Float32Array;
+    rs2Stamp: Int32Array;
+    stand: Float32Array;
+    standStamp: Int32Array;
     serial: number;
   }
 >();
@@ -261,6 +272,10 @@ function carvePose(
       botY: new Int32Array(grid.columnBottomY),
       stampY: new Int32Array(grid.nx * grid.nz).fill(-1),
       journalY: [],
+      rs2: new Float32Array(grid.nx * grid.ny),
+      rs2Stamp: new Int32Array(grid.nx * grid.ny).fill(-1),
+      stand: new Float32Array(grid.nx * grid.ny),
+      standStamp: new Int32Array(grid.nx * grid.ny).fill(-1),
       serial: 0,
     };
     baselines.set(grid, base);
@@ -269,6 +284,10 @@ function carvePose(
       const c = base.journal[e];
       base.top[c] = grid.columnTop[c];
       base.bot[c] = grid.columnBottom[c];
+      // the radial family's derived caches invalidate with the column
+      // baselines they were computed from — same journal, same move serial
+      base.rs2Stamp[c] = -1;
+      base.standStamp[c] = -1;
     }
     for (let e = 0; e < base.journalY.length; e++) {
       const l = base.journalY[e];
@@ -289,6 +308,12 @@ function carvePose(
   const baselineBotY = base.botY;
   const stampY = base.stampY;
   const journalY = base.journalY;
+  // radial-family caches (per-move — see the baselines doc): the column's
+  // pre-move standing radius (rs2) and its valley-window minimum (stand)
+  const rs2Arr = base.rs2;
+  const rs2Stamp = base.rs2Stamp;
+  const standArr = base.stand;
+  const standStamp = base.standStamp;
   // the classification family. EXACT index angles keep the world-axis
   // formulas (byte-identical paths: 3-axis ops, the plunge/skim fixtures,
   // 0/180 vertical and ±90 Y-line indexed ops — committee #4's landing
@@ -376,37 +401,56 @@ function carvePose(
           // term is the center-sampling correction: a cell whose CENTER sits
           // within tol of the valley floor is a sampling artifact, not a
           // gouge. Box-rotary stock never reaches here (radialMode gates on
-          // a finite axisZ).
+          // a finite axisZ). The standing radius and its window-min are
+          // PER-(row,column) functions of the pre-move baselines only —
+          // move-stable, so both ride the per-move caches (rs2/stand): the
+          // window scan runs once per (row,column) per move, not per voxel
+          // (Alice's 2026-10-27 >2× slowdown report: the window is
+          // Ø-proportional, not pitch-proportional — 42 hypots × every
+          // removal ≈ 68M redundant hypots at 0.15mm voxels).
           const wyV = grid.originY + (j + 0.5) * grid.pitch;
           const wzV = grid.originZ + (k + 0.5) * grid.pitch;
           const rhoV = Math.hypot(wyV, wzV - AXIS_Z);
-          let rTop = -1;
-          if (baseTop >= 0) {
-            rTop = Math.hypot(wyV, grid.originZ + (baseTop + 0.5) * grid.pitch - AXIS_Z);
-          }
-          let rBot = -1;
-          if (baseBot < grid.nz) {
-            rBot = Math.hypot(wyV, grid.originZ + (baseBot + 0.5) * grid.pitch - AXIS_Z);
-          }
-          const rSelf = Math.max(rTop, rBot);
-          let rStand = rSelf;
-          if (rSelf >= 0) {
+          const rc = j * nx + i;
+          let rStand: number;
+          if (standStamp[rc] === stampVal) {
+            rStand = standArr[rc];
+          } else {
+            let rTop = -1;
+            if (baseTop >= 0) {
+              rTop = Math.hypot(wyV, grid.originZ + (baseTop + 0.5) * grid.pitch - AXIS_Z);
+            }
+            let rBot = -1;
+            if (baseBot < grid.nz) {
+              rBot = Math.hypot(wyV, grid.originZ + (baseBot + 0.5) * grid.pitch - AXIS_Z);
+            }
+            rStand = Math.max(rTop, rBot);
             for (let di2 = -radW; di2 <= radW; di2++) {
               if (di2 === 0) continue;
               const i2 = i + di2;
               if (i2 < 0 || i2 >= nx) continue;
-              const bt2 = baselineTop[j * nx + i2];
-              const bb2 = baselineBot[j * nx + i2];
-              let rs2 = -1;
-              if (bt2 >= 0) {
-                rs2 = Math.hypot(wyV, grid.originZ + (bt2 + 0.5) * grid.pitch - AXIS_Z);
-              }
-              if (bb2 < grid.nz) {
-                const rb2 = Math.hypot(wyV, grid.originZ + (bb2 + 0.5) * grid.pitch - AXIS_Z);
-                if (rb2 > rs2) rs2 = rb2;
+              const rc2 = j * nx + i2;
+              let rs2: number;
+              if (rs2Stamp[rc2] === stampVal) {
+                rs2 = rs2Arr[rc2];
+              } else {
+                const bt2 = baselineTop[rc2];
+                const bb2 = baselineBot[rc2];
+                rs2 = -1;
+                if (bt2 >= 0) {
+                  rs2 = Math.hypot(wyV, grid.originZ + (bt2 + 0.5) * grid.pitch - AXIS_Z);
+                }
+                if (bb2 < grid.nz) {
+                  const rb2 = Math.hypot(wyV, grid.originZ + (bb2 + 0.5) * grid.pitch - AXIS_Z);
+                  if (rb2 > rs2) rs2 = rb2;
+                }
+                rs2Arr[rc2] = rs2;
+                rs2Stamp[rc2] = stampVal;
               }
               if (rs2 >= 0 && rs2 < rStand) rStand = rs2;
             }
+            standArr[rc] = rStand;
+            standStamp[rc] = stampVal;
           }
           gouged = rStand < 0 || rStand - rhoV - grid.pitch * 0.5 > stepDownTol;
         }
