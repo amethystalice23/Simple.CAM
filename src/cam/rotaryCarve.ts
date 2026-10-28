@@ -33,10 +33,15 @@
  *   run G94 at the surface feed capped by ROTARY_FEED_DEG_MIN (the
  *   cylChamfer contract); the FINISHING rings coordinate A with Z and
  *   run G93 inverse-time;
- * - 'spiralWrap': X advances continuously while A turns — one helix per
- *   sweep, G93 inverse-time from the spiralCarve formula (path length
- *   at the cutting radius over feed, floored by the rotary ceiling) —
- *   the strategy Makera does NOT have.
+ * - 'spiralWrap': MULTI-COIL helix (Alice, 2026-10-28: "a result very
+ *   similar to vertical except each vertical twisted very slightly to
+ *   the side to form a spiral") — lead = stepOver per REVOLUTION, each
+ *   revolution sweeping the full circle across a one-step-over band of
+ *   columns, so the coils tile the axial span the way vertical's rings
+ *   do; the v1 single-revolution helix never touched most of the model.
+ *   Rough runs fold into ONE G93 move each (X and A advance linearly
+ *   together — the machine's own interpolation IS the coil); the finish
+ *   emits every grid sample (the chord lesson). G93 throughout.
  *
  * Entry safety (the pinned convention): travels happen at the safe
  * radius FIRST, the descent is a pure Z rapid at the destination, and
@@ -110,13 +115,6 @@ export interface RotaryCarveResult {
     blockedCells: number;
   };
 }
-
-/**
- * Radial word emission threshold, mm — surface steps smaller than this
- * ride the previous move (the post's 3-decimal rounding would swallow
- * them anyway); the same folding mercy relief.ts gives z and y.
- */
-const R_EMIT_TOL = 0.005;
 
 /** Minimum air gap between material bands for a shadow to count, mm —
  * coincident backside sheets of open shells merge below this. */
@@ -638,9 +636,61 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   const degPerMin = (r: number) =>
     Math.min((o.feed * 360) / (2 * Math.PI * r), ROTARY_FEED_DEG_MIN);
 
+  // ------------------------------------------------- spiralWrap shared core
+  // MULTI-COIL (Alice, 2026-10-28 — un-parking the 2026-10-26 redesign:
+  // "what i expected was a result very similar to vertical except each
+  // vertical twisted very slightly to the side to form a spiral"): the
+  // helix lead is stepOver per REVOLUTION, so each revolution sweeps the
+  // full circle across a one-step-over band of columns and the coils tile
+  // the axial span the way vertical's rings do. The v1 single-revolution
+  // helix ("a quiet, steeply angled curve… like string draped over it")
+  // crossed every θ row exactly once — it never touched most of the model.
+  // Sampling: one θ row per sample, X advancing stepOver/nTheta per row,
+  // both snapped to the grid (θ indexed to the sampling grid, the parked
+  // spec); a sample cuts on vertical's own ring predicate at its column.
+  const spiral = strategy === 'spiralWrap';
+  const nRev = spiral ? Math.max(1, Math.ceil(((nx - 1) * pitchX) / o.stepOver)) : 0;
+  const totalSamples = nRev * nTheta;
+  /** grid column of sample s (X = gx0 + col·pitchX) */
+  const sampleCol = spiral
+    ? (s: number) => Math.min(nx - 1, Math.round((s * o.stepOver) / (nTheta * pitchX)))
+    : () => 0;
+  /** maximal runs of consecutive samples with material below `level`
+   *  (null = the finishing predicate, comp < stock radius) — the same
+   *  predicate as vertical's ringRuns, walked along the helix */
+  const spiralRuns = spiral
+    ? (level: number | null): [number, number][] => {
+        const runs: [number, number][] = [];
+        for (let s = 0; s < totalSamples; s++) {
+          const c = comp[(s % nTheta) * nx + sampleCol(s)];
+          const cut = level === null ? c < o.radius - 1e-9 : c < level - 1e-9;
+          if (!cut) continue;
+          const last = runs.length - 1;
+          if (last >= 0 && runs[last][1] === s - 1) runs[last][1] = s;
+          else runs.push([s, s]);
+        }
+        return runs;
+      }
+    : () => [];
+  /** entry to a run: crown retract → A forward to the run's row → X over
+   *  → plunge. Crown-based transitions (the parked note): runs SKIP
+   *  standing stock — comp ≥ level means the plane sits INSIDE material
+   *  there, so the helix never rides the plane across a gap (a ride would
+   *  be a sideways plow); A only ever advances (the wrap rule). */
+  const enterSpiralRun = spiral
+    ? (s: number, targetR: number) => {
+        retract();
+        adv(s % nTheta);
+        moves.push({ words: { a }, feed: 0, rapid: true });
+        const i = sampleCol(s);
+        moves.push({ words: { x: gx0 + i * pitchX }, feed: 0, rapid: true });
+        plungeFromTo(z, o.axisZ + targetR);
+        col = i;
+      }
+    : () => {};
+
   // ------------------------------------------------------------ rough levels
   levels.forEach((rL, levelIndex) => {
-    const cutZ = o.axisZ + rL;
     wraps++;
     if (strategy === 'horizontal') {
       for (const j of thetaRows()) {
@@ -672,33 +722,36 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         }
       }
     } else {
-      // spiralWrap: one complete helix per level — X advances over the
-      // grid span while A turns a full wrap (the complete sweep, Makera's
-      // ladder in helix form; empty stretches ride in air, honest
-      // minutes). G93 inverse-time from the spiralCarve formula: path
-      // length at the cutting radius over the surface feed, floored by
-      // the rotary ceiling's minutes per wrap.
-      const span = (nx - 1) * pitchX;
-      // PARKED strategy (2026-10-26: single-revolution "draped string"
-      // redesign specced in PLAN.md) — still crown-based transitions
-      retract();
-      moves.push({ words: { a }, feed: 0, rapid: true });
-      moves.push({ words: { x: gx0 }, feed: 0, rapid: true });
-      plungeFromTo(z, cutZ);
-      const passMinutes = Math.max(
-        Math.hypot(2 * Math.PI * rL, span) / o.feed,
-        1 / MAX_ROTARY_RPM,
-      );
-      a += 360;
-      jc = 0;
-      moves.push({
-        words: { x: gx0 + span, a },
-        feed: 1 / passMinutes,
-        comment: `helix r${rL.toFixed(2)}`,
-      });
-      minutes += passMinutes;
-      rows++;
-      col = nx - 1;
+      // spiralWrap rough: the multi-coil helix at the plane, runs folded —
+      // X and A both advance linearly along a run, so ONE G93 move per run
+      // (modal Z at the plane) IS the helix segment: the machine's own
+      // linear interpolation traces the coil. The run may span many
+      // revolutions (a full cylinder level is a single run, the whole
+      // axial sweep); air stretches broke the runs and were skipped by
+      // the crown transitions above.
+      for (const [s0, s1] of spiralRuns(rL)) {
+        rows++;
+        enterSpiralRun(s0, rL);
+        if (s1 > s0) {
+          const x0 = gx0 + sampleCol(s0) * pitchX;
+          const x1 = gx0 + sampleCol(s1) * pitchX;
+          const da = (s1 - s0) * thetaStepDeg;
+          const arc = (da * Math.PI * rL) / 180;
+          const passMinutes = Math.max(
+            Math.hypot(x1 - x0, arc) / o.feed,
+            (s1 - s0) * (thetaStepDeg / 360) / MAX_ROTARY_RPM,
+          );
+          a += da;
+          jc = s1 % nTheta;
+          moves.push({
+            words: { x: x1, a },
+            feed: 1 / passMinutes,
+            comment: `helix r${rL.toFixed(2)}`,
+          });
+          minutes += passMinutes;
+          col = sampleCol(s1);
+        }
+      }
     }
   });
 
@@ -781,57 +834,39 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
       }
     }
   } else {
-    // spiralWrap finish: one helix over the surface — θ sweeps a full
-    // wrap while X walks the grid span, sampled once per grid column, Z
-    // following the compensated radius, G93 per folded segment. Leading
-    // and trailing AIR samples are trimmed (the pad corners carry
-    // +Infinity surfaces — plunging at one would emit a garbage Z);
-    // interior air gaps ride along, the helix is continuous by design.
-    /** nearest θ row for grid column i — the helix samples the whole
-     *  surface once as X crosses it */
-    const jj = (i: number) => Math.min(nTheta - 1, Math.round((i * (nTheta - 1)) / (nx - 1)));
-    const compAt = (i: number) => comp[jj(i) * nx + i];
-    let iFirst = 0;
-    while (iFirst < nx - 1 && !(compAt(iFirst) < o.radius - 1e-9)) iFirst++;
-    let iLast = nx - 1;
-    while (iLast > iFirst && !(compAt(iLast) < o.radius - 1e-9)) iLast--;
-    if (compAt(iFirst) < o.radius - 1e-9) {
-      // PARKED strategy (see the rough block note) — crown-based entry
-      retract();
-      adv(0);
-      moves.push({ words: { a }, feed: 0, rapid: true });
-      moves.push({ words: { x: gx0 + iFirst * pitchX }, feed: 0, rapid: true });
-      const rStart = compAt(iFirst);
+    // spiralWrap finish — MULTI-COIL: the helix follows the compensated
+    // surface per grid sample (X, A, Z coordinated → G93 inverse time, the
+    // post's rule; EVERY cell emits — the 2026-10-27 chord lesson: a folded
+    // chord between vertices dives through flank material). Runs skip
+    // standing stock with crown transitions; a run may span revolutions.
+    for (const [s0, s1] of spiralRuns(null)) {
+      rows++;
+      const i0 = sampleCol(s0);
+      const rStart = comp[(s0 % nTheta) * nx + i0];
       const plunge = o.radius - rStart;
       if (plunge > maxFinishPlunge) maxFinishPlunge = plunge;
-      plungeFromTo(z, o.axisZ + rStart);
-      // θ from the helix's own start, so the wrap closes exactly over the
-      // material span (air-trimmed at both ends)
-      const nCols = iLast - iFirst;
-      const thetaPerColDeg = nCols > 0 ? 360 / nCols : 360;
-      let lastR = rStart;
-      let px = gx0 + iFirst * pitchX;
+      enterSpiralRun(s0, rStart);
       let lastA = a;
-      for (let i = iFirst + 1; i <= iLast; i++) {
-        const c = compAt(i);
+      let lastR = rStart;
+      let px = gx0 + i0 * pitchX;
+      for (let s = s0 + 1; s <= s1; s++) {
+        const j = s % nTheta;
+        const i = sampleCol(s);
+        const c = comp[j * nx + i];
         const x = gx0 + i * pitchX;
-        a += thetaPerColDeg;
-        if (Math.abs(c - lastR) > R_EMIT_TOL) {
-          const arc = Math.abs(a - lastA) * (Math.PI / 180) * Math.max(c, lastR);
-          const passMinutes = Math.max(
-            Math.hypot(arc, x - px, c - lastR) / o.feed,
-            Math.abs(a - lastA) / 360 / MAX_ROTARY_RPM,
-          );
-          moves.push({ words: { x, a, z: o.axisZ + c }, feed: 1 / passMinutes });
-          minutes += passMinutes;
-          px = x;
-          lastA = a;
-          lastR = c;
-        }
+        adv(j); // one θ row per sample — A advances thetaStep, monotonic
+        const arc = Math.abs(a - lastA) * (Math.PI / 180) * Math.max(c, lastR);
+        const passMinutes = Math.max(
+          Math.hypot(arc, x - px, c - lastR) / o.feed,
+          Math.abs(a - lastA) / 360 / MAX_ROTARY_RPM,
+        );
+        moves.push({ words: { x, a, z: o.axisZ + c }, feed: 1 / passMinutes });
+        minutes += passMinutes;
+        lastA = a;
+        lastR = c;
+        px = x;
       }
-      jc = 0; // the wrap closed
-      rows++;
-      col = iLast;
+      col = sampleCol(s1);
     }
   }
 
