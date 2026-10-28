@@ -27,7 +27,8 @@ import type {
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { planeExtents, transformFn } from './featureOverlays';
-import { opEdgeSource, resolveFeature, sourcesFor } from './featureSources';
+import { opEdgeSource, resolveFeature, sourcesFor, splitSelection } from './featureSources';
+import { threadTargetsFromSelection } from './opTargets';
 import { ModelPanel } from './ModelPanel';
 import {
   artworkFromSvg,
@@ -45,6 +46,7 @@ import {
   newJobOp,
   OP_KINDS,
   prefillDepths,
+  prefillThreadMill,
   seedJobOpIds,
   type GeneratedOp,
 } from './jobGeneration';
@@ -377,6 +379,9 @@ export function App() {
           if (o.kind === 'thread') {
             return { ...o, nominalDiameter: diameter, pitch: metricPitch(diameter) ?? o.pitch };
           }
+          if (o.kind === 'threadMill') {
+            return { ...o, nominalDiameter: diameter, pitch: metricPitch(diameter) ?? o.pitch };
+          }
           return o;
         }),
       );
@@ -431,6 +436,19 @@ export function App() {
             ? o.featureIds.filter((x) => x !== id)
             : [...o.featureIds, id];
           let next = { ...o, featureIds } as JobOp;
+          if (o.featureIds.length === 0 && o.kind === 'threadMill') {
+            // the rim/wall/facet click resolves the whole thread spec: Ø,
+            // inside/outside, the rim depth — and the thread length when
+            // the click was the cylinder wall itself
+            next = prefillThreadMill(
+              next as Extract<JobOp, { kind: 'threadMill' }>,
+              sources,
+              id,
+              crown,
+              datumAngleBefore(ops, o.id),
+              stock,
+            );
+          }
           if (o.featureIds.length === 0 && p) {
             next = prefillDepths(next, featureDepthInFrame(o, p), crown);
           }
@@ -893,6 +911,74 @@ export function App() {
       return [...prev.slice(0, at), face, ...prev.slice(at)];
     });
     setExpandedOpId(face.id); // open it for tool and feed tweaks
+  };
+
+  /** thread-mill op: insert the PREP toolpath right before it (Alice,
+   * 2026-10-28 — "offering to insert a suitable facing cut: external is a
+   * profile, internal is a pocket"), prefilled from the thread's own
+   * geometry. External → a PROFILE turning the boss to the major Ø
+   * (clear-to-stock, allowance = nominalR − bossR, negative to turn
+   * down); internal → a POCKET opening the bore to the ISO minor d1
+   * (allowance = boreR − d1R, negative when the modeled bore is
+   * undersize). Makera's own prep on the GHM9 example was exactly this
+   * shape: a flat-endmill contour down to Ø14 before the 14ccw thread. */
+  const insertPrepOp = (op: JobOp) => {
+    if (op.kind !== 'threadMill') return;
+    const prepTool = tools.find((t) => t.type === 'flat') ?? tools[0];
+    if (!prepTool) return;
+    const datum = datumAngleBefore(ops, op.id);
+    const rotate =
+      datum !== 0 ? indexedPointRotation(datum, rotaryCalibrationOf(stock).axisZ) : undefined;
+    // the modeled bore/boss radius from the op's own selection
+    let radius: number | null = null;
+    for (const part of splitSelection(sources, op.featureIds)) {
+      const src = threadTargetsFromSelection(
+        part.source.features,
+        part.ids,
+        part.source.transform,
+        rotate,
+      );
+      if (src && src.targets.length > 0) {
+        radius = src.targets[0].radius;
+        break;
+      }
+    }
+    const d1R = (op.nominalDiameter - 1.0825 * op.pitch) / 2;
+    let prep: JobOp;
+    if (op.internal) {
+      const base = newJobOp('pocket', prepTool, stock.materialId, stock);
+      prep = {
+        ...base,
+        featureIds: op.featureIds,
+        selectionIs: 'floor',
+        startDepth: op.startDepth,
+        // the bore runs past the thread's floor — form clearance below
+        endDepth: round2(op.endDepth + Math.max(1, op.pitch * 2)),
+        // negative opens an undersized bore to d1; 0 = already at size
+        allowance: radius === null ? 0 : round2(radius - d1R),
+        cutBeyondStock: false,
+      } as JobOp;
+    } else {
+      const base = newJobOp('profile', prepTool, stock.materialId, stock);
+      prep = {
+        ...base,
+        featureIds: op.featureIds,
+        selectionIs: 'floor',
+        startDepth: 0, // turn from the crown down — air above the boss is free
+        endDepth: round2(op.endDepth + 1),
+        side: 'outside',
+        // negative turns the boss down to the major Ø; 0 = already at size
+        allowance: radius === null ? 0 : round2(op.nominalDiameter / 2 - radius),
+        clearToStock: true, // clear the waste out to the stock wall
+        tabs: null,
+      } as JobOp;
+    }
+    setOps((prev) => {
+      const idx = prev.findIndex((o) => o.id === op.id);
+      const at = idx < 0 ? prev.length : idx;
+      return [...prev.slice(0, at), prep, ...prev.slice(at)];
+    });
+    setExpandedOpId(prep.id); // open it for tool and feed tweaks
   };
 
   /** start/stop editing an op's feature selection (enables measure mode) */
@@ -1369,6 +1455,7 @@ export function App() {
               picking={featurePick}
               onFeaturePick={toggleFeaturePick}
               onInsertFacingOp={insertFacingOp}
+              onInsertPrepOp={insertPrepOp}
               onDeleteOp={(id) => {
                 const nextOps = ops.filter((o) => o.id !== id);
                 const nextGen = { ...generated };

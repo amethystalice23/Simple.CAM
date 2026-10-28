@@ -2397,3 +2397,62 @@ describe("'Finishing pass only' (Alice, 2026-10-26 — one explicit rough/finish
     expect(res.summary).not.toContain('step down');
   });
 });
+
+describe('thread mill generation (3-axis, the 2026-10-28 op)', () => {
+  // a slim M4×0.7 mill that comfortably fits the Ø4 fixture bore
+  const threadmillTool: Tool = {
+    id: 'tm1',
+    name: 'M4 thread mill',
+    type: 'threadmill',
+    diameter: 1.6,
+    pitch: 0.7,
+    shaftDiameter: 3.175,
+    fluteLength: 10,
+    spindleRpm: 10000,
+  };
+  const threadMillOp: Extract<JobOp, { kind: 'threadMill' }> = {
+    id: 'opT',
+    toolId: 'tm1',
+    featureIds: [holeCircleId],
+    kind: 'threadMill',
+    internal: true,
+    nominalDiameter: 4,
+    pitch: 0.7,
+    starts: 1,
+    tolerance: 0,
+    hand: 'right',
+    startDepth: 4, // the rim, 4mm below the crown
+    endDepth: 6, // the 2mm bore, rim to floor
+  };
+  const threadCtx: GenContext = { ...ctx, tools: [...ctx.tools, threadmillTool] };
+
+  it('threads the selected bore: bottom-up helix at Rc, no error', () => {
+    const res = generateJobOp(threadMillOp, threadCtx);
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(50);
+    expect(res.summary).toContain('internal');
+    expect(res.summary).toContain('right-hand');
+    // the radial entry lands on the helix radius: nominal/2 − toolR = 1.2
+    const entry = res.moves.find(
+      (m) => !m.rapid && m.words.x !== undefined && m.words.y !== undefined && m.words.z !== undefined,
+    );
+    expect(entry).toBeDefined();
+    expect(Math.hypot(entry!.words.x!, entry!.words.y!)).toBeCloseTo(1.2, 5);
+  });
+
+  it('refuses a non-threadmill tool with a clear message', () => {
+    const bad = generateJobOp({ ...threadMillOp, toolId: 't1' }, threadCtx);
+    expect(bad.error).toMatch(/needs a thread mill/);
+    expect(bad.moves).toHaveLength(0);
+  });
+
+  it('refuses a pitch the tool cannot mill', () => {
+    const bad = generateJobOp({ ...threadMillOp, pitch: 1 }, threadCtx);
+    expect(bad.error).toMatch(/pitch/);
+  });
+
+  it('refuses a zero-length thread', () => {
+    const bad = generateJobOp({ ...threadMillOp, endDepth: threadMillOp.startDepth }, threadCtx);
+    expect(bad.error).toMatch(/length must be positive/);
+  });
+});

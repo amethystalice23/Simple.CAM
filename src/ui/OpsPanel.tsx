@@ -50,6 +50,9 @@ interface Props {
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   /** thread: insert a prefilled Face cylinder op right before it */
   onInsertFacingOp: (op: JobOp) => void;
+  /** thread mill: insert the prefilled prep op right before it (external =
+   * a profile turning the boss, internal = a pocket opening the bore) */
+  onInsertPrepOp: (op: JobOp) => void;
   /** ops whose toolpath is hidden from the preview (the g-code keeps them) */
   hiddenOps: ReadonlySet<string>;
   onToggleVisible: (id: string) => void;
@@ -406,6 +409,8 @@ function ParamFields(props: {
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   /** thread: insert a prefilled Face cylinder op right before it */
   onInsertFacingOp: (op: JobOp) => void;
+  /** thread mill: insert the prefilled prep op right before it */
+  onInsertPrepOp: (op: JobOp) => void;
   floorLabel: string | null;
 }) {
   const { op, onChange } = props;
@@ -944,6 +949,70 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'threadMill':
+      return (
+        <>
+          <label className="field">
+            <span>Thread</span>
+            <select
+              value={op.internal ? 'internal' : 'external'}
+              onChange={(e) => upd({ internal: e.target.value === 'internal' } as Partial<JobOp>)}
+            >
+              <option value="internal">internal (bore)</option>
+              <option value="external">external (boss)</option>
+            </select>
+          </label>
+          <div className="floor-row">
+            <NumberField
+              label="Nominal Ø (mm)"
+              value={op.nominalDiameter}
+              min={0.1}
+              step={0.1}
+              // editing the size fills the standard coarse pitch (M6 → 1.0)
+              onCommit={(v) =>
+                upd({ nominalDiameter: v, pitch: metricPitch(v) ?? op.pitch } as Partial<JobOp>)
+              }
+            />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'targetDiameter' ? ' active' : ''}`}
+              title="Pick the nominal Ø from a circular feature — click, then select the circle"
+              onClick={() => props.onFeaturePick(op, 'targetDiameter')}
+            >
+              ⇩
+            </button>
+          </div>
+          <NumberField label="Pitch (mm)" value={op.pitch} min={0.1} step={0.05} onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)} />
+          <NumberField label="Starts" value={op.starts} min={1} step={1} onCommit={(v) => upd({ starts: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
+          <NumberField label="Tolerance (mm)" value={op.tolerance} min={0} step={0.05} onCommit={(v) => upd({ tolerance: Math.max(v, 0) } as Partial<JobOp>)} />
+          <label className="field">
+            <span>Hand</span>
+            <select value={op.hand} onChange={(e) => upd({ hand: e.target.value as 'right' | 'left' } as Partial<JobOp>)}>
+              <option value="right">right-hand</option>
+              <option value="left">left-hand</option>
+            </select>
+          </label>
+          <NumberField label="Start depth (mm)" value={op.startDepth} min={0} step={0.1} onCommit={(v) => upd({ startDepth: Math.max(v, 0) } as Partial<JobOp>)} />
+          <NumberField label="End depth (mm)" value={op.endDepth} min={0.1} step={0.1} onCommit={(v) => upd({ endDepth: v } as Partial<JobOp>)} />
+          <div className="buttons">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => props.onInsertPrepOp(op)}
+              title="Insert the prep toolpath right before this thread — external: a profile turning the boss to the major Ø (waste cleared to the stock wall); internal: a pocket opening the bore to the minor Ø. Its own tool and feeds, fully editable"
+            >
+              Add prep toolpath
+            </button>
+          </div>
+          <p className="hint">
+            single-profile thread mill, cut bottom-up in one helix per start (a full second
+            spring pass, like Makera's own 14×1 example). The fit is radial: tolerance shifts
+            the helix, the tool cuts its own full form. Internal retract picks itself — pull
+            aside and lift when the cleared bore has room, follow the spiral out when it
+            doesn't. Editing the nominal Ø fills the standard coarse pitch (M6 → 1.0, M4 → 0.7…)
+          </p>
+        </>
+      );
     case 'drill':
       return (
         <>
@@ -1352,6 +1421,7 @@ export function OpsPanel(props: Props) {
                     picking={props.picking}
                     onFeaturePick={props.onFeaturePick}
                     onInsertFacingOp={props.onInsertFacingOp}
+                    onInsertPrepOp={props.onInsertPrepOp}
                     floorLabel={
                       isDepthBearingJobOp(op) && op.floorFeatureId !== null
                         ? (props.featureLabels[op.floorFeatureId] ?? null)
