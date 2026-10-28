@@ -454,8 +454,14 @@ describe('3-class classification', () => {
     );
     expect(stats.removed).toBeGreaterThan(0);
     expect(stats.gougedVoxels).toBeGreaterThan(0); // the honest paint
-    // and a NEAR-INDEX angle (θ=89.9°) still rides the Y-line family —
-    // the 90°-indexed-ops path is byte-identical (≥0.999 gate)
+    // and a NEAR-INDEX angle (θ=89.9°) under ALLRAD (Alice's 2026-10-27
+    // leniency ruling): every cylinder-stock pose classifies radially —
+    // the old ±90 Y-line family was the pre-radial approximation, and her
+    // 2026-10-26 indexed-ops fix's GOAL (indexed passes read fine) is
+    // preserved by the lenient radial mark instead. A deep near-index
+    // plunge therefore reads FINE (the interior-min reads the plunge's
+    // own cleared column as cleared) — the honest safety layer for a
+    // buried tool is RED (shank), which allrad does not touch.
     const { grid: g2 } = rotaryStock(R);
     const stats2: CarveStats = emptyStats();
     carvePoses(
@@ -465,7 +471,8 @@ describe('3-class classification', () => {
       stats2,
       new Float32Array([1]),
     );
-    expect(stats2.gougedVoxels).toBeGreaterThan(0); // still paints deep
+    expect(stats2.removed).toBeGreaterThan(0);
+    expect(stats2.gougedVoxels).toBe(0); // lenient by design — red is the guard
   });
 
   it('(h) box-rotary stock keeps the world-axis approximation — radial mode needs an axisZ', () => {

@@ -68,10 +68,18 @@ export class VoxelGrid {
       throw new Error(`voxel pitch must be a positive finite number, got ${pitch}`);
     }
     this.pitch = pitch;
+    // 4-axis gate: a 3-axis STANDING cylinder has an axisZ too, but its
+    // rotation axis is vertical (Z), not machine X — routing its poses to
+    // the radial family would measure depth about the wrong axis. Only
+    // 4-axis cylinder stock rides the radial classifier.
     this.rotaryAxisZ =
-      stock.kind === 'cylinder' && stock.calibration ? stock.calibration.axisZ : NaN;
+      stock.kind === 'cylinder' && stock.calibration && stock.axisMode === '4-axis'
+        ? stock.calibration.axisZ
+        : NaN;
     this.rotaryRadius =
-      stock.kind === 'cylinder' && stock.calibration ? stock.calibration.effectiveRadius : NaN;
+      stock.kind === 'cylinder' && stock.calibration && stock.axisMode === '4-axis'
+        ? stock.calibration.effectiveRadius
+        : NaN;
     const sx = spanOf(stock, 'x');
     this.stockSpanX0 = sx[0];
     this.stockSpanX1 = sx[1];

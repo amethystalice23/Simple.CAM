@@ -146,12 +146,10 @@ const baselines = new WeakMap<
      *  RAPIDS MUST NOT LOWER the field (a rapid gouge stays a gouge when
      *  re-planned) — only flute removals re-min at move boundaries. */
     hmap: Float32Array;
-    /** per x-column: 1 = the mark is STALE (a move carved it since its last
-     *  seed-min) — the next radial read re-mins the live standing field into
-     *  the mark (min, so the carved floor persists through the second pass;
-     *  a live-only reseed would lose it, no reseed lets a move's own cells
-     *  justify themselves — the plunge-bar failure) */
-    hmapSeedColumn: Uint8Array;
+    /** per x-column: 1 = seeded ONCE (this grid's occupancy scan ran); the
+     *  mark never re-scans (re-minning after carving provably finds the same
+     *  or higher mins — removal never adds occupied cells) */
+    hmapSeeded: Uint8Array;
     serial: number;
   }
 >();
@@ -298,7 +296,7 @@ function carvePose(
       stampY: new Int32Array(grid.nx * grid.nz).fill(-1),
       journalY: [],
       hmap: new Float32Array(grid.nx * HMAP_PHI_BINS).fill(-1),
-      hmapSeedColumn: new Uint8Array(grid.nx),
+      hmapSeeded: new Uint8Array(grid.nx),
       serial: 0,
     };
     baselines.set(grid, base);
@@ -313,21 +311,12 @@ function carvePose(
       base.topY[l] = grid.columnTopY[l];
       base.botY[l] = grid.columnBottomY[l];
     }
-    // radial deep-water mark refresh: for every x-column the previous move
-    // carved (journal: deduped j·nx+i, so i = c mod nx), re-min the mark
-    // with the LIVE standing field (seedFromLive below) — min, never
-    // overwrite: a rebuild-from-live alone would raise the mark back to
-    // standing-only and lose the carved floor that makes a retrace's own
-    // channel the honest reference; no refresh at all lets one move's cells
-    // justify themself against the mark their own shallower cells just
-    // lowered (the plunge-bar failure: a 5mm rotary plunge painted 0).
-    // Unseeded columns stay unseeded (lazy seeding is still per-move
-    // honest: the seed runs at the first read of the NEXT move).
-    for (const c of base.journal) {
-      const i = c % grid.nx;
-      // staleness: the next move's first radial read re-mins this column
-      base.hmapSeedColumn[i] = 1;
-    }
+    // radial mark: NO boundary re-scan — the seed is ONCE per column (see
+    // the seededCol comment): re-minning after carving provably finds the
+    // same or higher mins (removal never adds occupied cells), so a
+    // stale-re-min is a no-op that dominated wall-clock (the knight at
+    // 24x main). The sweep-progress h2 window (pose-local) carries the
+    // move's own progress; the persisted mark carries the op's history.
     base.move = pose.moveIndex;
     base.journal.length = 0;
     base.journalY.length = 0;
@@ -342,44 +331,37 @@ function carvePose(
   const baselineBotY = base.botY;
   const stampY = base.stampY;
   const journalY = base.journalY;
-  // radial family: the per-(x,φ) pre-move standing-radius field (see the
-  // baselines doc) — lazily seeded per column, re-minned at move boundaries
+  // radial family: the per-(x,φ) standing-radius mark (see the baselines
+  // doc) — seeded ONCE per column per GRID (base.hmapSeeded): the occupancy
+  // scan's min includes interior cells (ρ≈pitch), which is the LENIENCY
+  // Alice ruled for (2026-10-27: "better to show less yellow than too
+  // much; red honesty matters") — the mark reads "this column was cleared
+  // through" almost everywhere a flute has been, and re-minning after
+  // carving can only find the same or HIGHER mins (removal never adds
+  // occupied cells), so boundary re-scans are provably no-ops and are
+  // DROPPED. That one-seed-per-column form is also the perf fix: the
+  // per-pose re-scan dominated wall-clock on big grids (her "way slower
+  // than it used to be" — the knight at 24× main).
   const hmap = base.hmap;
-  // the next radial read re-mins the live standing field into the mark
-  const seedCol = base.hmapSeedColumn;
-  const seededCol = new Uint8Array(grid.nx); // per-CALL: fresh columns this pose
-  // (the per-move staleness is base.hmapSeedColumn; a column seeded THIS
-  // pose needs no re-min — the mark was honest when this move began)
-  for (let i = 0; i < grid.nx; i++) {
-    if (!seedCol[i]) continue;
-    seededCol[i] = 1; // stale → treat as unseeded-fresh once, then clear
-    seedCol[i] = 0;
-  }
-  // POSE-LOCAL sweep-progress field (the hybrid): a per-call copy of the
-  // mark that THIS move's own flute removals lower live, so the
-  // x-window reads the sweep's own fresh floors. Freed with the call —
-  // never persisted, never read by the next move (which reads the
-  // boundary-refreshed mark). sweptThisMove marks the columns this move
-  // has carved (the window gates on it).
-  const h2 = new Float32Array(grid.nx * HMAP_PHI_BINS);
-  const seededH2 = new Uint8Array(grid.nx);
-  const sweptThisMove = new Uint8Array(grid.nx);
-  // the classification family. EXACT index angles keep the world-axis
-  // formulas (byte-identical paths: 3-axis ops, the plunge/skim fixtures,
-  // 0/180 vertical and ±90 Y-line indexed ops — committee #4's landing
-  // rule). A CONTINUOUS-rotary pose (neither axis component near a world
-  // axis) approaches the stock RADIALLY, so its honest depth measure is
-  // radial (see the branch below); box-rotary stock has no axisZ and keeps
-  // the old vertical approximation.
-  const nearVert = Math.abs(az) >= 0.999;
-  const nearHoriz = !nearVert && Math.abs(ay) >= 0.999;
-  const radialMode = !nearVert && !nearHoriz && Number.isFinite(grid.rotaryAxisZ);
+  const seededCol = base.hmapSeeded; // per-GRID: seeded once, never re-seeded
+  // the classification family. ALLRAD (Alice's 2026-10-27 leniency ruling
+  // + committee #6 M2's measured candidate): on 4-axis CYLINDER stock every
+  // pose classifies radially — the world-axis families were the pre-radial
+  // approximation, and their exact-angle "escape windows" at the θ
+  // 0/90/180/270 spokes painted every rotary job's residual yellow (her
+  // "thin horizontal bands on all three face ops", "specs at the bottom of
+  // the spirals", the knight's scattered specks) while the lenient radial
+  // mark reads the same cells fine. Box stock and 3-axis stock (including
+  // standing cylinders — grid.rotaryAxisZ is NaN for them) keep the
+  // world-axis families byte-identically: the coin raster, all box
+  // fixtures, the plunge/skim pins.
+  const radialMode = Number.isFinite(grid.rotaryAxisZ);
+  const nearHoriz = !radialMode && Math.abs(ay) >= 0.999;
   const approachNegY = ay < 0; // axis −Y → the tool comes from +Y
   const approachPosZ = az < 0; // axis −Z → from +Z; axis +Z (180°) → from below
   const stepDownTol = moveStepDown && moveStepDown[pose.moveIndex] > 0 ? moveStepDown[pose.moveIndex] : grid.pitch;
   // radial-branch constants (unused outside radialMode)
   const AXIS_Z = grid.rotaryAxisZ;
-  const flR = Math.max(Math.abs(b[0]), Math.abs(b[1])); // flute radius, spec bounds
   /** DEEP-WATER MARK (committee #6 — M4's design, validated by M2's bars):
    *  hmap[i·BINS + φbin] = the MIN radius ever FLUTE-carved at that (x,φ)
    *  — Infinity while nothing has been cut there (open sky above the
@@ -392,12 +374,12 @@ function carvePose(
    *  honest pre-move floor: standing material where nothing was carved,
    *  the carved floor where it was. RAPIDS DO NOT LOWER THE MARK (a
    *  rapid gouge stays a gouge when re-planned; the removed material
-   *  still counts as the prior surface). Seeded lazily per column;
-   *  re-seeded at move boundaries for the carved columns (the journal). */
+   *  still counts as the prior surface). Seeded ONCE per column per grid
+   *  (the occupancy scan's interior min IS the leniency Alice ruled for
+   *  2026-10-27: "better to show less yellow than too much" — a bin the
+   *  flute has cleared through reads as cleared, so a plunge reads fine
+   *  and only genuinely odd engagement paints). */
   const seedColumn = (i: number): void => {
-    // re-seed-min (a stale column): min the LIVE standing field into the
-    // EXISTING mark — never overwrite, so the carved floor persists through
-    // the second pass. A fresh column (never seeded) initializes first.
     if (!seededCol[i]) {
       seededCol[i] = 1;
       for (let p = 0; p < HMAP_PHI_BINS; p++) {
@@ -512,48 +494,17 @@ function carvePose(
           const pbV = Math.max(0, Math.min(HMAP_PHI_BINS - 1, Math.floor((phiV / 360) * HMAP_PHI_BINS)));
           const cellV = i * HMAP_PHI_BINS + pbV;
           if (!seededCol[i]) seedColumn(i);
-          let rStand = hmap[cellV];
-          // SWEEP-PROGRESS WINDOW (the hybrid, Alice's 2026-10-27 "flecks at
-          // the base of each level ≥2" call): the φ-resolved pre-move floor
-          // alone reads the flute disc's sub-floor edge cells (up to half a
-          // pitch + engagement rounding BELOW the previous level's floor) as
-          // over-tolerance — level-1's floor is a full increment above them.
-          // The old window over LIVE neighboring tops forgave exactly that:
-          // as the sweep progresses through x, cells behind it measure
-          // against the sweep's OWN fresh floor upstream. Window-min the
-          // mark's φ-bins over the ±fluteR x-neighbors THAT THIS MOVE
-          // already carved (the journal of THIS move — pose-local, never
-          // persisted), so the forgiveness applies only where the sweep has
-          // genuinely passed, and the groove fix (the pre-move floor)
-          // otherwise stands. The window cannot resurrect the old groove
-          // bug: it reads the move's own φ-resolved floors, not far-side
-          // virgin crowns.
-          const halfW = Math.max(1, Math.ceil(flR / grid.pitch));
-          for (let d = -halfW; d <= halfW; d++) {
-            if (d === 0) continue;
-            const i2 = i + d;
-            if (i2 < 0 || i2 >= nx) continue;
-            if (!sweptThisMove[i2]) continue; // only the move's own swept columns
-            const cell2 = i2 * HMAP_PHI_BINS + pbV; // same φ bin — the helix drifts, the bin is per-column
-            const r2 = h2[cell2];
-            if (r2 < rStand) rStand = r2;
-          }
+          const rStand = hmap[cellV];
+          // LENIENT by Alice's 2026-10-27 ruling ("yellow is just a warning
+          // … better to show less yellow than too much; red honesty
+          // matters"): the once-seeded interior-min mark reads every bin a
+          // flute has cleared THROUGH as cleared (a plunge's own column
+          // included), so a genuine radial plunge no longer paints yellow —
+          // the honest safety layer for a buried tool is RED (shank
+          // contact), which this classifier does not touch. The
+          // sweep-progress h2 window this replaced is in git history
+          // (257ca45) if her read of a real job ever wants it back.
           gouged = !(rStand < Infinity) || rStand - rhoV - grid.pitch * 0.5 > stepDownTol;
-          // NO per-removal lowering of the PERSISTED mark within the move
-          // (a cell classified against a mark its own move's shallower cells
-          // just lowered justifies itself — the plunge-bar failure). The
-          // move's own swept floors ride the POSE-LOCAL h2 snapshot instead.
-          if (!pose.rapid) {
-            if (!seededH2[i]) {
-              seededH2[i] = 1;
-              // seed this column's pose-local floors from the live mark…
-              for (let p = 0; p < HMAP_PHI_BINS; p++) h2[i * HMAP_PHI_BINS + p] = hmap[i * HMAP_PHI_BINS + p];
-            }
-            if (rhoV < h2[cellV]) {
-              h2[cellV] = rhoV;
-              sweptThisMove[i] = 1; // this column now carries the move's floor
-            }
-          }
         }
         if (gouged) {
           ghost[idx] = 1;
