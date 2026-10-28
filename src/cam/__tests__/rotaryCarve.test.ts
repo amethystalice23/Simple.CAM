@@ -283,22 +283,46 @@ describe('rotaryCarve', () => {
     }
   });
 
-  it('spiralWrap: one G93 helix per level, X advancing while A wraps', () => {
+  it('spiralWrap: MULTI-COIL — lead = stepOver/rev, runs folded, A monotonic, full span covered', () => {
+    // Alice, 2026-10-28 (un-parking the redesign): "a result very similar
+    // to vertical except each vertical twisted very slightly to the side
+    // to form a spiral" — the v1 single-revolution "draped string" never
+    // touched most of the model. Fixture: stock Ø24 (r12) × 30 span,
+    // stepOver 1 → nRev = 30 revolutions of coils.
     const res = rotaryCarve(opts(cylinder(5, 20), { strategy: 'spiralWrap' }));
     const helices = res.moves.filter((m) => (m.comment ?? '').startsWith('helix r'));
-    expect(helices.length).toBe(res.stats.levels);
+    // the cylinder is solid at every level: ONE run per level (the whole
+    // sweep folded into a single helix move), 3 rough levels
     expect(helices.length).toBe(3);
     let prevA = 0;
     for (const m of helices) {
       expect(m.feed).toBeGreaterThan(0);
-      expect(m.feed).toBeLessThanOrEqual(MAX_ROTARY_RPM + 1e-9); // inverse-time, ceiling-floored
-      expect(m.words.a! - prevA).toBeCloseTo(360, 6);
+      // G93 inverse-time, ceiling-floored: F·minutes(rev) ≤ MAX_ROTARY_RPM
+      expect(m.feed).toBeLessThanOrEqual(MAX_ROTARY_RPM + 1e-9);
+      // a full-cylinder level folds to ONE move spanning ~30 revolutions:
+      // Δa ≈ nRev·360 − one θ step, never the old single 360
+      expect(m.words.a! - prevA).toBeGreaterThan(2 * 360);
       prevA = m.words.a!;
-      expect(m.words.x! > 0).toBe(true);
     }
-    // the finishing helix exists too (X+A+Z coordinated, inverse-time)
-    const finish = res.moves.filter((m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined && m.words.z !== undefined);
-    expect(finish.length).toBeGreaterThan(0);
+    // A is monotonic across the whole op (the wrap rule): every a-worded
+    // move advances, none retreats
+    let last = -Infinity;
+    for (const m of res.moves) {
+      if (m.words.a === undefined) continue;
+      expect(m.words.a).toBeGreaterThanOrEqual(last - 1e-9);
+      last = m.words.a;
+    }
+    // the finish samples EVERY grid column (the coils tile the span): the
+    // finish moves' X words cover the full stock span −15…+15
+    const finish = res.moves.filter(
+      (m) => !m.rapid && m.words.a !== undefined && m.words.x !== undefined && m.words.z !== undefined,
+    );
+    expect(finish.length).toBeGreaterThan(100);
+    const xs = finish.map((m) => m.words.x!);
+    expect(Math.min(...xs)).toBeLessThanOrEqual(-14.9);
+    expect(Math.max(...xs)).toBeGreaterThanOrEqual(14.9);
+    // and every move coordinates A with X (and Z) → G93 inverse-time feeds
+    for (const m of finish) expect(m.feed).toBeGreaterThan(0);
   });
 
   it('blocked cells: the mushroom shaft under the disc is reported; a plain cone is not', () => {

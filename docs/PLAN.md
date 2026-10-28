@@ -482,13 +482,20 @@ existing spiral-family emission:
   and clamps at the ~6.6 RPM rotary ceiling (one full wrap ≈ 9s floor);
 - **spiral wrap**: X advancing continuously while A turns — the strategy
   Makera does NOT have, and our G93 machinery already cuts it.
-  **2026-10-26 field report (Alice): NOT YET THIS — v1 emits ONE helix
-  spanning the whole axial range in a SINGLE revolution ("a quiet,
-  steeply angled curve that wiggles end to end, like string draped over
-  it"), not tight coils. The redesign, specced not built: a MULTI-COIL
-  helix, lead = stepOver per revolution, θ indexed to the sampling grid,
-  so the coils tile the surface the way the horizontal rows do. Park
-  until horizontal + vertical are validated on hardware.**
+  **2026-10-28 BUILT (Alice, un-parking it: "really what i expected was a
+  result very similar to vertical except each vertical twisted very
+  slightly to the side to form a spiral"): MULTI-COIL — lead = stepOver
+  per REVOLUTION, each revolution sweeping the full circle across a
+  one-step-over band of columns, the coils tiling the axial span the way
+  vertical's rings do; θ indexed to the sampling grid (one grid row per
+  sample, X advancing stepOver/nTheta per row, both snapped). Rough runs
+  FOLD: X and A advance linearly together, so ONE G93 move per run IS the
+  coil (machine-interpolated); the finish emits every grid sample (the
+  chord lesson). Runs skip standing stock with crown transitions (comp ≥
+  level means the plane sits INSIDE material — riding would be a plow);
+  A only ever advances. Her Knight job: 14.2k moves, the full 0.6mm
+  carve 0 yellow / 0 red. The v1 single-revolution "draped string" never
+  touched most of the model — gone.**
 Blocked-cell reporting: cells the dexel cannot reach (radial shadow,
 normal ∥ X) are REPORTED ("these cells are unreachable: …"), never left
 as silent mystery material. Cylinder stock + on-axis model only.
