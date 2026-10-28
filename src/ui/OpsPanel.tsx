@@ -529,7 +529,7 @@ function ParamFields(props: {
           {!op.finishingOnly && (
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
-          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
           <label
             className="check"
             title="On: the clearing deliberately steps up to one step-over past the selected outline (and the stock edge) — a clean transition past drop-offs at the border. Off: the cut stops at the selected outline."
@@ -586,7 +586,7 @@ function ParamFields(props: {
           {!op.finishingOnly && (
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
-          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
           <p className="hint">
             the region is the cross-section at the slice depth — put it where the body is
             clean, away from rounded or chamfered tops (the violet plane in the viewport
