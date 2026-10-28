@@ -29,6 +29,7 @@ import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { planeExtents, transformFn } from './featureOverlays';
 import { opEdgeSource, resolveFeature, sourcesFor, splitSelection } from './featureSources';
 import { threadTargetsFromSelection } from './opTargets';
+import { internalMinorDiameter } from '../cam/threadMill';
 import { ModelPanel } from './ModelPanel';
 import {
   artworkFromSvg,
@@ -575,6 +576,41 @@ export function App() {
         ),
     };
   }, [ops, expandedOpId, geometry, stock]);
+
+  /** the expanded thread-mill op's intended AREA (2026-10-28): a ghost
+   * cylinder of the thread's cutting Ø spanning the start→end Z band at
+   * the resolved bore/boss, while that op's panel is open — live with the
+   * depth boxes and the selection/⇩ prefills. External shows the major Ø,
+   * internal the prep-bore d1 (the visible hole being threaded). Null
+   * until the selection resolves something. */
+  const threadPreview = useMemo(() => {
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!op || op.kind !== 'threadMill' || op.featureIds.length === 0) return null;
+    if (op.endDepth <= op.startDepth) return null;
+    const crown = stockTopZ(stock);
+    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    const rotate =
+      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    for (const part of splitSelection(sources, op.featureIds)) {
+      let src;
+      try {
+        src = threadTargetsFromSelection(part.source.features, part.ids, part.source.transform, rotate);
+      } catch {
+        continue; // a bad selection ghosts nothing — generation says why
+      }
+      if (src && src.targets.length > 0) {
+        return {
+          center: src.targets[0].center,
+          topZ: crown - op.startDepth,
+          bottomZ: crown - op.endDepth,
+          diameter: op.internal
+            ? internalMinorDiameter(op.nominalDiameter, op.pitch)
+            : op.nominalDiameter,
+        };
+      }
+    }
+    return null;
+  }, [ops, expandedOpId, sources, stock]);
 
   /** the expanded rotary op's intended result (edge-tracing §5): the
    * violet ghost cylinder about the stock axis — a spiral carve adds its
@@ -1348,6 +1384,7 @@ export function App() {
             viewDatum={viewDatum}
             pickKind={featurePick?.kind ?? null}
             facePreview={facePreview}
+            threadPreview={threadPreview}
             simChunks={showSim && carveSim.state.chunks.size > 0 ? carveSim.state.chunks : null}
             displayLayers={{
               stock: showStock,

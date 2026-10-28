@@ -1360,7 +1360,7 @@ export function OpsPanel(props: Props) {
                           {PICK_BANNERS[props.picking!.kind]}
                         </button>
                       ) : (
-                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave'].includes(op.kind) && (
+                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave', 'threadMill'].includes(op.kind) && (
                           <button
                             type="button"
                             className={editing ? '' : 'secondary'}
