@@ -1146,9 +1146,15 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            // Tail stock cut-over (Alice, 2026-10-28): OFF = hard clamp to
+            // the declared stock. ON = a DELIBERATE step-over of the border,
+            // not mere permission: the clamp footprint is the stock dilated
+            // by one step-over, so paths extend up to that perimeter and no
+            // further (if you allowed the step-over, you already vouched
+            // nothing of value sits within it).
             footprint: op.cutBeyondStock === false
               ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
-              : undefined,
+              : offsetOutward(stockFootprint(ctx.stock, ctx.datumAngle !== 0), op.stepOver),
           },
           tool,
         );
@@ -1160,7 +1166,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
             (op.finishingOnly ? ', finishing pass only' : '') +
-            (op.cutBeyondStock ? ', tail stock cut-over' : '') +
+            (op.cutBeyondStock ? ', step-over past the stock edge' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
@@ -1695,6 +1701,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            // Profile cut-over keeps the ORIGINAL meaning (Alice,
+            // 2026-10-28): a single-cut op, so ON = permission to keep the
+            // loop intact across obstacles (running out of stock to cut
+            // through mid-loop) — the loop is never clipped. OFF clamps the
+            // wall pass to the stock: open spans at the edge.
             footprint: op.cutBeyondStock === false
               ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
               : undefined,

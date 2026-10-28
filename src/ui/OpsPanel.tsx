@@ -530,13 +530,16 @@ function ParamFields(props: {
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
-          <label className="check" title="This allows the tool tip to pass outside of the defined stock's area">
+          <label
+            className="check"
+            title="On: clearing paths deliberately step over the stock border by up to one step-over — for a clean pass off the edge. Off: tool stays inside the declared stock."
+          >
             <input
               type="checkbox"
               checked={op.cutBeyondStock ?? false}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>allow tail stock cut-over</span>
+            <span>step over the stock edge</span>
           </label>
         </>
       );
@@ -985,13 +988,16 @@ function ParamFields(props: {
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
           <TabsFields op={op} upd={upd} />
-          <label className="check" title="This allows the tool tip to pass outside of the defined stock's area">
+          <label
+            className="check"
+            title="On: the wall pass may leave the declared stock so the loop stays intact where it runs out of material. Off: the pass clips to the stock edge — open spans at the border."
+          >
             <input
               type="checkbox"
               checked={op.cutBeyondStock ?? false}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>allow tail stock cut-over</span>
+            <span>keep the loop past the stock edge</span>
           </label>
         </>
       );

@@ -300,6 +300,107 @@ describe('generateJobOp', () => {
     expect(deepest).toBeCloseTo(-6, 5); // crown 0 − endDepth 6
   });
 
+  it('pocket cut-over ON is a deliberate step-over: paths stop one step-over past the stock', () => {
+    // 2mm tool (R = 1), stepOver 1: the 60×40 box stock's right edge is
+    // x = 60. A face pocket whose region straddles the edge (the plate's
+    // r=5 disc translated to span x 53…63): the clamp intersects the
+    // tool-CENTER loops directly, so cut-over ON (footprint dilated by
+    // one step-over → border x = 61) rides the center AT 61 — one
+    // step-over perimeter past the stock, Alice's rule. OFF clamps the
+    // center at the stock border itself (the tool edge overhangs by R —
+    // that is how a clean edge is milled).
+    const straddle: Extract<JobOp, { kind: 'pocket' }> = {
+      ...pocketOp,
+      selectionIs: 'floor',
+      startDepth: 0,
+      endDepth: 2,
+      stepOver: 1,
+      cutBeyondStock: true,
+    };
+    const geo = plateWithHole();
+    geo.translate(58, 0, -6);
+    const f = detectFeatures(geo);
+    const straddleCtx: GenContext = {
+      ...ctx,
+      geometry: geo,
+      features: f,
+      sources: sourcesFor(geo, f, identityTransform(), []),
+    };
+    // pocket the PLATE face (flatten — the outer boundary alone), which
+    // extends past the stock edge
+    const faceId = f.planes.find((p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z + 4) < 0.01)!.id;
+    const on = generateJobOp({ ...straddle, featureIds: [faceId], flatten: true }, straddleCtx);
+    expect(on.error).toBeNull();
+    expect(on.summary).toContain('step-over past the stock edge');
+    const cutsOn = on.moves.filter((m) => !m.rapid && m.words.x !== undefined);
+    expect(cutsOn.length).toBeGreaterThan(0);
+    const maxXOn = Math.max(...cutsOn.map((m) => m.words.x!));
+    // the boundary loop rides the DILATED border: exactly stock + stepOver
+    expect(maxXOn).toBeCloseTo(61, 1);
+
+    // OFF: hard clamp — the tool center rides the stock border itself
+    const off = generateJobOp(
+      { ...straddle, featureIds: [faceId], flatten: true, cutBeyondStock: false },
+      straddleCtx,
+    );
+    expect(off.error).toBeNull();
+    const cutsOff = off.moves.filter((m) => !m.rapid && m.words.x !== undefined);
+    expect(cutsOff.length).toBeGreaterThan(0);
+    const maxXOff = Math.max(...cutsOff.map((m) => m.words.x!));
+    expect(maxXOff).toBeCloseTo(60, 1);
+    expect(maxXOn).toBeGreaterThan(maxXOff);
+  });
+
+  it('profile cut-over ON keeps the loop intact past the stock edge (permission, not extension)', () => {
+    // the plate's outer rim (r = 5 at the origin) against boxStock whose
+    // Y spans 0…40: an online wall pass at y = −5 sits 5mm outside the
+    // stock — cut-over ON must still close the FULL loop (no span
+    // comments, a bare level comment), OFF clips it to open spans
+    const online: Extract<JobOp, { kind: 'profile' }> = {
+      id: 'prof-cut',
+      toolId: 't3',
+      featureIds: [],
+      kind: 'profile',
+      selectionIs: 'floor',
+      startDepth: 0,
+      endDepth: 2,
+      allowance: 0,
+      stepDown: 2,
+      finishingOnly: false,
+      side: 'online',
+      floorFeatureId: null,
+      clearToStock: false,
+      tabs: null,
+      cutBeyondStock: true,
+    };
+    const geo = plateWithHole();
+    geo.translate(0, 0, -6); // cap top at z −4, crown at 0
+    const f = detectFeatures(geo);
+    const rim = f.circles.find((c) => !c.inner && c.axis.z > 0.99)!.id; // outer rim
+    const edgeCtx: GenContext = {
+      ...ctx,
+      geometry: geo,
+      features: f,
+      sources: sourcesFor(geo, f, identityTransform(), []),
+    };
+    const on = generateJobOp({ ...online, featureIds: [rim] }, edgeCtx);
+    expect(on.error).toBeNull();
+    // the full closed loop: a bare level comment, never a span comment
+    expect(on.moves.some((m) => m.comment === 'level z-2.00')).toBe(true);
+    expect(on.moves.some((m) => m.comment?.includes('span '))).toBe(false);
+    // and it really does leave the stock: y reaches −5
+    const ys = on.moves.filter((m) => m.words.y !== undefined).map((m) => m.words.y!);
+    expect(Math.min(...ys)).toBeLessThanOrEqual(-5 + 1e-6);
+
+    const off = generateJobOp(
+      { ...online, featureIds: [rim], cutBeyondStock: false },
+      edgeCtx,
+    );
+    expect(off.error).toBeNull();
+    // clipped: open spans replace the closed loop
+    expect(off.moves.some((m) => m.comment?.includes('span '))).toBe(true);
+  });
+
   it('single-level finishing pass when start depth equals end depth', () => {
     const res = generateJobOp(
       { ...pocketOp, startDepth: 6, endDepth: 6, stepDown: 0.5 },

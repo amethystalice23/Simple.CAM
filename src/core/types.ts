@@ -504,9 +504,10 @@ export interface PocketOp {
   toolId: string;
   regions: Vec2[][];
   /**
-   * The declared stock's XY outer contours (CCW).
-   * Present: tool-center paths clamp inside the footprint (cut-over OFF).
-   * Absent: paths may leave the stock (cut-over ON / old saves).
+   * The XY clamp contours (CCW) — the stock footprint, or a DELIBERATELY
+   * DILATED one when cut-over is on. Present: tool-center paths clamp
+   * inside it; absent: paths run unclamped (profile's cut-over ON keeps
+   * its loops intact).
    */
   footprint?: Vec2[][];
   /** machine Z the pocket starts from (surface) */
@@ -572,8 +573,9 @@ export interface ProfileOp {
   contours: Vec2[][];
   /**
    * The declared stock's XY outer contours (CCW).
-   * Present: tool-center paths clamp inside the footprint (cut-over OFF).
-   * Absent: paths may leave the stock (cut-over ON / old saves).
+   * Present: the wall pass clamps to it — open spans at the stock edge
+   * (cut-over OFF). Absent: the loop runs unclipped, kept intact even
+   * past the stock (cut-over ON / old saves).
    */
   footprint?: Vec2[][];
   side: 'outside' | 'inside' | 'online';
@@ -836,10 +838,11 @@ export type JobOp =
        * inside. Off (default) preserves interior features. */
       flatten: boolean;
       /**
-       * Allow tail stock cut-over (Alice, 2026-10-28): off = clearing loops
-       * clamp inside the stock footprint; on = they may run off the stock
-       * edge. Absent = ON — pre-cut-over saves keep their unclamped
-       * behavior (normalizeJobOps pins it).
+       * Tail stock cut-over (Alice, 2026-10-28): off = clearing loops clamp
+       * inside the stock footprint; on = a DELIBERATE step-over of the
+       * border — paths extend up to one step-over perimeter around the
+       * declared stock and no further. Absent = ON (pre-cut-over saves
+       * keep their behavior; normalizeJobOps pins it).
        */
       cutBeyondStock?: boolean;
     })
@@ -898,10 +901,12 @@ export type JobOp =
        * threaded to profile2d at generation */
       tabs: ProfileTabs | null;
       /**
-       * Allow tail stock cut-over (Alice, 2026-10-28): off = wall passes
-       * clamp inside the stock footprint; on = they may run off the stock
-       * edge. Absent = ON — pre-cut-over saves keep their unclamped
-       * behavior (normalizeJobOps pins it).
+       * Tail stock cut-over (Alice, 2026-10-28): a single-cut op, so on
+       * keeps the ORIGINAL permission meaning — the loop stays intact
+       * even where it runs out of stock to cut through (never clipped);
+       * off clips the wall pass to the stock (open spans at the edge).
+       * Absent = ON (pre-cut-over saves keep their behavior;
+       * normalizeJobOps pins it).
        */
       cutBeyondStock?: boolean;
     })
