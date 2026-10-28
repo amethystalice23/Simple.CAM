@@ -13,8 +13,9 @@
  */
 
 import type { Move, ProfileOp, Tool, Vec2 } from '../core/types';
-import { offsetInward, offsetOutward } from './clipper';
+import { intersection, offsetInward, offsetOutward } from './clipper';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
+import { extractClipIntervals, pointAtArc } from './clipUtils';
 
 export interface ProfileResult {
   moves: Move[];
@@ -40,6 +41,18 @@ interface LoopGeo {
   cum: number[];
   perimeter: number;
   tabs: LoopTabs | null;
+  clip: [number, number][] | null;
+}
+
+/** Area of a closed polygon (signed). */
+function calculateArea(loop: Vec2[]): number {
+  let area = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const p = loop[i];
+    const q = loop[(i + 1) % loop.length];
+    area += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(area) / 2;
 }
 
 /** Arc-length table of a closed loop (last entry closes back to vertex 0). */
@@ -51,30 +64,6 @@ function arcTable(loop: Vec2[]): number[] {
     cum.push(cum[i] + Math.hypot(b.x - a.x, b.y - a.y));
   }
   return cum;
-}
-
-/** Point at arc length `s` along the loop, interpolated on its segment
- *  (`s` wraps past the perimeter; binary search — relief-slice loops run
- *  to tens of thousands of vertices). */
-function pointAtArc(loop: Vec2[], cum: number[], s: number): Vec2 {
-  const n = loop.length;
-  const P = cum[n];
-  let t = s % P;
-  if (t < 0) t += P;
-  let lo = 0;
-  let hi = n - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (cum[mid] <= t) lo = mid;
-    else hi = mid - 1;
-  }
-  const i = lo;
-  const segLen = cum[i + 1] - cum[i];
-  if (segLen <= 0) return loop[i];
-  const f = (t - cum[i]) / segLen;
-  const a = loop[i];
-  const b = loop[(i + 1) % n];
-  return { x: a.x + f * (b.x - a.x), y: a.y + f * (b.y - a.y) };
 }
 
 /** Loop points strictly after arc `s0` up to and including `s1` (which may
@@ -154,7 +143,24 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
         resolved = { n: Math.min(tabs.count, fits), half: tabs.length / 2 };
       }
     }
-    return { loop, cum, perimeter: cum[loop.length], tabs: resolved };
+
+    // Footprint clip intervals
+    let clip: [number, number][] | null = null;
+    if (op.footprint && op.footprint.length > 0) {
+      const clipped = intersection([loop], op.footprint);
+      // Entirely inside check: relative area difference < 1e-6
+      const isEntirelyInside = clipped.length === 1 &&
+        Math.abs(calculateArea(clipped[0]) - calculateArea(loop)) / calculateArea(loop) < 1e-6;
+
+      if (!isEntirelyInside) {
+        clip = extractClipIntervals(loop, cum, op.footprint);
+        if (clip.length === 0) {
+          warnings.push('loop lies outside the declared stock — nothing to cut there');
+        }
+      }
+    }
+
+    return { loop, cum, perimeter: cum[loop.length], tabs: resolved, clip };
   });
 
   const levels = zLadder(op.topZ, op.floorZ, op.stepDown);
@@ -167,17 +173,74 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   for (const levelZ of levels) {
     // below the tab top the groove is interrupted; at/above it the loop
     // cuts through the bridge material unbroken
-    const spanned = tabs !== null && !tabsNoOp && levelZ < tabTop - 1e-9;
+    const spannedByTabs = tabs !== null && !tabsNoOp && levelZ < tabTop - 1e-9;
 
     for (const geo of geos) {
-      const loop: Vec2[] = geo.tabs ? geo.loop : rotateToNearest(geo.loop, cur);
-      const start: Vec2 = loop[0];
-      const levelTag = `level z${levelZ.toFixed(2)}`;
+      const { loop, cum, perimeter: P, tabs: loopTabs, clip } = geo;
 
-      if (!(spanned && geo.tabs)) {
-        // travel first at the machine's existing height (after a tool change
-        // that is the swap macro's high park — never a diagonal descent
-        // across the table), then descend at the destination
+      // Combine clip intervals and tab intervals
+      let activeIntervals: [number, number][] = [];
+      if (clip === null) {
+        // No clipping or entirely inside
+        if (spannedByTabs && loopTabs) {
+          const t = loopTabs;
+          const spanLen = P / t.n - 2 * t.half;
+          for (let k = 0; k < t.n; k++) {
+            const s0 = ((k + 0.5) * P) / t.n + t.half;
+            const s1 = s0 + spanLen;
+            activeIntervals.push([s0, s1]);
+          }
+        } else {
+          activeIntervals = [[0, P]];
+        }
+      } else {
+        // Clipped to footprint. A tab span may WRAP past the perimeter (its
+        // s1 legitimately exceeds P) — split wrapping intervals at P before
+        // intersecting, or the wrapped overlap with the stock clip silently
+        // drops (raw max/min sees numbers, not arcs).
+        const splitWrap = (list: [number, number][]): [number, number][] => {
+          const out: [number, number][] = [];
+          for (const [s0, s1] of list) {
+            if (s1 > P) out.push([s0, P], [0, s1 - P]);
+            else out.push([s0, s1]);
+          }
+          return out;
+        };
+        const clips = splitWrap(clip);
+        if (spannedByTabs && loopTabs) {
+          const t = loopTabs;
+          const spanLen = P / t.n - 2 * t.half;
+          const tabIntervals: [number, number][] = [];
+          for (let k = 0; k < t.n; k++) {
+            const s0 = ((k + 0.5) * P) / t.n + t.half;
+            tabIntervals.push([s0, s0 + spanLen]);
+          }
+          const tabSpans = splitWrap(tabIntervals);
+          // Intersect clip intervals with tab intervals
+          for (const [cs0, cs1] of clips) {
+            for (const [ts0, ts1] of tabSpans) {
+              const s0 = Math.max(cs0, ts0);
+              const s1 = Math.min(cs1, ts1);
+              if (s1 > s0 + 1e-9) activeIntervals.push([s0, s1]);
+            }
+          }
+        } else {
+          activeIntervals = clips;
+        }
+      }
+
+      if (activeIntervals.length === 0) {
+        continue;
+      }
+
+      if (activeIntervals.length === 1 && activeIntervals[0][0] <= 1e-9 && activeIntervals[0][1] >= P - 1e-9) {
+        // Unclipped loop: today's emission. A tabbed loop keeps its CANONICAL
+        // start (tab arc positions must not drift between levels); only
+        // untabbed loops rotate to the nearest vertex to save travel.
+        const rotatedLoop = geo.tabs ? loop : rotateToNearest(loop, cur);
+        const start: Vec2 = rotatedLoop[0];
+        const levelTag = `level z${levelZ.toFixed(2)}`;
+
         moves.push({
           words: { x: start.x, y: start.y },
           feed: 0,
@@ -194,8 +257,8 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
         minutes += APPROACH_CLEARANCE / op.plungeFeed;
 
         let prev = start;
-        for (let i = 1; i <= loop.length; i++) {
-          const p = loop[i % loop.length];
+        for (let i = 1; i <= rotatedLoop.length; i++) {
+          const p = rotatedLoop[i % rotatedLoop.length];
           moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
           minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
           prev = p;
@@ -204,23 +267,17 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         cur = start;
       } else {
-        // deep level: cut only the spans between the tabs. Tab k covers the
-        // arc interval around (k + ½)·P/n — the half-interval offset keeps
-        // a tab from ever straddling the loop start — so span k runs from
-        // that tab's trailing edge to the next tab's leading edge.
-        const { cum, perimeter: P } = geo;
-        const t = geo.tabs;
-        const spanLen = P / t.n - 2 * t.half;
-        for (let k = 0; k < t.n; k++) {
-          const s0 = ((k + 0.5) * P) / t.n + t.half;
-          const s1 = s0 + spanLen;
+        // Cut as open spans
+        const levelTag = `level z${levelZ.toFixed(2)}`;
+        for (let i = 0; i < activeIntervals.length; i++) {
+          const [s0, s1] = activeIntervals[i];
           const from = pointAtArc(loop, cum, s0);
 
           moves.push({
             words: { x: from.x, y: from.y },
             feed: 0,
             rapid: true,
-            comment: `${levelTag} span ${k + 1}/${t.n}`,
+            comment: `${levelTag} span ${i + 1}/${activeIntervals.length}`,
           });
           moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
           moves.push({ words: { z: levelZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });

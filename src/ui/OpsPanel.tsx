@@ -530,6 +530,14 @@ function ParamFields(props: {
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <label className="check" title="This allows the tool tip to pass outside of the defined stock's area">
+            <input
+              type="checkbox"
+              checked={op.cutBeyondStock ?? false}
+              onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>allow tail stock cut-over</span>
+          </label>
         </>
       );
     case 'slicePocket':
@@ -977,6 +985,14 @@ function ParamFields(props: {
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
           <TabsFields op={op} upd={upd} />
+          <label className="check" title="This allows the tool tip to pass outside of the defined stock's area">
+            <input
+              type="checkbox"
+              checked={op.cutBeyondStock ?? false}
+              onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>allow tail stock cut-over</span>
+          </label>
         </>
       );
     case 'chamfer':

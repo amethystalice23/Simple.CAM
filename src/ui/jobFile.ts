@@ -129,6 +129,13 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
           return { ...normalized, clearToStock: false } as JobOp;
         }
       }
+      // pre-cut-over pocket/profile saves: absent = true (preserve unclamped behavior)
+      if (normalized.kind === 'pocket' || normalized.kind === 'profile') {
+        const rawCut = (normalized as { cutBeyondStock?: unknown }).cutBeyondStock;
+        if (rawCut !== true && rawCut !== false) {
+          return { ...normalized, cutBeyondStock: true } as JobOp;
+        }
+      }
       return normalized;
     }
     if (op.kind === 'chamfer') {

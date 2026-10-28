@@ -503,6 +503,12 @@ export interface PocketOp {
   id: string;
   toolId: string;
   regions: Vec2[][];
+  /**
+   * The declared stock's XY outer contours (CCW).
+   * Present: tool-center paths clamp inside the footprint (cut-over OFF).
+   * Absent: paths may leave the stock (cut-over ON / old saves).
+   */
+  footprint?: Vec2[][];
   /** machine Z the pocket starts from (surface) */
   topZ: number;
   /**
@@ -564,6 +570,12 @@ export interface ProfileOp {
   id: string;
   toolId: string;
   contours: Vec2[][];
+  /**
+   * The declared stock's XY outer contours (CCW).
+   * Present: tool-center paths clamp inside the footprint (cut-over OFF).
+   * Absent: paths may leave the stock (cut-over ON / old saves).
+   */
+  footprint?: Vec2[][];
   side: 'outside' | 'inside' | 'online';
   /** wall allowance left outside the tool path, mm */
   allowance: number;
@@ -823,6 +835,13 @@ export type JobOp =
        * tool passes over indents/holes and mills off anything proud
        * inside. Off (default) preserves interior features. */
       flatten: boolean;
+      /**
+       * Allow tail stock cut-over (Alice, 2026-10-28): off = clearing loops
+       * clamp inside the stock footprint; on = they may run off the stock
+       * edge. Absent = ON — pre-cut-over saves keep their unclamped
+       * behavior (normalizeJobOps pins it).
+       */
+      cutBeyondStock?: boolean;
     })
   | (JobOpBase & {
       kind: 'drill';
@@ -878,6 +897,13 @@ export type JobOp =
       /** cut-out tabs (hold-down bridges) — null = cut through unbroken;
        * threaded to profile2d at generation */
       tabs: ProfileTabs | null;
+      /**
+       * Allow tail stock cut-over (Alice, 2026-10-28): off = wall passes
+       * clamp inside the stock footprint; on = they may run off the stock
+       * edge. Absent = ON — pre-cut-over saves keep their unclamped
+       * behavior (normalizeJobOps pins it).
+       */
+      cutBeyondStock?: boolean;
     })
   | (JobOpBase & {
       kind: 'slicePocket';

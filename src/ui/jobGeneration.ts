@@ -243,6 +243,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepOver: defaultStepOver(tool),
         floorFeatureId: null,
         flatten: false, // islands preserved unless asked
+        cutBeyondStock: false,
       };
     case 'slicePocket':
       return {
@@ -1145,6 +1146,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            footprint: op.cutBeyondStock === false
+              ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
+              : undefined,
           },
           tool,
         );
@@ -1156,6 +1160,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
             (op.finishingOnly ? ', finishing pass only' : '') +
+            (op.cutBeyondStock ? ', tail stock cut-over' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
@@ -1690,6 +1695,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            footprint: op.cutBeyondStock === false
+              ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
+              : undefined,
           },
           tool,
         );
@@ -1719,6 +1727,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
             (op.finishingOnly ? ', finishing pass only' : '') +
+            (op.cutBeyondStock ? ', tail stock cut-over' : '') +
             `, ~${minutes.toFixed(1)} min` +
             wasteNote +
             (res.warnings.length > 0 ? ` · ${res.warnings.join(' · ')}` : ''),

@@ -134,6 +134,35 @@ describe('pocket2d', () => {
     expect([...approachZ].map(Number).sort((a, b) => a - b)).toEqual([-1.167, -0.333, 0.5]);
   });
 
+  it('clamps clearing loops to the stock footprint (tail-stock cut-over off)', () => {
+    // 10mm region, footprint a 3.5mm square over its corner: every
+    // tool-center move stays inside the stock, the boundary loop rides the
+    // footprint edge, and the run fits fewer inset passes than the free one
+    // (free: insets 1..4 → 4 passes; clamped: the 3.5mm crop → 3)
+    const region = [square(0, 10)];
+    const footprint = [square(0, 3.5)];
+    const clamped = pocket2d(op({ regions: region, footprint }), tool);
+    const free = pocket2d(op({ regions: region }), tool);
+    expect(clamped.passes).toBeGreaterThan(0);
+    expect(clamped.passes).toBeLessThan(free.passes);
+    const xy = clamped.moves.filter((m) => !m.rapid && m.words.x !== undefined);
+    expect(xy.length).toBeGreaterThan(0);
+    for (const m of xy) {
+      expect(m.words.x!).toBeGreaterThanOrEqual(-1e-6);
+      expect(m.words.x!).toBeLessThanOrEqual(3.5 + 1e-6);
+      expect(m.words.y!).toBeGreaterThanOrEqual(-1e-6);
+      expect(m.words.y!).toBeLessThanOrEqual(3.5 + 1e-6);
+    }
+    // the clamped boundary loop rides the footprint edge (x = 3.5)
+    expect(xy.some((m) => Math.abs(m.words.x! - 3.5) < 1e-9)).toBe(true);
+  });
+
+  it('a region entirely outside the stock does not fit — honest throw', () => {
+    expect(() =>
+      pocket2d(op({ regions: [square(20, 10)], footprint: [square(0, 6)] }), tool),
+    ).toThrowError(/does not fit the pocket region/);
+  });
+
   it('clears around islands (holes grow as passes shrink)', () => {
     const outer = square(0, 10);
     const hole: Vec2[] = [...square(3, 4)].reverse(); // CW hole

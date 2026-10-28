@@ -6,7 +6,7 @@
  */
 
 import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
-import { offsetInward } from './clipper';
+import { intersection, offsetInward } from './clipper';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
 export interface PocketResult {
@@ -50,8 +50,12 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   const levels = zLadder(op.topZ, op.floorZ, op.stepDown);
 
   // sanity: the tool must fit in the region at all
-  if (offsetInward(op.regions, toolR).length === 0) {
-    throw new Error(`tool Ø${tool.diameter} does not fit the pocket region`);
+  const effectiveRegions = (op.footprint && op.footprint.length > 0)
+    ? intersection(op.regions, op.footprint)
+    : op.regions;
+
+  if (offsetInward(effectiveRegions, toolR).length === 0) {
+    throw new Error(`tool Ø${tool.diameter} does not fit the pocket region${op.footprint?.length ? ' (clamped to stock)' : ''}`);
   }
 
   const safeZ = op.travelZ ?? op.topZ + op.safeClearance;
@@ -73,7 +77,10 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     // passes from the wall inward in stepOver increments, until the region
     // vanishes under the offset
     for (let k = 0; k < 10000; k++) {
-      const loops = offsetInward(op.regions, toolR + k * op.stepOver);
+      let loops = offsetInward(op.regions, toolR + k * op.stepOver);
+      if (op.footprint && op.footprint.length > 0) {
+        loops = intersection(loops, op.footprint);
+      }
       if (loops.length === 0) break;
 
       for (const raw of loops) {

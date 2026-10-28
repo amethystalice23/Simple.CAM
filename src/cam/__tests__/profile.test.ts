@@ -153,6 +153,106 @@ describe('profile2d', () => {
     expect(approaches.map((m) => m.words.z)).toEqual([0.5 - 2.5 / 3, 0.5 - (2 * 2.5) / 3, -2.5 + 0.5]);
   });
 
+  it('clamps the wall pass to the stock footprint: open spans, centers inside', () => {
+    // the online 10mm loop (P = 40, corners at arcs 0/10/20/30) against a
+    // [−2, 7.03]² footprint: the bottom edge is inside for x < 7.03 →
+    // samples at 0.05mm give the interval [0, 7.00]; the left edge (arc
+    // s ↔ y = 40 − s) is inside for y < 7.03 → [33.00, 40.00]; the top and
+    // right edges lie outside. The 0.03 overhang keeps interval ends OFF
+    // the sample grid, so the ends are exactly the last inside samples.
+    const footprint = [square(-2, 9.03)];
+    const res = profile2d(op({ side: 'online', topZ: 0, floorZ: -1, stepDown: 2, footprint }), tool);
+    // two open spans, never a closed loop (no bare level-comment travel)
+    const spanComments = res.moves.filter((m) => m.comment?.includes('span '));
+    expect(spanComments).toHaveLength(2);
+    expect(spanComments.some((m) => m.comment?.includes('span 1/2'))).toBe(true);
+    expect(spanComments.some((m) => m.comment?.includes('span 2/2'))).toBe(true);
+    expect(res.moves.some((m) => m.comment === 'level z-1.00')).toBe(false);
+    // the bottom span cuts (0,0) → (7,0): the stock edge, one sample short
+    expect(res.moves.some((m) => !m.rapid && m.words.x !== undefined && Math.abs(m.words.x - 7) < 1e-9)).toBe(true);
+    // the left span starts at (0, 7) — its positioning rapid carries it
+    expect(res.moves.some((m) => m.words.x !== undefined && Math.abs(m.words.x) < 1e-9 && Math.abs(m.words.y! - 7) < 1e-9)).toBe(true);
+    // every XY stays inside the declared stock
+    const xy = res.moves.filter((m) => m.words.x !== undefined);
+    expect(xy.length).toBeGreaterThan(0);
+    for (const m of xy) {
+      expect(m.words.x!).toBeGreaterThanOrEqual(-2 - 1e-6);
+      expect(m.words.x!).toBeLessThanOrEqual(7.03 + 1e-6);
+      expect(m.words.y!).toBeGreaterThanOrEqual(-2 - 1e-6);
+      expect(m.words.y!).toBeLessThanOrEqual(7.03 + 1e-6);
+    }
+  });
+
+  it('a loop entirely inside the footprint runs byte-identical to unclamped', () => {
+    const inside = profile2d(op({ side: 'online', footprint: [square(-2, 20)] }), tool);
+    const bare = profile2d(op({ side: 'online' }), tool);
+    expect(inside.moves).toEqual(bare.moves);
+    expect(inside.warnings).toEqual(bare.warnings);
+    expect(inside.passes).toBe(bare.passes);
+  });
+
+  it('a loop wholly outside the stock warns once and cuts nothing for it', () => {
+    // two loops — one at the origin, one 30mm away — over two levels: the
+    // far loop's warning fires ONCE (per loop, never per level) and it
+    // contributes no XY moves at all
+    const res = profile2d(
+      op({
+        side: 'online',
+        contours: [square(0, 10), square(30, 5)],
+        footprint: [square(-2, 20)],
+        topZ: 0,
+        floorZ: -1,
+        stepDown: 0.6, // n = ceil(1/0.6) = 2 levels
+      }),
+      tool,
+    );
+    expect(res.warnings.filter((w) => w.includes('outside the declared stock'))).toHaveLength(1);
+    const xy = res.moves.filter((m) => m.words.x !== undefined);
+    expect(xy.length).toBeGreaterThan(0);
+    for (const m of xy) {
+      expect(m.words.x!).toBeGreaterThanOrEqual(-2 - 1e-6);
+      expect(m.words.x!).toBeLessThanOrEqual(18 + 1e-6);
+      expect(m.words.y!).toBeGreaterThanOrEqual(-2 - 1e-6);
+      expect(m.words.y!).toBeLessThanOrEqual(18 + 1e-6);
+    }
+  });
+
+  it('tabs and the stock clamp intersect: neither tab arcs nor outside arcs cut', () => {
+    // online 10mm loop, P = 40, four 2mm tabs centered at arcs 5/15/25/35
+    // (tab arcs [4,6], [14,16], [24,26], [34,36]) → cut spans [6,14],
+    // [16,24], [26,34], [36,44] — the last WRAPS past P. Stock clip
+    // intervals [0, 7.00] and [33.00, 40.00] (the 7.03-edge fixture).
+    // Deep-level intersection, wrap-split: [6,7], [0,4], [33,34], [36,40].
+    const footprint = [square(-2, 9.03)];
+    const res = profile2d(
+      op({
+        side: 'online',
+        footprint,
+        tabs: { count: 4, height: 0.5, length: 2 },
+        topZ: 0,
+        floorZ: -2,
+        stepDown: 1, // levels −1 (above the tab top −1.5: spans clipped to
+        // the stock only) and −2 (deep: clipped to stock ∩ tab spans)
+      }),
+      tool,
+    );
+    // above the tab top: the stock clip alone → 2 spans
+    const shallow = res.moves.filter((m) => m.comment?.includes('z-1.00 span'));
+    expect(shallow).toHaveLength(2);
+    // deep level: the wrapped tab span must still intersect — 4 spans
+    const deep = res.moves.filter((m) => m.comment?.includes('z-2.00 span'));
+    expect(deep).toHaveLength(4);
+    // the bottom-edge cuts end at the TAB edge (x = 4 and x = 6) and the
+    // STOCK edge (x = 7) — never between them, never beyond
+    const bottomX = res.moves
+      .filter((m) => !m.rapid && m.words.x !== undefined && Math.abs(m.words.y!) < 1e-9)
+      .map((m) => m.words.x!);
+    // pointAtArc interpolates, so the endpoints carry ulp-level error
+    expect(bottomX.some((x) => Math.abs(x - 4) < 1e-6)).toBe(true);
+    expect(bottomX.some((x) => Math.abs(x - 7) < 1e-6)).toBe(true);
+    expect(bottomX.some((x) => x > 7.03 + 1e-6)).toBe(false);
+  });
+
   it('rejects an inside profile the tool cannot fit', () => {
     expect(() => profile2d(op({ side: 'inside', contours: [square(0, 1)] }), tool)).toThrowError(
       /leaves no path/,
