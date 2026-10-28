@@ -61,6 +61,7 @@ import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
 import { CalibrationDialog } from './CalibrationDialog';
 import { SimulateDialog } from './SimulateDialog';
+import { simStepDownFor } from '../sim/stepDown';
 import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
@@ -756,22 +757,9 @@ export function App() {
     for (const o of ops) {
       if (hiddenOps.has(o.id)) continue;
       const len = generated[o.id]?.moves.length ?? 0;
-      const sd =
-        o.kind === 'drill'
-          ? o.peckDepth
-          : o.kind === 'threadMill'
-            ? // A thread is cut FULL AXIAL DEPTH in one helical pass — by
-              // tool design (the cutting length spans the whole thread), not
-              // a step-down choice. The radial Step over ladders the FORM
-              // radially, never the axial depth, so the honest intended
-              // removal per move is the full thread length and the
-              // classification reads it (her 2026-10-28 report: a yellow
-              // wall at any step over, because the moves were being read
-              // against the 0.61mm form depth).
-              o.endDepth - o.startDepth
-            : 'stepDown' in o
-              ? (o.stepDown as number | undefined) ?? 0
-              : 0;
+      // the per-op intended DOC (drill peck / full thread length / the
+      // chamfer's own flank reach / the op's step-down) — simStepDownFor
+      const sd = simStepDownFor(o);
       for (let k = 0; k < len; k++) perMove[mi + k] = sd;
       mi += len;
     }

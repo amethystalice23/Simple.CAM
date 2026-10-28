@@ -611,7 +611,7 @@ removal/contact is classified per voxel — FINE (flute removal within the
 owning op's step-down of the pre-move standing surface: unmarked), YELLOW
 GOUGE (removed deeper than the step-down, or by any RAPID — "removed,
 just not intentionally"), RED COLLISION (shank contact on standing
-material: not removed, move counted once). Per-move step-down threads
+material: not removed, move counted once). Per-move step-down threads The per-op intended DOC (simStepDownFor, src/sim/stepDown.ts): drill → peckDepth; threadMill → the FULL THREAD LENGTH (one axial pass by tool design); **chamfer → op.depth, the flank reach** — the cone engages its full geometry by design (dressing an edge IS a full-flank cut, no ladder), so reading it against the grid-pitch fallback painted every honest flank voxel yellow (her 2026-10-28 report: "a whole bunch of yellow warnings around the chamfer loops"; both her chamfers went 3374/356 yellow → 0 with the rule); deeper-than-own-geometry removals (a genuine plow) still warn, and rapid removals always do.
 from the owning op (App.simStepDown; drill → peckDepth; 0 = one pitch).
 The shank solid uses the tool's REAL fields — `shaftDiameter` (default
 cutter Ø), `fluteLength`, `overallLength` (default +30) — so red contact
