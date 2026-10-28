@@ -982,14 +982,35 @@ function ParamFields(props: {
               ⇩
             </button>
           </div>
-          <NumberField label="Pitch (mm)" value={op.pitch} min={0.1} step={0.05} onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)} />
+          <NumberField
+            label="Pitch (mm)"
+            value={op.pitch}
+            min={0.1}
+            step={0.05}
+            // a fixed-pitch thread mill LOCKS the pitch (Alice, 2026-10-28)
+            disabled={props.tool?.pitch !== undefined}
+            title={
+              props.tool?.pitch !== undefined
+                ? `Locked to the ${props.tool.name} — these bits mill one fixed pitch`
+                : 'Free-form pitch (this mill declares none) — defaults to the ISO coarse pitch for the Ø'
+            }
+            onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)}
+          />
           <NumberField label="Starts" value={op.starts} min={1} step={1} onCommit={(v) => upd({ starts: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
           <NumberField label="Tolerance (mm)" value={op.tolerance} min={0} step={0.05} onCommit={(v) => upd({ tolerance: Math.max(v, 0) } as Partial<JobOp>)} />
+          <NumberField
+            label="Step over (mm)"
+            value={op.stepOver}
+            min={0}
+            step={0.05}
+            title="Radial depth per pass — 0 (default) cuts the full form in one pass, the Makera cycle; set ~0.2–0.3 for tougher materials to work the form down in even radial steps"
+            onCommit={(v) => upd({ stepOver: Math.max(v, 0) } as Partial<JobOp>)}
+          />
           <label className="field">
-            <span>Hand</span>
-            <select value={op.hand} onChange={(e) => upd({ hand: e.target.value as 'right' | 'left' } as Partial<JobOp>)}>
-              <option value="right">right-hand</option>
-              <option value="left">left-hand</option>
+            <span>Rotation</span>
+            <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' } as Partial<JobOp>)}>
+              <option value="cw">cw</option>
+              <option value="ccw">ccw</option>
             </select>
           </label>
           <NumberField label="Start depth (mm)" value={op.startDepth} min={0} step={0.1} onCommit={(v) => upd({ startDepth: Math.max(v, 0) } as Partial<JobOp>)} />
@@ -1007,9 +1028,11 @@ function ParamFields(props: {
           <p className="hint">
             single-profile thread mill, cut bottom-up in one helix per start (a full second
             spring pass, like Makera's own 14×1 example). The fit is radial: tolerance shifts
-            the helix, the tool cuts its own full form. Internal retract picks itself — pull
-            aside and lift when the cleared bore has room, follow the spiral out when it
-            doesn't. Editing the nominal Ø fills the standard coarse pitch (M6 → 1.0, M4 → 0.7…)
+            the helix, the tool cuts its own full form. Step over 0 = the full form in one
+            pass; set it to split the form into radial steps for tough materials. Internal
+            retract picks itself — pull aside and lift when the cleared bore has room, follow
+            the spiral out when it doesn't. Rotation names the thread like the 4-axis Thread
+            op does (their 14ccw example is a ccw thread)
           </p>
         </>
       );
@@ -1226,6 +1249,20 @@ export function OpsPanel(props: Props) {
         case 'rasterContour':
           next = { ...next, stepOver } as JobOp;
           break;
+        case 'threadMill': {
+          // the pitch follows the tool (Alice, 2026-10-28: "as these
+          // threadmill bits have fixed pitch you should set and disable
+          // the pitch when one is selected"): a fixed-pitch mill locks it
+          // (and the panel disables the box); a pitch-less kind (a
+          // single-tooth mill) keeps it editable but still defaults —
+          // to the ISO coarse pitch for the nominal Ø
+          const tm = next as Extract<JobOp, { kind: 'threadMill' }>;
+          next = {
+            ...tm,
+            pitch: t.pitch ?? metricPitch(tm.nominalDiameter) ?? tm.pitch,
+          };
+          break;
+        }
         case 'profile':
         case 'cylChamfer':
         case 'spiralCarve':

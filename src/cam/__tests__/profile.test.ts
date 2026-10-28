@@ -268,7 +268,13 @@ describe('profile2d', () => {
   it('rejects invalid parameters', () => {
     expect(() => profile2d(op({ floorZ: 1 }), tool)).toThrowError(/above topZ/);
     expect(() => profile2d(op({ contours: [] }), tool)).toThrowError(/contour/);
-    expect(() => profile2d(op({ allowance: -1 }), tool)).toThrowError(/allowance/);
+    // negative wall stock is FORCED to 0, not rejected (Alice, 2026-10-28:
+    // the thread-mill prep insert computed −0.01 from a boss a hair over
+    // nominal and the throw killed the prep op — "dont warn that it must
+    // be >= 0, force it to be"): a −1 allowance cuts the same path as 0
+    expect(profile2d(op({ allowance: -1 }), tool).moves).toEqual(
+      profile2d(op({ allowance: 0 }), tool).moves,
+    );
   });
 
   it('pins the no-tabs output to the pre-tabs baseline', () => {

@@ -2420,7 +2420,8 @@ describe('thread mill generation (3-axis, the 2026-10-28 op)', () => {
     pitch: 0.7,
     starts: 1,
     tolerance: 0,
-    hand: 'right',
+    rotation: 'cw',
+    stepOver: 0,
     startDepth: 4, // the rim, 4mm below the crown
     endDepth: 6, // the 2mm bore, rim to floor
   };
@@ -2431,7 +2432,7 @@ describe('thread mill generation (3-axis, the 2026-10-28 op)', () => {
     expect(res.error).toBeNull();
     expect(res.moves.length).toBeGreaterThan(50);
     expect(res.summary).toContain('internal');
-    expect(res.summary).toContain('right-hand');
+    expect(res.summary).toContain('cw');
     // the radial entry lands on the helix radius: nominal/2 − toolR = 1.2
     const entry = res.moves.find(
       (m) => !m.rapid && m.words.x !== undefined && m.words.y !== undefined && m.words.z !== undefined,

@@ -91,7 +91,11 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   // top == floor is legal: a single level at the floor (finishing pass)
   if (op.floorZ > op.topZ) throw new Error('floorZ must not be above topZ');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
-  if (op.allowance < 0) throw new Error('allowance must be >= 0');
+  // FORCED, not warned (Alice, 2026-10-28 — the thread-mill prep insert
+  // computed nominalR − bossR = −0.01 from a boss 0.01 over nominal and
+  // the throw killed the whole prep op): negative wall stock is a
+  // turn-to-size request the profile already satisfies — clamp to 0
+  op = { ...op, allowance: Math.max(0, op.allowance) };
   if (op.tabs) {
     if (!Number.isInteger(op.tabs.count) || op.tabs.count < 1) {
       throw new Error('tab count must be an integer >= 1');

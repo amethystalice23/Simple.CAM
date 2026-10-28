@@ -334,7 +334,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
     case 'threadMill': {
       // no stock/Ø defaults to read yet — the selection prefills the
       // thread (Ø/pitch/length from the rim or wall facet); M6-coarse
-      // is a sane editable starting point for a hand-set op
+      // is a sane editable starting point for a hand-set op. Pitch
+      // locks to the tool the moment one is picked (changeTool).
       const nominal = 6;
       return {
         ...base,
@@ -344,7 +345,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         pitch: metricPitch(nominal) ?? 1,
         starts: 1,
         tolerance: 0,
-        hand: 'right',
+        rotation: 'cw',
+        stepOver: 0, // one full-form pass; > 0 ladders for tough materials
         startDepth: 0,
         endDepth: 5,
       };
@@ -2010,7 +2012,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               pitch: op.pitch,
               starts: op.starts,
               tolerance: op.tolerance,
-              hand: op.hand,
+              rotation: op.rotation,
+              stepOver: op.stepOver,
               feed,
               plungeFeed,
               safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
@@ -2025,7 +2028,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               `${resolved.length} ${op.internal ? 'internal' : 'external'} thread(s), ` +
               `${op.nominalDiameter}×${op.pitch}` +
               (op.starts > 1 ? ` (${op.starts} starts)` : '') +
-              ` ${op.hand}-hand, ${depth.toFixed(1)}mm, ${res.passes} pass(es) incl. spring` +
+              ` ${op.rotation}, ${depth.toFixed(1)}mm, ${res.passes} pass(es) incl. spring` +
               (op.tolerance > 0 ? `, ${op.tolerance}mm fit` : '') +
               (res.notes.length > 0 ? ` · ${res.notes.join(' · ')}` : '') +
               `, ~${res.estimatedMinutes.toFixed(1)} min`,

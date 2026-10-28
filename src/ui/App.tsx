@@ -753,9 +753,18 @@ export function App() {
       const sd =
         o.kind === 'drill'
           ? o.peckDepth
-          : 'stepDown' in o
-            ? (o.stepDown as number | undefined) ?? 0
-            : 0;
+          : o.kind === 'threadMill'
+            ? // the thread's own radial DOC: the ladder's step, or the full
+              // form depth in the default single pass — the honest intended
+              // removal, so a correct thread doesn't paint yellow against
+              // the kernel's grid-pitch default (her 2026-10-28 report:
+              // "a sea of yellow")
+              o.stepOver > 0
+              ? o.stepOver
+              : (o.internal ? 0.5413 : 0.6134) * o.pitch
+            : 'stepDown' in o
+              ? (o.stepDown as number | undefined) ?? 0
+              : 0;
       for (let k = 0; k < len; k++) perMove[mi + k] = sd;
       mi += len;
     }
@@ -990,8 +999,11 @@ export function App() {
         startDepth: op.startDepth,
         // the bore runs past the thread's floor — form clearance below
         endDepth: round2(op.endDepth + Math.max(1, op.pitch * 2)),
-        // negative opens an undersized bore to d1; 0 = already at size
-        allowance: radius === null ? 0 : round2(radius - d1R),
+        // negative opens an undersized bore to d1; 0 = already at size.
+        // FORCED ≥ 0 (Alice, 2026-10-28: her prep came out at −0.01 from a
+        // boss a hair over nominal and the profile errored — "dont warn
+        // that it must be >= 0, force it to be")
+        allowance: Math.max(0, radius === null ? 0 : round2(radius - d1R)),
         cutBeyondStock: false,
       } as JobOp;
     } else {
@@ -1003,8 +1015,8 @@ export function App() {
         startDepth: 0, // turn from the crown down — air above the boss is free
         endDepth: round2(op.endDepth + 1),
         side: 'outside',
-        // negative turns the boss down to the major Ø; 0 = already at size
-        allowance: radius === null ? 0 : round2(op.nominalDiameter / 2 - radius),
+        // same force: a boss at/under nominal is already at size (0)
+        allowance: Math.max(0, radius === null ? 0 : round2(op.nominalDiameter / 2 - radius)),
         clearToStock: true, // clear the waste out to the stock wall
         tabs: null,
       } as JobOp;

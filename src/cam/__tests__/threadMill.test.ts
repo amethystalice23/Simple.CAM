@@ -29,7 +29,8 @@ const op: ThreadMillOp = {
   pitch: 1,
   starts: 1,
   tolerance: 0,
-  hand: 'left',
+  rotation: 'ccw', // their "14ccw" — a ccw thread (left-hand)
+  stepOver: 0, // one full-form pass, the Makera cycle
   feed: 100,
   plungeFeed: 100,
   safeClearance: 3,
@@ -50,7 +51,7 @@ const multiOp: ThreadMillOp = {
   nominalDiameter: 10,
   pitch: 1.5,
   starts: 2,
-  hand: 'right',
+  rotation: 'cw',
   targets: [{ center: { x: 0, y: 0 }, internal: false, topZ: 0, depth: 6 }],
 };
 
@@ -154,8 +155,8 @@ describe('threadMill — the mill-tested ground truth, replayed', () => {
     expect(res.notes.some((n) => n.includes('8.76'))).toBe(true);
   });
 
-  it('right-hand flips the ascent to CCW (angle increasing)', () => {
-    const res = threadMill({ ...op, hand: 'right' }, mill);
+  it("'cw' (right-hand) flips the ascent to CCW (angle increasing)", () => {
+    const res = threadMill({ ...op, rotation: 'cw' }, mill);
     const pass = pass1(res);
     const helix = pass.g1s.filter(isHelix);
     expect(helix[0].words.y!).toBeGreaterThan(0);
@@ -278,7 +279,7 @@ describe('threadMill — the Makera 09-11 gouge, pinned out', () => {
         expect(y).toBeDefined();
         const r = Math.hypot(x!, y!); // fixtures center the target at the origin
         if (internal) expect(r).toBeLessThan(1e-6);
-        else expect(r).toBeCloseTo(clearR, 6);
+        else expect(r).toBeGreaterThanOrEqual(clearR - 1e-6);
         descents++;
       }
       if (w.x !== undefined) x = w.x;
@@ -291,6 +292,12 @@ describe('threadMill — the Makera 09-11 gouge, pinned out', () => {
   it('external: every descent starts outside the crest at the approach point', () => {
     assertDescentsFromClear(threadMill(op, mill), false, pathRadius(14, 1, 4.75 / 2, 0, false));
     assertDescentsFromClear(threadMill(multiOp, mill15), false, pathRadius(10, 1.5, 4.75 / 2, 0, false)); // multi-start + spring
+    // the radial ladder's outer levels approach FARTHER out — ≥, not ≈
+    assertDescentsFromClear(
+      threadMill({ ...op, stepOver: 0.2 }, mill),
+      false,
+      pathRadius(14, 1, 4.75 / 2, 0, false),
+    );
   });
 
   it('internal: every descent starts at the bore center', () => {
@@ -300,6 +307,54 @@ describe('threadMill — the Makera 09-11 gouge, pinned out', () => {
       true,
       pathRadius(6, 1, 4.75 / 2, 0, true),
     ); // aside retract
+  });
+});
+
+describe('threadMill — the radial ladder (Alice, 2026-10-28: tough materials)', () => {
+  it('stepOver 0 cuts the full form once per cycle (the Makera default)', () => {
+    const res = threadMill(op, mill);
+    expect(res.moves.filter((m) => m.comment === 'radial entry')).toHaveLength(2); // pass + spring
+    expect(res.notes.some((n) => n.includes('radial ladder'))).toBe(false);
+  });
+
+  it('stepOver > 0 ladders the form: even levels, deepest last, spring at the final', () => {
+    // span = (d − d3)/2 = 0.6134mm; stepOver 0.2 → ceil = 4 levels
+    const res = threadMill({ ...op, stepOver: 0.2 }, mill);
+    const Rc = pathRadius(14, 1, 4.75 / 2, 0, false);
+    const span = 14 / 2 - (Rc - 4.75 / 2); // crest to groove bottom
+
+    expect(res.notes.some((n) => n.includes('radial ladder: 4 levels'))).toBe(true);
+
+    // 4 levels + the spring repeating the final = 5 radial entries
+    const entries = res.moves.filter((m) => m.comment === 'radial entry');
+    expect(entries).toHaveLength(5);
+    // the FIRST entry sits at level 1: Rc + 3/4 of the span (shallow)
+    expect(entries[0].words.x!).toBeCloseTo(Rc + (3 * span) / 4, 4);
+    // the LAST (spring) at the finished radius exactly
+    expect(entries[4].words.x!).toBeCloseTo(Rc, 6);
+    // each intermediate level steps in by span/4
+    expect(entries[1].words.x!).toBeCloseTo(Rc + span / 2, 4);
+    expect(entries[2].words.x!).toBeCloseTo(Rc + span / 4, 4);
+    expect(entries[3].words.x!).toBeCloseTo(Rc, 6);
+
+    // passes: 3 intermediate levels once + the final level twice
+    expect(res.passes).toBe(5);
+  });
+
+  it('internal ladders outward from the prep bore, final at the major', () => {
+    // span = (d − d1)/2 = 0.5413mm; stepOver 0.2 → 3 levels
+    const res = threadMill({ ...internalOp, stepOver: 0.2 }, mill);
+    const Rc = pathRadius(6, 1, 4.75 / 2, 0, true);
+    expect(res.notes.some((n) => n.includes('radial ladder: 3 levels'))).toBe(true);
+    const entries = res.moves.filter((m) => m.comment === 'radial entry');
+    expect(entries).toHaveLength(4); // 3 levels + spring
+    // the entries approach from the bore CENTER: the first radial leg is
+    // the level's Rc — level 1 sits 1/3 span inside the final
+    const span = Rc + 4.75 / 2 - internalMinorDiameter(6, 1) / 2;
+    const dist = (m: Move) => Math.hypot(m.words.x!, m.words.y!);
+    expect(dist(entries[0])).toBeCloseTo(Rc - (2 * span) / 3, 4);
+    expect(dist(entries[2])).toBeCloseTo(Rc, 6);
+    expect(dist(entries[3])).toBeCloseTo(Rc, 6); // the spring at the final
   });
 });
 
@@ -326,6 +381,20 @@ describe('threadMill — validation', () => {
     const stub = { ...mill, fluteLength: 2 };
     expect(() => threadMill(internalOp, stub)).toThrow(/cannot enter the Ø4\.92 bore deeper than the 2mm flute/);
     expect(() => threadMill(internalOp, stub)).toThrow(/use a longer mill/);
+  });
+
+  it('rejects an external thread whose shank overhangs the crest (her M6-mill test)', () => {
+    // Alice's 2026-10-28 report, the sim's sea of red: the Ø4.8 M6 mill
+    // (shank Ø6, flute 2mm) on a 10mm M14×1 thread — above the flute the
+    // shank's inner edge sweeps 5.79 < the 7mm crest radius, plowing the
+    // thread teeth standing there. Loud error, not a silent red sim.
+    const fatShank = { ...mill, diameter: 4.8, fluteLength: 2 };
+    expect(() => threadMill(op, fatShank)).toThrow(/Ø6 shank overhangs the Ø14 thread/);
+    expect(() => threadMill(op, fatShank)).toThrow(/use a longer-fluted mill/);
+    // a thread within the flute is fine with the same tool
+    expect(() =>
+      threadMill({ ...op, targets: [{ ...target, depth: 1 }] }, fatShank),
+    ).not.toThrow();
   });
 
   it('rejects degenerate op fields', () => {

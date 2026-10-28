@@ -364,8 +364,11 @@ export interface ThreadOp {
  * (nominal − 1.2268·p). FIT IS RADIAL — a full-form tool cuts its own
  * profile, so tolerance shifts the helix radius, never the depth:
  * external Rc = d3/2 + toolR − tolerance, internal Rc = nominal/2 −
- * toolR + tolerance (tips at the major). Hand: right-hand = the groove
- * descends with CCW rotation (helix CW-descending viewed from above).
+ * toolR + tolerance (tips at the major). Rotation: cw/ccw thread
+ * perception, the rotary Thread op's naming (Alice, 2026-10-28: "dont
+ * use right-hand/left-hand as the other thread tool uses cw/ccw, so be
+ * consistant") — 'ccw' = left-hand (the 14ccw example: helix
+ * CW-viewed-from-above ascending), 'cw' = right-hand.
  */
 export interface ThreadMillOp {
   kind: 'threadMill';
@@ -381,8 +384,16 @@ export interface ThreadMillOp {
   /** fit allowance, mm: internal + (deeper grooves → looser nut),
    * external − (thinner teeth → looser bolt) */
   tolerance: number;
-  /** right-hand = the helix descends clockwise viewed from above */
-  hand: 'right' | 'left';
+  /** cw/ccw thread perception — 'ccw' = left-hand, 'cw' = right-hand */
+  rotation: 'cw' | 'ccw';
+  /**
+   * RADIAL depth per pass, mm — 0 (default) = the full form in ONE
+   * radial pass (the Makera cycle); > 0 ladders the form in even
+   * steps for tough materials (Alice, 2026-10-28): each level runs
+   * the full thread bottom-up, the last at the final radius, the
+   * spring repeating the final level.
+   */
+  stepOver: number;
   /** XY cut feed, mm/min (G94) */
   feed: number;
   /** plunge feed for the approach descent, mm/min (G94) */
@@ -862,8 +873,12 @@ export type JobOp =
       /** fit allowance, mm: internal + (deeper grooves → looser nut),
        *  external − (thinner teeth → looser bolt); 0 = form-true */
       tolerance: number;
-      /** right-hand = the helix descends clockwise viewed from above */
-      hand: 'right' | 'left';
+      /** cw/ccw thread perception — 'ccw' = left-hand, 'cw' = right-hand
+       *  (the rotary Thread op's naming, Alice 2026-10-28) */
+      rotation: 'cw' | 'ccw';
+      /** RADIAL depth per pass, mm — 0 = one full-form pass (the Makera
+       *  cycle); > 0 ladders the form for tough materials */
+      stepOver: number;
       /** thread start, mm below the stock crown (0 = the rim/face) */
       startDepth: number;
       /** thread floor, mm below the stock crown (length = end − start) */

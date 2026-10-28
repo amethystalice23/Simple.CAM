@@ -34,9 +34,15 @@
  *
  * Multi-start: lead = starts × pitch; start k enters at bottomZ + k·pitch
  * (groove k is groove 0 shifted up one pitch), each an ascending helix of
- * the same depth. Hand: left-hand ascends CW viewed from above (angle
- * decreasing — their "ccw" M14, pinned by the same file); right-hand
- * ascends CCW.
+ * the same depth. Rotation is the cw/ccw thread perception (the rotary
+ * Thread op's naming, Alice 2026-10-28): 'ccw' = left-hand, ascends CW
+ * viewed from above (their "14ccw" M14); 'cw' = right-hand, ascends CCW.
+ *
+ * RADIAL LADDER (Alice, 2026-10-28: "for tougher materials you might
+ * need to do this in multiple passes"): stepOver 0 = the full form in
+ * ONE radial pass (the Makera cycle); > 0 splits the radial span into
+ * even levels — each a full bottom-up thread at its own radius, deepest
+ * last, the spring repeating the final level.
  */
 
 import type { Move, ThreadMillOp, ThreadMillTarget, Tool, Vec2 } from '../core/types';
@@ -128,7 +134,10 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
 
   const toolR = tool.diameter / 2;
   const lead = op.starts * op.pitch;
-  const dir = op.hand === 'left' ? -1 : 1; // left ascends CW from above (their ccw M14)
+  // cw/ccw thread perception, the rotary Thread op's naming (Alice,
+  // 2026-10-28): 'ccw' = left-hand = ascends CW viewed from above (their
+  // 14ccw M14 example); 'cw' = right-hand = ascends CCW
+  const dir = op.rotation === 'ccw' ? -1 : 1;
   // travel clearance between targets: the highest mouth + clearance
   const travelZ = Math.max(...op.targets.map((t) => t.topZ)) + op.safeClearance;
 
@@ -172,7 +181,6 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           `(${target.internal ? `internal, at the Ø${op.nominalDiameter} major` : `external, at the d3 minor Ø${externalMinorDiameter(op.nominalDiameter, op.pitch).toFixed(3)}`})`,
       );
     }
-    const segs = segmentsPerRevolution(Rc);
     const bottomZ = target.topZ - target.depth;
     const asideRoom = boreR - toolR; // 0 external — irrelevant there
     // tight fit: less than a margin of aside room → follow the spiral out
@@ -185,15 +193,54 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           : `Ø${(boreR * 2).toFixed(2)} bore → aside retract (${asideRoom.toFixed(2)}mm of room)`,
       );
     } else {
+      // the shank must clear the crest when the thread out-runs the
+      // flute: above the flute the (usually fatter) shank sweeps the
+      // orbit, and its inner edge crossing the crest circle means it
+      // plows the thread teeth standing there (her M6-mill test: Ø6
+      // shank, 2mm flute, 10mm of thread — the sim's sea of red was
+      // exactly this, honestly)
+      const shank = tool.shaftDiameter ?? tool.diameter;
+      const flute = tool.fluteLength ?? Infinity;
+      if (target.depth > flute - op.pitch && Rc - shank / 2 < op.nominalDiameter / 2) {
+        throw new Error(
+          `the Ø${shank} shank overhangs the Ø${op.nominalDiameter} thread — above the ` +
+            `${tool.fluteLength}mm flute its inner edge sweeps ` +
+            `${(op.nominalDiameter / 2 - (Rc - shank / 2)).toFixed(2)}mm inside the crest, and this ` +
+            `thread is ${target.depth}mm; use a longer-fluted mill (or split the thread into Z bands)`,
+        );
+      }
       notes.push(`Ø${op.nominalDiameter} boss → lifts straight off — nothing stands above an external thread`);
     }
+
+    // RADIAL LADDER (Alice, 2026-10-28: "for tougher materials you might
+    // need to do this in multiple passes"): stepOver 0 = the full form in
+    // ONE radial pass (the Makera cycle); > 0 splits the radial span
+    // into even levels, each a full bottom-up thread at its own radius,
+    // deepest LAST, the spring repeating the final level. The span runs
+    // tip-first: from the start surface (the crest external / the prep
+    // bore d1 internal) to the final groove bottom.
+    const startTip = target.internal
+      ? internalMinorDiameter(op.nominalDiameter, op.pitch) / 2
+      : op.nominalDiameter / 2;
+    const finalTip = target.internal ? Rc + toolR : Rc - toolR;
+    const span = Math.abs(finalTip - startTip);
+    const levelCount = op.stepOver > 0 ? Math.max(1, Math.ceil(span / op.stepOver)) : 1;
+    if (levelCount > 1) {
+      notes.push(
+        `radial ladder: ${levelCount} levels of ${(span / levelCount).toFixed(3)}mm ` +
+          `(step over ${op.stepOver}mm, span ${span.toFixed(3)}mm)`,
+      );
+    }
+    const rcOfLevel = (li: number): number => {
+      const frac = li / levelCount;
+      const tip = target.internal ? startTip + span * frac : startTip - span * frac;
+      return target.internal ? tip - toolR : tip + toolR;
+    };
 
     const at = (r: number, a: number): Vec2 => ({
       x: target.center.x + r * Math.cos(a),
       y: target.center.y + r * Math.sin(a),
     });
-    const approach = at(Rc + op.safeClearance, 0); // external: outside the boss at angle 0
-    const grooveStart = at(Rc, 0);
     const topSafeZ = target.topZ + op.safeClearance;
 
     if (ti > 0) {
@@ -202,8 +249,15 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
       moves.push({ words: { z: travelZ }, feed: 0, rapid: true, comment: 'travel clearance' });
     }
 
-    // THE WHOLE CYCLE RUNS TWICE — the spring is a full second pass
-    for (let cycle = 0; cycle < 2; cycle++) {
+    for (let li = 1; li <= levelCount; li++) {
+      const levelRc = rcOfLevel(li);
+      const segs = segmentsPerRevolution(levelRc);
+      const approach = at(levelRc + op.safeClearance, 0); // external: outside the boss at angle 0
+      const grooveStart = at(levelRc, 0);
+      // THE FINAL LEVEL RUNS TWICE — the spring is a full second pass at
+      // the finished radius (Makera's cycle; intermediate levels once)
+      const cycles = li === levelCount ? 2 : 1;
+      for (let cycle = 0; cycle < cycles; cycle++) {
       const spring = cycle === 1;
       // approach: internal at the bore center, external outside the boss;
       // XY at the current height, then descend to the target's safe Z
@@ -248,10 +302,10 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           feed: op.feed,
           comment: 'radial entry',
         });
-        minutes += (target.internal ? Rc : op.safeClearance) / op.feed;
+        minutes += (target.internal ? levelRc : op.safeClearance) / op.feed;
 
         // ASCENDING HELIX: revs = depth/lead (fractional ends exactly at
-        // the top), lead/rev — left-hand ascends CW from above, right CCW
+        // the top), lead/rev — 'ccw' ascends CW from above, 'cw' CCW
         const revs = target.depth / lead;
         const n = Math.max(1, Math.round(revs * segs));
         let prev = grooveStart;
@@ -260,7 +314,7 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           const frac = i / n;
           const a = dir * 2 * Math.PI * revs * frac;
           const z = startZ + target.depth * frac;
-          const p = at(Rc, a);
+          const p = at(levelRc, a);
           moves.push({ words: { x: p.x, y: p.y, z }, feed: op.feed });
           minutes += Math.hypot(p.x - prev.x, p.y - prev.y, z - prevZ) / op.feed;
           prev = p;
@@ -278,7 +332,7 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
               const frac = j / en;
               const a = dir * 2 * Math.PI * (revs + extraRevs * frac);
               const z = endZ + extraRevs * lead * frac;
-              const p = at(Rc, a);
+              const p = at(levelRc, a);
               moves.push({ words: { x: p.x, y: p.y, z }, feed: op.feed });
               minutes += Math.hypot(p.x - prev.x, p.y - prev.y, z - prevZ) / op.feed;
               prev = p;
@@ -304,7 +358,7 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
               feed: op.feed,
               comment: lastStart ? 'aside retract' : 'step aside for the next start',
             });
-            minutes += Rc / op.feed;
+            minutes += levelRc / op.feed;
             moves.push({ words: { z: topSafeZ }, feed: 0, rapid: true });
           }
         } else {
@@ -321,7 +375,8 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           }
         }
       }
-      passes++; // one full thread pass over every start, spring included
+      passes++; // one full thread pass over every start at this radius
+      }
     }
   });
 
