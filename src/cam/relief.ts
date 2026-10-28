@@ -388,28 +388,30 @@ export function rasterContour(o: RasterContourOptions): RasterContourResult {
     return z;
   };
 
-  // the Z ladder: with stepDown set the op ROUGHS in flat levels down
-  // from the crown (each level at topZ − k·stepDown, floored at the stock
-  // bottom) and FINISHES on the surface itself; without stepDown it is the
+  // the Z ladder: with stepDown set the op ROUGHS in flat levels and
+  // FINISHES on the surface itself; without stepDown (or 0) it is the
   // single finish pass (the original surface-op behavior). Rough-vs-
   // finish is the user's choice, not the op kind's.
   const stepDown = o.stepDown && o.stepDown > 0 ? o.stepDown : 0;
-  const levels: (number | null)[] = []; // null = the final surface pass
-  if (stepDown > 0) {
-    let deepest = Infinity;
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const z = surfaceZ(i, j);
-      if (z !== null && z < deepest) deepest = z;
-    }
-    if (deepest < Infinity) {
-      for (let z = o.topZ - stepDown; z > deepest + 1e-9; z -= stepDown) {
-        levels.push(Math.max(z, o.bottomZ));
-      }
-    }
-    levels.push(null); // the finishing pass on the surface itself
-  } else {
-    levels.push(null);
+  let deepest = Infinity;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const z = surfaceZ(i, j);
+    if (z !== null && z < deepest) deepest = z;
   }
+  const span = o.topZ - deepest;
+  const levels: (number | null)[] = []; // null = the final surface pass
+  if (stepDown > 0 && span > 0) {
+    // the ladder is even INCLUDING the finish band: n = ceil(span/stepDown)
+    // total bands — ROUGH levels are the first n−1 even levels
+    // (topZ − k·span/n, floored at the stock bottom), and the surface pass
+    // owns the final band (span/n ≤ stepDown). Even rungs because acetal
+    // (POM) punishes a thin chip — it rubs and melts instead of shearing.
+    const n = Math.ceil(span / stepDown);
+    for (let k = 1; k < n; k++) {
+      levels.push(Math.max(o.topZ - (k * span) / n, o.bottomZ));
+    }
+  }
+  levels.push(null); // the finishing pass on the surface itself
 
   /** Cut z at (i,j) for the given level: flat at the level plane while
    *  the surface lies below it (roughing a flat shelf), the surface z when

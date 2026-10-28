@@ -46,7 +46,7 @@ describe('cylChamfer', () => {
     // the Z ladder tops out AT the circle (r = 7.5), not the stock surface
     const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
     expect(plunges.map((p) => p.words.z).length).toBe(2);
-    expect(plunges[0].words.z!).toBeCloseTo(7.2, 9); // 7.5 − step 0.3
+    expect(plunges[0].words.z!).toBeCloseTo(7.25, 9); // even rung: 0.5mm span in n=2 → 0.25
     expect(plunges[1].words.z!).toBeCloseTo(7.0, 9); // exactly the tip depth
     expect(res.moves[0].rapid).toBe(true);
     expect(res.moves[0].words.z).toBeUndefined(); // travel first, at the existing height
@@ -56,19 +56,20 @@ describe('cylChamfer', () => {
   });
 
   it('depth 0: ladder descends from the STOCK surface to the anchor, finishing exactly on it', () => {
-    // 8.175 → 7.5 is 0.675mm: at 0.3 steps → 7.875, 7.575, then 7.5 exactly
+    // 8.175 → 7.5 is 0.675mm: at a 0.3 rung → n=3 even 0.225 steps:
+    // 7.95, 7.725, then 7.5 exactly
     const res = cylChamfer(stepOp, cal, vbit, 0);
     expect(res.passes).toBe(3);
     const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
     expect(plunges.length).toBe(3);
-    expect(plunges[0].words.z!).toBeCloseTo(7.875, 9);
-    expect(plunges[1].words.z!).toBeCloseTo(7.575, 9);
+    expect(plunges[0].words.z!).toBeCloseTo(7.95, 9);
+    expect(plunges[1].words.z!).toBeCloseTo(7.725, 9);
     expect(plunges[2].words.z!).toBeCloseTo(7.5, 9); // finished flank exactly on the anchor
     // A accumulates monotonically (no unwind between levels)
     const aWords = res.moves.filter((m) => m.words.a !== undefined).map((m) => m.words.a!);
     expect(aWords).toEqual([360, 720, 1080]);
     // estimated minutes: plunge increments + one ceiling-rev per sweep
-    const plungeMin = ((8.175 - 7.875) + 0.3 + 0.075) / 100;
+    const plungeMin = 0.675 / 100; // three even 0.225 rungs telescope to the span
     expect(res.estimatedMinutes).toBeCloseTo(plungeMin + 3 / 6.6, 6);
   });
 

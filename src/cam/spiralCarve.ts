@@ -41,10 +41,14 @@ function fanOffsets(width: number, toolDiameter: number): number[] {
   return Array.from({ length: n }, (_, i) => -spread / 2 + (i * spread) / (n - 1));
 }
 
-/** Depth levels down to `depth` in `stepDown` steps, the last exactly at it. */
+/** Depth levels down to `depth` in evenly distributed steps, the last exactly at it.
+ * Rationale: acetal (POM) punishes too-short steps; even distribution maximizes the minimum cut. */
 function depthLadder(depth: number, stepDown: number): number[] {
+  const n = Math.ceil(depth / stepDown);
   const levels: number[] = [];
-  for (let d = stepDown; d < depth - 1e-9; d += stepDown) levels.push(d);
+  for (let k = 1; k < n; k++) {
+    levels.push((k * depth) / n);
+  }
   levels.push(depth);
   return levels;
 }

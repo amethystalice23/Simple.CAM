@@ -48,8 +48,20 @@ const op: FaceCylinderOp = {
   cutBeyondStock: true,
 };
 
-// 1mm radial increments throughout, so every helical entry takes the same time
+// even 0.96mm rough increments throughout, so every helical entry takes the same time
 const entryMinutes = Math.max(1 / op.plungeFeed, (90 / 360) / MAX_ROTARY_RPM);
+
+// the even ladder for this fixture (totalDepth 5, stepDown 1, allowance
+// 0.2): the rough span 4.8 divides into n = ceil(4.8/1) = 5 equal 0.96
+// rungs landing exactly on the rough target, then the 0.2 allowance band —
+// written as the same arithmetic the generator runs, so the fp values
+// compare exactly.
+const roughTarget = 5 - 0.2;
+const evenZs = [
+  ...Array.from({ length: 4 }, (_, i) => 25 - ((i + 1) * roughTarget) / 5),
+  25 - roughTarget,
+  20,
+];
 
 describe('faceCylinder: spiral', () => {
   const res = faceCylinder(op, calibration, tool);
@@ -59,10 +71,11 @@ describe('faceCylinder: spiral', () => {
   const sweeps = res.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
 
   it('schedules roughing levels plus one finishing level', () => {
-    // Alice's ladder rule (2026-10-28): roughs at whole step-downs then a
-    // SHORTER remainder landing exactly ON totalDepth − allowance (4.8),
-    // finish takes exactly the allowance band (4.8 → 5) — never a step
-    // larger than the step-down (the old finish jumped 0.8 + 0.2 = 1.0 > 1).
+    // Alice's ladder rule (2026-10-28) with the even strategy she chose:
+    // the rough span 4.8 divides into n=5 equal 0.96 rungs landing exactly ON
+    // the rough target, the finish takes exactly the allowance band
+    // (4.8 → 5) — never a thin remainder anywhere, never a step over the
+    // step-down (the old ladder jumped the finish 0.8 + 0.2 = 1.0 > 1).
     expect(res.passes).toBe(6);
     expect(res.radialDepth).toBeCloseTo(5, 9);
     // lift + travel + (step-down + sweep) × 6 levels + final retract
@@ -70,7 +83,7 @@ describe('faceCylinder: spiral', () => {
   });
 
   it('steps down in the cut: one Z+A move per level at surface - depth', () => {
-    expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
+    expect(stepDowns.map((m) => m.words.z)).toEqual(evenZs);
     for (const s of stepDowns) expect(s.feed).toBeCloseTo(1 / entryMinutes, 3);
     // the first entry comes from safe Z; the rest step down at the sweep ends
     expect(stepDowns[0].comment).toMatch(/helical entry/);
@@ -151,18 +164,18 @@ describe('faceCylinder: spiral', () => {
     expect(narrowSweeps.map((s) => s.words.x)).toEqual([90, 10, 90, 10, 90, 10]);
   });
 
-  it("enforces Alice's ladder rule: every increment ≤ stepDown, roughs land on totalDepth − allowance", () => {
-    // the rule as she stated it (2026-10-28): smaller steps yes, bigger
-    // never, always entirely to the target (actual depth − allowance),
-    // then the finish leaves exactly the allowance — spot-checked across
-    // parameter shapes where the old code jumped over the step-down
+  it("enforces Alice's ladder rule: even bands ≤ stepDown, roughs land on totalDepth − allowance", () => {
+    // the rule as she stated it (2026-10-28), with the even strategy she
+    // chose: every band ≤ stepDown AND every rough band EQUALS span/n — the
+    // max-min distribution, no thin remainder anywhere (acetal punishes a
+    // thin chip: it rubs and melts instead of shearing)
     for (const [depth, sd, allow] of [
-      [4.15, 0.8, 0.2], // her example: 3.95 remainder 0.75, finish 0.2
-      [4.15, 0.8, 0.1], // her saved job: 4.05 remainder 0.25
-      [5, 1, 0.2], // this fixture: 4.8 remainder 0.8
-      [4.0, 0.8, 0], // no allowance: ends at the target, last level is the finish
-      [3.0, 1.5, 0.4], // multiple whole steps + remainder
-      [1.0, 2.0, 0.2], // single shallow remainder level
+      [4.15, 0.8, 0.2], // her example: rough 3.95 in n=5 → 0.79 rungs, finish 0.2
+      [4.15, 0.8, 0.1], // her saved job: rough 4.05 in n=6 → 0.675 rungs
+      [5, 1, 0.2], // this fixture: rough 4.8 in n=5 → 0.96 rungs
+      [4.0, 0.8, 0], // no allowance: exact multiple — 5 × 0.8, last level is the finish
+      [3.0, 1.5, 0.4], // rough 2.6 in n=2 → 1.3 rungs
+      [1.0, 2.0, 0.2], // single shallow rough level 0.8 (n=1), finish 0.2
     ] as const) {
       const r = faceCylinder(
         {
@@ -177,22 +190,29 @@ describe('faceCylinder: spiral', () => {
       expect(r.passes).toBeGreaterThan(0);
       // reconstruct the emitted ladder from the Z+A step-downs
       const ladder: number[] = [];
-      let a: number | undefined;
       for (const m of r.moves) {
         if (m.words.z !== undefined && m.words.a !== undefined && m.words.x === undefined && !m.rapid) {
           ladder.push(25 - m.words.z);
         }
-        a = m.words.a ?? a;
       }
-      void a;
+      const roughTarget = Math.max(depth - allow, 0);
+      const roughN = roughTarget > 0 ? Math.ceil(roughTarget / sd) : 0;
+      const finN = allow > 1e-9 ? Math.ceil(allow / sd) : 0;
+      expect(ladder.length).toBe(roughN + finN);
       // every increment ≤ stepDown (never a bigger step)
       let prev = 0;
       for (const d of ladder) {
         expect(d - prev).toBeLessThanOrEqual(sd + 1e-9);
         prev = d;
       }
+      // the even strategy: every rough band equals span/n, every finish
+      // band equals allowance/m — no remainder rung anywhere
+      for (let i = 1; i <= ladder.length; i++) {
+        const band = ladder[i - 1] - (i >= 2 ? ladder[i - 2] : 0);
+        const want = i <= roughN ? roughTarget / roughN : allow / finN;
+        expect(band).toBeCloseTo(want, 9);
+      }
       // the rough ladder lands EXACTLY on totalDepth − allowance
-      const roughTarget = Math.max(depth - allow, 0);
       if (allow > 0 && roughTarget > 0) {
         expect(ladder.some((d) => Math.abs(d - roughTarget) < 1e-9)).toBe(true);
       }
@@ -241,7 +261,7 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     // level 1 plunges from safe Z (the level-0 "surface"), the rest step
     // down one increment at the previous level's sweep end — both at the
     // entry X, straight (no A word), so the ring below cuts pre-cleared
-    expect(plunges.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
+    expect(plunges.map((m) => m.words.z)).toEqual(evenZs);
     expect(plunges.map((m) => m.feed)).toEqual(
       Array.from({ length: 6 }, () => op.plungeFeed), // G94 mm/min, A stationary
     );
@@ -291,7 +311,7 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     const pathSpan = pX1 - pX0;
     const passMinutes = pathSpan / op.stepOver / MAX_ROTARY_RPM;
     // the fixed-X plunges telescope: their increments sum to totalDepth (5)
-    // — per-level increments [1,1,1,1,0.8,0.2]; entryMinutes is rotary-bound
+    // — per-level increments [0.96 × 5, 0.2]; entryMinutes is rotary-bound
     // and equal every level
     expect(res.estimatedMinutes).toBeCloseTo(
       6 * (passMinutes + entryMinutes + 2 * ringMinutes) + 5 / op.plungeFeed,
@@ -303,7 +323,7 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     const stepDowns = res.moves.filter(
       (m) => !m.rapid && m.words.z !== undefined && m.words.a !== undefined && m.words.x === undefined,
     );
-    expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
+    expect(stepDowns.map((m) => m.words.z)).toEqual(evenZs);
     const sweeps = res.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
     // sweeps alternate between the PATH bounds (not the raw xStart/xEnd)
     expect(sweeps.map((s) => s.words.x)).toEqual([pX1, pX0, pX1, pX0, pX1, pX0]);
@@ -325,8 +345,8 @@ describe('faceCylinder: vertical (rings)', () => {
 
   it('cuts a ring at every step-over position, ending exactly at xEnd', () => {
     // span 100 / stepOver 4.8 => 21 rings at 4.8 spacing + a short final
-    // ring at 100 => 22 rings per level; the ladder (Alice's rule) is
-    // [1, 2, 3, 4, 4.8, 5] → 6 levels
+    // ring at 100 => 22 rings per level; the ladder (Alice's rule, even) is
+    // [0.96, 1.92, 2.88, 3.84, 4.8, 5] → 6 levels
     expect(ringMoves.length).toBe(6 * 22);
     const level0Xs = xSteps.slice(0, 21).map((m) => m.words.x);
     expect(level0Xs[0]).toBeCloseTo(4.8, 9);
@@ -337,7 +357,7 @@ describe('faceCylinder: vertical (rings)', () => {
   it('snakes between levels, plunging to the next depth at the level end', () => {
     // one straight plunge per level, at the X where the previous level ended
     expect(plunges.length).toBe(6);
-    expect(plunges.map((p) => p.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
+    expect(plunges.map((p) => p.words.z)).toEqual(evenZs);
     for (const p of plunges) expect(p.feed).toBe(300);
     // level 1 runs back over the same ring positions: 100 → 96 → … → 0
     expect(xSteps[21].words.x).toBeCloseTo(96, 9);
@@ -409,10 +429,11 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
   const indexRapids = res.moves.filter((m) => m.rapid && m.words.a !== undefined);
 
   it('indexes the full 360° per level at a step-over arc on the cut radius', () => {
-    // level arcs at r = 24,23,22,21,20.2,20 (the ladder [1,2,3,4,4.8,5])
+    // level arcs at r = 24.04, 23.08, 22.12, 21.16, 20.2, 20 (the even
+    // ladder [0.96, 1.92, 2.88, 3.84, 4.8, 5])
     // => 32+31+29+28+27+27 = 174 passes
     expect(sweeps.length).toBe(174);
-    const stepDeg = (4.8 / 24) * (180 / Math.PI); // level 0 cuts at r=24
+    const stepDeg = (4.8 / (25 - (1 * roughTarget) / 5)) * (180 / Math.PI); // level 0 cuts at r = 25 − 0.96
     const a0 = indexRapids[0]?.words.a ?? 0;
     const a1 = indexRapids[1]?.words.a ?? 0;
     expect(a1 - a0).toBeCloseTo(stepDeg, 3);
@@ -437,11 +458,11 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
     // (positioning rapids are axis-separate too: the rotary step is its
     // own A-only rapid, the return travel its own X-only rapid)
     expect(res.moves.filter((m) => isSimultaneous(m) && !m.rapid)).toHaveLength(0);
-    // depth per level: 32×z24, 31×z23, 29×z22, 28×z21, 27×z20.2, 27×z20
+    // depth per level: 32×z24.04, 31×z23.08, 29×z22.12, 28×z21.16, 27×z20.2, 27×z20
     const zs = plunges.map((p) => p.words.z);
-    expect(zs[0]).toBe(24);
-    expect(zs[31]).toBe(24);
-    expect(zs[32]).toBe(23);
+    expect(zs[0]).toBe(25 - (1 * roughTarget) / 5);
+    expect(zs[31]).toBe(25 - (1 * roughTarget) / 5);
+    expect(zs[32]).toBe(25 - (2 * roughTarget) / 5);
     expect(zs[120]).toBeCloseTo(20.2, 9);
     expect(zs[173]).toBe(20);
   });
@@ -460,9 +481,9 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
 
   it('estimates time from plunge + sweep feeds', () => {
     // each pass charges its LEVEL's increment at plungeFeed (the pass count
-    // per level: 32+31+29+28+27+27), so the plunge terms are
-    // (32+31+29+28)·1 + 27·0.8 + 27·0.2 = 147mm at plungeFeed
-    expect(res.estimatedMinutes).toBeCloseTo(147 / 300 + (174 * 100) / 600, 3);
+    // per level: 32+31+29+28+27+27): five levels at the even 0.96 rung and
+    // the finish at 0.2 → (147 × 0.96 + 27 × 0.2) = 146.52mm at plungeFeed
+    expect(res.estimatedMinutes).toBeCloseTo((147 * 0.96 + 27 * 0.2) / 300 + (174 * 100) / 600, 3);
   });
 });
 
@@ -523,10 +544,16 @@ describe('faceCylinder: 4-axis box stock (derived diagonal calibration)', () => 
   it('faces the corners first: surface at axisZ + half-diagonal', () => {
     const res = faceCylinder({ ...op, targetDiameter: 30 }, calib, tool);
     expect(res.radialDepth).toBeCloseTo(r0 - 15, 9); // Ø30 target on Ø36.06 box corners
-    // first Z cut sits one step-down below the corner surface; the flats
-    // are lower still, so this pass cuts air over them — never a gouge
+    // first Z cut sits one EVEN rung below the corner surface — the rough
+    // span (r0 − 15 − allowance) divides into n = ceil(span/stepDown) equal
+    // bands; the flats are lower still, so this pass cuts air over them —
+    // never a gouge
     const firstZ = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
-    expect(firstZ?.words.z).toBeCloseTo(15 + r0 - op.stepDown, 6);
+    const roughSpan = r0 - 15 - op.finishAllowance;
+    expect(firstZ?.words.z).toBeCloseTo(
+      15 + r0 - roughSpan / Math.ceil(roughSpan / op.stepDown),
+      6,
+    );
   });
 });
 describe('faceCylinder: clearance override', () => {

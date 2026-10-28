@@ -208,9 +208,12 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   // nominal ladder z_1..z_n (z_n = floorZ); the band above level i is
   // [z_{i-1}, z_i] with z_0 = the crown. Cut planes sit allowance above the
   // nominal levels, so a plane can rise into its own band when the allowance
-  // swallows the whole step (allowance ≥ stepDown) — those levels have
+  // swallows the whole step (allowance ≥ increment) — those levels have
   // nothing left to clear and are counted as skipped.
   const nominal = zLadder(o.topZ, floorZ, o.stepDown);
+  const span = o.topZ - floorZ;
+  const n = Math.ceil(span / o.stepDown);
+  const increment = n > 0 ? span / n : 0;
   const bands = nominal.map((z, i) => ({
     bandTop: i === 0 ? o.topZ : nominal[i - 1],
     cut: z + o.allowance,
@@ -437,7 +440,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       const nextCut =
         (bandIndex + 1 < nominal.length
           ? nominal[bandIndex + 1]
-          : Math.max(floorZ, cut - o.stepDown)) + o.allowance;
+          : Math.max(floorZ, cut - increment)) + o.allowance;
       finFlats = difference(sliceAt(nextCut).contours, upperShadow);
       if (keepOut.length === 0 && finFlats.length === 0) {
         skippedLevels++; // touches nothing — no surface above or below
@@ -534,7 +537,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
 
   if (allowanceSkips > 0) {
     warnings.push(
-      `allowance ≥ step-down: ${allowanceSkips} level(s) had no band left to clear`,
+      `allowance ≥ increment: ${allowanceSkips} level(s) had no band left to clear`,
     );
   }
   if (droppedSlivers > 0) {

@@ -7,9 +7,9 @@
 G90 G21
 G92.4 A0 R0
 G0 Y0
-G0 X1 ; pass 1/4 depth 2.000mm radial — 8 rings
+G0 X1 ; pass 1/4 depth 1.600mm radial — 8 rings
 G0 Z30
-G1 Z23 F300 ; plunge 2.000mm radial
+G1 Z23.4 F300 ; plunge 1.600mm radial
 G1 A360 F2376
 G1 X2.6 F600
 G1 A720 F2376
@@ -25,7 +25,7 @@ G1 X10.6 F600
 G1 A2520 F2376
 G1 X11 F600
 G1 A2880 F2376
-G1 Z21 F300 ; plunge 2.000mm radial
+G1 Z21.8 F300 ; plunge 1.600mm radial
 G1 A3240 F2376
 G1 X10.6 F600
 G1 A3600 F2376
@@ -41,7 +41,7 @@ G1 X2.6 F600
 G1 A5400 F2376
 G1 X1 F600
 G1 A5760 F2376
-G1 Z20.2 F300 ; plunge 0.800mm radial
+G1 Z20.2 F300 ; plunge 1.600mm radial
 G1 A6120 F2376
 G1 X2.6 F600
 G1 A6480 F2376

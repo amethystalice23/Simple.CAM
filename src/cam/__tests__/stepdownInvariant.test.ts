@@ -137,8 +137,12 @@ function assertCutBands(moves: Move[], topZ: number, stepDown: number, target: n
 
 describe('the global cut-band rule: never a band deeper than the step-down', () => {
   describe('zLadder — the helper pocket/profile/waterline share', () => {
-    it('steps whole rungs then a shorter remainder, landing exactly on the floor', () => {
-      expect(zLadder(0, -2.5, 1)).toEqual([-1, -2, -2.5]);
+    it('steps in even distribution, landing exactly on the floor', () => {
+      expect(zLadder(0, -2.5, 1)).toEqual([
+        -2.5 / 3,
+        - (2 * 2.5) / 3,
+        -2.5,
+      ]);
     });
 
     it('an exact multiple of the rung never duplicates the floor level', () => {

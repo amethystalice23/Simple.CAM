@@ -96,7 +96,9 @@ describe('pocket2d', () => {
       .map((m) => m.words.z!)
       .sort((a, b) => b - a);
     const unique = [...new Set(plunges.map((z) => z.toFixed(3)))];
-    expect(unique).toEqual(['-1.000', '-2.000', '-2.500']);
+    // even ladder (Alice's strategy, 2026-10-28): 2.5mm in n=3 equal
+    // 0.8333… rungs — no thin remainder at the floor
+    expect(unique).toEqual(['-0.833', '-1.667', '-2.500']);
   });
 
   it('approach rapids stay above the standing material (the sim yellow-streak fix)', () => {
@@ -127,8 +129,9 @@ describe('pocket2d', () => {
       }
     }
     expect(offenders).toEqual([]);
-    // one approach plane per level: surface + 0.5, then previous cut + 0.5
-    expect([...approachZ].map(Number).sort((a, b) => a - b)).toEqual([-1.5, -0.5, 0.5]);
+    // one approach plane per level: surface + 0.5, then each previous even
+    // cut + 0.5 — 0.8333…/1.6667… rungs → −0.333, −1.167 (toFixed-rounded)
+    expect([...approachZ].map(Number).sort((a, b) => a - b)).toEqual([-1.167, -0.333, 0.5]);
   });
 
   it('clears around islands (holes grow as passes shrink)', () => {

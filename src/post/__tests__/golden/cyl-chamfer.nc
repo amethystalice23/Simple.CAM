@@ -9,7 +9,7 @@ G92.4 A0 R0
 G0 Y0
 G0 X20 ; chamfer edge X20.00, Ø15.00 — cut up-and-out
 G0 Z13.18
-G1 Z7.78 F200 ; level 1/2
+G1 Z7.84 F200 ; level 1/2
 G1 A360 F2376
 G1 Z7.5 F200
 G1 A720 F2376

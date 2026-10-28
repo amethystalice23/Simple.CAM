@@ -143,14 +143,14 @@ describe('profile2d', () => {
       .filter((m) => !m.rapid && m.words.z !== undefined)
       .map((m) => m.words.z!)
       .sort((a, b) => b - a);
-    expect([...new Set(plunges.map((z) => z.toFixed(3)))]).toEqual(['-1.000', '-2.000', '-2.500']);
+    expect([...new Set(plunges.map((z) => z.toFixed(3)))]).toEqual(['-0.833', '-1.667', '-2.500']);
     // one safe-Z retract per pass (plus the entry rapids carry safeZ too)
     const safeRetracts = res.moves.filter((m) => m.rapid && m.words.z === 5);
     expect(safeRetracts.length).toBe(6); // 3 entries + 3 retracts
-    // approach rapids stop half a mm above each level
+    // approach rapids stop half a mm above each even level (2.5/3 rungs)
     const approaches = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.z !== 5);
     expect(approaches.length).toBe(3);
-    expect(approaches.map((m) => m.words.z)).toEqual([-0.5, -1.5, -2]);
+    expect(approaches.map((m) => m.words.z)).toEqual([0.5 - 2.5 / 3, 0.5 - (2 * 2.5) / 3, -2.5 + 0.5]);
   });
 
   it('rejects an inside profile the tool cannot fit', () => {

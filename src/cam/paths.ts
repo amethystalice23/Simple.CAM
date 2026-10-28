@@ -8,14 +8,19 @@ import type { Vec2 } from '../core/types';
 export const APPROACH_CLEARANCE = 0.5;
 
 /**
- * Z ladder from a surface down to a floor in fixed steps, clamped so the
- * final level lands exactly on the floor (e.g. top 0, floor −2.5, step 1 →
- * [−1, −2, −2.5]).
+ * Z ladder from a surface down to a floor in evenly distributed steps,
+ * clamped so the final level lands exactly on the floor.
+ * (e.g. top 0, floor −2.5, step 1 → n=ceil(2.5/1)=3, levels [−0.833, −1.667, −2.5]).
+ * Rationale: acetal (POM) punishes too-short steps — thin chips rub and melt.
+ * Even distribution maximizes the minimum cut thickness.
  */
 export function zLadder(topZ: number, floorZ: number, stepDown: number): number[] {
+  const span = topZ - floorZ;
+  if (span <= 0) return [floorZ];
+  const n = Math.ceil(span / stepDown);
   const levels: number[] = [];
-  for (let z = topZ - stepDown; z > floorZ + 1e-9; z -= stepDown) {
-    levels.push(z);
+  for (let k = 1; k < n; k++) {
+    levels.push(topZ - (k * span) / n);
   }
   levels.push(floorZ);
   return levels;

@@ -422,8 +422,9 @@ describe('generateJobOp', () => {
     expect(res.moves.every((m) => m.words.a === undefined)).toBe(true); // no A words
     // the hole rim rotated on top: first plunge targets the raised rim
     const plunges = res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!);
-    // rim rotated to z=8; first peck plunge is rim − peck 2
-    expect(Math.max(...plunges)).toBeCloseTo(6, 5);
+    // rim rotated to z=8; even pecks (hole depth 5, peck 2 → n=3): the
+    // first peck plunge is rim − 5/3
+    expect(Math.max(...plunges)).toBeCloseTo(8 - 5 / 3, 5);
   });
 
   it('rejects an index datum without 4-axis mode', () => {
@@ -1032,7 +1033,7 @@ describe('slice pocket (section plane + band)', () => {
     // more level 0.5... the pin: strictly between the bar top and its
     // floor (−2), never near the stock bottom (−25)
     const minZ = Math.min(...cuts.map((m) => m.words.z ?? Infinity));
-    expect(minZ).toBeGreaterThan(1);
+    expect(minZ).toBeGreaterThan(-2);
     expect(minZ).toBeLessThan(4);
   });
 

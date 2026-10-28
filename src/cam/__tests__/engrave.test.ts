@@ -38,9 +38,9 @@ describe('engrave: flat frame', () => {
   });
 
   it('ladders depth levels, each level retracing the path', () => {
-    const res = engrave({ ...base, depth: 1, stepDown: 0.4 }); // levels 0.4, 0.8, 1.0
+    const res = engrave({ ...base, depth: 1, stepDown: 0.4 }); // even levels: 1/3, 2/3, 1.0
     const zs = res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z);
-    expect(zs).toEqual([9.6, 9.2, 9.0]);
+    expect(zs).toEqual([10 - 1 / 3, 10 - (2 * 1) / 3, 9]);
     // traces alternate direction: level 0 forward to x=10, level 1 back to 0
     const xMoves = res.moves.filter((m) => !m.rapid && m.words.x !== undefined);
     expect(xMoves[0].words.x).toBeCloseTo(10, 6);

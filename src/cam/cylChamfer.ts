@@ -32,18 +32,18 @@ export interface CylChamferResult {
 }
 
 /**
- * Tip radii per level, descending from `top` to exactly `bottom` in ≤
- * stepDown steps — a single pass when the span fits one step (the whole
- * wedge at the seam then, which is what "already the highest point"
- * means). The final level is the cut's finished radius.
+ * Tip radii per level, descending from `top` to exactly `bottom` in evenly
+ * distributed steps ≤ stepDown — a single pass when the span fits one step.
+ * Rationale: acetal (POM) punishes too-short steps; even distribution
+ * maximizes the minimum cut.
  */
 function levelRadii(top: number, bottom: number, stepDown: number): number[] {
-  if (top - bottom <= stepDown + 1e-9) return [bottom];
+  const span = top - bottom;
+  if (span <= stepDown + 1e-9) return [bottom];
+  const n = Math.ceil(span / stepDown);
   const out: number[] = [];
-  let r = top - stepDown;
-  while (r > bottom + 1e-9) {
-    out.push(r);
-    r -= stepDown;
+  for (let k = 1; k < n; k++) {
+    out.push(top - (k * span) / n);
   }
   out.push(bottom);
   return out;

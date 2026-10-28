@@ -11,21 +11,21 @@ G0 A90 ; index stock to A90°
 G0 X5 Y5 ; drill (5.00, 5.00) depth 5.00mm
 G0 Z5
 G0 Z0.5
-G1 Z-2 F300
+G1 Z-1.67 F300
 G0 Z0.5
-G0 Z-1.5
-G1 Z-4
+G0 Z-1.17
+G1 Z-3.33
 G0 Z0.5
-G0 Z-3.5
+G0 Z-2.83
 G1 Z-5
 G0 Z0.5
 G0 Z5
 G0 X25 Y5 ; drill (25.00, 5.00) depth 3.00mm
 G0 Z5
 G0 Z0.5
-G1 Z-2
+G1 Z-1.5
 G0 Z0.5
-G0 Z-1.5
+G0 Z-1
 G1 Z-3
 G0 Z0.5
 G0 Z5

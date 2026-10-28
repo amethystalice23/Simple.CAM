@@ -129,31 +129,34 @@ export function faceCylinder(
     : Math.max(op.xEnd - toolR, pathX0);
   const pathSpan = Math.abs(pathX1 - pathX0);
 
-  // The depth ladder (Alice's rule, 2026-10-28): every step ≤ stepDown, the
-  // rough ladder lands EXACTLY ON the rough target (totalDepth − allowance —
-  // "you always go entirely to your target depth"), a final SHORTER
-  // remainder step when the last whole step-down falls short, never a step
-  // past it, and the finish then takes exactly the allowance band ("leave
-  // only allowance at the bottom, no more or less" — one level when
-  // allowance ≤ stepDown, itself laddered if it ever exceeds it). Same
-  // shape with no allowance: the rough ladder ends at totalDepth and its
-  // last level IS the finishing pass. The old ladder stopped BELOW the
-  // target (last whole k·stepDown) and let the finish jump the remainder
-  // + allowance in one step — larger than the step-down whenever the two
-  // summed over it (e.g. depth 4.15, step 0.8, allowance 0.2 → a 0.95
-  // finish step), which must never happen.
+  // The depth ladder (Alice's rules, 2026-10-28): every band ≤ stepDown,
+  // NEVER a thin remainder anywhere. The EVEN STRATEGY (her choice, after
+  // the acetal findings): n = ceil(span/stepDown) bands, each exactly
+  // span/n — the max-min distribution, making the thinnest cut as thick as
+  // the rung count allows, because a thin chip rubs instead of shears and
+  // melts (Mastercam equalizes by default; Fusion 360's "use even
+  // stepdowns"; Makera's own mill-tested threads cut even passes). The
+  // rough ladder spans totalDepth − allowance and lands EXACTLY ON that
+  // rough target ("you always go entirely to your target depth"); the
+  // finish then takes exactly the allowance band ("leave only allowance
+  // at the bottom, no more or less" — one even band when allowance ≤
+  // stepDown, itself laddered evenly if it ever exceeds it). With no
+  // allowance the rough ladder ends at totalDepth and its last level IS
+  // the finishing pass. The pre-2026-10-28 ladder this replaces stopped
+  // BELOW the target and let the finish jump remainder + allowance in one
+  // step (0.95 > 0.8 on her facing params) — tool breakage on hard stock.
   const roughTarget = Math.max(totalDepth - op.finishAllowance, 0);
   const roughDepths: number[] = [];
-  for (let k = 1; k * op.stepDown < roughTarget - 1e-9; k++) roughDepths.push(k * op.stepDown);
-  if (roughTarget > 0) roughDepths.push(roughTarget); // the remainder step, ≤ stepDown
+  if (roughTarget > 0) {
+    const n = Math.ceil(roughTarget / op.stepDown);
+    for (let k = 1; k < n; k++) roughDepths.push((k * roughTarget) / n);
+    roughDepths.push(roughTarget); // the literal target — exact landing, no drift
+  }
   const finishDepths: number[] = [];
   if (op.finishAllowance > 1e-9) {
-    // the allowance band, laddered at ≤ stepDown (one level in the normal case)
-    let d = roughTarget;
-    while (totalDepth - d > op.stepDown + 1e-9) {
-      d += op.stepDown;
-      finishDepths.push(d);
-    }
+    // the allowance band, even rungs at ≤ stepDown (one level in the normal case)
+    const m = Math.ceil(op.finishAllowance / op.stepDown);
+    for (let j = 1; j < m; j++) finishDepths.push(roughTarget + (j * op.finishAllowance) / m);
     finishDepths.push(totalDepth);
   } // else: the rough ladder already ends at totalDepth — its last level is the finish
   // FINISHING PASS ONLY (Alice, 2026-10-26): skip the roughing ladder —

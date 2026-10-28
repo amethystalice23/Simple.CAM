@@ -235,13 +235,15 @@ describe('materializeTestPattern — flat (the pocket grid, as ops)', () => {
       expect(res.error, `${op.id}: ${res.error}`).toBeNull();
       expect(res.moves.length).toBeGreaterThan(0);
     }
-    // the step-down ladder shows in the level comments: column 1 steps
-    // 0.35 (three levels), column 7 cuts single-level at the floor
+    // the step-down ladder shows in the level comments: column 1's 1mm
+    // pocket at a 0.35 rung → n=3 even 1/3 levels (z19.67, z19.33), column
+    // 7 cuts single-level at the floor
     const c1 = generateJobOp(ops[0], c);
     const c7 = generateJobOp(ops[6], c);
-    expect(c1.moves.some((m) => m.comment?.includes('level z19.65'))).toBe(true);
+    expect(c1.moves.some((m) => m.comment?.includes('level z19.67'))).toBe(true);
+    expect(c1.moves.some((m) => m.comment?.includes('level z19.33'))).toBe(true);
     expect(c7.moves.some((m) => m.comment?.includes('level z19.00'))).toBe(true);
-    expect(c7.moves.some((m) => m.comment?.includes('level z19.65'))).toBe(false);
+    expect(c7.moves.some((m) => m.comment?.includes('level z19.67'))).toBe(false);
     // the per-op S lines: row 1 runs 9000, row 4 runs 15000
     expect(c1.moves[0].spindleRpm).toBe(9000);
     const r4 = generateJobOp(ops[21], c);

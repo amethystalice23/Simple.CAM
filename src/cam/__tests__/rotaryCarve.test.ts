@@ -90,15 +90,20 @@ describe('rotaryCarve', () => {
     expect(() => rotaryCarve(opts(cylinder(5, 20), { allowance: -1 }))).toThrow(/allowance/);
   });
 
-  it('the ladder follows Makera semantics: COMPLETE sweeps at R − k·stepDown until nothing is left', () => {
-    // cylinder Ø10 in a Ø24 stock: surface radius ~5, so planes 10, 8, 6
-    // cut and 4 has nothing left below it — three levels, stop.
+  it('the ladder runs COMPLETE sweeps at even radial planes until nothing is left', () => {
+    // cylinder Ø10 in a Ø24 stock: surface radius ~5 → span ≈ 7.01mm in
+    // n = ceil(7.01/2) = 4 even bands — three rough planes ≈ 10.25, 8.49,
+    // 6.74, the finish owns the final band. Three levels, stop.
     const res = rotaryCarve(opts(cylinder(5, 20)));
     expect(res.stats.levels).toBe(3);
     // every roughing plunge lands exactly on a level plane (the finish's
     // plunge rides the surface — the tessellated ~TESS)
     const zs = [...new Set(cutZs(res.moves))];
-    for (const level of [10, 8, 6]) expect(zs).toContain(level);
+    const span = 12 - TESS;
+    for (const k of [1, 2, 3]) {
+      const plane = 12 - (k * span) / 4;
+      expect(zs.some((z) => Math.abs(z - plane) < 1e-3)).toBe(true); // the even plane
+    }
     // never below the tessellated surface
     expect(Math.min(...cutZs(res.moves))).toBeGreaterThanOrEqual(TESS - 1e-6);
     // COMPLETE sweep (Alice's 2026-10-26 knight report): the level rings
@@ -260,8 +265,14 @@ describe('rotaryCarve', () => {
     const rings = res.moves.filter((m) => !m.rapid && m.words.a !== undefined && m.words.x === undefined && m.words.z === undefined);
     expect(rings.length).toBeGreaterThan(0);
     const expected = (r: number) => Math.min((300 * 360) / (2 * Math.PI * r), ROTARY_FEED_DEG_MIN);
-    const seen = new Set(rings.map((m) => m.feed));
-    for (const r of [10, 8, 6]) expect(seen.has(expected(r))).toBe(true);
+    const seen = rings.map((m) => m.feed);
+    // the even planes: R − k·span/n (span = R − ~TESS, n = 4) — each ring's
+    // deg/min feed is derived from its own plane radius
+    const span = 12 - TESS;
+    for (const k of [1, 2, 3]) {
+      const want = expected(12 - (k * span) / 4);
+      expect(seen.some((f) => Math.abs(f - want) < 0.01)).toBe(true);
+    }
     // finish: A+Z coordinated moves carry inverse-time feeds — each
     // segment's F = 1/passMinutes with the ceiling flooring passMinutes
     // at its revolutions/6.6, so F·revs ≤ 6.6 per move

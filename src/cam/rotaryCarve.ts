@@ -393,14 +393,17 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   }
   const minComp = wasteFloor;
 
-  // The roughing ladder (Makera semantics): full sweeps at R − k·stepDown
-  // while the plane has material below it — the first plane at/below the
-  // deepest compensated surface has nothing left to cut, and the
-  // finishing pass owns everything below that.
+  // The roughing ladder (Makera semantics): full sweeps at R − k·span/n
+  // where span = radius − minComp and n = ceil(span/stepDown).
+  // Every rough plane is evenly distributed to avoid thin chips in POM.
+  // The first plane at/below the deepest compensated surface has
+  // nothing left to cut, and the finishing pass owns everything below that.
+  const span = o.radius - minComp;
   const levels: number[] = [];
-  if (!o.finishingOnly) {
-    for (let rL = o.radius - o.stepDown; rL > minComp + 1e-9; rL -= o.stepDown) {
-      levels.push(rL);
+  if (!o.finishingOnly && span > 0) {
+    const n = Math.ceil(span / o.stepDown);
+    for (let k = 1; k < n; k++) {
+      levels.push(o.radius - (k * span) / n);
     }
   }
 

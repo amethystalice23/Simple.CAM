@@ -106,9 +106,13 @@ export function thread(
   const safeZ = axisZ + startR + (op.clearance ?? SAFE_CLEARANCE);
 
   // depth ladder from the working surface down to the root, last at it
+  // Even distribution prevents thin chips from rubbing/melting in POM.
   const total = startR - rootR;
+  const n = Math.ceil(total / op.stepDown);
   const levels: number[] = [];
-  for (let d = op.stepDown; d < total - 1e-9; d += op.stepDown) levels.push(d);
+  for (let k = 1; k < n; k++) {
+    levels.push((k * total) / n);
+  }
   levels.push(total);
 
   let passes = 0;

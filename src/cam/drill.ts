@@ -28,6 +28,7 @@ export function drill(op: DrillOp, tool: Tool): DrillResult {
     const retractZ = t.topZ + APPROACH_CLEARANCE;
     const safeZ = t.topZ + op.safeClearance;
     const peck = op.peckDepth > 0 ? op.peckDepth : t.depth;
+    const n = Math.ceil(t.depth / peck);
 
     // travel first at the machine's existing height (after a tool change
     // that is the swap macro's high park — never a diagonal descent
@@ -41,9 +42,9 @@ export function drill(op: DrillOp, tool: Tool): DrillResult {
     moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
     moves.push({ words: { z: retractZ }, feed: 0, rapid: true });
 
-    let peckZ = t.topZ;
-    while (peckZ > floorZ + 1e-9) {
-      const nextZ = Math.max(floorZ, peckZ - peck);
+    for (let k = 1; k <= n; k++) {
+      const nextZ = k === n ? floorZ : t.topZ - (k * t.depth) / n;
+      const peckZ = k === 1 ? t.topZ : t.topZ - ((k - 1) * t.depth) / n;
       // rapid back near the previous peck bottom, then feed the increment
       if (peckZ < t.topZ - 1e-9) {
         moves.push({ words: { z: peckZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
@@ -52,7 +53,6 @@ export function drill(op: DrillOp, tool: Tool): DrillResult {
       minutes += (peckZ - nextZ) / op.plungeFeed;
       // full retract to clear chips
       moves.push({ words: { z: retractZ }, feed: 0, rapid: true });
-      peckZ = nextZ;
     }
 
     moves.push({ words: { z: safeZ }, feed: 0, rapid: true });

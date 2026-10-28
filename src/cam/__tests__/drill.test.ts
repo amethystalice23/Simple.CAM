@@ -22,9 +22,9 @@ describe('drill', () => {
     const res = drill(op(), tool);
     expect(res.holes).toBe(1);
     const zs = res.moves.map((m) => m.words.z).filter((z): z is number => z !== undefined);
-    // rapid to safe, approach, pecks at -2, -4, -5 with retracts between
-    expect(zs).toContain(-2);
-    expect(zs).toContain(-4);
+    // rapid to safe, approach, pecks at 5/3, 10/3, 5 with retracts between
+    expect(zs).toContain(-5 / 3);
+    expect(zs).toContain(-10 / 3);
     expect(zs).toContain(-5);
     // every feed move is a plunge with explicit F
     const plunges = res.moves.filter((m) => !m.rapid);
