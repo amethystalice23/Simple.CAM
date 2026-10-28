@@ -360,7 +360,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         selectionIs: 'floor',
         startDepth: 0,
         endDepth: 2,
-        allowance: 0,
+        bottomAllowance: 0, // floor stock (the 2026-10-28 split)
+        sideAllowance: 0, // radial — SIGNED: negative turns a boss down
         stepDown,
         finishingOnly: false,
         side: 'outside',
@@ -394,7 +395,11 @@ function clearanceResult(
   ctx: GenContext,
   datumRotated: boolean,
 ): { moves: Move[]; minutes: number; passes: number } | null {
-  const keepOut = op.allowance > 0 ? offsetOutward(contours, op.allowance) : contours;
+  // the keep-out steps out by the RADIAL stock: the profile's SIGNED side
+  // allowance (the 2026-28 split), the slice-pocket's single allowance.
+  // Negative never shrinks it (the raw guard) — conservative.
+  const radial = op.kind === 'profile' ? op.sideAllowance : op.allowance;
+  const keepOut = radial > 0 ? offsetOutward(contours, radial) : contours;
   const regions = difference(stockFootprint(ctx.stock, datumRotated), keepOut);
   if (regions.length === 0) return null;
   try {
@@ -1343,7 +1348,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             toolId: tool.id,
             contours: slice.contours,
             side: 'outside',
-            allowance: op.allowance,
+            sideAllowance: op.allowance, // the slice-pocket's single allowance is the radial one
+            bottomAllowance: 0, // unused inside profile2d — the caller raises floorZ
             topZ: range.topZ,
             floorZ: range.floorZ,
             stepDown: finStep,
@@ -1753,7 +1759,13 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         }
         if (contours.length === 0) return fail(SEL);
         const crown = stockTopZ(ctx.stock);
-        const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
+        // BOTTOM allowance raises the floor (forced ≥ 0 — a negative bottom
+        // would cut below the declared floor); SIDE is the radial one,
+        // SIGNED: negative steps the tool-center path INSIDE the contour,
+        // turning a boss down past its modeled Ø (the thread-prep case).
+        // The 2026-10-28 split: one knob must never move two axes.
+        const bottomAllowance = Math.max(0, op.bottomAllowance);
+        const range = cutRange(op.startDepth, op.endDepth, bottomAllowance, crown);
         if (!range) {
           return fail(
             'end depth must be at or below start depth, and the allowance must leave something to cut',
@@ -1773,9 +1785,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             toolId: tool.id,
             contours,
             side: op.side,
-            allowance: op.allowance, // wall stock (path offset from the line)
+            sideAllowance: op.sideAllowance, // radial wall stock — signed, the path offset from the line
+            bottomAllowance: 0, // unused inside profile2d — jobGeneration raised floorZ by it
             topZ: range.topZ,
-            floorZ: range.floorZ, // floor raised by the same allowance
+            floorZ: range.floorZ, // floor raised by the bottom allowance
             stepDown: finStep,
             tabs: op.tabs ?? undefined,
             feed,
@@ -1816,7 +1829,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           error: null,
           summary:
             `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
-            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+            (bottomAllowance > 0 ? `, ${bottomAllowance}mm floor allowance` : '') +
+            (op.sideAllowance !== 0 ? `, ${op.sideAllowance}mm side offset` : '') +
             (op.finishingOnly ? ', finishing pass only' : '') +
             (op.cutBeyondStock ? ', tail stock cut-over' : '') +
             `, ~${minutes.toFixed(1)} min` +

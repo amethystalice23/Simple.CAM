@@ -137,13 +137,33 @@ function DepthFields(props: {
           ⇩
         </button>
       </div>
-      <NumberField
-        label="Allowance (mm)"
-        value={op.allowance}
-        min={0}
-        step={0.05}
-        onCommit={(v) => upd({ allowance: v })}
-      />
+      {op.kind === 'profile' ? (
+        <>
+          <NumberField
+            label="Bottom allowance (mm)"
+            value={op.bottomAllowance}
+            min={0}
+            step={0.05}
+            title="Roughing stock RAISED ON THE FLOOR — the cut floor lifts by it"
+            onCommit={(v) => upd({ bottomAllowance: v })}
+          />
+          <NumberField
+            label="Side allowance (mm)"
+            value={op.sideAllowance}
+            step={0.05}
+            title="RADIAL stock outside the tool path — SIGNED: positive leaves wall stock for a finishing pass, negative steps the path INSIDE the contour (turns a boss down past its modeled Ø — the thread prep lands the crest at nominal − 2·tolerance)"
+            onCommit={(v) => upd({ sideAllowance: v })}
+          />
+        </>
+      ) : (
+        <NumberField
+          label="Allowance (mm)"
+          value={op.allowance}
+          min={0}
+          step={0.05}
+          onCommit={(v) => upd({ allowance: v })}
+        />
+      )}
       <p className="hint">
         depths are below the stock top · start = end → single finishing pass · allowance = stock
         left for finishing
@@ -360,15 +380,18 @@ function TabsFields(props: {
  * `allowanceKey`: the op's roughing-allowance field, ZEROED when the box is
  * ticked ON (a finishing pass cuts to size — the allowance was roughing
  * stock for exactly the ladder being skipped; Alice, 2026-10-26). The user
- * can set it back afterwards; unticking restores nothing.
+ * can set it back afterwards; unticking restores nothing. The profile's
+ * 2026-10-28 split carries TWO keys (bottom + side) — both zeroed.
  */
 function FinishingOnlyCheck(props: {
   /** one of the ten ladder ops (structural — index/drill/chamfer never call this) */
   op: { finishingOnly?: boolean };
   upd: (p: Partial<JobOp>) => void;
   title?: string;
-  /** the op's allowance field name, zeroed on tick-ON; absent = the op has none */
-  allowanceKey?: 'allowance' | 'finishAllowance';
+  /** the op's allowance field name(s), zeroed on tick-ON; absent = none */
+  allowanceKey?: 'allowance' | 'finishAllowance' | 'bottomAllowance';
+  /** the profile's split: the second (side) key zeroed with the first */
+  secondAllowanceKey?: 'sideAllowance';
 }) {
   return (
     <label
@@ -386,6 +409,7 @@ function FinishingOnlyCheck(props: {
           props.upd({
             finishingOnly: checked,
             ...(checked && props.allowanceKey ? { [props.allowanceKey]: 0 } : {}),
+            ...(checked && props.secondAllowanceKey ? { [props.secondAllowanceKey]: 0 } : {}),
           } as Partial<JobOp>);
         }}
       />
@@ -1079,7 +1103,9 @@ function ParamFields(props: {
             onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
-          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="allowance" />
+          {/* the 2026-10-28 split: BOTH profile allowances are roughing stock
+           * for the skipped ladder — a finishing pass cuts to size */}
+          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="bottomAllowance" secondAllowanceKey="sideAllowance" />
           {!op.finishingOnly && (
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}

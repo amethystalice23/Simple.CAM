@@ -650,8 +650,23 @@ export interface ProfileOp {
    */
   footprint?: Vec2[][];
   side: 'outside' | 'inside' | 'online';
-  /** wall allowance left outside the tool path, mm */
-  allowance: number;
+  /**
+   * ROUGHING stock RAISED ON THE FLOOR, mm — the cut floor lifts by it.
+   * The old single `allowance` moved BOTH axes at once (floor AND wall);
+   * split per Alice, 2026-10-28: "allowance i dont want to change as it
+   * is height as well as width, which would mean unseen consequences."
+   * Forced ≥ 0 — a negative bottom would cut below the declared floor.
+   */
+  bottomAllowance: number;
+  /**
+   * RADIAL stock outside the tool path, mm — SIGNED. Positive leaves wall
+   * stock for a finishing pass; negative steps the tool-center path
+   * INSIDE the contour line, turning a boss down below its modeled Ø
+   * (the thread-prep case: land the crest at `nominal − 2·tolerance`,
+   * the ISO-fit major — Alice, 2026-10-28). The path offset is
+   * `toolR + sideAllowance`, whichever sign.
+   */
+  sideAllowance: number;
   /** machine Z the pass starts from (surface) */
   topZ: number;
   /** machine Z of the profile floor */
@@ -999,8 +1014,13 @@ export type JobOp =
       startDepth: number;
       /** cut floor, mm below the stock crown (start = end → single pass) */
       endDepth: number;
-      /** roughing stock left on the floor and walls, mm; 0 = finish to size */
-      allowance: number;
+      /** roughing stock RAISED ON THE FLOOR, mm — forced ≥ 0 (the
+       *  2026-10-28 split: the old single allowance moved floor AND wall) */
+      bottomAllowance: number;
+      /** RADIAL stock outside the path, mm — SIGNED: negative steps the
+       *  path INSIDE the contour (turns a boss down, e.g. to the ISO-fit
+       *  thread crest); the prep insert prefills it */
+      sideAllowance: number;
       stepDown: number;
       /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the step-down ladder —
        *  one full-depth wall pass at the floor. Assumes the bulk is gone. */

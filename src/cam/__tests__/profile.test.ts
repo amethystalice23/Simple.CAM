@@ -20,7 +20,8 @@ function op(overrides: Partial<ProfileOp> = {}): ProfileOp {
     toolId: 't1',
     contours: [square(0, 10)],
     side: 'outside',
-    allowance: 0,
+    bottomAllowance: 0, // the 2026-10-28 split: floor stock
+    sideAllowance: 0, // …and the radial one — SIGNED
     topZ: 0,
     floorZ: -2,
     stepDown: 1,
@@ -127,12 +128,24 @@ describe('profile2d', () => {
     expect(Math.min(...xs)).toBeCloseTo(0, 5);
   });
 
-  it('honors a wall allowance', () => {
-    const res = profile2d(op({ allowance: 0.5 }), tool);
+  it('honors a wall allowance (the SPLIT side allowance)', () => {
+    const res = profile2d(op({ sideAllowance: 0.5 }), tool);
     const { xs } = loopExtents(res.moves);
     // outside + radius + allowance = 1.5mm out each side → 13mm across
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(12.9);
     expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(13.05);
+  });
+
+  it('NEGATIVE side allowance steps the path INSIDE the contour (the thread prep)', () => {
+    // Alice, 2026-10-28: the profile allowance split — side SIGNED so the
+    // prep can turn a boss down to `nominal − 2·tolerance` (the ISO-fit
+    // crest); a boss 0.006 over Ø14 with t=0.1 wants side = −0.106
+    const res = profile2d(op({ sideAllowance: -0.5 }), tool);
+    const { xs } = loopExtents(res.moves);
+    // the Ø2 test tool (r1): outside + 1 − 0.5 = +0.5mm out each side →
+    // 11mm across (stepped 0.5 IN from the 12mm allowance-0 path)
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(10.9);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(11.05);
   });
 
   it('steps levels and retracts safely between passes', () => {
@@ -272,13 +285,6 @@ describe('profile2d', () => {
   it('rejects invalid parameters', () => {
     expect(() => profile2d(op({ floorZ: 1 }), tool)).toThrowError(/above topZ/);
     expect(() => profile2d(op({ contours: [] }), tool)).toThrowError(/contour/);
-    // negative wall stock is FORCED to 0, not rejected (Alice, 2026-10-28:
-    // the thread-mill prep insert computed −0.01 from a boss a hair over
-    // nominal and the throw killed the prep op — "dont warn that it must
-    // be >= 0, force it to be"): a −1 allowance cuts the same path as 0
-    expect(profile2d(op({ allowance: -1 }), tool).moves).toEqual(
-      profile2d(op({ allowance: 0 }), tool).moves,
-    );
   });
 
   it('pins the no-tabs output to the pre-tabs baseline', () => {

@@ -1006,10 +1006,12 @@ export function App() {
         startDepth: op.startDepth,
         // the bore runs past the thread's floor — form clearance below
         endDepth: round2(op.endDepth + Math.max(1, op.pitch * 2)),
-        // negative opens an undersized bore to d1; 0 = already at size.
-        // FORCED ≥ 0 (Alice, 2026-10-28: her prep came out at −0.01 from a
-        // boss a hair over nominal and the profile errored — "dont warn
-        // that it must be >= 0, force it to be")
+        // the pocket's allowance insets the region: opening an OVERSIZE
+        // bore to d1 (positive); at/under size is 0 (a pocket cannot grow
+        // the region — open undersized bores by drilling them bigger).
+        // d1 derives from the THREAD's nominal (Alice, 2026-10-28: "the
+        // feature on the thread might not be the same as the thread
+        // diameter set"), never from the feature Ø
         allowance: Math.max(0, radius === null ? 0 : round2(radius - d1R)),
         cutBeyondStock: false,
       } as JobOp;
@@ -1022,8 +1024,16 @@ export function App() {
         startDepth: 0, // turn from the crown down — air above the boss is free
         endDepth: round2(op.endDepth + 1),
         side: 'outside',
-        // same force: a boss at/under nominal is already at size (0)
-        allowance: Math.max(0, radius === null ? 0 : round2(op.nominalDiameter / 2 - radius)),
+        bottomAllowance: 0,
+        // SIGNED side offset (Alice, 2026-10-28): turn the boss DOWN TO
+        // the ISO-fit crest Ø `nominal − 2·tolerance` — the thread neck
+        // rides that crest at zero clearance, so the red streamers stop.
+        // Both ends derive from the THREAD (nominal + tolerance), the
+        // start from the resolved BOSS radius — they are independent
+        // ("the feature on the thread might not be the same as the
+        // thread diameter set"), so the offset is their honest
+        // difference, sign and all — never clamped
+        sideAllowance: radius === null ? 0 : round2((op.nominalDiameter - 2 * op.tolerance) / 2 - radius),
         clearToStock: true, // clear the waste out to the stock wall
         tabs: null,
       } as JobOp;

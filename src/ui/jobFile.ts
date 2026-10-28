@@ -121,6 +121,23 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
         op = { ...op, tabs: null } as JobOp;
       }
     }
+    // pre-split profile saves (2026-10-28): the single `allowance` moved
+    // BOTH the floor and the wall — it migrates to bottom AND side alike.
+    // MUTATE (assign), never return: legacy saves lack the split AND the
+    // clearToStock/cutBeyondStock fields below, and an early return would
+    // skip those migrations (the tabs-era lesson).
+    if (op.kind === 'profile') {
+      const hasSplit =
+        typeof (op as { bottomAllowance?: unknown }).bottomAllowance === 'number' &&
+        typeof (op as { sideAllowance?: unknown }).sideAllowance === 'number';
+      if (!hasSplit) {
+        const a = typeof (op as { allowance?: unknown }).allowance === 'number'
+          ? (op as { allowance?: unknown }).allowance as number
+          : 0;
+        const { allowance: _old, ...rest } = op as typeof op & { allowance?: unknown };
+        op = { ...rest, bottomAllowance: a, sideAllowance: a } as JobOp;
+      }
+    }
     // pre-⇩ saves carry no floorFeatureId — detached is the null default
     if (isDepthBearingJobOp(op)) {
       const normalized = op.floorFeatureId === undefined ? { ...op, floorFeatureId: null } : op;

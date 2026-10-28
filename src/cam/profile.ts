@@ -91,11 +91,13 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   // top == floor is legal: a single level at the floor (finishing pass)
   if (op.floorZ > op.topZ) throw new Error('floorZ must not be above topZ');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
-  // FORCED, not warned (Alice, 2026-10-28 — the thread-mill prep insert
-  // computed nominalR − bossR = −0.01 from a boss 0.01 over nominal and
-  // the throw killed the whole prep op): negative wall stock is a
-  // turn-to-size request the profile already satisfies — clamp to 0
-  op = { ...op, allowance: Math.max(0, op.allowance) };
+  // SIDE allowance is SIGNED (Alice, 2026-10-28 — the split): negative
+  // steps the tool-center path INSIDE the contour, turning a boss down
+  // below its modeled Ø (the thread prep lands the crest at
+  // nominal − 2·tolerance); the path offset is toolR + sideAllowance,
+  // whichever sign. The old single-allowance clamp is gone — the prep
+  // insert no longer needs it, and the floor/bottom split carries the
+  // forced-≥0 rule where it belongs (jobGeneration).
   if (op.tabs) {
     if (!Number.isInteger(op.tabs.count) || op.tabs.count < 1) {
       throw new Error('tab count must be an integer >= 1');
@@ -109,7 +111,7 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   if (op.side === 'online') {
     paths = op.contours;
   } else {
-    const offset = toolR + op.allowance;
+    const offset = toolR + op.sideAllowance;
     paths = op.side === 'outside' ? offsetOutward(op.contours, offset) : offsetInward(op.contours, offset);
   }
   if (paths.length === 0) {
