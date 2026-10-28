@@ -15,12 +15,18 @@
  *               radius, cylinder to fluteLen ('corn' maps to V-Bit in the
  *               post's tool-type table, so it cuts as a vbit)
  *  drill      → cone by drillPointAngle (default 118°), cylinder above
- *  threadmill → flat (documented v1 approximation)
+ *  threadmill → the TOOTHED BAND: ISO 60° trapezoid teeth at pitch spacing
+ *               (flutes = the tooth count), REVOLVED (the tool spins) —
+ *               tip flat p/6 at the cut Ø, 30° flanks, root at
+ *               cutØ − 1.2268·p; the taper to the shank (fluteLength =
+ *               the cutting length) is contact-only, never removal
  *  laser      → buildToolSpec THROWS — the caller must skip laser moves
  *               before the kernel ever sees them (laserSkipped counter)
  */
 
 import type { Tool } from '../core/types';
+// D3_FACTOR: the ISO 724 external minor (1.2268·p) — the thread-mill root
+import { D3_FACTOR } from '../cam/threadMill';
 
 export interface ToolSpec {
   /** max cutting radius, mm */
@@ -154,14 +160,101 @@ export function buildToolSpec(tool: Tool): ToolSpec {
     }
 
     case 'flat':
-    case 'threadmill': // documented v1 approximation: threadmill cuts as flat
       return flatSpec(radius, fluteLen, shank);
+
+    case 'threadmill': {
+      // The TOOTHED BAND cuts — the 60° thread form, not a flat wall
+      // (Alice, 2026-10-28: her sim report — "it has done a straight cut,
+      // like the flat vertical wall left by an endmill, rather than using
+      // the tooth profile of the threadmill"). The form derives from the
+      // tool's own record: a trapezoid TOOTH — tip flat p/6 at the cut Ø
+      // (the groove's root flat), flanks at 30° (60° included), root at
+      // cutØ − 1.2268·p (the ISO d3, D3_FACTOR — the root circle rides the
+      // crest plane by design). REVOLVED about the spindle axis: the tool
+      // spins, so the revolved envelope is the exact removal solid —
+      // sweeping it along the helix traces the groove continuously.
+      // `flutes` = the TOOTH count, at ONE circumferential spot, pitch
+      // spaced (Alice) — multi-tooth bands merge over the root cylinder
+      // (why they are pitch-locked); a 1-tooth stands alone on its neck.
+      // Above the band: the thin TAPER to the shank (the cutting length,
+      // fluteLength) — CONTACT only, never removal.
+      if (tool.pitch === undefined || !(tool.pitch > 0)) {
+        return flatSpec(radius, fluteLen, shank); // no pitch on record — nothing to derive
+      }
+      const p = tool.pitch;
+      const teeth = Math.max(1, tool.flutes ?? 1);
+      const rootR = radius - (D3_FACTOR / 2) * p;
+      if (rootR <= 0) return flatSpec(radius, fluteLen, shank); // degenerate — skip the form
+      const tan30 = Math.tan(Math.PI / 6);
+      const halfTip = p / 12; // half the p/6 tip flat
+      const toothSpan = halfTip + (radius - rootR) * tan30; // ≈ 0.437·p per side
+      const bandLen = 2 * toothSpan + (teeth - 1) * p;
+      const centers = Array.from({ length: teeth }, (_, k) => toothSpan + k * p);
+      // the taper+shank above the toothed band: contact bands — the taper
+      // grows linearly root→shaft over the cutting length, the shank above
+      const shaftR = (tool.shaftDiameter ?? tool.diameter) / 2;
+      const cutting = Math.max(bandLen, fluteLen);
+      const top = tool.overallLength !== undefined ? tool.overallLength : cutting + 30;
+      const bands: ShankBand[] = [];
+      if (cutting > bandLen) {
+        bands.push({ zFrom: bandLen, zTo: cutting, r0: rootR, r1: shaftR });
+      }
+      if (top > cutting) {
+        bands.push({ zFrom: cutting, zTo: top, r0: shaftR, r1: shaftR });
+      }
+      return {
+        radius,
+        // the CUTTING solid is the toothed band alone — the cutting length
+        // is the TAPER's reach (contact), not cutting extent
+        fluteLen: bandLen,
+        shankRadius: Math.max(shaftR, rootR),
+        shankTop: top,
+        shankInside(z, rhoSq) {
+          return shankInsideBands(bands, z, rhoSq);
+        },
+        inside(z, rhoSq) {
+          if (z < 0 || z > bandLen) return false;
+          const rho = Math.sqrt(rhoSq);
+          if (rho > radius) return false;
+          // between teeth the multi-tooth band is solid at the root
+          // circle (the merged body — it shaves the crests when the fit
+          // is cut deeper than nominal, honest physics); a 1-tooth's
+          // body below its root is the neck — contact, never removal
+          if (rho <= rootR) return teeth >= 2;
+          const halfW = halfTip + (radius - rho) * tan30;
+          return centers.some((c) => Math.abs(z - c) <= halfW);
+        },
+        bounds() {
+          return [-radius, radius, -radius, radius, 0, bandLen];
+        },
+      };
+    }
   }
 }
 
-/** shank-profile band: z ∈ (zFrom, zTo] within radius — contact-only
- *  (red collision), never removal */
-type ShankBand = { zFrom: number; zTo: number; radius: number };
+/** shank-profile band: z ∈ (zFrom, zTo] within its radius — contact-only
+ *  (red collision), never removal. The radius may TAPER linearly r0 → r1
+ *  (a thread mill's thin taper between the toothed band and the shank);
+ *  cylindrical bands are the r0 === r1 case. */
+type ShankBand = { zFrom: number; zTo: number; r0: number; r1: number };
+
+/** Band membership radius at z (linear r0 → r1). */
+function bandRadiusAt(b: ShankBand, z: number): number {
+  if (b.zTo <= b.zFrom) return b.r0;
+  const t = Math.min(1, Math.max(0, (z - b.zFrom) / (b.zTo - b.zFrom)));
+  return b.r0 + (b.r1 - b.r0) * t;
+}
+
+/** Contact test over a band stack (red collision — never removal). */
+function shankInsideBands(bands: ShankBand[], z: number, rhoSq: number): boolean {
+  for (const b of bands) {
+    if (z > b.zFrom && z <= b.zTo) {
+      const r = bandRadiusAt(b, z);
+      if (rhoSq <= r * r) return true;
+    }
+  }
+  return false;
+}
 
 /** shank solid (red-collision contact only — never removal) as BANDS above
  *  the flute: today the shaft cylinder (radius shaftDiameter/2, default
@@ -183,21 +276,18 @@ function shankOf(
   const headLen = tool.headLength ?? 0;
   if (headR > 0 && headLen > 0) {
     // the head sits directly above the flute; the shaft continues above it
-    bands.push({ zFrom: fluteLen, zTo: fluteLen + headLen, radius: headR });
+    bands.push({ zFrom: fluteLen, zTo: fluteLen + headLen, r0: headR, r1: headR });
     if (shankTop > fluteLen + headLen) {
-      bands.push({ zFrom: fluteLen + headLen, zTo: shankTop, radius: shaftRadius });
+      bands.push({ zFrom: fluteLen + headLen, zTo: shankTop, r0: shaftRadius, r1: shaftRadius });
     }
   } else {
-    bands.push({ zFrom: fluteLen, zTo: shankTop, radius: shaftRadius });
+    bands.push({ zFrom: fluteLen, zTo: shankTop, r0: shaftRadius, r1: shaftRadius });
   }
   return {
-    shankRadius: Math.max(...bands.map((b) => b.radius)),
+    shankRadius: Math.max(...bands.map((b) => Math.max(b.r0, b.r1))),
     shankTop: Math.max(...bands.map((b) => b.zTo)),
     shankInside(z, rhoSq) {
-      for (const b of bands) {
-        if (z > b.zFrom && z <= b.zTo && rhoSq <= b.radius * b.radius) return true;
-      }
-      return false;
+      return shankInsideBands(bands, z, rhoSq);
     },
   };
 }
