@@ -812,7 +812,11 @@ reference these numbers):
    "generate pins" op + "flip work" op pair.
 7. **Image → relief (greyscale heightmap)** — photo-to-carve, both
    Makera Studio and Carveco have it; pairs naturally with the
-   raster engine.
+   raster engine. ALICE (2026-10-28): import pops a bumpmap dialogue
+   (map greyscale to a chosen height, etc.); the result is an
+   ordinary model object that ALL standard contouring ops then work
+   on — no new ops, no separate workflow (unlike Studio), ops list
+   stays uncluttered.
 8. **Rest machining** — small tool cleans only what the big one
    missed. ALICE: our allowance + finishingOnly knobs already cover
    the workflow manually; bundling risks a vastly more complex UI
@@ -839,6 +843,15 @@ Remaining Makera-Studio parity gaps (the raison d'être is parity then
 some): DXF + STEP import (they have both), image import/trace-to-
 vector, PCB/Gerber workflow, laser-image dot matrix. Every other op
 on their list has a counterpart here.
+
+Laser-image design note (ALICE, 2026-10-28): halftoning is the
+approach — her proven trick for making Studio's laser-image
+engraving less terrible on a machine with little/no greyscale
+ability (Inkscape's "newspaper" filter shows the method space:
+round/screen/line/dots-per-inch etc.). Halftone output is vector
+artwork, so laser-image could ride the EXISTING artwork → engrave
+(beam power) pipeline — same no-new-ops philosophy as the heightmap
+above, on both flat and wrapped frames.
 
 ## License policy (hard rule)
 
