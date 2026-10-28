@@ -115,6 +115,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'spiralCarve', label: 'Spiral carve (4-axis)', rotaryOnly: true },
   { kind: 'engrave', label: 'Engrave (artwork paths)' },
   { kind: 'thread', label: 'Thread (4-axis)', rotaryOnly: true },
+  { kind: 'threadMill', label: 'Thread mill (3-axis)' },
 ];
 
 /**
@@ -326,6 +327,24 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       return { ...base, kind, depth: 0, stepDown, finishingOnly: false, rotation: 'cw' };
     case 'engrave':
       return { ...base, kind, depth: 0.5, stepDown: 0.25, finishingOnly: false };
+    case 'threadMill': {
+      // no stock/Ø defaults to read yet — the selection prefills the
+      // thread (Ø/pitch/length from the rim or wall facet); M6-coarse
+      // is a sane editable starting point for a hand-set op
+      const nominal = 6;
+      return {
+        ...base,
+        kind,
+        internal: true,
+        nominalDiameter: nominal,
+        pitch: metricPitch(nominal) ?? 1,
+        starts: 1,
+        tolerance: 0,
+        hand: 'right',
+        startDepth: 0,
+        endDepth: 5,
+      };
+    }
     case 'index':
       return { ...base, kind, angle: 90 };
     case 'profile':
@@ -1868,6 +1887,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `, ${res.chamferAngleDeg.toFixed(0)}° from the bit, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
+
+      case 'threadMill':
+        // landing next: the generator (src/cam/threadMill.ts) + the
+        // selection resolver (rim circle / cylindrical wall facet)
+        return fail('thread milling is not wired up yet — coming in this build');
 
       case 'engrave': {
         const SEL = 'select artwork paths (drop an SVG onto the viewport to create one)';

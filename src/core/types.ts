@@ -351,6 +351,66 @@ export interface ThreadOp {
   clearance?: number;
 }
 
+/**
+ * Internal/external threads cut with a single-profile thread mill in
+ * machine XYZ — no A, G94 throughout (PLAN.md ops table, 2026-10-28).
+ * Mill-tested ground truth: examples/MakeraStudioGHM9_Stage3_TOP…
+ * `[T6]14ccw thread` — external M14×1 CCW, Ø4.75 mill. Their cycle:
+ * plunge beside the boss to the thread BOTTOM, RADIAL feed in to the
+ * helix radius (the entry notch is the bottom groove), ASCENDING helix
+ * one pitch per revolution, straight rapid up at the top; the whole
+ * cycle runs twice (spring = a full second pass). Path radius pinned by
+ * that file: 8.76 = d3/2 + toolR, d3 = ISO 724 EXTERNAL minor
+ * (nominal − 1.2268·p). FIT IS RADIAL — a full-form tool cuts its own
+ * profile, so tolerance shifts the helix radius, never the depth:
+ * external Rc = d3/2 + toolR − tolerance, internal Rc = nominal/2 −
+ * toolR + tolerance (tips at the major). Hand: right-hand = the groove
+ * descends with CCW rotation (helix CW-descending viewed from above).
+ */
+export interface ThreadMillOp {
+  kind: 'threadMill';
+  id: string;
+  toolId: string;
+  targets: ThreadMillTarget[];
+  /** the thread's nominal (major) diameter, mm */
+  nominalDiameter: number;
+  /** tooth-to-tooth distance, mm (lead = starts × pitch) */
+  pitch: number;
+  /** thread starts (multi-start: starts helices offset one pitch) */
+  starts: number;
+  /** fit allowance, mm: internal + (deeper grooves → looser nut),
+   * external − (thinner teeth → looser bolt) */
+  tolerance: number;
+  /** right-hand = the helix descends clockwise viewed from above */
+  hand: 'right' | 'left';
+  /** XY cut feed, mm/min (G94) */
+  feed: number;
+  /** plunge feed for the approach descent, mm/min (G94) */
+  plungeFeed: number;
+  /** rapid clearance above the rim/face, mm */
+  safeClearance: number;
+}
+
+/** One thread, machine space. */
+export interface ThreadMillTarget {
+  /** machine XY of the thread axis */
+  center: Vec2;
+  /** internal (bore) or external (boss) */
+  internal: boolean;
+  /** thread start, machine Z — the rim/face the thread runs down from */
+  topZ: number;
+  /** thread length downward, mm (> 0) */
+  depth: number;
+  /**
+   * Internal only: the radius the PREP bore is actually cut to, mm —
+   * the aside-room retract decision reads it (boreR − toolR vs margin).
+   * Default/0 = the ISO minor radius (the prep the op itself recommends);
+   * a CAD bore already at size or a user-picked larger drill leaves more
+   * room and the tool lifts instead of unwinding.
+   */
+  boreRadius?: number;
+}
+
 /** One chamferable edge: a circle coaxial with the stock axis. */
 export interface CylChamferEdge {
   /** machine X of the edge circle — fixed through the whole cut */
@@ -647,7 +707,15 @@ export interface ChamferOp {
   safeClearance: number;
 }
 
-export type Operation = FaceCylinderOp | SpiralCarveOp | ThreadOp | PocketOp | DrillOp | ProfileOp | ChamferOp;
+export type Operation =
+  | FaceCylinderOp
+  | SpiralCarveOp
+  | ThreadOp
+  | ThreadMillOp
+  | PocketOp
+  | DrillOp
+  | ProfileOp
+  | ChamferOp;
 // Phase 1 adds: engrave | indexedPocket
 // Phase 2 adds: thread | wrappedGroove
 
@@ -770,6 +838,36 @@ export type JobOp =
       /** the surface the ladder starts from (the faced crest Ø when a
        * facing op precedes); null = the stock surface */
       surfaceDiameter: number | null;
+    })
+  | (JobOpBase & {
+      kind: 'threadMill';
+      /**
+       * 3-axis thread milling (PLAN.md ops table, 2026-10-28): internal
+       * AND external threads with a single-profile thread mill — helix in
+       * machine XYZ, fit RADIAL (tolerance shifts the helix radius, the
+       * tool cuts its own full form). The selection (rim circle or
+       * cylindrical wall facet) prefills this; depths are mm below the
+       * stock crown like every depth-bearing op.
+       */
+      /** internal (bore) or external (boss) — prefilled from the selection
+       *  (circle.inner / the wall-normal side), user-editable */
+      internal: boolean;
+      /** the thread's nominal (major) diameter, mm — editing prefills the
+       *  standard ISO coarse pitch (metricPitch), like the rotary thread */
+      nominalDiameter: number;
+      /** tooth-to-tooth distance, mm (lead = starts × pitch) */
+      pitch: number;
+      /** thread starts (multi-start: starts helices offset one pitch) */
+      starts: number;
+      /** fit allowance, mm: internal + (deeper grooves → looser nut),
+       *  external − (thinner teeth → looser bolt); 0 = form-true */
+      tolerance: number;
+      /** right-hand = the helix descends clockwise viewed from above */
+      hand: 'right' | 'left';
+      /** thread start, mm below the stock crown (0 = the rim/face) */
+      startDepth: number;
+      /** thread floor, mm below the stock crown (length = end − start) */
+      endDepth: number;
     })
   | (JobOpBase & {
       kind: 'index';
