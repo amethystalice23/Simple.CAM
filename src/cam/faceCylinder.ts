@@ -129,15 +129,37 @@ export function faceCylinder(
     : Math.max(op.xEnd - toolR, pathX0);
   const pathSpan = Math.abs(pathX1 - pathX0);
 
-  // Roughing depths: k * stepDown while below (total - allowance), capped.
+  // The depth ladder (Alice's rule, 2026-10-28): every step ≤ stepDown, the
+  // rough ladder lands EXACTLY ON the rough target (totalDepth − allowance —
+  // "you always go entirely to your target depth"), a final SHORTER
+  // remainder step when the last whole step-down falls short, never a step
+  // past it, and the finish then takes exactly the allowance band ("leave
+  // only allowance at the bottom, no more or less" — one level when
+  // allowance ≤ stepDown, itself laddered if it ever exceeds it). Same
+  // shape with no allowance: the rough ladder ends at totalDepth and its
+  // last level IS the finishing pass. The old ladder stopped BELOW the
+  // target (last whole k·stepDown) and let the finish jump the remainder
+  // + allowance in one step — larger than the step-down whenever the two
+  // summed over it (e.g. depth 4.15, step 0.8, allowance 0.2 → a 0.95
+  // finish step), which must never happen.
   const roughTarget = Math.max(totalDepth - op.finishAllowance, 0);
   const roughDepths: number[] = [];
-  for (let k = 1; k * op.stepDown < roughTarget; k++) roughDepths.push(k * op.stepDown);
-  if (roughTarget > 0 && roughDepths.length === 0) roughDepths.push(roughTarget);
+  for (let k = 1; k * op.stepDown < roughTarget - 1e-9; k++) roughDepths.push(k * op.stepDown);
+  if (roughTarget > 0) roughDepths.push(roughTarget); // the remainder step, ≤ stepDown
+  const finishDepths: number[] = [];
+  if (op.finishAllowance > 1e-9) {
+    // the allowance band, laddered at ≤ stepDown (one level in the normal case)
+    let d = roughTarget;
+    while (totalDepth - d > op.stepDown + 1e-9) {
+      d += op.stepDown;
+      finishDepths.push(d);
+    }
+    finishDepths.push(totalDepth);
+  } // else: the rough ladder already ends at totalDepth — its last level is the finish
   // FINISHING PASS ONLY (Alice, 2026-10-26): skip the roughing ladder —
   // one pass straight to the target Ø (the step-down and finish allowance
   // are meaningless without roughing; the op assumes the bulk is gone).
-  const depths = op.finishingOnly ? [totalDepth] : [...roughDepths, totalDepth];
+  const depths = op.finishingOnly ? [totalDepth] : [...roughDepths, ...finishDepths];
 
   const stepOver = op.stepOver;
   const revs = pathSpan / stepOver;

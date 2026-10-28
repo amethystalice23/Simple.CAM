@@ -149,8 +149,9 @@ describe('carvera post-processor', () => {
     expect(gcode).toMatch(/G1 X100 A7590 F0\.32/);
     // helical entry on the finishing pass: surface 25 − 5 depth = Z20 while A
     // steps 90° at the rotary limit — the retrace keeps A oscillating around
-    // the phase (4 levels in: 4×90 = 360), not piling up per pass
-    expect(gcode).toMatch(/G1 Z20 A450 F26\.4/);
+    // the phase (Alice's ladder [1,2,3,4,4.8,5]: the finish level is the
+    // 6th, its entry sits at 5×(90+7500) − 4×7500 + 90 = 8040)
+    expect(gcode).toMatch(/G1 Z20 A8040 F26\.4/);
   });
 
   it('documents prep assumptions as comments by default', () => {

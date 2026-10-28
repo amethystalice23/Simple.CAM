@@ -133,10 +133,16 @@ describe('materializeTestPattern — rotary (the v5 coupon, as ops)', () => {
       a = res.finalA;
       minutes += res.minutes;
     }
-    // the face pass dominates (~15 min at the rotary ceiling); 25 single
-    // passes add a couple more
-    expect(minutes).toBeGreaterThan(15);
-    expect(a).toBeGreaterThan(0); // the axis wound up cutting
+    // the face pass dominates (~7.6 min at the rotary ceiling — ONE level:
+    // Alice's ladder rule kills the old duplicate rough+finish at the same
+    // depth when totalDepth lands exactly on a step-down); the 25 single
+    // spiral passes add a few more
+    expect(minutes).toBeGreaterThan(10);
+    // DATUM DISCIPLINE: no Index op in the plan, so the final datum is the
+    // INITIAL datum (0) — every rotary op borrowed and handed it back.
+    // (The pile lives inside each op's moves — the axis did plenty of
+    // cutting, verified by the minutes above.)
+    expect(a).toBeCloseTo(0, 6);
   });
 
   it('carries per-cell S lines and honors the rotary feed clamp', () => {

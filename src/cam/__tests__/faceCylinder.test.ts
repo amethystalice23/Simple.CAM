@@ -59,22 +59,26 @@ describe('faceCylinder: spiral', () => {
   const sweeps = res.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
 
   it('schedules roughing levels plus one finishing level', () => {
-    expect(res.passes).toBe(5);
+    // Alice's ladder rule (2026-10-28): roughs at whole step-downs then a
+    // SHORTER remainder landing exactly ON totalDepth − allowance (4.8),
+    // finish takes exactly the allowance band (4.8 → 5) — never a step
+    // larger than the step-down (the old finish jumped 0.8 + 0.2 = 1.0 > 1).
+    expect(res.passes).toBe(6);
     expect(res.radialDepth).toBeCloseTo(5, 9);
-    // lift + travel + (step-down + sweep) × 5 levels + final retract
-    expect(res.moves.length).toBe(13);
+    // lift + travel + (step-down + sweep) × 6 levels + final retract
+    expect(res.moves.length).toBe(15);
   });
 
   it('steps down in the cut: one Z+A move per level at surface - depth', () => {
-    expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20]);
+    expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
     for (const s of stepDowns) expect(s.feed).toBeCloseTo(1 / entryMinutes, 3);
     // the first entry comes from safe Z; the rest step down at the sweep ends
     expect(stepDowns[0].comment).toMatch(/helical entry/);
-    expect(stepDowns[4].comment).toMatch(/spiral step down/);
+    expect(stepDowns[5].comment).toMatch(/spiral step down/);
   });
 
   it('emits coordinated X+A sweeps in G93 form (feed = 1/passMinutes)', () => {
-    expect(sweeps.length).toBe(5);
+    expect(sweeps.length).toBe(6);
     const revs = 100 / (0.8 * 6); // span / stepOver
     const passMinutes = revs / MAX_ROTARY_RPM;
     for (const s of sweeps) expect(s.feed).toBeCloseTo(1 / passMinutes, 4);
@@ -90,9 +94,10 @@ describe('faceCylinder: spiral', () => {
       180, // back along the helix
       270 + advance,
       360,
-      450 + advance, // finish sweep forward
+      450 + advance,
+      540, // the finish level sweeps back along the helix
     ]);
-    expect(sweeps.map((s) => s.words.x)).toEqual([100, 0, 100, 0, 100]);
+    expect(sweeps.map((s) => s.words.x)).toEqual([100, 0, 100, 0, 100, 0]);
   });
 
   it('approaches with axis-separate rapids and retracts once', () => {
@@ -107,7 +112,7 @@ describe('faceCylinder: spiral', () => {
     const xRapids = res.moves.filter((m) => m.rapid && m.words.x !== undefined);
     expect(xRapids).toHaveLength(1);
     expect(xRapids[0].words.x).toBe(op.xStart);
-    expect(xRapids[0].comment).toMatch(/pass 1\/5/); // the pass label rides the travel
+    expect(xRapids[0].comment).toMatch(/pass 1\/6/); // the pass label rides the travel
     // the travel PRECEDES the descent
     expect(res.moves[0].words.x).toBe(op.xStart);
     expect(res.moves[1].words.z).toBe(25 + SAFE_CLEARANCE);
@@ -126,8 +131,10 @@ describe('faceCylinder: spiral', () => {
   });
 
   it('estimates rotation-rate-limited time honestly', () => {
+    // every level's helical entry is rotary-bound ((90/360)/RPM > any
+    // increment/plungeFeed here), so one entryMinutes per level
     const passMinutes = 100 / 4.8 / MAX_ROTARY_RPM;
-    expect(res.estimatedMinutes).toBeCloseTo(5 * (passMinutes + entryMinutes), 3);
+    expect(res.estimatedMinutes).toBeCloseTo(6 * (passMinutes + entryMinutes), 3);
   });
 
   it('reverses A for ccw rotation', () => {
@@ -141,7 +148,57 @@ describe('faceCylinder: spiral', () => {
     const narrowSweeps = narrow.moves.filter(
       (m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined,
     );
-    expect(narrowSweeps.map((s) => s.words.x)).toEqual([90, 10, 90, 10, 90]);
+    expect(narrowSweeps.map((s) => s.words.x)).toEqual([90, 10, 90, 10, 90, 10]);
+  });
+
+  it("enforces Alice's ladder rule: every increment ≤ stepDown, roughs land on totalDepth − allowance", () => {
+    // the rule as she stated it (2026-10-28): smaller steps yes, bigger
+    // never, always entirely to the target (actual depth − allowance),
+    // then the finish leaves exactly the allowance — spot-checked across
+    // parameter shapes where the old code jumped over the step-down
+    for (const [depth, sd, allow] of [
+      [4.15, 0.8, 0.2], // her example: 3.95 remainder 0.75, finish 0.2
+      [4.15, 0.8, 0.1], // her saved job: 4.05 remainder 0.25
+      [5, 1, 0.2], // this fixture: 4.8 remainder 0.8
+      [4.0, 0.8, 0], // no allowance: ends at the target, last level is the finish
+      [3.0, 1.5, 0.4], // multiple whole steps + remainder
+      [1.0, 2.0, 0.2], // single shallow remainder level
+    ] as const) {
+      const r = faceCylinder(
+        {
+          ...op,
+          targetDiameter: (25 - depth) * 2, // totalDepth = depth
+          stepDown: sd,
+          finishAllowance: allow,
+        },
+        calibration,
+        tool,
+      );
+      expect(r.passes).toBeGreaterThan(0);
+      // reconstruct the emitted ladder from the Z+A step-downs
+      const ladder: number[] = [];
+      let a: number | undefined;
+      for (const m of r.moves) {
+        if (m.words.z !== undefined && m.words.a !== undefined && m.words.x === undefined && !m.rapid) {
+          ladder.push(25 - m.words.z);
+        }
+        a = m.words.a ?? a;
+      }
+      void a;
+      // every increment ≤ stepDown (never a bigger step)
+      let prev = 0;
+      for (const d of ladder) {
+        expect(d - prev).toBeLessThanOrEqual(sd + 1e-9);
+        prev = d;
+      }
+      // the rough ladder lands EXACTLY on totalDepth − allowance
+      const roughTarget = Math.max(depth - allow, 0);
+      if (allow > 0 && roughTarget > 0) {
+        expect(ladder.some((d) => Math.abs(d - roughTarget) < 1e-9)).toBe(true);
+      }
+      // and the final level is exactly totalDepth
+      expect(Math.abs(ladder[ladder.length - 1] - depth)).toBeLessThan(1e-9);
+    }
   });
 });
 
@@ -172,7 +229,7 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
   );
 
   it('opens and closes every level with a 360° edge ring', () => {
-    expect(edgeRings.length).toBe(10); // 5 levels × (entry ring + exit ring)
+    expect(edgeRings.length).toBe(12); // 6 levels × (entry ring + exit ring)
     for (const r of edgeRings) {
       expect(r.comment).toMatch(/entry ring 360|exit ring 360/);
       // rings sit ON the path bounds (tool-center inset by toolR)
@@ -184,9 +241,9 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     // level 1 plunges from safe Z (the level-0 "surface"), the rest step
     // down one increment at the previous level's sweep end — both at the
     // entry X, straight (no A word), so the ring below cuts pre-cleared
-    expect(plunges.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20]);
+    expect(plunges.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
     expect(plunges.map((m) => m.feed)).toEqual(
-      Array.from({ length: 5 }, () => op.plungeFeed), // G94 mm/min, A stationary
+      Array.from({ length: 6 }, () => op.plungeFeed), // G94 mm/min, A stationary
     );
     // each plunge PRECEDES its level's entry ring
     let pi = 0;
@@ -206,6 +263,7 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
       pX0.toFixed(1), pX1.toFixed(1),
       pX1.toFixed(1), pX0.toFixed(1),
       pX0.toFixed(1), pX1.toFixed(1),
+      pX1.toFixed(1), pX0.toFixed(1),
     ]);
   });
 
@@ -232,8 +290,11 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     const ringMinutes = 1 / MAX_ROTARY_RPM;
     const pathSpan = pX1 - pX0;
     const passMinutes = pathSpan / op.stepOver / MAX_ROTARY_RPM;
+    // the fixed-X plunges telescope: their increments sum to totalDepth (5)
+    // — per-level increments [1,1,1,1,0.8,0.2]; entryMinutes is rotary-bound
+    // and equal every level
     expect(res.estimatedMinutes).toBeCloseTo(
-      5 * (passMinutes + entryMinutes + 2 * ringMinutes + 1 / op.plungeFeed),
+      6 * (passMinutes + entryMinutes + 2 * ringMinutes) + 5 / op.plungeFeed,
       3,
     );
   });
@@ -242,10 +303,10 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     const stepDowns = res.moves.filter(
       (m) => !m.rapid && m.words.z !== undefined && m.words.a !== undefined && m.words.x === undefined,
     );
-    expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20]);
+    expect(stepDowns.map((m) => m.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
     const sweeps = res.moves.filter((m) => isSimultaneous(m) && !m.rapid && m.words.x !== undefined);
     // sweeps alternate between the PATH bounds (not the raw xStart/xEnd)
-    expect(sweeps.map((s) => s.words.x)).toEqual([pX1, pX0, pX1, pX0, pX1]);
+    expect(sweeps.map((s) => s.words.x)).toEqual([pX1, pX0, pX1, pX0, pX1, pX0]);
   });
 });
 
@@ -264,8 +325,9 @@ describe('faceCylinder: vertical (rings)', () => {
 
   it('cuts a ring at every step-over position, ending exactly at xEnd', () => {
     // span 100 / stepOver 4.8 => 21 rings at 4.8 spacing + a short final
-    // ring at 100 => 22 rings per level, 5 levels
-    expect(ringMoves.length).toBe(5 * 22);
+    // ring at 100 => 22 rings per level; the ladder (Alice's rule) is
+    // [1, 2, 3, 4, 4.8, 5] → 6 levels
+    expect(ringMoves.length).toBe(6 * 22);
     const level0Xs = xSteps.slice(0, 21).map((m) => m.words.x);
     expect(level0Xs[0]).toBeCloseTo(4.8, 9);
     expect(level0Xs[19]).toBeCloseTo(96, 9);
@@ -274,8 +336,8 @@ describe('faceCylinder: vertical (rings)', () => {
 
   it('snakes between levels, plunging to the next depth at the level end', () => {
     // one straight plunge per level, at the X where the previous level ended
-    expect(plunges.length).toBe(5);
-    expect(plunges.map((p) => p.words.z)).toEqual([24, 23, 22, 21, 20]);
+    expect(plunges.length).toBe(6);
+    expect(plunges.map((p) => p.words.z)).toEqual([24, 23, 22, 21, 20.2, 20]);
     for (const p of plunges) expect(p.feed).toBe(300);
     // level 1 runs back over the same ring positions: 100 → 96 → … → 0
     expect(xSteps[21].words.x).toBeCloseTo(96, 9);
@@ -291,7 +353,7 @@ describe('faceCylinder: vertical (rings)', () => {
     expect(rapids[0].words.z).toBeUndefined(); // the travel carries no Z word
     expect(rapids[1].words.z).toBe(25 + SAFE_CLEARANCE); // the descent
     expect(rapids[2].words.z).toBe(25 + SAFE_CLEARANCE); // the final retract
-    expect(res.moves.length).toBe(45 + 4 * 44 + 2); // 223
+    expect(res.moves.length).toBe(45 + 5 * 44 + 2); // 267: 6 levels × 44 + entry 3
   });
 
   it('runs full revolutions as A-only moves at the rotary limit (G94 deg/min)', () => {
@@ -308,11 +370,11 @@ describe('faceCylinder: vertical (rings)', () => {
       expect(aVals[i] - aVals[i - 1]).toBeCloseTo(360, 6);
     }
     expect(aVals[0]).toBeCloseTo(360, 6);
-    expect(aVals[aVals.length - 1]).toBeCloseTo(110 * 360, 3);
+    expect(aVals[aVals.length - 1]).toBeCloseTo(132 * 360, 3); // 6 levels × 22 rings
   });
 
   it('steps X in the cut at the cut feed (G94, A stationary)', () => {
-    expect(xSteps.length).toBe(5 * 21);
+    expect(xSteps.length).toBe(6 * 21);
     for (const s of xSteps) {
       expect(s.feed).toBe(600);
       expect(s.words.a).toBeUndefined();
@@ -331,8 +393,10 @@ describe('faceCylinder: vertical (rings)', () => {
   });
 
   it('estimates time as plunges + revolutions + X steps', () => {
+    // plunges telescope to totalDepth (5mm) at plungeFeed; 6 levels × 22
+    // revolutions at the rotary limit; 6 levels × span at the cut feed
     expect(res.estimatedMinutes).toBeCloseTo(
-      5 / 300 + (5 * 22) / MAX_ROTARY_RPM + (5 * 100) / 600,
+      5 / 300 + (6 * 22) / MAX_ROTARY_RPM + (6 * 100) / 600,
       3,
     );
   });
@@ -345,8 +409,9 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
   const indexRapids = res.moves.filter((m) => m.rapid && m.words.a !== undefined);
 
   it('indexes the full 360° per level at a step-over arc on the cut radius', () => {
-    // level arcs at r = 24,23,22,21,20 => 32+31+29+28+27 = 147 passes
-    expect(sweeps.length).toBe(147);
+    // level arcs at r = 24,23,22,21,20.2,20 (the ladder [1,2,3,4,4.8,5])
+    // => 32+31+29+28+27+27 = 174 passes
+    expect(sweeps.length).toBe(174);
     const stepDeg = (4.8 / 24) * (180 / Math.PI); // level 0 cuts at r=24
     const a0 = indexRapids[0]?.words.a ?? 0;
     const a1 = indexRapids[1]?.words.a ?? 0;
@@ -355,14 +420,14 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
 
   it('zigzags X so A only ever advances one way', () => {
     expect(sweeps.map((s) => s.words.x)).toEqual(
-      Array.from({ length: 147 }, (_, i) => (i % 2 === 0 ? 100 : 0)),
+      Array.from({ length: 174 }, (_, i) => (i % 2 === 0 ? 100 : 0)),
     );
     const aVals = indexRapids.map((m) => m.words.a ?? 0);
     for (let i = 1; i < aVals.length; i++) expect(aVals[i]).toBeGreaterThan(aVals[i - 1]);
   });
 
   it('plunges straight (G94 plungeFeed, A stationary) then sweeps at the cut feed', () => {
-    expect(plunges.length).toBe(147);
+    expect(plunges.length).toBe(174);
     for (const p of plunges) {
       expect(p.feed).toBe(300);
       expect(p.words.a).toBeUndefined();
@@ -372,28 +437,32 @@ describe('faceCylinder: horizontal (indexed passes)', () => {
     // (positioning rapids are axis-separate too: the rotary step is its
     // own A-only rapid, the return travel its own X-only rapid)
     expect(res.moves.filter((m) => isSimultaneous(m) && !m.rapid)).toHaveLength(0);
-    // depth per level: 32×z24, 31×z23, 29×z22, 28×z21, 27×z20
+    // depth per level: 32×z24, 31×z23, 29×z22, 28×z21, 27×z20.2, 27×z20
     const zs = plunges.map((p) => p.words.z);
     expect(zs[0]).toBe(24);
     expect(zs[31]).toBe(24);
     expect(zs[32]).toBe(23);
-    expect(zs[146]).toBe(20);
+    expect(zs[120]).toBeCloseTo(20.2, 9);
+    expect(zs[173]).toBe(20);
   });
 
   it('retracts between passes and repositions on axis-separate rapids', () => {
     // every pass ends lifted to the clearance height (plus one entry lift)
     const zRapids = res.moves.filter((m) => m.rapid && m.words.z !== undefined);
-    expect(zRapids.length).toBe(148);
+    expect(zRapids.length).toBe(175);
     expect(zRapids.every((m) => m.words.z === 25 + SAFE_CLEARANCE)).toBe(true);
     // the pass-to-pass step arc is an A-only rapid, the return an X-only one
     const travels = res.moves.filter((m) => m.rapid && m.words.x !== undefined && m.words.a === undefined);
-    expect(travels).toHaveLength(147);
+    expect(travels).toHaveLength(174);
     expect(travels.every((m) => m.words.z === undefined)).toBe(true);
     expect(res.moves.some((m) => m.rapid && m.words.a !== undefined && (m.words.x !== undefined || m.words.z !== undefined))).toBe(false);
   });
 
   it('estimates time from plunge + sweep feeds', () => {
-    expect(res.estimatedMinutes).toBeCloseTo(147 * (1 / 300 + 100 / 600), 3);
+    // each pass charges its LEVEL's increment at plungeFeed (the pass count
+    // per level: 32+31+29+28+27+27), so the plunge terms are
+    // (32+31+29+28)·1 + 27·0.8 + 27·0.2 = 147mm at plungeFeed
+    expect(res.estimatedMinutes).toBeCloseTo(147 / 300 + (174 * 100) / 600, 3);
   });
 });
 

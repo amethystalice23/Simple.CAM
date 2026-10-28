@@ -1325,13 +1325,25 @@ describe('spiral carve spin: the UI op model reaches the generator phase', () =>
     expect(spun.error).toBeNull();
     const baseA = aWords(base);
     const spunA = aWords(spun);
+    // DATUM DISCIPLINE (Alice's 2026-10-28 rule): each op appends one
+    // RETURN move onto the borrowed datum (startA 350) — so the A-word lists
+    // differ only by that shared return; the cutting/positioning words all
+    // shift by +90, and the LAST word of both is the same return to 350.
     expect(spunA).toHaveLength(baseA.length);
-    for (let i = 0; i < baseA.length; i++) {
+    for (let i = 0; i < baseA.length - 1; i++) {
       expect(spunA[i] - baseA[i]).toBeCloseTo(90, 6);
     }
+    expect(spunA[spunA.length - 1]).toBeCloseTo(350, 6); // the shared return
+    expect(baseA[baseA.length - 1]).toBeCloseTo(350, 6);
+    // and finalA is the borrowed datum back — the rule itself
+    expect(spun.finalA).toBeCloseTo(350, 6);
+    expect(base.finalA).toBeCloseTo(350, 6);
     // the first positioning rapid lands on datum 30 + spin 90 (mod 360) —
-    // still within a half-turn of the machine A it came from (350)
-    const rotate = spun.moves.find((m) => m.rapid && m.words.a !== undefined)!;
+    // still within a half-turn of the machine A it came from (350).
+    // (find it BEFORE the return move — the return is also a rapid A word)
+    const rotate = spun.moves.find(
+      (m) => m.rapid && m.words.a !== undefined && !/datum discipline/.test(m.comment ?? ''),
+    )!;
     const phase = ((rotate.words.a! % 360) + 360) % 360;
     expect(phase).toBeCloseTo(120, 6);
     expect(Math.abs(rotate.words.a! - 350)).toBeLessThanOrEqual(180);
@@ -1703,7 +1715,13 @@ describe('cylinder chamfer (edge circles → ring passes)', () => {
     // the op's spindle rides the first move like every cutting op
     expect(res.moves[0].spindleRpm).toBe(12000);
     expect(res.summary).toMatch(/1 edge/);
-    expect(res.finalA).toBeCloseTo(720, 6);
+    // DATUM DISCIPLINE: the ring sweeps end at 720 accumulated — the SAME
+    // spoke as the borrowed datum (0 mod 360), so no return spin is emitted
+    // (whole turns are equivalent orientation; the post's inter-op G92.4
+    // A0 S0 shrink drops the pile without motion) — and finalA is the
+    // borrowed datum back, the next op's startA, never the pile
+    expect(res.moves[res.moves.length - 1].comment ?? '').not.toMatch(/datum discipline/);
+    expect(res.finalA).toBeCloseTo(0, 6);
   });
 
   it('depth 0 on a face-op step edge ladders from the stock surface to the anchor', () => {

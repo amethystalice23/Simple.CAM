@@ -62,9 +62,14 @@ export interface GeneratedOp {
   error: string | null;
   /** one-line summary for the op panel */
   summary: string | null;
-  /** the machine's accumulated A after this op — the next op's startA, so
-   * rotary ops continue from the axis' real position and never unwind the
-   * previous pile to reach a small absolute target */
+  /** the machine's accumulated A the NEXT op continues from — the DATUM
+   *  DISCIPLINE (Alice's 2026-10-28 rule): only an Index op may change the
+   *  datum; every rotary op BORROWS it (its sweeps accumulate freely — the
+   *  machine needs that) and hands it back unchanged via an explicit
+   *  return move appended in the stamp below, so a machine-frame op
+   *  (pocket/profile/…) after it sees the same stock orientation it was
+   *  generated against. Her outer_barrel_adapter report: a face left A at
+   *  4770° ≡ 90° and the following pocket landed 90° off its feature. */
   finalA: number;
   /** the spindle RPM this op stamps (its `S<rpm> M3` line) — undefined for
    * index/laser/no-stamp ops; the NEXT op's prevRpm, so back-to-back ops at
@@ -828,13 +833,44 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
   const res = generateJobOpInner(op, ctx);
   // the machine's A after the op: the last A word emitted (the op continued
   // from ctx.startA), or startA itself when the op never touched A
-  let finalA = ctx.startA;
+  let lastA = ctx.startA;
   for (let i = res.moves.length - 1; i >= 0; i--) {
     const a = res.moves[i].words.a;
     if (a !== undefined) {
-      finalA = a;
+      lastA = a;
       break;
     }
+  }
+  // DATUM DISCIPLINE (Alice's 2026-10-28 rule — see GeneratedOp.finalA):
+  // only an Index op changes the datum (its own move below sets finalA).
+  // Every other op that touched A hands the borrowed datum BACK with an
+  // explicit return move — the datum is a shared session value the next op
+  // (machine-frame pockets, anything) generates against. The return runs
+  // only when the op actually moved the stock OFF its borrowed orientation
+  // (mod whole turns): a same-orientation end needs no spin back, and the
+  // post's inter-op G92.4 shrink only ever drops whole turns, so fractional
+  // orientation survives the pair. A machine at |datum| ≤ 360 spins back at
+  // most a partial turn; the explicit move (not a G92.4 reset) keeps
+  // physical orientation honest — no silent re-registration.
+  let finalA = ctx.startA;
+  const touchedA = lastA !== ctx.startA;
+  if (op.kind !== 'index' && res.moves.length > 0 && touchedA) {
+    // equivalent orientation? (mod 360 — whole turns are the same spoke,
+    // and the post's inter-op shrink drops them without motion)
+    const deltaBack = finalA - lastA;
+    if (Math.abs(deltaBack % 360) > 1e-9) {
+      res.moves.push({
+        words: { a: finalA },
+        feed: 0,
+        rapid: true,
+        comment: `return A to the borrowed datum ${finalA.toFixed(1)}° (datum discipline)`,
+      });
+      lastA = finalA;
+    }
+  }
+  if (op.kind === 'index') {
+    // the Index op IS the datum move: its move targets the new angle
+    finalA = lastA;
   }
   const stamped: GeneratedOp = { ...res, finalA };
   // index ops position the stock; failed ops cut nothing — neither carries
