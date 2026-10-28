@@ -112,6 +112,15 @@ function toTool(remoteName, type, t) {
     }));
   if (presets.length > 0) tool.presets = presets;
   if (typeof g.SFDM === 'number') tool.shaftDiameter = g.SFDM;
+  // Thread mills (Alice, 2026-10-28): the Makera 1- and 3-tooth mills are
+  // NECKED tools — a cutting band a few mm tall (LCF, the cutting face),
+  // then a long slim neck up to the handle; the overall length sets the
+  // max thread length, not the flute. Makera's Fusion records put the
+  // HANDLE Ø in SFDM for the M3–M8 sizes (6, vs the true neck the
+  // M1/M2/M2.5 records carry), which mis-sized the neck and made the
+  // generator and the simulator treat these as fat-shanked. The physical
+  // neck on the whole family is 1/8″ (3.175mm).
+  if (type === 'threadmill') tool.shaftDiameter = Math.min(tool.shaftDiameter ?? 3.175, 3.175);
   if (typeof g.LCF === 'number') tool.fluteLength = g.LCF;
   if (typeof g.OAL === 'number') tool.overallLength = g.OAL;
   if (typeof g.NOF === 'number') tool.flutes = g.NOF;

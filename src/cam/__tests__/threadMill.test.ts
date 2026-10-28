@@ -10,12 +10,14 @@ import type { Move, ThreadMillOp, ThreadMillTarget, Tool } from '../../core/type
 
 const mill: Tool = {
   id: 'tm1',
-  name: '6*M6*18mm Thread',
+  name: 'Carvera M6 Threadmill (the library record, 2026-10-28)',
   type: 'threadmill',
   diameter: 4.75,
   pitch: 1,
-  shaftDiameter: 6,
-  fluteLength: 20,
+  flutes: 3, // teeth at one spot (Alice) — locked to the pitch
+  shaftDiameter: 3.175, // the slim neck above the 2mm cutting band
+  fluteLength: 2,
+  overallLength: 50,
   spindleRpm: 12000,
 };
 
@@ -45,6 +47,9 @@ const internalOp: ThreadMillOp = {
 };
 
 const mill15: Tool = { ...mill, pitch: 1.5 }; // the matching M6×1.5-form mill
+/** a long-banded mill (the example's 6*M6*18mm class): the neck never
+ * comes into play — for pinning path shape, not tool limits */
+const longMill: Tool = { ...mill, fluteLength: 20, overallLength: 60, shaftDiameter: 3 };
 
 const multiOp: ThreadMillOp = {
   ...op,
@@ -221,7 +226,7 @@ describe('threadMill — internal retract decisions', () => {
 
 describe('threadMill — multi-start', () => {
   it('cuts starts helices pitch-staggered, lead = starts × pitch, all repeated by the spring', () => {
-    const res = threadMill(multiOp, mill15);
+    const res = threadMill(multiOp, { ...mill15, fluteLength: 20, overallLength: 60, shaftDiameter: 3 });
     const Rc = pathRadius(10, 1.5, 4.75 / 2, 0, false);
     expect(Rc).toBeCloseTo(6.4549, 3);
     const segs = segmentsPerRevolution(Rc);
@@ -291,7 +296,11 @@ describe('threadMill — the Makera 09-11 gouge, pinned out', () => {
 
   it('external: every descent starts outside the crest at the approach point', () => {
     assertDescentsFromClear(threadMill(op, mill), false, pathRadius(14, 1, 4.75 / 2, 0, false));
-    assertDescentsFromClear(threadMill(multiOp, mill15), false, pathRadius(10, 1.5, 4.75 / 2, 0, false)); // multi-start + spring
+    assertDescentsFromClear(
+      threadMill(multiOp, { ...longMill, pitch: 1.5 }),
+      false,
+      pathRadius(10, 1.5, 4.75 / 2, 0, false),
+    ); // multi-start + spring
     // the radial ladder's outer levels approach FARTHER out — ≥, not ≈
     assertDescentsFromClear(
       threadMill({ ...op, stepOver: 0.2 }, mill),
@@ -376,25 +385,52 @@ describe('threadMill — validation', () => {
     expect(() => threadMill(internalOp, fat)).toThrow(/does not fit the Ø4\.92 bore/);
   });
 
-  it('rejects a shank-oversized bore cut deeper than the flute', () => {
-    // shaft Ø6 > bore Ø4.92, thread 10mm deep vs a 2mm flute
-    const stub = { ...mill, fluteLength: 2 };
-    expect(() => threadMill(internalOp, stub)).toThrow(/cannot enter the Ø4\.92 bore deeper than the 2mm flute/);
-    expect(() => threadMill(internalOp, stub)).toThrow(/use a longer mill/);
+  it('rejects a fat-necked bore cut deeper than the cutting band', () => {
+    // a Ø6 neck > the Ø4.92 bore: the thread is capped at the 2mm band
+    const fat = { ...mill, shaftDiameter: 6 };
+    expect(() => threadMill(internalOp, fat)).toThrow(
+      /Ø6 neck cannot enter the Ø4\.92 bore past the 2mm cutting band/,
+    );
+    // the library neck (3.175) fits the same bore — deep internal is fine
+    expect(() => threadMill(internalOp, mill)).not.toThrow();
   });
 
-  it('rejects an external thread whose shank overhangs the crest (her M6-mill test)', () => {
-    // Alice's 2026-10-28 report, the sim's sea of red: the Ø4.8 M6 mill
-    // (shank Ø6, flute 2mm) on a 10mm M14×1 thread — above the flute the
-    // shank's inner edge sweeps 5.79 < the 7mm crest radius, plowing the
-    // thread teeth standing there. Loud error, not a silent red sim.
-    const fatShank = { ...mill, diameter: 4.8, fluteLength: 2 };
-    expect(() => threadMill(op, fatShank)).toThrow(/Ø6 shank overhangs the Ø14 thread/);
-    expect(() => threadMill(op, fatShank)).toThrow(/use a longer-fluted mill/);
-    // a thread within the flute is fine with the same tool
-    expect(() =>
-      threadMill({ ...op, targets: [{ ...target, depth: 1 }] }, fatShank),
-    ).not.toThrow();
+  it('rejects an external thread whose NECK overhangs the crest — but not the real library tool', () => {
+    // a Ø6-necked Ø4.8 mill on a 10mm M14: above the 2mm band the neck's
+    // inner edge sweeps 1.31mm inside the crest — the OLD sim's red sea,
+    // which was the uncleared stock plus the mis-imported fat neck
+    const fatNeck = { ...mill, diameter: 4.8, shaftDiameter: 6 };
+    expect(() => threadMill(op, fatNeck)).toThrow(/Ø6 neck overhangs the Ø14 thread/);
+    expect(() => threadMill(op, fatNeck)).toThrow(/slimmer-necked or longer-banded/);
+    // HER REAL CASE (2026-10-28, the corrected library record): the M6
+    // mill — Ø4.8 cut, 3.175 neck, 2mm band, 50mm OAL — cuts the 10mm
+    // M14 fine; the neck clears the crest by 0.10mm (noted, tight)
+    const real = threadMill({ ...op, tolerance: 0.1 }, { ...mill, diameter: 4.8 });
+    expect(real.moves.length).toBeGreaterThan(0);
+    expect(real.notes.some((n) => n.includes('clears the crest by only 0.10mm'))).toBe(true);
+    // a thread within the band never brings the neck down — no note
+    const short = threadMill({ ...op, targets: [{ ...target, depth: 1 }] }, mill);
+    expect(short.notes.some((n) => n.includes('crest'))).toBe(false);
+  });
+
+  it('rejects a thread beyond the overall-length reach', () => {
+    // Alice, 2026-10-28: "the 50mm over length sets the max length of
+    // thread" — 50mm OAL leaves ~35mm below the collet margin
+    const stubby = { ...mill, overallLength: 20 };
+    expect(() => threadMill(op, stubby)).toThrow(/beyond the .* reach/);
+    expect(() => threadMill(op, stubby)).toThrow(/use a longer mill/);
+  });
+
+  it('a 1-tooth mill cuts any pitch; a 3-tooth is locked to its own', () => {
+    // Alice, 2026-10-28: "with 3 teeth it can only be used on a fixed
+    // pitch, as that is the pitch between teeth. if it was 1 tooth then
+    // you could use it to make different pitches"
+    const single: Tool = { ...mill, flutes: 1, pitch: 1 };
+    expect(() => threadMill({ ...op, pitch: 1.25 }, single)).not.toThrow();
+    expect(() => threadMill({ ...op, pitch: 1.25 }, mill)).toThrow(
+      /mills a 1mm pitch — this op wants 1\.25mm/,
+    );
+    expect(() => threadMill({ ...op, pitch: 1.25 }, mill)).toThrow(/multi-tooth mill cannot cut another pitch/);
   });
 
   it('rejects degenerate op fields', () => {

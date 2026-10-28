@@ -21,6 +21,7 @@ import {
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
 import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
+import { isMultiTooth } from '../cam/threadMill';
 import { getMaterial } from '../core/materials';
 
 interface Props {
@@ -987,12 +988,15 @@ function ParamFields(props: {
             value={op.pitch}
             min={0.1}
             step={0.05}
-            // a fixed-pitch thread mill LOCKS the pitch (Alice, 2026-10-28)
-            disabled={props.tool?.pitch !== undefined}
+            // a multi-tooth thread mill LOCKS the pitch — its teeth sit at
+            // one fixed pitch and must ride successive turns of the groove
+            // (Alice, 2026-10-28); a 1-tooth mill cuts any pitch with its
+            // single profile, the recorded pitch just the nominal default
+            disabled={props.tool ? isMultiTooth(props.tool) : false}
             title={
-              props.tool?.pitch !== undefined
-                ? `Locked to the ${props.tool.name} — these bits mill one fixed pitch`
-                : 'Free-form pitch (this mill declares none) — defaults to the ISO coarse pitch for the Ø'
+              props.tool && isMultiTooth(props.tool)
+                ? `Locked to the ${props.tool.name} — its ${(props.tool.flutes ?? 1)} teeth are pitched ${props.tool.pitch}mm apart and must ride successive turns of one groove`
+                : 'Free pitch — a single-tooth mill cuts any pitch with its one profile (defaults to the tool record, else ISO coarse)'
             }
             onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)}
           />

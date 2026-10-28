@@ -78,7 +78,12 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   materialId: 'aluminum-6061',
 };
 
-const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v2'; // v2: corn bits split out of flat
+// v3 (2026-10-28): the Makera thread-mill necks corrected — SFDM on the
+// Fusion M3–M8 records carries the HANDLE Ø (6), but the 1/3-tooth mills
+// are necked tools (Alice: "a cutting area that is only a few mm tall,
+// then a long neck") and the physical neck on the whole family is 1/8″;
+// the fat record made the sim treat every external thread as a collision.
+const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v3';
 
 /**
  * Feature-picking caps: above this triangle count a model is a fine relief

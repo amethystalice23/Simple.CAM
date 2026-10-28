@@ -80,6 +80,31 @@ export function externalMinorDiameter(nominalDiameter: number, pitch: number): n
   return nominalDiameter - D3_FACTOR * pitch;
 }
 
+/**
+ * Multi-tooth thread mill? `flutes` on a thread mill is the TOOTH count —
+ * the profiles stacked axially at ONE circumferential spot (Alice,
+ * 2026-10-28: "there are no flutes, the teeth appear in only one spot on
+ * the circumference"). A 3-tooth mill is HARD-LOCKED to its recorded pitch
+ * (the teeth must ride successive turns of one groove — a different pitch
+ * misaligns them); a 1-tooth mill cuts ANY pitch with its single profile,
+ * its recorded pitch being just the nominal default. Records with no
+ * tooth count read as multi-tooth — locking by default errs safe.
+ */
+export function isMultiTooth(tool: Tool): boolean {
+  return tool.flutes === undefined || tool.flutes >= 2;
+}
+
+/**
+ * Collet + handle margin below the overall length, mm — the part of the
+ * tool that must stay in the holder, so the max thread length a necked
+ * mill can reach is OAL − this (Alice, 2026-10-28: "the 50mm over length
+ * sets the max length of thread you could cut with one"). An assumption,
+ * documented: Makera's 1/3-tooth mills carry no handle-length field.
+ */
+export const COLLET_MARGIN_MM = 15;
+/** External neck clearance under this gets a summary note — tight but real. */
+const NECK_CLEARANCE_NOTE_MM = 0.3;
+
 /** ISO internal minor diameter, mm — the prep bore the op recommends. */
 export function internalMinorDiameter(nominalDiameter: number, pitch: number): number {
   return nominalDiameter - D1_FACTOR * pitch;
@@ -109,16 +134,21 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
     throw new Error('thread milling needs a thread mill — pick one from the tool library');
   }
   if (!(tool.diameter > 0)) throw new Error('the thread mill has no cutting diameter set');
-  if (tool.pitch === undefined) {
-    throw new Error(
-      `the ${tool.name} has no pitch set — a thread mill is a single-profile tool; set its pitch in the library`,
-    );
-  }
-  if (Math.abs(tool.pitch - op.pitch) > 1e-9) {
-    throw new Error(
-      `the ${tool.name} mills a ${tool.pitch}mm pitch — this op wants ${op.pitch}mm; ` +
-        'pick the matching thread mill',
-    );
+  // PITCH: a multi-tooth mill is hard-locked to its recorded pitch (the
+  // teeth must ride successive turns of one groove); a 1-tooth mill cuts
+  // any pitch with its single profile (Alice, 2026-10-28)
+  if (isMultiTooth(tool)) {
+    if (tool.pitch === undefined) {
+      throw new Error(
+        `the ${tool.name} is a multi-tooth mill with no pitch set — its teeth only align at one fixed pitch; set the pitch in the library`,
+      );
+    }
+    if (Math.abs(tool.pitch - op.pitch) > 1e-9) {
+      throw new Error(
+        `the ${tool.name} mills a ${tool.pitch}mm pitch — this op wants ${op.pitch}mm; ` +
+          'pick the matching thread mill (a multi-tooth mill cannot cut another pitch)',
+      );
+    }
   }
   if (!(op.pitch > 0)) throw new Error('pitch must be positive');
   if (!Number.isInteger(op.starts) || op.starts < 1) {
@@ -161,14 +191,18 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
             'prep a larger bore or a slimmer mill',
         );
       }
-      // the shank must reach the thread bottom when it oversizes the bore:
-      // depth within the flute, minus one pitch of form room at the mouth
-      const shank = tool.shaftDiameter ?? tool.diameter;
-      const flute = tool.fluteLength ?? Infinity;
-      if (shank > boreR * 2 && target.depth > flute - op.pitch) {
+      // the NECK above the short cutting band must fit the bore when the
+      // thread outruns the band (Alice's tool model, 2026-10-28: the 1/3-
+      // tooth mills are a few mm of cutting face on a long slim neck) —
+      // then the thread length is capped by the band, minus one pitch of
+      // form room at the mouth
+      const neck = tool.shaftDiameter ?? tool.diameter;
+      const band = tool.fluteLength ?? Infinity;
+      if (neck > boreR * 2 && target.depth > band - op.pitch) {
         throw new Error(
-          `the Ø${shank} shank cannot enter the Ø${(boreR * 2).toFixed(2)} bore deeper than the ` +
-            `${tool.fluteLength}mm flute — this thread is ${target.depth}mm; use a longer mill`,
+          `the Ø${neck} neck cannot enter the Ø${(boreR * 2).toFixed(2)} bore past the ` +
+            `${tool.fluteLength}mm cutting band — this thread is ${target.depth}mm; ` +
+            'use a mill with a longer band (or a slimmer neck)',
         );
       }
     }
@@ -193,23 +227,45 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           : `Ø${(boreR * 2).toFixed(2)} bore → aside retract (${asideRoom.toFixed(2)}mm of room)`,
       );
     } else {
-      // the shank must clear the crest when the thread out-runs the
-      // flute: above the flute the (usually fatter) shank sweeps the
-      // orbit, and its inner edge crossing the crest circle means it
-      // plows the thread teeth standing there (her M6-mill test: Ø6
-      // shank, 2mm flute, 10mm of thread — the sim's sea of red was
-      // exactly this, honestly)
-      const shank = tool.shaftDiameter ?? tool.diameter;
-      const flute = tool.fluteLength ?? Infinity;
-      if (target.depth > flute - op.pitch && Rc - shank / 2 < op.nominalDiameter / 2) {
-        throw new Error(
-          `the Ø${shank} shank overhangs the Ø${op.nominalDiameter} thread — above the ` +
-            `${tool.fluteLength}mm flute its inner edge sweeps ` +
-            `${(op.nominalDiameter / 2 - (Rc - shank / 2)).toFixed(2)}mm inside the crest, and this ` +
-            `thread is ${target.depth}mm; use a longer-fluted mill (or split the thread into Z bands)`,
-        );
+      // the NECK above the short cutting band must clear the crest when
+      // the thread outruns the band (Alice's tool model, 2026-10-28: "a
+      // cutting area that is only a few mm tall, then a long neck" —
+      // fluteLength IS the cutting face, the overall length sets the
+      // reach). Above the band the neck sweeps the orbit; its inner edge
+      // crossing the crest circle would plow the thread teeth standing
+      // there. (Her first sim's red sea was the UNCLEARED STOCK plus the
+      // mis-imported fat neck, not the real tool.)
+      const neck = tool.shaftDiameter ?? tool.diameter;
+      const band = tool.fluteLength ?? 0;
+      if (target.depth > band) {
+        const clearance = Rc - neck / 2 - op.nominalDiameter / 2;
+        if (clearance < 0) {
+          throw new Error(
+            `the Ø${neck} neck overhangs the Ø${op.nominalDiameter} thread — above the ` +
+              `${tool.fluteLength}mm cutting band its inner edge sweeps ` +
+              `${(-clearance).toFixed(2)}mm inside the crest, and this ` +
+              `thread is ${target.depth}mm; use a slimmer-necked or longer-banded mill`,
+          );
+        }
+        if (clearance < NECK_CLEARANCE_NOTE_MM) {
+          notes.push(
+            `neck clears the crest by only ${clearance.toFixed(2)}mm above the cutting band — mind the crest finish`,
+          );
+        }
       }
       notes.push(`Ø${op.nominalDiameter} boss → lifts straight off — nothing stands above an external thread`);
+    }
+
+    // REACH (Alice, 2026-10-28: "the 50mm over length sets the max length
+    // of thread you could cut with one"): the part of the tool below the
+    // collet margin must cover the thread depth
+    const oal = tool.overallLength ?? Infinity;
+    if (target.depth > oal - COLLET_MARGIN_MM) {
+      throw new Error(
+        `this ${target.depth}mm thread is beyond the ${tool.name}'s reach — its ` +
+          `${tool.overallLength}mm overall length leaves about ` +
+          `${Math.max(0, oal - COLLET_MARGIN_MM).toFixed(0)}mm below the collet; use a longer mill`,
+      );
     }
 
     // RADIAL LADDER (Alice, 2026-10-28: "for tougher materials you might
