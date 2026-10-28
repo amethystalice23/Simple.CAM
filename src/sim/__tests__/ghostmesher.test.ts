@@ -129,3 +129,38 @@ describe('ghostMeshChunk (classification overlay)', () => {
     expect(red).toBeGreaterThan(0);
   });
 });
+
+describe('ghost face winding (Alice\'s 2026-10-28 normals report)', () => {
+  it('every ghost quad\'s triangles wind CCW OUTWARD — cross((c10−c00),(c01−c00)) = the normal, all 6 dirs', () => {
+    // the ±Y corner rows were wound CW (inverted): the ghost material culls
+    // backfaces (FrontSide default), so those faces vanished and the cubes
+    // showed their insides — "stripes"/holes seen from one side only.
+    const grid = boxGrid(1); // a single cell
+    grid.ghost[0] = 1; // yellow
+    grid.set(0, 0, 0, 0); // removed (void) — free-standing cube draws all 6
+    const g = ghostMeshChunk(grid, 0);
+    expect(g.indices.length / 6).toBe(6); // one quad per direction
+    for (let q = 0; q < g.indices.length / 6; q++) {
+      const n = [g.normals[q * 12], g.normals[q * 12 + 1], g.normals[q * 12 + 2]];
+      const c = [0, 1, 2, 3].map((s) => [
+        g.positions[q * 12 + s * 3],
+        g.positions[q * 12 + s * 3 + 1],
+        g.positions[q * 12 + s * 3 + 2],
+      ]);
+      const sub = (a: number[], b: number[]) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const crs = (a: number[], b: number[]) => [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+      ];
+      // both triangles: (v1−v0)×(v2−v0) along the normal
+      for (const tri of [[0, 1, 2], [0, 2, 3]]) {
+        const u = sub(c[tri[1]], c[tri[0]]);
+        const v = sub(c[tri[2]], c[tri[0]]);
+        const m = crs(u, v);
+        const dot = m[0] * n[0] + m[1] * n[1] + m[2] * n[2];
+        expect(dot).toBeGreaterThan(0.5); // same direction, unit-length edges
+      }
+    }
+  });
+});

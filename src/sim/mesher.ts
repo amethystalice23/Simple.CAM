@@ -152,12 +152,15 @@ const FACE_DIRS: [number, number, number, [number, number, number]][] = [
 ];
 
 /** per-face corner offsets from the cell min corner, CCW seen from outside,
- *  matching FACE_DIRS order */
+ *  matching FACE_DIRS order. ±Y were wound CW (inverted normals — visible
+ *  only from inside the cube) until Alice's 2026-10-28 normals report; the
+ *  ghost material culls backfaces, so those faces dropped. Cross-check:
+ *  (c10−c00)×(c01−c00) must equal the face normal for every row. */
 const GHOST_FACE_CORNERS: [number, number, number][][] = [
   [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], // +X
   [[0, 1, 0], [0, 0, 0], [0, 0, 1], [0, 1, 1]], // −X
-  [[0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]], // +Y
-  [[1, 0, 0], [0, 0, 0], [0, 0, 1], [1, 0, 1]], // −Y
+  [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]], // +Y (was inverted)
+  [[1, 0, 0], [1, 0, 1], [0, 0, 1], [0, 0, 0]], // −Y (was inverted)
   [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], // +Z
   [[0, 1, 0], [1, 1, 0], [1, 0, 0], [0, 0, 0]], // −Z
 ];
