@@ -1121,10 +1121,20 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           );
         }
         // roughing wall stock: clear a region inset by the allowance
-        const cutRegions =
+        let cutRegions =
           op.allowance > 0 ? offsetInward(regions, op.allowance) : regions;
         if (cutRegions.length === 0) {
           return fail('the side allowance exceeds the selected region — nothing left to cut');
+        }
+        // Tail stock cut-over ON = a DELIBERATE step-over perimeter around
+        // the defined area (Alice, 2026-10-28): the region grows by one
+        // step-over before the tool-radius inset, so the swept cut extends
+        // exactly one step-over past the selected outline — clean past the
+        // drop-offs at the boundary (her flat-on-the-barrel: clear past the
+        // horizon so the transition to the curve is crisp, no rim skin).
+        // If you allowed it, you already vouched nothing of value sits there.
+        if (op.cutBeyondStock !== false) {
+          cutRegions = offsetOutward(cutRegions, op.stepOver);
         }
         // finishing-only: collapse the step-down ladder to ONE level at the
         // floor (zLadder with stepDown ≥ span) — the explicit version of the
@@ -1146,12 +1156,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
-            // Tail stock cut-over (Alice, 2026-10-28): OFF = hard clamp to
-            // the declared stock. ON = a DELIBERATE step-over of the border,
-            // not mere permission: the clamp footprint is the stock dilated
-            // by one step-over, so paths extend up to that perimeter and no
-            // further (if you allowed the step-over, you already vouched
-            // nothing of value sits within it).
+            // the stock clamp stays the outer bound: OFF = the declared
+            // stock, ON = the stock dilated by one step-over (a region that
+            // reaches the stock edge steps over it the same way)
             footprint: op.cutBeyondStock === false
               ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
               : offsetOutward(stockFootprint(ctx.stock, ctx.datumAngle !== 0), op.stepOver),
@@ -1166,7 +1173,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
             (op.finishingOnly ? ', finishing pass only' : '') +
-            (op.cutBeyondStock ? ', step-over past the stock edge' : '') +
+            (op.cutBeyondStock ? ', step-over past the edge' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }

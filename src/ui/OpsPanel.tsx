@@ -532,14 +532,14 @@ function ParamFields(props: {
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
           <label
             className="check"
-            title="On: clearing paths deliberately step over the stock border by up to one step-over — for a clean pass off the edge. Off: tool stays inside the declared stock."
+            title="On: the clearing deliberately steps up to one step-over past the selected outline (and the stock edge) — a clean transition past drop-offs at the border. Off: the cut stops at the selected outline."
           >
             <input
               type="checkbox"
               checked={op.cutBeyondStock ?? false}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>step over the stock edge</span>
+            <span>step over the edge</span>
           </label>
         </>
       );

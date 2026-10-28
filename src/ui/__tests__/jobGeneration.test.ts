@@ -39,10 +39,12 @@ const boxStock: Extract<Stock, { kind: 'box' }> = {
   sizeX: 60,
   sizeY: 40,
   sizeZ: 10,
-  origin: { x: 'min', y: 'min', z: 'max' },
+  // mid/mid in XY: the shared plate fixture sits at the origin — the stock
+  // must CONTAIN it or the (correct) footprint clamp bites every fixture
+  origin: { x: 'mid', y: 'mid', z: 'max' },
   axisMode: '3-axis',
   materialId: 'aluminum-6061',
-}; // crown at machine Z0
+}; // spans machine X −30…30, Y −20…20; crown at machine Z0
 
 const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
@@ -101,6 +103,7 @@ const pocketOp: Extract<JobOp, { kind: 'pocket' }> = {
   stepOver: 1,
   floorFeatureId: null,
   flatten: false,
+  cutBeyondStock: false, // these fixtures pin other semantics — no dilation
 };
 const drillOp: Extract<JobOp, { kind: 'drill' }> = {
   id: 'op2',
@@ -300,15 +303,56 @@ describe('generateJobOp', () => {
     expect(deepest).toBeCloseTo(-6, 5); // crown 0 − endDepth 6
   });
 
+  it('pocket cut-over ON steps one step-over past the selected outline, OFF stops at it', () => {
+    // the plate's top face (r = 5 disc outline, flatten): pocket it down to
+    // the face with the 2mm tool (R = 1), stepOver 1. OFF: the boundary
+    // pass rides the outline − toolR, tool edge exactly on the outline.
+    // ON: the region grows by one step-over first, so the swept cut extends
+    // exactly one step-over past the outline — the center path max radius
+    // grows by exactly stepOver (both share the polygon approximation).
+    const faceId = features.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z + 4) < 0.01,
+    )!.id;
+    const mk = (cbs: boolean): Extract<JobOp, { kind: 'pocket' }> => ({
+      ...pocketOp,
+      featureIds: [faceId],
+      selectionIs: 'floor',
+      startDepth: 0,
+      endDepth: 4,
+      stepOver: 1,
+      flatten: true,
+      cutBeyondStock: cbs,
+    });
+    const radius = (res: { moves: Move[] }) =>
+      Math.max(
+        ...res.moves
+          .filter((m) => !m.rapid && m.words.x !== undefined)
+          .map((m) => Math.hypot(m.words.x!, m.words.y ?? 0)),
+      );
+    const on = generateJobOp(mk(true), ctx);
+    const off = generateJobOp(mk(false), ctx);
+    expect(on.error).toBeNull();
+    expect(off.error).toBeNull();
+    expect(on.summary).toContain('step-over past the edge');
+    // the outline sits at r ≈ 5 (polygon-inscribed): OFF's center path
+    // rides ≈ 4 (tool edge on the outline); ON's extends one step-over
+    const offR = radius(off);
+    const onR = radius(on);
+    expect(offR).toBeGreaterThan(3.5);
+    expect(offR).toBeLessThan(4.5);
+    expect(onR - offR).toBeCloseTo(1, 1); // exactly one step-over further
+    // the swept cut (center + toolR) reaches past the r = 5 outline
+    expect(onR + 1).toBeGreaterThan(5.9);
+  });
+
   it('pocket cut-over ON is a deliberate step-over: paths stop one step-over past the stock', () => {
-    // 2mm tool (R = 1), stepOver 1: the 60×40 box stock's right edge is
-    // x = 60. A face pocket whose region straddles the edge (the plate's
-    // r=5 disc translated to span x 53…63): the clamp intersects the
-    // tool-CENTER loops directly, so cut-over ON (footprint dilated by
-    // one step-over → border x = 61) rides the center AT 61 — one
-    // step-over perimeter past the stock, Alice's rule. OFF clamps the
-    // center at the stock border itself (the tool edge overhangs by R —
-    // that is how a clean edge is milled).
+    // 2mm tool (R = 1), stepOver 1: the box stock's right edge is x = 30.
+    // A face pocket whose region straddles the edge (the plate's r=5 disc
+    // translated to span x 23…33): cut-over ON grows the region by one
+    // step-over AND dilates the stock clamp to x ≤ 31, so the boundary
+    // loop rides the center AT 31 — one step-over perimeter past the
+    // stock. OFF clamps the center at the stock border itself (the tool
+    // edge overhangs by R — that is how a clean edge is milled).
     const straddle: Extract<JobOp, { kind: 'pocket' }> = {
       ...pocketOp,
       selectionIs: 'floor',
@@ -318,7 +362,7 @@ describe('generateJobOp', () => {
       cutBeyondStock: true,
     };
     const geo = plateWithHole();
-    geo.translate(58, 0, -6);
+    geo.translate(28, 0, -6);
     const f = detectFeatures(geo);
     const straddleCtx: GenContext = {
       ...ctx,
@@ -331,12 +375,12 @@ describe('generateJobOp', () => {
     const faceId = f.planes.find((p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z + 4) < 0.01)!.id;
     const on = generateJobOp({ ...straddle, featureIds: [faceId], flatten: true }, straddleCtx);
     expect(on.error).toBeNull();
-    expect(on.summary).toContain('step-over past the stock edge');
+    expect(on.summary).toContain('step-over past the edge');
     const cutsOn = on.moves.filter((m) => !m.rapid && m.words.x !== undefined);
     expect(cutsOn.length).toBeGreaterThan(0);
     const maxXOn = Math.max(...cutsOn.map((m) => m.words.x!));
     // the boundary loop rides the DILATED border: exactly stock + stepOver
-    expect(maxXOn).toBeCloseTo(61, 1);
+    expect(maxXOn).toBeCloseTo(31, 1);
 
     // OFF: hard clamp — the tool center rides the stock border itself
     const off = generateJobOp(
@@ -347,7 +391,7 @@ describe('generateJobOp', () => {
     const cutsOff = off.moves.filter((m) => !m.rapid && m.words.x !== undefined);
     expect(cutsOff.length).toBeGreaterThan(0);
     const maxXOff = Math.max(...cutsOff.map((m) => m.words.x!));
-    expect(maxXOff).toBeCloseTo(60, 1);
+    expect(maxXOff).toBeCloseTo(30, 1);
     expect(maxXOn).toBeGreaterThan(maxXOff);
   });
 
@@ -377,8 +421,10 @@ describe('generateJobOp', () => {
     geo.translate(0, 0, -6); // cap top at z −4, crown at 0
     const f = detectFeatures(geo);
     const rim = f.circles.find((c) => !c.inner && c.axis.z > 0.99)!.id; // outer rim
+    // a narrow stock (Y ±2): the r=5 rim loop pokes out both sides
     const edgeCtx: GenContext = {
       ...ctx,
+      stock: { ...boxStock, sizeY: 4 },
       geometry: geo,
       features: f,
       sources: sourcesFor(geo, f, identityTransform(), []),

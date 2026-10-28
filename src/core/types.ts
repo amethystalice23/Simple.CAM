@@ -838,11 +838,14 @@ export type JobOp =
        * inside. Off (default) preserves interior features. */
       flatten: boolean;
       /**
-       * Tail stock cut-over (Alice, 2026-10-28): off = clearing loops clamp
-       * inside the stock footprint; on = a DELIBERATE step-over of the
-       * border — paths extend up to one step-over perimeter around the
-       * declared stock and no further. Absent = ON (pre-cut-over saves
-       * keep their behavior; normalizeJobOps pins it).
+       * Tail stock cut-over (Alice, 2026-10-28): on = the clearing
+       * DELIBERATELY steps over the selected area's border by one
+       * step-over — the swept cut extends that far past the outline,
+       * clean past boundary drop-offs (her flat-on-the-barrel: clear
+       * past the horizon so the transition to the curve is crisp) and
+       * over the stock edge; off = the cut stops at the selected
+       * outline and clamps inside the stock. Absent = ON
+       * (normalizeJobOps pins it).
        */
       cutBeyondStock?: boolean;
     })
