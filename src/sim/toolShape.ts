@@ -176,8 +176,15 @@ export function buildToolSpec(tool: Tool): ToolSpec {
       // `flutes` = the TOOTH count, at ONE circumferential spot, pitch
       // spaced (Alice) — multi-tooth bands merge over the root cylinder
       // (why they are pitch-locked); a 1-tooth stands alone on its neck.
-      // Above the band: the thin TAPER to the shank (the cutting length,
-      // fluteLength) — CONTACT only, never removal.
+      // Above the band: the NECK at the CONSTANT root Ø through the whole
+      // cutting length (Alice, 2026-10-28 night — the red-column report:
+      // "just above where the tool is cutting, taller and taller as the
+      // spiral climbs" was this tool modeled with a linear taper to the
+      // shank, running deeper than the crest at every height). The root
+      // circle rides the crest plane EXACTLY (d3/2 + 0.6134·p = Ø/2), so
+      // a constant-Ø neck grazes at tolerance 0 and shaves `tol`-deep
+      // past it — real thread-milling physics, not a collision. The
+      // taper/shank starts only ABOVE the cutting length.
       if (tool.pitch === undefined || !(tool.pitch > 0)) {
         return flatSpec(radius, fluteLen, shank); // no pitch on record — nothing to derive
       }
@@ -190,14 +197,14 @@ export function buildToolSpec(tool: Tool): ToolSpec {
       const toothSpan = halfTip + (radius - rootR) * tan30; // ≈ 0.437·p per side
       const bandLen = 2 * toothSpan + (teeth - 1) * p;
       const centers = Array.from({ length: teeth }, (_, k) => toothSpan + k * p);
-      // the taper+shank above the toothed band: contact bands — the taper
-      // grows linearly root→shaft over the cutting length, the shank above
       const shaftR = (tool.shaftDiameter ?? tool.diameter) / 2;
       const cutting = Math.max(bandLen, fluteLen);
       const top = tool.overallLength !== undefined ? tool.overallLength : cutting + 30;
+      // contact bands: the constant-Ø neck through the cutting length,
+      // then the shank above it
       const bands: ShankBand[] = [];
       if (cutting > bandLen) {
-        bands.push({ zFrom: bandLen, zTo: cutting, r0: rootR, r1: shaftR });
+        bands.push({ zFrom: bandLen, zTo: cutting, r0: rootR, r1: rootR });
       }
       if (top > cutting) {
         bands.push({ zFrom: cutting, zTo: top, r0: shaftR, r1: shaftR });

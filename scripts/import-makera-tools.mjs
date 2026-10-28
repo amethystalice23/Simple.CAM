@@ -130,8 +130,17 @@ function toTool(remoteName, type, t) {
   } else if (typeof g.LCF === 'number') {
     tool.fluteLength = g.LCF;
   }
-  if (typeof g.OAL === 'number') tool.overallLength = g.OAL;
+  // Makera's shop thread mills are 1-TOOTH (Alice, 2026-10-28: "the
+  // makera ones are 1 tooth, i have a different brand that is otherwise
+  // the same sizes but 3 tooth"); the Fusion record's NOF: 3 describes
+  // the generic 3-flute look, not the shop tool. flutes = the TOOTH count
+  // in our model — 1 tooth means the pitch stays editable (one profile
+  // cuts any pitch).
   if (typeof g.NOF === 'number') tool.flutes = g.NOF;
+  if (type === 'threadmill' && tool.flutes === 3) {
+    tool.flutes = 1;
+  }
+  if (typeof g.OAL === 'number') tool.overallLength = g.OAL;
   if (typeof t.BMC === 'string') tool.material = t.BMC.toLowerCase();
   if (type === 'vbit') {
     // TA is the per-side taper angle; our vAngle is the included angle

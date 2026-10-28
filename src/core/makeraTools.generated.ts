@@ -71,8 +71,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 3,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -134,8 +134,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 4,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -197,8 +197,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 6,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -260,8 +260,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 7.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -323,8 +323,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 10,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -362,8 +362,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 4,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -401,8 +401,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 8,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -440,8 +440,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -479,8 +479,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 15,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -518,8 +518,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 22,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -581,8 +581,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 18,
-    "overallLength": 50,
     "flutes": 2,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -620,8 +620,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 12,
-    "overallLength": 50,
     "flutes": 2,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -659,8 +659,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 22,
-    "overallLength": 50,
     "flutes": 2,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -698,8 +698,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 32,
-    "overallLength": 60,
     "flutes": 2,
+    "overallLength": 60,
     "material": "carbide"
   },
   {
@@ -761,8 +761,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 12,
-    "overallLength": 50,
     "flutes": 2,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -800,8 +800,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 12,
-    "overallLength": 45,
     "flutes": 2,
+    "overallLength": 45,
     "material": "carbide"
   },
   {
@@ -839,8 +839,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 22,
-    "overallLength": 45,
     "flutes": 2,
+    "overallLength": 45,
     "material": "carbide"
   },
   {
@@ -878,8 +878,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 32,
-    "overallLength": 60,
     "flutes": 2,
+    "overallLength": 60,
     "material": "carbide"
   },
   {
@@ -909,8 +909,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 3,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -940,8 +940,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 4,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -971,8 +971,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 5.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1002,8 +1002,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 6,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1033,8 +1033,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 7,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1064,8 +1064,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 7,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1095,8 +1095,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 7,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1126,8 +1126,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 7.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1157,8 +1157,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 7.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1188,8 +1188,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 8.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1219,8 +1219,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 8.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1250,8 +1250,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1281,8 +1281,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1312,8 +1312,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1343,8 +1343,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 10.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1374,8 +1374,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 10.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1405,8 +1405,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 10.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1436,8 +1436,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 10.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1467,8 +1467,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1498,8 +1498,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -1511,8 +1511,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 3.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1525,8 +1525,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 5.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1539,8 +1539,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 7,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1553,8 +1553,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 8.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1567,8 +1567,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 9.5,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1581,8 +1581,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 10,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1595,8 +1595,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 10,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1609,8 +1609,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 10,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1623,8 +1623,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 10,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1637,8 +1637,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 10,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1651,8 +1651,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1665,8 +1665,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1679,8 +1679,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1693,8 +1693,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1707,8 +1707,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1721,8 +1721,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1735,8 +1735,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1749,8 +1749,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 10,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1763,8 +1763,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1777,8 +1777,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1791,8 +1791,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1805,8 +1805,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1819,8 +1819,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1833,8 +1833,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1847,8 +1847,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1861,8 +1861,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1875,8 +1875,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1889,8 +1889,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1903,8 +1903,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1917,8 +1917,8 @@ export const MAKERA_TOOLS: Tool[] = [
     "spindleRpm": 18000,
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "drillPointAngle": 118
   },
@@ -1957,8 +1957,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 17,
-    "overallLength": 50,
     "flutes": 2,
+    "overallLength": 50,
     "material": "carbide",
     "vAngle": 20,
     "tipDiameter": 0.3
@@ -1998,8 +1998,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 17,
-    "overallLength": 50,
     "flutes": 2,
+    "overallLength": 50,
     "material": "carbide",
     "vAngle": 20,
     "tipDiameter": 0.4
@@ -2039,8 +2039,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 17,
-    "overallLength": 50,
     "flutes": 2,
+    "overallLength": 50,
     "material": "carbide",
     "vAngle": 20,
     "tipDiameter": 0.5
@@ -2112,8 +2112,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 45,
     "flutes": 1,
+    "overallLength": 45,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.3
@@ -2185,8 +2185,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 45,
     "flutes": 1,
+    "overallLength": 45,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.4
@@ -2258,8 +2258,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 45,
     "flutes": 1,
+    "overallLength": 45,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.5
@@ -2299,8 +2299,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 42,
     "flutes": 1,
+    "overallLength": 42,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.1
@@ -2340,8 +2340,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 42,
     "flutes": 1,
+    "overallLength": 42,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.2
@@ -2381,8 +2381,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 42,
     "flutes": 1,
+    "overallLength": 42,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.3
@@ -2422,8 +2422,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 42,
     "flutes": 1,
+    "overallLength": 42,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.4
@@ -2463,8 +2463,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 7,
-    "overallLength": 42,
     "flutes": 1,
+    "overallLength": 42,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.5
@@ -2536,8 +2536,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 8,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 60,
     "tipDiameter": 0.1
@@ -2609,8 +2609,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.2
@@ -2682,8 +2682,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.3
@@ -2755,8 +2755,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.4
@@ -2828,8 +2828,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.5
@@ -2869,8 +2869,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.1
@@ -2910,8 +2910,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.2
@@ -2951,8 +2951,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.3
@@ -2992,8 +2992,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.4
@@ -3033,8 +3033,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 9,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.5
@@ -3098,8 +3098,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 17,
-    "overallLength": 50,
     "flutes": 1,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -3161,8 +3161,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 25,
-    "overallLength": 55,
     "flutes": 1,
+    "overallLength": 55,
     "material": "carbide"
   },
   {
@@ -3224,8 +3224,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 25,
-    "overallLength": 60,
     "flutes": 1,
+    "overallLength": 60,
     "material": "carbide"
   },
   {
@@ -3263,8 +3263,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 22,
-    "overallLength": 50,
     "flutes": 1,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -3302,8 +3302,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 25,
-    "overallLength": 55,
     "flutes": 1,
+    "overallLength": 55,
     "material": "carbide"
   },
   {
@@ -3341,8 +3341,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 32,
-    "overallLength": 60,
     "flutes": 1,
+    "overallLength": 60,
     "material": "carbide"
   },
   {
@@ -3404,8 +3404,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 12,
-    "overallLength": 50,
     "flutes": 1,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -3467,8 +3467,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 17,
-    "overallLength": 50,
     "flutes": 1,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -3530,8 +3530,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 22,
-    "overallLength": 50,
     "flutes": 1,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -3569,8 +3569,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 22,
-    "overallLength": 45,
     "flutes": 1,
+    "overallLength": 45,
     "material": "carbide"
   },
   {
@@ -3608,8 +3608,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 25,
-    "overallLength": 50,
     "flutes": 1,
+    "overallLength": 50,
     "material": "carbide"
   },
   {
@@ -3647,8 +3647,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 4,
     "fluteLength": 32,
-    "overallLength": 55,
     "flutes": 1,
+    "overallLength": 55,
     "material": "carbide"
   },
   {
@@ -3710,8 +3710,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -3749,8 +3749,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 17,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -3788,8 +3788,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 25,
-    "overallLength": 42,
     "flutes": 1,
+    "overallLength": 42,
     "material": "carbide"
   },
   {
@@ -3827,8 +3827,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 32,
-    "overallLength": 45,
     "flutes": 1,
+    "overallLength": 45,
     "material": "carbide"
   },
   {
@@ -3866,8 +3866,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 42,
-    "overallLength": 60,
     "flutes": 1,
+    "overallLength": 60,
     "material": "carbide"
   },
   {
@@ -3929,8 +3929,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -3968,8 +3968,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 15,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -4031,8 +4031,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 8,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -4070,8 +4070,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 12,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -4133,8 +4133,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 6,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -4172,8 +4172,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 8,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -4235,8 +4235,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 3,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -4274,8 +4274,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 3,
-    "overallLength": 38,
     "flutes": 1,
+    "overallLength": 38,
     "material": "carbide"
   },
   {
@@ -4353,8 +4353,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 3,
-    "overallLength": 38,
     "flutes": 2,
+    "overallLength": 38,
     "material": "carbide",
     "vAngle": 90,
     "tipDiameter": 0.1
@@ -4378,8 +4378,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 3,
-    "overallLength": 46,
     "flutes": 1,
+    "overallLength": 46,
     "material": "carbide",
     "vAngle": 30,
     "tipDiameter": 0.3
@@ -4443,8 +4443,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 2,
+    "flutes": 1,
     "overallLength": 38,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 0.25
   },
@@ -4507,8 +4507,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 2,
+    "flutes": 1,
     "overallLength": 38,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 0.35
   },
@@ -4571,8 +4571,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 2,
+    "flutes": 1,
     "overallLength": 38,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 0.45
   },
@@ -4635,8 +4635,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 2,
+    "flutes": 1,
     "overallLength": 38,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 0.5
   },
@@ -4699,8 +4699,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 2,
+    "flutes": 1,
     "overallLength": 38,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 0.7
   },
@@ -4763,8 +4763,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 3.175,
     "fluteLength": 2,
+    "flutes": 1,
     "overallLength": 38,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 0.8
   },
@@ -4827,8 +4827,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 18,
+    "flutes": 1,
     "overallLength": 50,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 1
   },
@@ -4891,8 +4891,8 @@ export const MAKERA_TOOLS: Tool[] = [
     ],
     "shaftDiameter": 6,
     "fluteLength": 24,
+    "flutes": 1,
     "overallLength": 50,
-    "flutes": 3,
     "material": "carbide",
     "pitch": 1
   }

@@ -247,6 +247,15 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
         );
       }
       notes.push(`Ø${op.nominalDiameter} boss → lifts straight off — nothing stands above an external thread`);
+      // the neck rides the crest plane EXACTLY at fit 0 (d3/2 + 0.6134·p
+      // = Ø/2): past tolerance 0 the constant-Ø neck shaves the crests
+      // tol-deep — real thread-milling physics, and the sim will paint
+      // it as a thin red ribbon along the crests (contact, not removal)
+      if (op.tolerance > 0) {
+        notes.push(
+          `the neck shaves the crests ~${op.tolerance.toFixed(2)}mm at this fit — the sim paints a thin red ribbon on the crest tops`,
+        );
+      }
     }
 
     // REACH (Alice, 2026-10-28: "the 50mm over length sets the max length

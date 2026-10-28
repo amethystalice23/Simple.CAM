@@ -147,13 +147,36 @@ describe('buildToolSpec', () => {
     // above the band: nothing cuts — the taper/shank are contact-only
     expect(s.inside(3.0, rootR * rootR)).toBe(false);
     expect(s.inside(3.0, 0)).toBe(false);
-    // the taper (2.875 → 18, root → Ø6) is CONTACT: at z=10 it runs
-    // ≈ Ø2.36 — red there, not at the Ø6 heights; the shank (6) at 18
-    expect(s.shankInside(10, (2.3) ** 2)).toBe(true);
-    expect(s.shankInside(10, (2.4) ** 2)).toBe(false);
+    // the NECK (band → 18): CONSTANT root Ø through the whole cutting
+    // length — NOT a taper (her red-column report: a linear taper to the
+    // shank runs deeper than the crest at every height above the cut).
+    // At z=10 it is still Ø3.5732
+    expect(s.shankInside(10, (rootR - 0.01) ** 2)).toBe(true);
+    expect(s.shankInside(10, (rootR + 0.01) ** 2)).toBe(false);
+    // the shank (Ø6) starts only at the cutting length (18)
+    expect(s.shankInside(17, (rootR + 0.01) ** 2)).toBe(false);
     expect(s.shankInside(18.5, (3.0) ** 2)).toBe(true); // the Ø6 shank
     expect(s.shankInside(18.5, (3.0001) ** 2)).toBe(false);
     expect(s.shankTop).toBe(50);
+    // the 1-TOOTH Makera shop record (Alice: "the makera ones are 1 tooth
+    // — the 3-tooth is a different brand"): a single trapezoid on the
+    // neck, no merged root body between teeth
+    const one = buildToolSpec(
+      tool({
+        type: 'threadmill',
+        diameter: 4.8,
+        pitch: 1,
+        flutes: 1,
+        shaftDiameter: 6,
+        fluteLength: 18,
+        overallLength: 50,
+      }),
+    );
+    expect(one.fluteLen).toBeCloseTo(2 * span, 6); // the band alone
+    expect(one.inside(span, R * R)).toBe(true);
+    expect(one.inside(1.0, rootR * rootR)).toBe(false); // no root body between
+    expect(one.inside(1.0, (rootR + 0.05) ** 2)).toBe(false);
+    expect(one.shankInside(10, (rootR - 0.01) ** 2)).toBe(true); // same neck
     // no pitch on record — the flat fallback stays
     const flat = buildToolSpec(tool({ type: 'threadmill', diameter: 4, fluteLength: 8 }));
     expect(flat.inside(0, 4)).toBe(true);

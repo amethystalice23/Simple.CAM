@@ -78,14 +78,13 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   materialId: 'aluminum-6061',
 };
 
-// v4 (2026-10-28 evening): thread-mill records take the shop-measured
-// CUTTING LENGTH as fluteLength (18mm on the M6, 24 on the M8 — the thin
-// taper between the 2mm tooth band and the shank; Alice checked the Makera
-// bit shop). The v3 records carried only the 2mm tooth band, which made the
-// simulator stick the Ø6 shank 2mm above the tip — inside the stock beside
-// every full-depth thread — painting red collisions and yellow gouges on a
-// correct cut.
-const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v4';
+// v5 (2026-10-28 night): the Makera shop thread mills are 1-TOOTH (Alice:
+// "the makera ones are 1 tooth, i have a different brand that is otherwise
+// the same sizes but 3 tooth" — the Fusion NOF: 3 is the generic look, not
+// the shop tool) — the pitch stays editable on them. The simulator's neck
+// was also remodeled constant-Ø at the root through the cutting length (a
+// linear taper ran deeper than the crest at every height above the cut).
+const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v5';
 
 /**
  * Feature-picking caps: above this triangle count a model is a fine relief
