@@ -592,6 +592,81 @@ cylinder + finish directly into round stock, vs. an unwrapped-frame
 waterline rough); adaptive clearing (trochoidal — a named contour type to add, with raster contour/waterline contour the family so far); adaptive Δz levels; slope-split finishing; how the
 long-running worker integrates with the recalc/preview pipeline.
 
+### True optimized 4D carve (SKETCH 2026-10-28 — the v2 headliner, conversation opened by Alice, to be picked up another day)
+
+Her ask, verbatim: "a true optimised 4d carve, something that gives the
+same kind of quality result as 4 way waterline did, but strategically
+plans a minimal set of cuts and moves to achieve the same, to plan to
+touch every facet of the model its physically possible to reach with 4
+axis of motion."
+
+**Why the current ops cannot get there:** waterline/raster/spiral are
+all SINGLE-ORIENTATION passes — one fixed frame per op, a silhouette
+column cleared from one direction. Multi-orientation work today is
+hand-stacked Index ops, each clearing a whole column again including
+what the last orientation already cleared, with a full crown-height
+retract-and-re-enter between them.
+
+**The core insight: it is a SET-COVER problem, not a path problem.**
+
+1. REACHABILITY MAP — for every (cell, orientation) pair: can a tool
+   at that A legally touch that cell without gouging first? Radial
+   raycasts per cell per candidate orientation + the shadow map for
+   the buried material (the dexel machinery the rotary carve already
+   has, re-run over an orientation ladder instead of one A).
+2. GREEDY ORIENTATION COVER — repeatedly pick the orientation reaching
+   the most currently-uncovered cells, clear that band, re-mark,
+   continue until no new cells are reachable. On her knight: the head
+   wants ~3 orientations, the body ~2; most candidate orientations
+   cover nearly the same cells as the last, and greedy skips them —
+   ~3 chosen orientations instead of a hand-tuned 6.
+3. MINIMAL-REGION CLEARING per orientation — the move-count saver:
+   once B is known to need only cells A missed (the overlap band, the
+   under-head flank), do not re-run A's whole ladder at B — clear only
+   the DELTA region, skipping levels whose cells are already below the
+   plane from A's work. This is the carve kernel's existing per-cell
+   "standing material" bookkeeping (standingR), made CROSS-ORIENTATION
+   persistent instead of per-op.
+
+**Honest structure of the deliverable:** an op that plans the whole
+part (no user-chosen orientations), emits per-orientation band ops as
+one move list, and reports the coverage + the unreachable set (the
+blocked-cell honesty the rotary carve already has). The roughing
+question and finishing question stay separable: cover orientations
+first (rough to allowance), then the surface pass per orientation.
+
+**PREREQUISITE STAGES (in order — Alice asked these be noted):**
+
+- **P0 — gen-worker hosting of the rotary generation.** Reachability
+  sampling is O(cells × orientations) — a 300k-raycast × 8-orientation
+  pass is minutes-class work, and generation is currently SYNCHRONOUS
+  on the main thread. The relief batch's genWorker protocol (already
+  hosting the heavy kinds) is the charter; rotary generation joins
+  HEAVY_GEN_KINDS first. This unblocks interactive use of everything
+  below.
+- **P1 — cross-orientation standing-material state.** The carve
+  kernel's per-cell standing radius (standingR) is per-op today; the
+  roughing predicate and the skim/transition planner need it shared
+  across a multi-orientation sequence. Pure-core data-structure change
+  (grid in, grid out), vitest-covered, no worker semantics touched.
+- **P2 — the reachability map as a pure module.** (cell, orientation)
+  → reachable/buried/blocked, on the existing dexel + shadowMap
+  primitives. Prototype on her knight STL before generalizing: it
+  carries a genuine radial shadow (the offset head), an
+  axis-parallel flank, and a flat — the torture shapes the Phase D
+  sphere was specced for. Validate the map against the existing
+  simulator: a cell marked reachable must carve clean at that A.
+- **P3 — then the planner:** greedy cover + delta-region clearing
+  emitting Move[] per orientation band, reusing the rotary carve's
+  entry-safety conventions (pure-Z plunges, skim transitions, A
+  monotonic within a band), with per-orientation time estimates
+  honestly summed.
+
+**Also parked nearby, unchanged:** Phase D per-pose collision
+validation (ball+shank+holder vs rotated model) composes AFTER the
+planner exists — validating a hand-stacked op sequence does not need
+it, but validating a planned one wants it as the safety net.
+
 **Carve simulator (2026-10-25, landed) — the app's FIRST Web Worker.**
 Top-bar "Simulate…" → src/sim worker carves the generated Move[] out of
 a voxel stock and the viewport swaps the translucent stock for the
