@@ -114,3 +114,45 @@ describe('carve display integrity (the gaps regression)', () => {
     expect(floatingAbove).toBe(0);
   });
 });
+describe('carve display integrity (the chunk-boundary stripes)', () => {
+  it('carving a boundary cell dirties the NEIGHBOR chunk owning the exposed face (the bore stripes)', () => {
+    // Alice's 2026-10-28 report: "areas where i can see through from the
+    // inside but not the outside… stripes down the interior bore hole."
+    // 33 cells along X: chunk 0 owns cells 0–31, chunk 1 owns cell 32.
+    // Carving cell 32 exposes the +x face of solid cell 31 — owned by
+    // chunk 0, which holds no carved cell of its own. The old
+    // markChunkDirty left chunk 0's setup mesh standing (no boundary
+    // face) → a see-through stripe on the chunk boundary.
+    const stock: Stock = {
+      kind: 'box', sizeX: 33, sizeY: 2, sizeZ: 2,
+      origin: { x: 'min', y: 'min', z: 'min' },
+      axisMode: '3-axis', materialId: 'test',
+    };
+    const grid = new VoxelGrid(stock, 1);
+    expect(grid.chunkX).toBe(2); // cells 0..31 | cell 32
+    expect(grid.filled(31, 0, 0)).toBe(true); // starts full
+
+    grid.set(32, 0, 0, 0);
+    grid.onCarved(32, 0, 0);
+    grid.markChunkDirty(32, 0, 0);
+
+    // the exposed face's owner (chunk 0) must be dirty — the OLD behavior
+    // dirtied only chunk 1 and the +x face of cell 31 never appeared
+    expect(grid.dirtyChunkIds()).toContain(0);
+    expect(grid.dirtyChunkIds()).toContain(1);
+
+    // and chunk 0's remesh actually EMITS the exposed face: the +x quad
+    // of cell 31 sits on plane x = 32 (origin + 32 cells)
+    const g = greedyMeshChunk(grid, 0);
+    let exposed = false;
+    for (let q = 0; q < g.positions.length / 12; q++) {
+      const nx = g.normals[q * 12];
+      const ny = g.normals[q * 12 + 1];
+      const nz = g.normals[q * 12 + 2];
+      if (nx !== 1 || ny !== 0 || nz !== 0) continue;
+      const xs = [0, 1, 2, 3].map((c) => g.positions[q * 12 + c * 3]);
+      if (xs.every((x) => Math.abs(x - 32) < 1e-9)) exposed = true;
+    }
+    expect(exposed).toBe(true);
+  });
+});

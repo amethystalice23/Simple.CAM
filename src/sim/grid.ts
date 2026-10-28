@@ -254,8 +254,32 @@ export class VoxelGrid {
     ];
   }
 
+  /**
+   * Mark the chunk owning (i, j, k) dirty — AND the chunks owning its six
+   * face neighbors (Alice's 2026-10-28 report: "areas where i can see
+   * through from the inside but not the outside… stripes down the interior
+   * bore hole"). Carving a cell EXPOSES new boundary faces owned by its
+   * still-solid neighbors — the +d face of the −d neighbor, the −d face of
+   * the +d one — and an exposed face's owner is the SOLID cell's chunk,
+   * which at a 32³ boundary is usually the ADJACENT chunk. A chunk with no
+   * carved cells of its own (the bore's edge runs just past its border, so
+   * every wall cell it owns faces a void cell in the next chunk) was never
+   * dirtied and kept its setup-time mesh — its boundary faces missing:
+   * see-through stripes exactly on the chunk boundaries, visible from
+   * inside the bore. Six id lookups per carved voxel, idempotent.
+   */
   markChunkDirty(i: number, j: number, k: number): void {
     this.chunkDirty[this.chunkIdAt(i, j, k)] = 1;
+    // the exposed faces' owners: the six neighbors' chunks (in-grid only)
+    for (let d = 0; d < 3; d++) {
+      for (const s of [-1, 1]) {
+        const c = [i, j, k];
+        c[d] += s;
+        const [ci, cj, ck] = c;
+        if (ci < 0 || cj < 0 || ck < 0 || ci >= this.nx || cj >= this.ny || ck >= this.nz) continue;
+        this.chunkDirty[this.chunkIdAt(ci, cj, ck)] = 1;
+      }
+    }
   }
 
   /** ids of all dirty chunks */

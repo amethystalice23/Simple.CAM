@@ -25,7 +25,7 @@ import type { Stock, Tool } from '../core/types';
 /** build stamp — the `ready` message carries it so the client can PROVE
  *  which worker version is running (the 2026-10-25 gaps debugging: a
  *  stale dev-server worker copy was a live suspect) */
-const SIM_BUILD = 'b10-transport-honest';
+const SIM_BUILD = 'b11-boundary-chunks';
 
 /** cooperative-slice budget, ms — the CARVE stays within one of these per
  *  slice so the worker yields often enough to serve control messages
