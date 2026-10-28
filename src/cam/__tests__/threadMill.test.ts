@@ -250,6 +250,59 @@ describe('threadMill — multi-start', () => {
   });
 });
 
+describe('threadMill — the Makera 09-11 gouge, pinned out', () => {
+  // Alice's warning (2026-10-28): an early Makera Studio version re-plunged
+  // between radial levels AT THE CUT RADIUS — a vertical descent straight
+  // through the thread it had just cut, gouging every flank it crossed
+  // (examples/…Stage3_TOP_20260911195828.nc: the `G1 Z-8 F1000 / Z-10`
+  // transitions between its 9.44 → 9.1 → 8.76 helix levels; fixed by the
+  // 1003 file, which re-approaches from outside the crest between passes).
+  // Invariant: every Z-DESCENDING move starts from clear space — outside
+  // the crest at the approach point (external) or at the bore center
+  // (internal) — never at the cut radius.
+  const assertDescentsFromClear = (
+    res: { moves: Move[] },
+    internal: boolean,
+    /** the op's own path radius — the approach sits at Rc + safeClearance */
+    rc: number,
+  ) => {
+    const clearR = internal ? 0 : rc + 3; // internal: the center; external: Rc + safeClearance
+    let x: number | undefined;
+    let y: number | undefined;
+    let z: number | undefined;
+    let descents = 0;
+    for (const m of res.moves) {
+      const w = m.words;
+      if (z !== undefined && w.z !== undefined && w.z < z - 1e-9) {
+        expect(x).toBeDefined();
+        expect(y).toBeDefined();
+        const r = Math.hypot(x!, y!); // fixtures center the target at the origin
+        if (internal) expect(r).toBeLessThan(1e-6);
+        else expect(r).toBeCloseTo(clearR, 6);
+        descents++;
+      }
+      if (w.x !== undefined) x = w.x;
+      if (w.y !== undefined) y = w.y;
+      if (w.z !== undefined) z = w.z;
+    }
+    expect(descents).toBeGreaterThan(0); // the walker actually saw descents
+  };
+
+  it('external: every descent starts outside the crest at the approach point', () => {
+    assertDescentsFromClear(threadMill(op, mill), false, pathRadius(14, 1, 4.75 / 2, 0, false));
+    assertDescentsFromClear(threadMill(multiOp, mill15), false, pathRadius(10, 1.5, 4.75 / 2, 0, false)); // multi-start + spring
+  });
+
+  it('internal: every descent starts at the bore center', () => {
+    assertDescentsFromClear(threadMill(internalOp, mill), true, pathRadius(6, 1, 4.75 / 2, 0, true)); // spiral exit
+    assertDescentsFromClear(
+      threadMill({ ...internalOp, targets: [{ ...internalOp.targets[0], boreRadius: 4 }] }, mill),
+      true,
+      pathRadius(6, 1, 4.75 / 2, 0, true),
+    ); // aside retract
+  });
+});
+
 describe('threadMill — validation', () => {
   const flat: Tool = { ...mill, type: 'flat', pitch: undefined };
 
