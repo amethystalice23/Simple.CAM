@@ -773,6 +773,73 @@ v1 deliberately excludes: playback transport, scrub-back, laser burn
 modeling (skipped + noted). Real-coin bench: 12.6k moves → 1.58M voxels in ~3s
 at 0.25mm pitch (400×200×200 grid).
 
+## Candidate future features (gap analysis, 2026-10-28)
+
+Nightcap survey of the six CAM systems that officially target the
+Carvera 4th axis (Makera Studio, Fusion 360, Carveco, VCarve/Aspire,
+Kiri:Moto, SolidCAM; EstlCAM has no 4-axis) against our current
+feature set. Where we already lead: simultaneous 4-axis breadth
+(rotaryCarve + spiralWrap multi-coil — Makera Studio lacks that
+strategy), the voxel sim with gouge/shank classification + playback,
+and the golden-pinned post. The gaps are almost all 3-axis-side.
+Ranked by usefulness × popularity, one-line justification each,
+with Alice's same-day verdicts (numbering kept stable — her notes
+reference these numbers):
+
+1. **Trochoidal/adaptive clearing** — constant-engagement roughing
+   that lets small desktop machines cut deep without snapping bits;
+   the most-asked-for roughing feature in hobby CAM (Fusion's
+   flagship strategy). Already discussed; Phase-3 territory.
+2. **True V-carving** — variable-depth V-bit cut that fills lettering
+   out to its vector outline with crisp corners; the feature that
+   built Vectric's business. ALICE: possibly related to her idea of
+   permitting chamfers DEEPER than the bit's cutting face via
+   multiple depth passes — same V-bit-geometry exploitation, but a
+   different op (chamfer rides a modelled edge; V-carve follows
+   vector outlines at variable depth). Design together when taken up.
+3. **DXF import** — 2D CAD lingua franca, every competitor has it.
+   ALICE: cheap. (Already phase 3 of the engrave spec; no DXF code
+   exists yet.)
+4. **Ramp/helical entry + arc lead-ins** — never plunge an end mill
+   straight down; cheapest tool-life and finish win in CAM.
+   ALICE: cheap. (Already noted as a future refinement.)
+5. **STEP import (occt-import-js)** — face-driven ops and the format
+   every professional model arrives in. ALICE: cheap. (Already
+   planned "later".)
+6. **Two-sided / flip machining** — through-features and full-3D
+   parts via flip + re-registration; very popular on desktop CNCs.
+   ALICE: not in her plans as a setup system, but achievable as a
+   "generate pins" op + "flip work" op pair.
+7. **Image → relief (greyscale heightmap)** — photo-to-carve, both
+   Makera Studio and Carveco have it; pairs naturally with the
+   raster engine.
+8. **Rest machining** — small tool cleans only what the big one
+   missed. ALICE: our allowance + finishingOnly knobs already cover
+   the workflow manually; bundling risks a vastly more complex UI
+   for minimal gain. Deferred.
+9. **Swarf/flank milling (4-axis)** — cut walls with the tool's side
+   in a continuous A+X move; the classic tapered-column/flute op,
+   natural small sibling of the 4D-carve engine. ALICE: cheap.
+10. **Dogbones/corner relief** — round bits can't cut square internal
+    corners, so parts don't seat; every box-making user hits it.
+    ALICE: cheap.
+11. **Fixture/clamp modeling & avoidance** — tell the CAM where the
+    vise jaws sit and keep rapids clear; the most common real-world
+    crash our sim can't warn about today. (No verdict yet.)
+12. **Chipload-based feeds/speeds** — ALICE: not a wizard; rather an
+    auto-warning on op settings (step-down etc.) plus auto-suggest
+    best speeds/settings when a tool is selected, for the novice —
+    smarter presets, not new UI.
+
+Deliberately not pursued: coolant codes, canned drill cycles, G54+
+work offsets, controller-side probing — Carvera hardware + Community
+Controller make them near-irrelevant.
+
+Remaining Makera-Studio parity gaps (the raison d'être is parity then
+some): DXF + STEP import (they have both), image import/trace-to-
+vector, PCB/Gerber workflow, laser-image dot matrix. Every other op
+on their list has a counterpart here.
+
 ## License policy (hard rule)
 
 Project license: MIT. Code may be taken only from MIT/BSL/Apache/LGPL
