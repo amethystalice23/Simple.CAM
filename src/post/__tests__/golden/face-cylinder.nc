@@ -7,7 +7,7 @@
 G90 G21
 G92.4 A0 R0
 G0 Y0
-G0 X0 ; pass 1/5 depth 1.000mm radial
+G0 X0 ; pass 1/6 depth 1.000mm radial
 G0 Z30
 G93
 G1 Z24 A90 F26.4 ; helical entry 1.000mm radial
@@ -18,11 +18,13 @@ G1 Z22 A270 F26.4 ; spiral step down 1.000mm radial
 G1 X100 A7770 F0.32 ; rough to r=22.000
 G1 Z21 A7860 F26.4 ; spiral step down 1.000mm radial
 G1 X0 A360 F0.32 ; rough to r=21.000
-G1 Z20 A450 F26.4 ; spiral step down 1.000mm radial
-G1 X100 A7950 F0.32
+G1 Z20.2 A450 F26.4 ; spiral step down 0.800mm radial
+G1 X100 A7950 F0.32 ; rough to r=20.200
+G1 Z20 A8040 F26.4 ; spiral step down 0.200mm radial
+G1 X0 A540 F0.32
 G0 Z30
 G94
-; shrink work-coordinate A back to ±360 (was 7950.00)
+; shrink work-coordinate A back to ±360 (was 540.00)
 G92.4 A0 S0
 M05
 G28
