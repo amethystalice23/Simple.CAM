@@ -74,13 +74,47 @@ describe('pocketRegionsFromSelection', () => {
     ).toThrowError(/either faces or holes/);
   });
 
-  it('rejects a selection with no usable floor in the frame, with a diagnosis', () => {
+  it('diagnoses an unusable selection: sideways, parallel, away, or tilted', () => {
+    // a side wall facing machine Y: reachable by rotating — the message
+    // says so instead of refusing (Alice, 2026-10-28)
+    const box = new THREE.BoxGeometry(4, 4, 4).toNonIndexed();
+    const bf = detectFeatures(box);
+    const yFace = bf.planes.find(
+      (p) => Math.abs(p.normal.y - 1) < 1e-6,
+    )!;
+    expect(() =>
+      pocketRegionsFromSelection(bf, [yFace.id], identityTransform()),
+    ).toThrowError(/points sideways.*add an Index op/s);
+
+    // a face parallel to the rotation axis: no sensible interpretation,
+    // however you index — it only spins in place
+    const xFace = bf.planes.find(
+      (p) => Math.abs(p.normal.x - 1) < 1e-6,
+    )!;
+    expect(() =>
+      pocketRegionsFromSelection(bf, [xFace.id], identityTransform()),
+    ).toThrowError(/parallel to the rotation axis.*no sensible interpretation/s);
+
+    // a face pointing away at this datum: rotate the stock to machine it
     const geo = plateWithHole();
     const f = detectFeatures(geo);
-    const sidePlane = f.planes.find((p) => Math.abs(p.normal.z) < 0.5);
-    expect(sidePlane).toBeDefined();
+    const bottom = f.planes.find(
+      (p) => Math.abs(p.normal.z + 1) < 1e-6,
+    )!;
     expect(() =>
-      pocketRegionsFromSelection(f, [sidePlane!.id], identityTransform()),
+      pocketRegionsFromSelection(f, [bottom.id], identityTransform()),
+    ).toThrowError(/points away from the cutter at this datum.*add an Index op/s);
+
+    // a near-horizontal floor that missed the ~10° tolerance: generic
+    // re-click advice
+    const tilted = new THREE.BoxGeometry(10, 10, 4).toNonIndexed();
+    tilted.rotateY((15 * Math.PI) / 180);
+    const tf = detectFeatures(tilted);
+    const tiltedTop = tf.planes.find(
+      (p) => p.normal.z > 0.9 && p.normal.z < 0.99,
+    )!;
+    expect(() =>
+      pocketRegionsFromSelection(tf, [tiltedTop.id], identityTransform()),
     ).toThrowError(/cannot be pocketed in the cutting frame/);
   });
 
@@ -171,22 +205,21 @@ describe('pocketRegionsFromSelection', () => {
 });
 
 describe('drillTargetsFromSelection', () => {
-  it('collects only inner, Z-axis circles', () => {
+  it('collects only inner, Z-axis circles — one entry per bore, at its up mouth', () => {
     const geo = plateWithHole();
     const f = detectFeatures(geo);
     const ids = f.circles.map((c) => c.id); // select everything
     const targets = drillTargetsFromSelection(f, ids, identityTransform(), 5);
-    // two hole loops (top + bottom caps), the outer circles are excluded
+    // the through-hole's two rims are ONE bore read at its up-facing
+    // mouth (Alice 2026-10-28: the up version is the only sensible
+    // interpretation) — a single target, entering at the top cap
     expect(targets).not.toBeNull();
-    expect(targets).toHaveLength(2);
-    for (const t of targets!) {
-      expect(t.x).toBeCloseTo(0, 5);
-      expect(t.y).toBeCloseTo(0, 5);
-      expect(t.depth).toBe(5);
-    }
-    const zs = targets!.map((t) => t.topZ).sort((a, b) => a - b);
-    expect(zs[0]).toBeCloseTo(0, 5);
-    expect(zs[1]).toBeCloseTo(2, 5);
+    expect(targets).toHaveLength(1);
+    const t = targets![0];
+    expect(t.x).toBeCloseTo(0, 5);
+    expect(t.y).toBeCloseTo(0, 5);
+    expect(t.depth).toBe(5);
+    expect(t.topZ).toBeCloseTo(2, 5);
   });
 
   it('returns null when nothing drillable is selected', () => {
@@ -240,20 +273,70 @@ function squareHolePlate(): THREE.BufferGeometry {
 }
 
 describe('chamferTargetsFromSelection', () => {
-  it('accepts inner AND outer circles, with the material side per loop', () => {
+  it('accepts inner AND outer circles — each read at its UP mouth, material side per loop', () => {
     const geo = plateWithHole();
     const f = detectFeatures(geo);
     const src = chamferTargetsFromSelection(f, f.circles.map((c) => c.id), identityTransform());
     expect(src).not.toBeNull();
-    expect(src!.loops).toHaveLength(4); // hole + outer rim, top + bottom
+    // all four rims selected, but a bore/outline pair is ONE loop read at
+    // its up-facing mouth (Alice 2026-10-28: the up version is the only
+    // sensible interpretation) — two loops, both at the top cap z=2
+    expect(src!.loops).toHaveLength(2);
     for (const l of src!.loops) {
       expect(l.kind).toBe('circle');
       if (l.kind === 'circle') {
         expect(l.center.x).toBeCloseTo(0, 5);
         expect(l.center.y).toBeCloseTo(0, 5);
+        expect(l.z).toBeCloseTo(2, 5);
         // hole rims have material outside (the funnel cut), outer rims inside
         expect(l.materialOutside).toBe(l.radius < 3);
       }
+    }
+  });
+
+  it('a far-side face selection re-anchors on the up-facing mouth (the 180° barrel chamfer)', () => {
+    // her outer_barrel_adapter bug: the through-hole's top floor selected
+    // at datum 180 faces AWAY — before the fix the chamfer anchored on the
+    // underside rim and cut through the part. The up reading puts the
+    // loop on the mouth that faces the tool.
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const topPlane = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 2) < 1e-6,
+    )!;
+    const rot = indexedPointRotation(180, 0);
+    const src = chamferTargetsFromSelection(f, [topPlane.id], identityTransform(), rot);
+    expect(src).not.toBeNull();
+    expect(src!.loops).toHaveLength(2); // hole rim + outer rim
+    for (const l of src!.loops) {
+      expect(l.kind).toBe('circle');
+      if (l.kind === 'circle') {
+        expect(l.center.x).toBeCloseTo(0, 5);
+        expect(l.center.y).toBeCloseTo(0, 5);
+        // the UP mouth in the rotated frame: the model's bottom cap
+        // (z 0) stays at machine 0 while the selected top cap flips to
+        // −2 — the loop anchors on 0, never the away-facing −2
+        expect(l.z).toBeCloseTo(0, 5);
+      }
+    }
+  });
+
+  it('a rim selected on the away-facing side reads at its up mouth', () => {
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    // the hole rim on the model-top cap: at datum 180 it faces away
+    const topHoleRim = f.circles.find(
+      (c) => c.inner && Math.abs(c.center.z - 2) < 1e-6 && Math.abs(c.radius - 2) < 1e-3,
+    )!;
+    const rot = indexedPointRotation(180, 0);
+    const src = chamferTargetsFromSelection(f, [topHoleRim.id], identityTransform(), rot);
+    expect(src).not.toBeNull();
+    expect(src!.loops).toHaveLength(1);
+    const l = src!.loops[0];
+    expect(l.kind).toBe('circle');
+    if (l.kind === 'circle') {
+      expect(l.z).toBeCloseTo(0, 5); // machine-up mouth, not the −2 away face
+      expect(l.materialOutside).toBe(true); // still a hole rim (funnel cut)
     }
   });
 
@@ -343,9 +426,11 @@ describe('chamferTargetsFromSelection', () => {
     const f = detectFeatures(geo);
     const sidePlane = f.planes.find((p) => Math.abs(p.normal.z) < 0.5);
     expect(sidePlane).toBeDefined();
+    // the tessellated side facet found first runs along the rotation axis
+    // — no sensible interpretation on this machine, however you index
     expect(() =>
       chamferTargetsFromSelection(f, [sidePlane!.id], identityTransform()),
-    ).toThrowError(/cannot be chamfered in the cutting frame/);
+    ).toThrowError(/parallel to the rotation axis.*no sensible interpretation/s);
   });
 
   it('chamfers a radial edge when indexed to face the cutter', () => {
@@ -356,10 +441,11 @@ describe('chamferTargetsFromSelection', () => {
     const radialHole = f.circles.find(
       (c) => c.inner && Math.abs(c.axis.y) > 0.99 && c.center.y > 7.9,
     )!;
-    // flat: the rim is radial, not Z — a diagnosis, not silence
+    // flat: the rim is radial, not Z — reachable by rotating: the message
+    // says to add an Index op rather than refusing (Alice, 2026-10-28)
     expect(() =>
       chamferTargetsFromSelection(f, [radialHole.id], identityTransform()),
-    ).toThrowError(/cannot be chamfered in the cutting frame/);
+    ).toThrowError(/points sideways.*add an Index op/s);
     const rot = indexedPointRotation(90, 0);
     const src = chamferTargetsFromSelection(f, [radialHole.id], identityTransform(), rot);
     expect(src).not.toBeNull();

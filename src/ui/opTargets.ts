@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import type { DetectedFeatures } from '../cam/features';
 import type {
   ChamferLoop,
+  CircleFeature,
   CylChamferEdge,
   DrillOp,
   ModelTransform,
@@ -58,6 +59,80 @@ function machineAxisX(v: THREE.Vector3, xf: (p: { x: number; y: number; z: numbe
 }
 
 /**
+ * WHY a selection produced nothing in the cutting frame (Alice,
+ * 2026-10-28): a feature whose direction is PARALLEL to the rotation
+ * axis has NO sensible interpretation on this machine — indexing only
+ * spins it in place, it can never face the cutter. A feature that faces
+ * AWAY at this datum, or a side wall with no Z component, is reachable
+ * by rotating the stock — the honest message is "add an Index op", not
+ * a refusal. Near-horizontal floors that missed the ~10° tolerance
+ * keep the generic re-click advice. Most severe finding wins.
+ */
+function frameGateDiagnosis(
+  features: DetectedFeatures,
+  selection: string[],
+  xf: (p: { x: number; y: number; z: number }) => THREE.Vector3,
+): 'parallel' | 'away' | 'sideways' | null {
+  let away = false;
+  let sideways = false;
+  const dirs: THREE.Vector3[] = [];
+  for (const c of features.circles) {
+    if (!selection.includes(c.id)) continue;
+    dirs.push(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z));
+  }
+  for (const p of features.planes) {
+    if (!selection.includes(p.id)) continue;
+    dirs.push(new THREE.Vector3(p.normal.x, p.normal.y, p.normal.z));
+  }
+  for (const d of dirs) {
+    const z = machineAxisZ(d, xf);
+    if (Math.abs(z) >= Z_TOL) {
+      // a plane facing away at this datum: its rim re-reads up, but the
+      // outline itself has no up reading here — rotate the stock
+      if (z <= -Z_TOL) away = true;
+      continue;
+    }
+    if (Math.abs(machineAxisX(d, xf)) >= X_TOL) return 'parallel';
+    if (Math.abs(z) < 0.5) sideways = true; // a wall, not a tilted floor
+  }
+  if (away) return 'away';
+  return sideways ? 'sideways' : null;
+}
+
+/**
+ * The UP-FACING reading of a selected circle (Alice, 2026-10-28): an
+ * indexed op has exactly one sensible interpretation of a rim — the one
+ * facing the tool in the frame in effect. Among circles sharing the
+ * machine-XY center and radius, that is the one at the highest machine Z
+ * (a bore's upper mouth, a plateau's top edge). The loop-winding AXIS is
+ * deliberately NOT the test: its Newell sign flips between bore rims and
+ * outline rims, and reading it as "facing" anchored a 180°-indexed
+ * chamfer on the underside rim — the cut went through the part. The
+ * selected circle returns unchanged when it already is the up face.
+ */
+function upFacingCircle(
+  features: DetectedFeatures,
+  c: CircleFeature,
+  xf: (p: { x: number; y: number; z: number }) => THREE.Vector3,
+): CircleFeature {
+  const center = xf(c.center);
+  let best = c;
+  let bestZ = center.z;
+  for (const o of features.circles) {
+    if (o.id === c.id || o.arcs) continue;
+    const oc = xf(o.center);
+    if (Math.abs(oc.x - center.x) > CHAMFER_CENTER_TOL) continue;
+    if (Math.abs(oc.y - center.y) > CHAMFER_CENTER_TOL) continue;
+    if (Math.abs(o.radius - c.radius) > CHAMFER_RADIUS_TOL) continue;
+    if (oc.z > bestZ) {
+      best = o;
+      bestZ = oc.z;
+    }
+  }
+  return best;
+}
+
+/**
  * Pocket regions from the selection: circles aligned to the machine Z
  * axis become their disc; Z-normal planes become their BORDER LOOPS —
  * the tool follows the selected outline (a cross cuts a cross, not its
@@ -86,6 +161,7 @@ export function pocketRegionsFromSelection(
   /** a selected partial circle doesn't bound a disc — say so instead of
    * falling through to the misleading frame-gate error */
   let sawPartial = false;
+  const seenRims = new Set<string>();
 
   for (const c of features.circles) {
     if (!selection.includes(c.id)) continue;
@@ -94,11 +170,17 @@ export function pocketRegionsFromSelection(
       continue;
     }
     if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < Z_TOL) continue;
-    const center = xf(c.center);
+    // the up-facing reading: a rim selected on the underside of the part
+    // at this datum still bounds the same disc — read it at its upper
+    // mouth (both ends of one bore are one region)
+    const up = upFacingCircle(features, c, xf);
+    if (seenRims.has(up.id)) continue;
+    seenRims.add(up.id);
+    const center = xf(up.center);
     const contour: Vec2[] = [];
     for (let i = 0; i < CIRCLE_SEGMENTS; i++) {
       const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
-      contour.push({ x: center.x + Math.cos(a) * c.radius, y: center.y + Math.sin(a) * c.radius });
+      contour.push({ x: center.x + Math.cos(a) * up.radius, y: center.y + Math.sin(a) * up.radius });
     }
     circleRegions.push(contour);
     rimZ = Math.max(rimZ, center.z);
@@ -110,7 +192,10 @@ export function pocketRegionsFromSelection(
   for (let pi = 0; pi < features.planes.length; pi++) {
     const p = features.planes[pi];
     if (!selection.includes(p.id)) continue;
-    if (Math.abs(machineAxisZ(new THREE.Vector3(p.normal.x, p.normal.y, p.normal.z), xf)) < Z_TOL) continue;
+    // up-facing only: a plane whose rotated normal points AWAY from the
+    // tool has no up reading at this datum — its outline would cut inside
+    // the part (the 180° chamfer lesson: gate on the SIGN, not the magnitude)
+    if (machineAxisZ(new THREE.Vector3(p.normal.x, p.normal.y, p.normal.z), xf) < Z_TOL) continue;
     // the face's own border loops, projected to machine XY and oriented
     // outer-CCW / holes-CW by nesting depth (sliceAtZ's classification
     // rule) — the path follows the outline, not a box containing it
@@ -161,6 +246,27 @@ export function pocketRegionsFromSelection(
   // features are selected but none survived the frame gate: say so —
   // "select features…" here reads as if the click never registered
   if (selection.length > 0) {
+    const diag = frameGateDiagnosis(features, selection, xf);
+    if (diag === 'parallel') {
+      throw new Error(
+        'a selected feature is parallel to the rotation axis — it can never ' +
+          'face the cutter on this machine, however you index: there is no ' +
+          'sensible interpretation',
+      );
+    }
+    if (diag === 'away') {
+      throw new Error(
+        'the selected face points away from the cutter at this datum — ' +
+          'add an Index op to rotate it up if you want to machine this one',
+      );
+    }
+    if (diag === 'sideways') {
+      throw new Error(
+        'the selected face points sideways in the cutting frame — it is ' +
+          'reachable by rotating the stock: add an Index op if you want to ' +
+          'machine this one',
+      );
+    }
     throw new Error(
       'the selected features cannot be pocketed in the cutting frame — ' +
         'they are not within ~10° of horizontal (a thread circle or side face ' +
@@ -188,11 +294,18 @@ export function drillTargetsFromSelection(
     ? (p: { x: number; y: number; z: number }) => indexRotation(xf0(p))
     : xf0;
   const targets: DrillOp['targets'] = [];
+  const seen = new Set<string>();
   for (const c of features.circles) {
     // a broken hole rim doesn't bound a drillable center
     if (!c.inner || c.arcs || !selection.includes(c.id)) continue;
     if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < DRILL_Z_TOL) continue;
-    const center = xf(c.center);
+    // the up-facing reading: enter the bore at its upper mouth in the
+    // cutting frame, never at a rim the tool would have to reach through
+    // the part to touch (both ends of one bore are one hole)
+    const up = upFacingCircle(features, c, xf);
+    if (seen.has(up.id)) continue;
+    seen.add(up.id);
+    const center = xf(up.center);
     targets.push({ x: center.x, y: center.y, topZ: center.z, depth });
   }
   return targets.length > 0 ? targets : null;
@@ -285,15 +398,21 @@ export function chamferTargetsFromSelection(
       );
     }
     if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < Z_TOL) continue;
-    const center = xf(c.center);
+    // the up-facing reading: a rim selected on the side that faces away at
+    // this datum is read at the mouth that faces the tool (Alice
+    // 2026-10-28: an indexed op has exactly one sensible interpretation —
+    // both ends of one bore are one loop)
+    const up = upFacingCircle(features, c, xf);
+    if (directCircles.has(up.id)) continue;
+    const center = xf(up.center);
     loops.push({
       kind: 'circle',
       center: { x: center.x, y: center.y },
-      radius: c.radius,
+      radius: up.radius,
       z: center.z,
-      materialOutside: c.inner,
+      materialOutside: up.inner,
     });
-    directCircles.add(c.id);
+    directCircles.add(up.id);
   }
 
   const planeLoops = features.planeLoops;
@@ -309,6 +428,10 @@ export function chamferTargetsFromSelection(
       }));
     if (faceLoops.length === 0) continue;
     const planeZ = xf(p.point).z;
+    // the plane may face away at this datum — its circle-matched loops
+    // still re-anchor on the up-facing rim below; a bare poly outline has
+    // no up reading and must not cut through the part
+    const planeDown = machineAxisZ(new THREE.Vector3(p.normal.x, p.normal.y, p.normal.z), xf) < -Z_TOL;
     // material-side classification for loops that don't circle-match: the
     // containing (largest) loop bounds material outside it, interior loops
     // bound material inside the face
@@ -336,18 +459,24 @@ export function chamferTargetsFromSelection(
           })
         : undefined;
       if (matched) {
-        // identical to selecting the circle itself — and skip when it was
-        if (directCircles.has(matched.id)) continue;
-        const center = xf(matched.center);
+        // identical to selecting the circle itself — resolved to its
+        // up-facing reading, so a plane picked on the far side of a
+        // through-hole still chamfers the mouth facing the tool (her
+        // 180°-indexed barrel adapter: the top floor selection cut inside
+        // the part before this re-anchor)
+        const up = upFacingCircle(features, matched, xf);
+        if (directCircles.has(up.id)) continue;
+        const center = xf(up.center);
         loops.push({
           kind: 'circle',
           center: { x: center.x, y: center.y },
-          radius: matched.radius,
+          radius: up.radius,
           z: center.z,
-          materialOutside: matched.inner,
+          materialOutside: up.inner,
         });
         continue;
       }
+      if (planeDown) continue; // no up reading for a back-facing outline
       loops.push({
         kind: 'poly',
         points: pts,
@@ -376,6 +505,27 @@ export function chamferTargetsFromSelection(
             'Cylinder chamfer op for rod ends and step edges',
         );
       }
+    }
+    const diag = frameGateDiagnosis(features, selection, xf);
+    if (diag === 'parallel') {
+      throw new Error(
+        'a selected feature is parallel to the rotation axis — it can never ' +
+          'face the cutter on this machine, however you index: there is no ' +
+          'sensible interpretation',
+      );
+    }
+    if (diag === 'away') {
+      throw new Error(
+        'the selected face points away from the cutter at this datum — ' +
+          'add an Index op to rotate it up if you want to machine this one',
+      );
+    }
+    if (diag === 'sideways') {
+      throw new Error(
+        'the selected edge points sideways in the cutting frame — it is ' +
+          'reachable by rotating the stock: add an Index op if you want to ' +
+          'machine this one',
+      );
     }
     throw new Error(
       'the selected features cannot be chamfered in the cutting frame — ' +
