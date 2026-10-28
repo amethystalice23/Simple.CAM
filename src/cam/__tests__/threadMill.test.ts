@@ -10,13 +10,13 @@ import type { Move, ThreadMillOp, ThreadMillTarget, Tool } from '../../core/type
 
 const mill: Tool = {
   id: 'tm1',
-  name: 'Carvera M6 Threadmill (the library record, 2026-10-28)',
+  name: 'Carvera M6 Threadmill (the shop record, 2026-10-28)',
   type: 'threadmill',
-  diameter: 4.75,
+  diameter: 4.75, // the example's cut Ø; the shop M6 is 4.8
   pitch: 1,
   flutes: 3, // teeth at one spot (Alice) — locked to the pitch
-  shaftDiameter: 3.175, // the slim neck above the 2mm cutting band
-  fluteLength: 2,
+  shaftDiameter: 6, // 6mm shank (shop-checked by Alice)
+  fluteLength: 18, // the CUTTING LENGTH — the thin taper before the shank
   overallLength: 50,
   spindleRpm: 12000,
 };
@@ -385,32 +385,30 @@ describe('threadMill — validation', () => {
     expect(() => threadMill(internalOp, fat)).toThrow(/does not fit the Ø4\.92 bore/);
   });
 
-  it('rejects a fat-necked bore cut deeper than the cutting band', () => {
-    // a Ø6 neck > the Ø4.92 bore: the thread is capped at the 2mm band
-    const fat = { ...mill, shaftDiameter: 6 };
-    expect(() => threadMill(internalOp, fat)).toThrow(
-      /Ø6 neck cannot enter the Ø4\.92 bore past the 2mm cutting band/,
+  it('rejects a thread that outruns the CUTTING LENGTH (the axial cap)', () => {
+    // the shop M6 record: 18mm cutting length — a 10mm thread fits
+    expect(() => threadMill(op, mill)).not.toThrow();
+    // a 2mm-band record (the raw Fusion LCF) cannot take a 10mm thread:
+    // above the band the shank sweeps the stock beside the thread
+    const banded = { ...mill, fluteLength: 2 };
+    expect(() => threadMill(op, banded)).toThrow(
+      /10mm thread outruns .* 2mm cutting length/,
     );
-    // the library neck (3.175) fits the same bore — deep internal is fine
-    expect(() => threadMill(internalOp, mill)).not.toThrow();
+    expect(() => threadMill(op, banded)).toThrow(/Ø6 shank sweeps the stock beside/);
+    // a thread within the band is fine with the same record
+    expect(() =>
+      threadMill({ ...op, targets: [{ ...target, depth: 2 }] }, banded),
+    ).not.toThrow();
   });
 
-  it('rejects an external thread whose NECK overhangs the crest — but not the real library tool', () => {
-    // a Ø6-necked Ø4.8 mill on a 10mm M14: above the 2mm band the neck's
-    // inner edge sweeps 1.31mm inside the crest — the OLD sim's red sea,
-    // which was the uncleared stock plus the mis-imported fat neck
-    const fatNeck = { ...mill, diameter: 4.8, shaftDiameter: 6 };
-    expect(() => threadMill(op, fatNeck)).toThrow(/Ø6 neck overhangs the Ø14 thread/);
-    expect(() => threadMill(op, fatNeck)).toThrow(/slimmer-necked or longer-banded/);
-    // HER REAL CASE (2026-10-28, the corrected library record): the M6
-    // mill — Ø4.8 cut, 3.175 neck, 2mm band, 50mm OAL — cuts the 10mm
-    // M14 fine; the neck clears the crest by 0.10mm (noted, tight)
-    const real = threadMill({ ...op, tolerance: 0.1 }, { ...mill, diameter: 4.8 });
-    expect(real.moves.length).toBeGreaterThan(0);
-    expect(real.notes.some((n) => n.includes('clears the crest by only 0.10mm'))).toBe(true);
-    // a thread within the band never brings the neck down — no note
-    const short = threadMill({ ...op, targets: [{ ...target, depth: 1 }] }, mill);
-    expect(short.notes.some((n) => n.includes('crest'))).toBe(false);
+  it('internal: the shank caps the thread at the cutting length when it misses the bore', () => {
+    // her M6 mill: Ø4.8 cut fits the Ø4.92 prep bore, but the Ø6 shank
+    // does not — the 10mm internal thread is capped by the 18mm cutting
+    // length (fine), and a 20mm one is beyond it
+    expect(() => threadMill(internalOp, mill)).not.toThrow();
+    expect(() =>
+      threadMill({ ...internalOp, targets: [{ ...internalOp.targets[0], depth: 20 }] }, mill),
+    ).toThrow(/Ø6 shank cannot enter the Ø4\.92 bore/);
   });
 
   it('rejects a thread beyond the overall-length reach', () => {

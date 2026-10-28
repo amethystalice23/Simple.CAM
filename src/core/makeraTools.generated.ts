@@ -4825,8 +4825,8 @@ export const MAKERA_TOOLS: Tool[] = [
         "rampFeed": 333
       }
     ],
-    "shaftDiameter": 3.175,
-    "fluteLength": 2,
+    "shaftDiameter": 6,
+    "fluteLength": 18,
     "overallLength": 50,
     "flutes": 3,
     "material": "carbide",
@@ -4889,8 +4889,8 @@ export const MAKERA_TOOLS: Tool[] = [
         "rampFeed": 333
       }
     ],
-    "shaftDiameter": 3.175,
-    "fluteLength": 2,
+    "shaftDiameter": 6,
+    "fluteLength": 24,
     "overallLength": 50,
     "flutes": 3,
     "material": "carbide",

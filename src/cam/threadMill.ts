@@ -21,6 +21,14 @@
  * Tolerance loosens the fit in both modes (deeper grooves), never the
  * thread depth — fit is radial with a full-form tool.
  *
+ * TOOL MODEL (Alice, from the Makera bit shop, 2026-10-28): the 1/3-tooth
+ * mills are a 2mm toothed band on a long thin CUTTING LENGTH (the taper
+ * before the shank — 18mm on the M6, 24 on the M8), then the shank (6mm on
+ * the M6/M8, 1/8″ on the smaller). fluteLength carries the CUTTING LENGTH
+ * (shop overrides in the import), so a full-depth helix keeps the shank
+ * clear: axially, the thread depth is capped by the cutting length, and by
+ * the overall length below the collet margin.
+ *
  * INTERNAL cycle (no example exists — Alice's ruled design, 2026-10-28):
  * approach at the bore CENTER (the prep pocket cleared it — rapiding
  * inside is the documented contract), plunge to the thread bottom, radial
@@ -102,8 +110,6 @@ export function isMultiTooth(tool: Tool): boolean {
  * documented: Makera's 1/3-tooth mills carry no handle-length field.
  */
 export const COLLET_MARGIN_MM = 15;
-/** External neck clearance under this gets a summary note — tight but real. */
-const NECK_CLEARANCE_NOTE_MM = 0.3;
 
 /** ISO internal minor diameter, mm — the prep bore the op recommends. */
 export function internalMinorDiameter(nominalDiameter: number, pitch: number): number {
@@ -191,18 +197,16 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
             'prep a larger bore or a slimmer mill',
         );
       }
-      // the NECK above the short cutting band must fit the bore when the
-      // thread outruns the band (Alice's tool model, 2026-10-28: the 1/3-
-      // tooth mills are a few mm of cutting face on a long slim neck) —
-      // then the thread length is capped by the band, minus one pitch of
-      // form room at the mouth
-      const neck = tool.shaftDiameter ?? tool.diameter;
-      const band = tool.fluteLength ?? Infinity;
-      if (neck > boreR * 2 && target.depth > band - op.pitch) {
+      // the SHANK must stay out of the bore when it oversizes it: the
+      // thread is then capped at the CUTTING LENGTH (the thin taper —
+      // 18mm on her M6), minus a pitch of form room at the mouth
+      const shank = tool.shaftDiameter ?? tool.diameter;
+      const cutting = tool.fluteLength ?? Infinity;
+      if (shank > boreR * 2 && target.depth > cutting - op.pitch) {
         throw new Error(
-          `the Ø${neck} neck cannot enter the Ø${(boreR * 2).toFixed(2)} bore past the ` +
-            `${tool.fluteLength}mm cutting band — this thread is ${target.depth}mm; ` +
-            'use a mill with a longer band (or a slimmer neck)',
+          `the Ø${shank} shank cannot enter the Ø${(boreR * 2).toFixed(2)} bore — this ` +
+            `thread is ${target.depth}mm but the ${tool.fluteLength}mm cutting length ` +
+            'caps it; use a longer-cutting or slimmer mill',
         );
       }
     }
@@ -227,31 +231,20 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           : `Ø${(boreR * 2).toFixed(2)} bore → aside retract (${asideRoom.toFixed(2)}mm of room)`,
       );
     } else {
-      // the NECK above the short cutting band must clear the crest when
-      // the thread outruns the band (Alice's tool model, 2026-10-28: "a
-      // cutting area that is only a few mm tall, then a long neck" —
-      // fluteLength IS the cutting face, the overall length sets the
-      // reach). Above the band the neck sweeps the orbit; its inner edge
-      // crossing the crest circle would plow the thread teeth standing
-      // there. (Her first sim's red sea was the UNCLEARED STOCK plus the
-      // mis-imported fat neck, not the real tool.)
-      const neck = tool.shaftDiameter ?? tool.diameter;
-      const band = tool.fluteLength ?? 0;
-      if (target.depth > band) {
-        const clearance = Rc - neck / 2 - op.nominalDiameter / 2;
-        if (clearance < 0) {
-          throw new Error(
-            `the Ø${neck} neck overhangs the Ø${op.nominalDiameter} thread — above the ` +
-              `${tool.fluteLength}mm cutting band its inner edge sweeps ` +
-              `${(-clearance).toFixed(2)}mm inside the crest, and this ` +
-              `thread is ${target.depth}mm; use a slimmer-necked or longer-banded mill`,
-          );
-        }
-        if (clearance < NECK_CLEARANCE_NOTE_MM) {
-          notes.push(
-            `neck clears the crest by only ${clearance.toFixed(2)}mm above the cutting band — mind the crest finish`,
-          );
-        }
+      // EXTERNAL, AXIAL: the shank crosses the crest radially on every
+      // thread (Rc − shankR < crestR always, for shankR ≥ toolR), so when
+      // the thread outruns the CUTTING LENGTH the shank sweeps the stock
+      // standing beside/above the thread — grinding it (Alice's tool model,
+      // 2026-10-28, shop-checked: the cutting length IS the thin taper
+      // before the shank — 18mm on her M6 — and it caps the thread).
+      const shank = tool.shaftDiameter ?? tool.diameter;
+      const cutting = tool.fluteLength ?? Infinity;
+      if (target.depth > cutting) {
+        throw new Error(
+          `this ${target.depth}mm thread outruns the ${tool.name}'s ${tool.fluteLength}mm ` +
+            `cutting length — above it the Ø${shank} shank sweeps the stock beside the ` +
+            'thread; use a longer-cutting mill (or split the thread into Z bands)',
+        );
       }
       notes.push(`Ø${op.nominalDiameter} boss → lifts straight off — nothing stands above an external thread`);
     }

@@ -78,12 +78,14 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   materialId: 'aluminum-6061',
 };
 
-// v3 (2026-10-28): the Makera thread-mill necks corrected — SFDM on the
-// Fusion M3–M8 records carries the HANDLE Ø (6), but the 1/3-tooth mills
-// are necked tools (Alice: "a cutting area that is only a few mm tall,
-// then a long neck") and the physical neck on the whole family is 1/8″;
-// the fat record made the sim treat every external thread as a collision.
-const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v3';
+// v4 (2026-10-28 evening): thread-mill records take the shop-measured
+// CUTTING LENGTH as fluteLength (18mm on the M6, 24 on the M8 — the thin
+// taper between the 2mm tooth band and the shank; Alice checked the Makera
+// bit shop). The v3 records carried only the 2mm tooth band, which made the
+// simulator stick the Ø6 shank 2mm above the tip — inside the stock beside
+// every full-depth thread — painting red collisions and yellow gouges on a
+// correct cut.
+const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v4';
 
 /**
  * Feature-picking caps: above this triangle count a model is a fine relief
@@ -759,14 +761,15 @@ export function App() {
         o.kind === 'drill'
           ? o.peckDepth
           : o.kind === 'threadMill'
-            ? // the thread's own radial DOC: the ladder's step, or the full
-              // form depth in the default single pass — the honest intended
-              // removal, so a correct thread doesn't paint yellow against
-              // the kernel's grid-pitch default (her 2026-10-28 report:
-              // "a sea of yellow")
-              o.stepOver > 0
-              ? o.stepOver
-              : (o.internal ? 0.5413 : 0.6134) * o.pitch
+            ? // A thread is cut FULL AXIAL DEPTH in one helical pass — by
+              // tool design (the cutting length spans the whole thread), not
+              // a step-down choice. The radial Step over ladders the FORM
+              // radially, never the axial depth, so the honest intended
+              // removal per move is the full thread length and the
+              // classification reads it (her 2026-10-28 report: a yellow
+              // wall at any step over, because the moves were being read
+              // against the 0.61mm form depth).
+              o.endDepth - o.startDepth
             : 'stepDown' in o
               ? (o.stepDown as number | undefined) ?? 0
               : 0;
