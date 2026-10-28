@@ -3,7 +3,7 @@
 G90 G21
 G0 X10.43 Y-0.9 ; level z-1.00
 G0 Z5
-G0 Z-0.5
+G0 Z0.5
 G1 Z-1 F200 ; plunge 1.00mm below surface
 G1 X10.78 Y-0.63 F500
 G1 X10.97 Y-0.22
@@ -28,7 +28,7 @@ G1 X10.43 Y-0.9
 G0 Z5
 G0 X10.43 Y-0.9 ; level z-2.00
 G0 Z5
-G0 Z-1.5
+G0 Z-0.5
 G1 Z-2 F200 ; plunge 2.00mm below surface
 G1 X10.78 Y-0.63 F500
 G1 X10.97 Y-0.22

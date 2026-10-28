@@ -155,6 +155,17 @@ interface Props {
     axisZ: number;
     marks: { x: number; y: number; z: number }[][] | null;
   } | null;
+  /** the expanded thread-mill op's intended AREA (2026-10-28): a ghost
+   * cylinder of the thread's cutting Ø spanning the start→end Z band at
+   * the resolved bore/boss — external shows the major Ø, internal the
+   * prep-bore d1. Null when the open op isn't a thread mill or its
+   * selection hasn't resolved. */
+  threadPreview: {
+    center: { x: number; y: number };
+    topZ: number;
+    bottomZ: number;
+    diameter: number;
+  } | null;
   /** the carve simulator's chunk meshes, when the Simulation layer is on
    *  (PLAN "cutting simulator"): stock-frame greedy-meshed voxels keyed by
    *  chunk id, machine-space positions baked in. The meshes parent into
@@ -192,6 +203,7 @@ export function Viewport({
   viewDatum,
   pickKind,
   facePreview,
+  threadPreview,
   simChunks,
   displayLayers,
   onToggleLayer,
@@ -1541,6 +1553,46 @@ export function Viewport({
       markMat.dispose();
     };
   }, [facePreview]);
+
+  // the thread-mill op's intended AREA (2026-10-28): a violet ghost
+  // cylinder of the thread's cutting Ø over the start→end Z band at the
+  // resolved bore/boss, while that op's panel is open — the thread will
+  // apply to this band. Machine space; drawn through the stock/model
+  // like the face ghost (depthTest off), live with the depth boxes.
+  useEffect(() => {
+    const group = sliceGroupRef.current;
+    if (!group) return;
+    if (!threadPreview || threadPreview.bottomZ >= threadPreview.topZ) return;
+    const len = threadPreview.topZ - threadPreview.bottomZ;
+    const geo = new THREE.CylinderGeometry(
+      threadPreview.diameter / 2,
+      threadPreview.diameter / 2,
+      len,
+      48,
+    );
+    geo.rotateX(Math.PI / 2); // geometry Y axis → machine Z (the thread axis)
+    const mat = new THREE.MeshBasicMaterial({
+      color: SLICE_COLOR,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(
+      threadPreview.center.x,
+      threadPreview.center.y,
+      (threadPreview.topZ + threadPreview.bottomZ) / 2,
+    );
+    mesh.renderOrder = 3;
+    group.add(mesh);
+    return () => {
+      group.remove(mesh);
+      geo.dispose();
+      mat.dispose();
+    };
+  }, [threadPreview]);
 
   // unmount only: no fresh effect run follows, so end any drag and give
   // the controls back

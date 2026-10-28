@@ -21,6 +21,7 @@ import {
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
 import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
+import { isMultiTooth } from '../cam/threadMill';
 import { getMaterial } from '../core/materials';
 
 interface Props {
@@ -50,6 +51,9 @@ interface Props {
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   /** thread: insert a prefilled Face cylinder op right before it */
   onInsertFacingOp: (op: JobOp) => void;
+  /** thread mill: insert the prefilled prep op right before it (external =
+   * a profile turning the boss, internal = a pocket opening the bore) */
+  onInsertPrepOp: (op: JobOp) => void;
   /** ops whose toolpath is hidden from the preview (the g-code keeps them) */
   hiddenOps: ReadonlySet<string>;
   onToggleVisible: (id: string) => void;
@@ -133,13 +137,33 @@ function DepthFields(props: {
           ⇩
         </button>
       </div>
-      <NumberField
-        label="Allowance (mm)"
-        value={op.allowance}
-        min={0}
-        step={0.05}
-        onCommit={(v) => upd({ allowance: v })}
-      />
+      {op.kind === 'profile' ? (
+        <>
+          <NumberField
+            label="Bottom allowance (mm)"
+            value={op.bottomAllowance}
+            min={0}
+            step={0.05}
+            title="Roughing stock RAISED ON THE FLOOR — the cut floor lifts by it"
+            onCommit={(v) => upd({ bottomAllowance: v })}
+          />
+          <NumberField
+            label="Side allowance (mm)"
+            value={op.sideAllowance}
+            step={0.05}
+            title="RADIAL stock outside the tool path — SIGNED: positive leaves wall stock for a finishing pass, negative steps the path INSIDE the contour (turns a boss down past its modeled Ø — the thread prep lands the crest at nominal − 2·tolerance)"
+            onCommit={(v) => upd({ sideAllowance: v })}
+          />
+        </>
+      ) : (
+        <NumberField
+          label="Allowance (mm)"
+          value={op.allowance}
+          min={0}
+          step={0.05}
+          onCommit={(v) => upd({ allowance: v })}
+        />
+      )}
       <p className="hint">
         depths are below the stock top · start = end → single finishing pass · allowance = stock
         left for finishing
@@ -356,15 +380,18 @@ function TabsFields(props: {
  * `allowanceKey`: the op's roughing-allowance field, ZEROED when the box is
  * ticked ON (a finishing pass cuts to size — the allowance was roughing
  * stock for exactly the ladder being skipped; Alice, 2026-10-26). The user
- * can set it back afterwards; unticking restores nothing.
+ * can set it back afterwards; unticking restores nothing. The profile's
+ * 2026-10-28 split carries TWO keys (bottom + side) — both zeroed.
  */
 function FinishingOnlyCheck(props: {
   /** one of the ten ladder ops (structural — index/drill/chamfer never call this) */
   op: { finishingOnly?: boolean };
   upd: (p: Partial<JobOp>) => void;
   title?: string;
-  /** the op's allowance field name, zeroed on tick-ON; absent = the op has none */
-  allowanceKey?: 'allowance' | 'finishAllowance';
+  /** the op's allowance field name(s), zeroed on tick-ON; absent = none */
+  allowanceKey?: 'allowance' | 'finishAllowance' | 'bottomAllowance';
+  /** the profile's split: the second (side) key zeroed with the first */
+  secondAllowanceKey?: 'sideAllowance';
 }) {
   return (
     <label
@@ -382,6 +409,7 @@ function FinishingOnlyCheck(props: {
           props.upd({
             finishingOnly: checked,
             ...(checked && props.allowanceKey ? { [props.allowanceKey]: 0 } : {}),
+            ...(checked && props.secondAllowanceKey ? { [props.secondAllowanceKey]: 0 } : {}),
           } as Partial<JobOp>);
         }}
       />
@@ -406,6 +434,8 @@ function ParamFields(props: {
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
   /** thread: insert a prefilled Face cylinder op right before it */
   onInsertFacingOp: (op: JobOp) => void;
+  /** thread mill: insert the prefilled prep op right before it */
+  onInsertPrepOp: (op: JobOp) => void;
   floorLabel: string | null;
 }) {
   const { op, onChange } = props;
@@ -944,6 +974,96 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'threadMill':
+      return (
+        <>
+          <label className="field">
+            <span>Thread</span>
+            <select
+              value={op.internal ? 'internal' : 'external'}
+              onChange={(e) => upd({ internal: e.target.value === 'internal' } as Partial<JobOp>)}
+            >
+              <option value="internal">internal (bore)</option>
+              <option value="external">external (boss)</option>
+            </select>
+          </label>
+          <div className="floor-row">
+            <NumberField
+              label="Nominal Ø (mm)"
+              value={op.nominalDiameter}
+              min={0.1}
+              step={0.1}
+              // editing the size fills the standard coarse pitch (M6 → 1.0)
+              onCommit={(v) =>
+                upd({ nominalDiameter: v, pitch: metricPitch(v) ?? op.pitch } as Partial<JobOp>)
+              }
+            />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'targetDiameter' ? ' active' : ''}`}
+              title="Pick the nominal Ø from a circular feature — click, then select the circle"
+              onClick={() => props.onFeaturePick(op, 'targetDiameter')}
+            >
+              ⇩
+            </button>
+          </div>
+          <NumberField
+            label="Pitch (mm)"
+            value={op.pitch}
+            min={0.1}
+            step={0.05}
+            // a multi-tooth thread mill LOCKS the pitch — its teeth sit at
+            // one fixed pitch and must ride successive turns of the groove
+            // (Alice, 2026-10-28); a 1-tooth mill cuts any pitch with its
+            // single profile, the recorded pitch just the nominal default
+            disabled={props.tool ? isMultiTooth(props.tool) : false}
+            title={
+              props.tool && isMultiTooth(props.tool)
+                ? `Locked to the ${props.tool.name} — its ${(props.tool.flutes ?? 1)} teeth are pitched ${props.tool.pitch}mm apart and must ride successive turns of one groove`
+                : 'Free pitch — a single-tooth mill cuts any pitch with its one profile (defaults to the tool record, else ISO coarse)'
+            }
+            onCommit={(v) => upd({ pitch: v } as Partial<JobOp>)}
+          />
+          <NumberField label="Starts" value={op.starts} min={1} step={1} onCommit={(v) => upd({ starts: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
+          <NumberField label="Tolerance (mm)" value={op.tolerance} min={0} step={0.05} onCommit={(v) => upd({ tolerance: Math.max(v, 0) } as Partial<JobOp>)} />
+          <NumberField
+            label="Step over (mm)"
+            value={op.stepOver}
+            min={0}
+            step={0.05}
+            title="Radial depth per pass — 0 (default) cuts the full form in one pass, the Makera cycle; set ~0.2–0.3 for tougher materials to work the form down in even radial steps"
+            onCommit={(v) => upd({ stepOver: Math.max(v, 0) } as Partial<JobOp>)}
+          />
+          <label className="field">
+            <span>Rotation</span>
+            <select value={op.rotation} onChange={(e) => upd({ rotation: e.target.value as 'cw' | 'ccw' } as Partial<JobOp>)}>
+              <option value="cw">cw</option>
+              <option value="ccw">ccw</option>
+            </select>
+          </label>
+          <NumberField label="Start depth (mm)" value={op.startDepth} min={0} step={0.1} onCommit={(v) => upd({ startDepth: Math.max(v, 0) } as Partial<JobOp>)} />
+          <NumberField label="End depth (mm)" value={op.endDepth} min={0.1} step={0.1} onCommit={(v) => upd({ endDepth: v } as Partial<JobOp>)} />
+          <div className="buttons">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => props.onInsertPrepOp(op)}
+              title="Insert the prep toolpath right before this thread — external: a profile turning the boss to the major Ø (waste cleared to the stock wall); internal: a pocket opening the bore to the minor Ø. Its own tool and feeds, fully editable"
+            >
+              Add prep toolpath
+            </button>
+          </div>
+          <p className="hint">
+            single-profile thread mill, cut bottom-up in one helix per start (a full second
+            spring pass, like Makera's own 14×1 example). The fit is radial: tolerance shifts
+            the helix, the tool cuts its own full form. Step over 0 = the full form in one
+            pass; set it to split the form into radial steps for tough materials. Internal
+            retract picks itself — pull aside and lift when the cleared bore has room, follow
+            the spiral out when it doesn't. Rotation names the thread like the 4-axis Thread
+            op does (their 14ccw example is a ccw thread)
+          </p>
+        </>
+      );
     case 'drill':
       return (
         <>
@@ -983,7 +1103,9 @@ function ParamFields(props: {
             onFeaturePick={props.onFeaturePick}
             floorLabel={props.floorLabel}
           />
-          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="allowance" />
+          {/* the 2026-10-28 split: BOTH profile allowances are roughing stock
+           * for the skipped ladder — a finishing pass cuts to size */}
+          <FinishingOnlyCheck op={op} upd={upd} allowanceKey="bottomAllowance" secondAllowanceKey="sideAllowance" />
           {!op.finishingOnly && (
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
@@ -1157,6 +1279,20 @@ export function OpsPanel(props: Props) {
         case 'rasterContour':
           next = { ...next, stepOver } as JobOp;
           break;
+        case 'threadMill': {
+          // the pitch follows the tool (Alice, 2026-10-28: "as these
+          // threadmill bits have fixed pitch you should set and disable
+          // the pitch when one is selected"): a fixed-pitch mill locks it
+          // (and the panel disables the box); a pitch-less kind (a
+          // single-tooth mill) keeps it editable but still defaults —
+          // to the ISO coarse pitch for the nominal Ø
+          const tm = next as Extract<JobOp, { kind: 'threadMill' }>;
+          next = {
+            ...tm,
+            pitch: t.pitch ?? metricPitch(tm.nominalDiameter) ?? tm.pitch,
+          };
+          break;
+        }
         case 'profile':
         case 'cylChamfer':
         case 'spiralCarve':
@@ -1291,7 +1427,7 @@ export function OpsPanel(props: Props) {
                           {PICK_BANNERS[props.picking!.kind]}
                         </button>
                       ) : (
-                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave'].includes(op.kind) && (
+                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave', 'threadMill'].includes(op.kind) && (
                           <button
                             type="button"
                             className={editing ? '' : 'secondary'}
@@ -1352,6 +1488,7 @@ export function OpsPanel(props: Props) {
                     picking={props.picking}
                     onFeaturePick={props.onFeaturePick}
                     onInsertFacingOp={props.onInsertFacingOp}
+                    onInsertPrepOp={props.onInsertPrepOp}
                     floorLabel={
                       isDepthBearingJobOp(op) && op.floorFeatureId !== null
                         ? (props.featureLabels[op.floorFeatureId] ?? null)

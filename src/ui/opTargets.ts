@@ -597,3 +597,250 @@ export function cylChamferTargetsFromSelection(
   }
   return null;
 }
+
+// ------------------------------------------------------------- thread mill
+
+/** One threadable feature resolved in machine space. */
+export interface ThreadSourceTarget {
+  /** machine XY of the thread axis */
+  center: Vec2;
+  /** the rim bounds a bore (true) or a boss outline (false) */
+  internal: boolean;
+  /** machine Z of the UP-FACING mouth — the thread's top reference */
+  rimZ: number;
+  /** the modeled radius of the bore/boss at the rim, mm */
+  radius: number;
+  /**
+   * A cylindrical-WALL selection: the wall's machine-Z span — the thread
+   * length the shape itself declares (Alice, 2026-10-28: "take
+   * assumptions about thread length, diameter, and inside/outside from
+   * the shape of it"). Absent for rim/floor selections — the depth box
+   * keeps its default.
+   */
+  spanZ?: readonly [number, number];
+}
+
+export interface ThreadSource {
+  targets: ThreadSourceTarget[];
+}
+
+/**
+ * Tangency slop for matching a wall facet to its cylinder (mm): a
+ * tessellated cylinder's facets sit INSIDE the true surface by the
+ * sagitta, which grows with radius and segment count — a 12-segment
+ * Ø10 bore's facets sit ~0.13mm inside, so the fit allowance must
+ * scale with the radius or coarse meshes never match.
+ */
+const WALL_SAGITTA_FACTOR = 0.06;
+const WALL_SAGITTA_MIN_MM = 0.1;
+
+/**
+ * Thread targets from the selection (the thread-mill op, PLAN.md
+ * 2026-10-28). Three ways to point at one thread, all resolving to the
+ * same target:
+ *  - the rim CIRCLE at either end of the bore/boss (read at its
+ *    UP-FACING mouth — the 2026-10-28 rule; both ends of a through bore
+ *    are one thread);
+ *  - the cylindrical WALL facet — matched by tangency to its rim circle,
+ *    the facet's Z span supplying the thread length the shape declares;
+ *  - the flat face around the rim (a pocket floor, a boss top) — its
+ *    outline circle-matches the rim, the chamfer precedent: clicking the
+ *    face threads the hole/boss it bounds.
+ * One op threads one Ø and one kind — mixed selections are refused.
+ * `indexRotation` maps points into the indexed cutting frame.
+ */
+export function threadTargetsFromSelection(
+  features: DetectedFeatures,
+  selection: string[],
+  transform: ModelTransform,
+  indexRotation?: (p: { x: number; y: number; z: number }) => THREE.Vector3,
+): ThreadSource | null {
+  const xf0 = transformFn(transform);
+  const xf = indexRotation
+    ? (p: { x: number; y: number; z: number }) => indexRotation(xf0(p))
+    : xf0;
+  const targets: ThreadSourceTarget[] = [];
+  const seenRims = new Set<string>();
+  let sawPartial = false;
+
+  const push = (c: CircleFeature): boolean => {
+    const up = upFacingCircle(features, c, xf);
+    if (seenRims.has(up.id)) return false;
+    seenRims.add(up.id);
+    const center = xf(up.center);
+    targets.push({
+      center: { x: center.x, y: center.y },
+      internal: up.inner,
+      rimZ: center.z,
+      radius: up.radius,
+    });
+    return true;
+  };
+
+  // Pass 1: directly selected circles — full, axis ∥ machine Z (strict:
+  // a tilted bore cannot be threaded by a vertical helix).
+  for (const c of features.circles) {
+    if (!selection.includes(c.id)) continue;
+    if (c.arcs) {
+      sawPartial = true;
+      continue;
+    }
+    const axis = new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z);
+    if (Math.abs(machineAxisZ(axis, xf)) < DRILL_Z_TOL) continue;
+    push(c);
+  }
+
+  // Pass 2: selected planes — floors circle-match their rims (the chamfer
+  // precedent); radial wall facets match by TANGENCY to a vertical circle
+  // (the facet plane sits one radius from the bore/boss axis) and carry
+  // the wall's Z span as the declared thread length.
+  for (let pi = 0; pi < features.planes.length; pi++) {
+    const p = features.planes[pi];
+    if (!selection.includes(p.id)) continue;
+    const nrmRaw = new THREE.Vector3(p.normal.x, p.normal.y, p.normal.z);
+    const nz = machineAxisZ(nrmRaw, xf);
+    const pp = xf(p.point);
+
+    if (Math.abs(nz) >= Z_TOL) {
+      // a floor/top face: every outline loop that circle-matches a
+      // vertical circle threads that bore/boss (clicking the face around
+      // the hole threads the hole)
+      const faceLoops = features.planeLoops
+        .filter((l) => l.plane === pi)
+        .map((l) =>
+          l.points.map((pt) => {
+            const v = xf(pt);
+            return { x: v.x, y: v.y };
+          }),
+        );
+      for (const pts of faceLoops) {
+        const cx = pts.reduce((s, q) => s + q.x, 0) / pts.length;
+        const cy = pts.reduce((s, q) => s + q.y, 0) / pts.length;
+        const radii = pts.map((q) => Math.hypot(q.x - cx, q.y - cy));
+        const fitR = radii.reduce((s, r) => s + r, 0) / radii.length;
+        if (!radii.every((r) => Math.abs(r - fitR) <= CHAMFER_RADIUS_TOL)) continue;
+        const matched = features.circles.find((c) => {
+          if (c.arcs) return false;
+          if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < DRILL_Z_TOL) {
+            return false;
+          }
+          const center = xf(c.center);
+          return (
+            Math.abs(center.z - pp.z) <= CHAMFER_CENTER_TOL &&
+            Math.hypot(center.x - cx, center.y - cy) <= CHAMFER_CENTER_TOL &&
+            Math.abs(c.radius - fitR) <= CHAMFER_RADIUS_TOL
+          );
+        });
+        if (matched) push(matched);
+      }
+      continue;
+    }
+
+    // a radial wall facet: match the vertical circle it is tangent to —
+    // |center − planePoint · normal| ≈ radius, within the tessellation
+    // sagitta allowance (facets sit inside the true cylinder)
+    const nrm = xf({ x: pp.x + nrmRaw.x, y: pp.y + nrmRaw.y, z: pp.z + nrmRaw.z })
+      .clone()
+      .sub(pp)
+      .normalize();
+    let best: { c: CircleFeature; err: number } | null = null;
+    for (const c of features.circles) {
+      if (c.arcs) continue;
+      if (Math.abs(machineAxisZ(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < DRILL_Z_TOL) continue;
+      const cc = xf(c.center);
+      const d = Math.abs(cc.clone().sub(pp).dot(nrm));
+      const sag = Math.max(WALL_SAGITTA_MIN_MM, c.radius * WALL_SAGITTA_FACTOR);
+      const err = Math.abs(d - c.radius);
+      if (err <= sag && (!best || err < best.err)) best = { c, err };
+    }
+    if (best) {
+      const fresh = push(best.c);
+      // the facet's Z span is the shape's declared thread length —
+      // attach it to the target just added (or already present)
+      const t =
+        fresh ? targets[targets.length - 1] : targets.find((x) => x.radius === best!.c.radius);
+      if (t) {
+        let top = -Infinity;
+        let bottom = Infinity;
+        for (const l of features.planeLoops) {
+          if (l.plane !== pi) continue;
+          for (const pt of l.points) {
+            const z = xf(pt).z;
+            if (z > top) top = z;
+            if (z < bottom) bottom = z;
+          }
+        }
+        if (Number.isFinite(top)) t.spanZ = [top, bottom];
+      }
+    }
+  }
+
+  if (targets.length > 0) {
+    // one op threads one Ø and one kind — anything else would need two
+    // helix radii or two modes in a single op
+    const radius = targets[0].radius;
+    const internal = targets[0].internal;
+    if (targets.some((t) => Math.abs(t.radius - radius) > CHAMFER_RADIUS_TOL)) {
+      throw new Error(
+        'the selection mixes diameters — one thread op cuts one thread size; ' +
+          'add a second Thread mill op for the other',
+      );
+    }
+    if (targets.some((t) => t.internal !== internal)) {
+      throw new Error(
+        'the selection mixes bores and bosses — a thread op cuts either ' +
+          'internal or external threads, not both; split them into two ops',
+      );
+    }
+    return { targets };
+  }
+
+  // selected but nothing resolved — diagnose the frame like the other ops
+  if (sawPartial) {
+    throw new Error(
+      'a partial circle (a broken rim) is not a threadable bore — select a ' +
+        'complete circle, the cylinder wall, or the flat face around it',
+    );
+  }
+  if (selection.length > 0) {
+    // a circle coaxial with the ROTATION axis spins in place under
+    // indexing — threading around the stock is the 4-axis Thread op's job
+    for (const c of features.circles) {
+      if (!selection.includes(c.id)) continue;
+      if (Math.abs(machineAxisX(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) >= X_TOL) {
+        throw new Error(
+          'a circle around the stock axis is the 4-axis Thread op\'s job — a ' +
+            '3-axis thread mill cuts vertical bores and bosses; use the rotary ' +
+            'V-bit thread for the stock axis',
+        );
+      }
+    }
+    const diag = frameGateDiagnosis(features, selection, xf);
+    if (diag === 'parallel') {
+      throw new Error(
+        'a selected feature is parallel to the rotation axis — it can never ' +
+          'face the cutter on this machine, however you index: there is no ' +
+          'sensible interpretation',
+      );
+    }
+    if (diag === 'away') {
+      throw new Error(
+        'the selected face points away from the cutter at this datum — ' +
+          'add an Index op to rotate it up if you want to machine this one',
+      );
+    }
+    if (diag === 'sideways') {
+      throw new Error(
+        'the selected wall is not vertical in the cutting frame — a thread ' +
+          'helix only cuts vertical bores and bosses; add an Index op if the ' +
+          'feature is reachable by rotating the stock',
+      );
+    }
+    throw new Error(
+      'the selected features hold no vertical bore or boss to thread — pick ' +
+        'the rim circle, the cylinder wall, or the flat face around it (and ' +
+        'check the datum angle)',
+    );
+  }
+  return null;
+}

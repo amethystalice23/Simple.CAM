@@ -91,7 +91,13 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   // top == floor is legal: a single level at the floor (finishing pass)
   if (op.floorZ > op.topZ) throw new Error('floorZ must not be above topZ');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
-  if (op.allowance < 0) throw new Error('allowance must be >= 0');
+  // SIDE allowance is SIGNED (Alice, 2026-10-28 — the split): negative
+  // steps the tool-center path INSIDE the contour, turning a boss down
+  // below its modeled Ø (the thread prep lands the crest at
+  // nominal − 2·tolerance); the path offset is toolR + sideAllowance,
+  // whichever sign. The old single-allowance clamp is gone — the prep
+  // insert no longer needs it, and the floor/bottom split carries the
+  // forced-≥0 rule where it belongs (jobGeneration).
   if (op.tabs) {
     if (!Number.isInteger(op.tabs.count) || op.tabs.count < 1) {
       throw new Error('tab count must be an integer >= 1');
@@ -105,7 +111,7 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   if (op.side === 'online') {
     paths = op.contours;
   } else {
-    const offset = toolR + op.allowance;
+    const offset = toolR + op.sideAllowance;
     paths = op.side === 'outside' ? offsetOutward(op.contours, offset) : offsetInward(op.contours, offset);
   }
   if (paths.length === 0) {
@@ -169,6 +175,16 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   let cur: Vec2 | null = null;
   let passes = 0;
   let minutes = 0;
+  // the level entries' approach plane rides ABOVE STANDING MATERIAL —
+  // the pocket2d convention (its 2026-10-26 yellow-streak fix): level 1
+  // stands at the surface (topZ), each later level at the PREVIOUS
+  // level's cut, so the approach rapid ends standing + clearance and
+  // the G1 plunge feeds the honest descent. profile2d's old
+  // `levelZ + clearance` rapid ended 0.5 INSIDE the standing wall at
+  // every level start — a rapid removing stock, a yellow streak down
+  // the side one entry wide (Alice's 2026-10-28 sim report: 84 voxels
+  // × 10 levels).
+  let prevCut = op.topZ;
 
   for (const levelZ of levels) {
     // below the tab top the groove is interrupted; at/above it the loop
@@ -248,13 +264,14 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
           comment: levelTag,
         });
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-        moves.push({ words: { z: levelZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
+        const approach = Math.max(levelZ, prevCut) + APPROACH_CLEARANCE;
+        moves.push({ words: { z: approach }, feed: 0, rapid: true });
         moves.push({
           words: { z: levelZ },
           feed: op.plungeFeed,
           comment: `plunge ${(op.topZ - levelZ).toFixed(2)}mm below surface`,
         });
-        minutes += APPROACH_CLEARANCE / op.plungeFeed;
+        minutes += (approach - levelZ) / op.plungeFeed;
 
         let prev = start;
         for (let i = 1; i <= rotatedLoop.length; i++) {
@@ -266,6 +283,7 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
 
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         cur = start;
+        prevCut = levelZ;
       } else {
         // Cut as open spans
         const levelTag = `level z${levelZ.toFixed(2)}`;
@@ -280,13 +298,14 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
             comment: `${levelTag} span ${i + 1}/${activeIntervals.length}`,
           });
           moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-          moves.push({ words: { z: levelZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
+          const approach = Math.max(levelZ, prevCut) + APPROACH_CLEARANCE;
+          moves.push({ words: { z: approach }, feed: 0, rapid: true });
           moves.push({
             words: { z: levelZ },
             feed: op.plungeFeed,
             comment: `plunge ${(op.topZ - levelZ).toFixed(2)}mm below surface`,
           });
-          minutes += APPROACH_CLEARANCE / op.plungeFeed;
+          minutes += (approach - levelZ) / op.plungeFeed;
 
           let prev = from;
           for (const p of spanPoints(loop, cum, s0, s1)) {
@@ -298,6 +317,7 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
           moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
           cur = prev;
         }
+        prevCut = levelZ;
       }
       passes++;
     }

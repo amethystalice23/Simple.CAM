@@ -11,6 +11,7 @@ import { cylChamfer } from '../cam/cylChamfer';
 import { engrave } from '../cam/engrave';
 import { spiralCarve } from '../cam/spiralCarve';
 import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
+import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
 import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
@@ -35,6 +36,7 @@ import type {
   OpRates,
   Primitive,
   Stock,
+  ThreadMillTarget,
   Tool,
   ToolPreset,
   Vec2,
@@ -45,6 +47,8 @@ import {
   cylChamferTargetsFromSelection,
   drillTargetsFromSelection,
   pocketRegionsFromSelection,
+  threadTargetsFromSelection,
+  type ThreadSourceTarget,
 } from './opTargets';
 import { transformFn } from './featureOverlays';
 import { boxTopFaceId, resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
@@ -115,6 +119,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'spiralCarve', label: 'Spiral carve (4-axis)', rotaryOnly: true },
   { kind: 'engrave', label: 'Engrave (artwork paths)' },
   { kind: 'thread', label: 'Thread (4-axis)', rotaryOnly: true },
+  { kind: 'threadMill', label: 'Thread mill (3-axis)' },
 ];
 
 /**
@@ -326,6 +331,26 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       return { ...base, kind, depth: 0, stepDown, finishingOnly: false, rotation: 'cw' };
     case 'engrave':
       return { ...base, kind, depth: 0.5, stepDown: 0.25, finishingOnly: false };
+    case 'threadMill': {
+      // no stock/Ø defaults to read yet — the selection prefills the
+      // thread (Ø/pitch/length from the rim or wall facet); M6-coarse
+      // is a sane editable starting point for a hand-set op. Pitch
+      // locks to the tool the moment one is picked (changeTool).
+      const nominal = 6;
+      return {
+        ...base,
+        kind,
+        internal: true,
+        nominalDiameter: nominal,
+        pitch: metricPitch(nominal) ?? 1,
+        starts: 1,
+        tolerance: 0,
+        rotation: 'cw',
+        stepOver: 0, // one full-form pass; > 0 ladders for tough materials
+        startDepth: 0,
+        endDepth: 5,
+      };
+    }
     case 'index':
       return { ...base, kind, angle: 90 };
     case 'profile':
@@ -335,7 +360,8 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         selectionIs: 'floor',
         startDepth: 0,
         endDepth: 2,
-        allowance: 0,
+        bottomAllowance: 0, // floor stock (the 2026-10-28 split)
+        sideAllowance: 0, // radial — SIGNED: negative turns a boss down
         stepDown,
         finishingOnly: false,
         side: 'outside',
@@ -369,7 +395,11 @@ function clearanceResult(
   ctx: GenContext,
   datumRotated: boolean,
 ): { moves: Move[]; minutes: number; passes: number } | null {
-  const keepOut = op.allowance > 0 ? offsetOutward(contours, op.allowance) : contours;
+  // the keep-out steps out by the RADIAL stock: the profile's SIGNED side
+  // allowance (the 2026-28 split), the slice-pocket's single allowance.
+  // Negative never shrinks it (the raw guard) — conservative.
+  const radial = op.kind === 'profile' ? op.sideAllowance : op.allowance;
+  const keepOut = radial > 0 ? offsetOutward(contours, radial) : contours;
   const regions = difference(stockFootprint(ctx.stock, datumRotated), keepOut);
   if (regions.length === 0) return null;
   try {
@@ -767,6 +797,54 @@ export function prefillDepths(op: JobOp, selectionZ: number, crownZ: number): Jo
   }
   const start = round2(Math.max(crownZ - selectionZ, 0));
   return { ...op, startDepth: start, endDepth: round2(start + 2) } as JobOp;
+}
+
+/**
+ * Prefill a thread-mill op from its FIRST selected feature (the same
+ * hook prefillDepths gives the depth-bearing ops): the resolved rim
+ * carries the thread Ø, the inside/outside side, the rim depth below the
+ * crown, and — when the click was a cylindrical wall facet — the thread
+ * length the shape itself declares (Alice, 2026-10-28). A pick that
+ * doesn't resolve stays untouched: generation will diagnose it loudly.
+ */
+export function prefillThreadMill(
+  op: Extract<JobOp, { kind: 'threadMill' }>,
+  sources: FeatureSource[],
+  featureId: string,
+  crown: number,
+  datumAngle: number,
+  stock: Stock,
+): Extract<JobOp, { kind: 'threadMill' }> {
+  const parts = splitSelection(sources, [featureId]);
+  if (parts.length === 0) return op;
+  const rotate =
+    datumAngle !== 0 ? indexedPointRotation(datumAngle, rotaryCalibrationOf(stock).axisZ) : undefined;
+  let targets: ReturnType<typeof threadTargetsFromSelection>;
+  try {
+    targets = threadTargetsFromSelection(
+      parts[0].source.features,
+      [featureId],
+      parts[0].source.transform,
+      rotate,
+    );
+  } catch {
+    return op; // a bad pick stays silent here — generation diagnoses it
+  }
+  const t = targets?.targets[0];
+  if (!t) return op;
+  const diameter = round2(t.radius * 2);
+  const start = Math.max(0, round2(crown - t.rimZ));
+  const end = t.spanZ
+    ? Math.max(start + 0.3, round2(crown - t.spanZ[1]))
+    : round2(start + 5);
+  return {
+    ...op,
+    internal: t.internal,
+    nominalDiameter: diameter,
+    pitch: metricPitch(diameter) ?? op.pitch,
+    startDepth: start,
+    endDepth: end,
+  };
 }
 
 /**
@@ -1270,7 +1348,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             toolId: tool.id,
             contours: slice.contours,
             side: 'outside',
-            allowance: op.allowance,
+            sideAllowance: op.allowance, // the slice-pocket's single allowance is the radial one
+            bottomAllowance: 0, // unused inside profile2d — the caller raises floorZ
             topZ: range.topZ,
             floorZ: range.floorZ,
             stepDown: finStep,
@@ -1680,7 +1759,13 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         }
         if (contours.length === 0) return fail(SEL);
         const crown = stockTopZ(ctx.stock);
-        const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
+        // BOTTOM allowance raises the floor (forced ≥ 0 — a negative bottom
+        // would cut below the declared floor); SIDE is the radial one,
+        // SIGNED: negative steps the tool-center path INSIDE the contour,
+        // turning a boss down past its modeled Ø (the thread-prep case).
+        // The 2026-10-28 split: one knob must never move two axes.
+        const bottomAllowance = Math.max(0, op.bottomAllowance);
+        const range = cutRange(op.startDepth, op.endDepth, bottomAllowance, crown);
         if (!range) {
           return fail(
             'end depth must be at or below start depth, and the allowance must leave something to cut',
@@ -1700,9 +1785,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             toolId: tool.id,
             contours,
             side: op.side,
-            allowance: op.allowance, // wall stock (path offset from the line)
+            sideAllowance: op.sideAllowance, // radial wall stock — signed, the path offset from the line
+            bottomAllowance: 0, // unused inside profile2d — jobGeneration raised floorZ by it
             topZ: range.topZ,
-            floorZ: range.floorZ, // floor raised by the same allowance
+            floorZ: range.floorZ, // floor raised by the bottom allowance
             stepDown: finStep,
             tabs: op.tabs ?? undefined,
             feed,
@@ -1743,7 +1829,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           error: null,
           summary:
             `${res.passes} wall pass(es) / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
-            (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+            (bottomAllowance > 0 ? `, ${bottomAllowance}mm floor allowance` : '') +
+            (op.sideAllowance !== 0 ? `, ${op.sideAllowance}mm side offset` : '') +
             (op.finishingOnly ? ', finishing pass only' : '') +
             (op.cutBeyondStock ? ', tail stock cut-over' : '') +
             `, ~${minutes.toFixed(1)} min` +
@@ -1867,6 +1954,102 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             (op.finishingOnly ? ', finishing pass only' : '') +
             `, ${res.chamferAngleDeg.toFixed(0)}° from the bit, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
+      }
+
+      case 'threadMill': {
+        if (tool.type !== 'threadmill') {
+          return fail('thread milling needs a thread mill — pick one from the Threadmill family in the library');
+        }
+        const SEL =
+          'select the bore or boss to thread — the rim circle, the cylinder ' +
+          'wall, or the flat face around it';
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const resolved: ThreadSourceTarget[] = [];
+        for (const part of parts) {
+          try {
+            const src = threadTargetsFromSelection(
+              part.source.features,
+              part.ids,
+              part.source.transform,
+              rotate,
+            );
+            if (src) resolved.push(...src.targets);
+          } catch (e) {
+            return fail(e instanceof Error ? e.message : String(e));
+          }
+        }
+        if (resolved.length === 0) return fail(SEL);
+        // one op threads one Ø and one kind — across sources too
+        if (resolved.some((t) => Math.abs(t.radius - resolved[0].radius) > 0.02)) {
+          return fail(
+            'the selection mixes diameters — one thread op cuts one size; ' +
+              'add a second Thread mill op for the other',
+          );
+        }
+        const kindMism = resolved.some((t) => t.internal !== op.internal);
+        if (kindMism) {
+          return fail(
+            op.internal
+              ? 'the op is set to internal but the selection holds a boss outline — ' +
+                'flip Inside/Outside or split the ops'
+              : 'the op is set to external but the selection holds a bore — ' +
+                'flip Inside/Outside or split the ops',
+          );
+        }
+        const crown = stockTopZ(ctx.stock);
+        const topZ = crown - op.startDepth;
+        const depth = op.endDepth - op.startDepth;
+        if (!(depth > 0)) {
+          return fail('the thread length must be positive — set the end depth below the start depth');
+        }
+        // the prep bore this op itself recommends is the ISO minor d1;
+        // the modeled radius is the honest pre-prep size — the aside-room
+        // retract reads whichever is larger (the prep opens an undersized bore)
+        const d1R = (op.nominalDiameter - 1.0825 * op.pitch) / 2;
+        const targets: ThreadMillTarget[] = resolved.map((t) => ({
+          center: t.center,
+          internal: op.internal,
+          topZ,
+          depth,
+          ...(op.internal ? { boreRadius: Math.max(t.radius, d1R) } : {}),
+        }));
+        try {
+          const res = threadMill(
+            {
+              kind: 'threadMill',
+              id: op.id,
+              toolId: tool.id,
+              targets,
+              nominalDiameter: op.nominalDiameter,
+              pitch: op.pitch,
+              starts: op.starts,
+              tolerance: op.tolerance,
+              rotation: op.rotation,
+              stepOver: op.stepOver,
+              feed,
+              plungeFeed,
+              safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            },
+            tool,
+          );
+          return {
+            moves: res.moves,
+            minutes: res.estimatedMinutes,
+            error: null,
+            summary:
+              `${resolved.length} ${op.internal ? 'internal' : 'external'} thread(s), ` +
+              `${op.nominalDiameter}×${op.pitch}` +
+              (op.starts > 1 ? ` (${op.starts} starts)` : '') +
+              ` ${op.rotation}, ${depth.toFixed(1)}mm, ${res.passes} pass(es) incl. spring` +
+              (op.tolerance > 0 ? `, ${op.tolerance}mm fit` : '') +
+              (res.notes.length > 0 ? ` · ${res.notes.join(' · ')}` : '') +
+              `, ~${res.estimatedMinutes.toFixed(1)} min`,
+          };
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
       }
 
       case 'engrave': {

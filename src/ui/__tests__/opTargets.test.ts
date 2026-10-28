@@ -10,6 +10,7 @@ import {
   cylChamferTargetsFromSelection,
   drillTargetsFromSelection,
   pocketRegionsFromSelection,
+  threadTargetsFromSelection,
 } from '../opTargets';
 
 function plateWithHole(): THREE.BufferGeometry {
@@ -502,6 +503,12 @@ describe('partial circles: the path-following ops refuse broken rims', () => {
       chamferTargetsFromSelection(feats, [partial.id], identityTransform()),
     ).toThrowError(/partial circle/);
   });
+
+  it('thread: a broken rim is not a threadable bore', () => {
+    expect(() =>
+      threadTargetsFromSelection(feats, [partial.id], identityTransform()),
+    ).toThrowError(/partial circle.*not a threadable bore/s);
+  });
 });
 
 describe('cylChamferTargetsFromSelection', () => {
@@ -594,5 +601,135 @@ describe('cylChamferTargetsFromSelection', () => {
     expect(() =>
       chamferTargetsFromSelection(feats(xCircle('a', 0, 40)), ['a'], identityTransform()),
     ).toThrowError(/Cylinder chamfer/);
+  });
+});
+
+describe('threadTargetsFromSelection', () => {
+  /** a Ø6 boss standing on the origin, 10mm tall (axis ∥ Z, 24 facets) */
+  function boss(): THREE.BufferGeometry {
+    const g = new THREE.CylinderGeometry(3, 3, 10, 24, 1, false);
+    g.rotateX(Math.PI / 2); // CylinderGeometry axis Y → Z
+    return g.toNonIndexed();
+  }
+
+  it('a bore rim read at its UP mouth — either end of the bore is one thread', () => {
+    const geo = plateWithHole(); // Ø4 bore through a plate z 0→2
+    const f = detectFeatures(geo);
+    const rims = f.circles.filter((c) => c.inner && Math.abs(c.axis.z) > 0.99);
+    expect(rims.length).toBeGreaterThanOrEqual(2); // the two mouths
+    for (const rim of rims) {
+      const src = threadTargetsFromSelection(f, [rim.id], identityTransform());
+      expect(src).not.toBeNull();
+      expect(src!.targets).toHaveLength(1);
+      expect(src!.targets[0].internal).toBe(true);
+      expect(src!.targets[0].radius).toBeCloseTo(2, 5);
+      // the up-facing mouth, whichever end was clicked
+      expect(src!.targets[0].rimZ).toBeCloseTo(2, 5);
+    }
+  });
+
+  it('a boss rim resolves as an external thread', () => {
+    const f = detectFeatures(boss());
+    const rim = f.circles.find((c) => !c.inner && Math.abs(c.axis.z) > 0.99)!;
+    expect(rim).toBeDefined();
+    const src = threadTargetsFromSelection(f, [rim.id], identityTransform());
+    expect(src!.targets).toHaveLength(1);
+    expect(src!.targets[0].internal).toBe(false);
+    expect(src!.targets[0].radius).toBeCloseTo(3, 5);
+  });
+
+  it('a cylindrical WALL facet matches its rim and declares the thread length', () => {
+    const f = detectFeatures(boss());
+    // one facet of the Ø6 wall: horizontal normal, point ≈ 3mm off-axis
+    const facet = f.planes.find(
+      (p) =>
+        Math.abs(p.normal.z) < 1e-6 &&
+        Math.abs(Math.hypot(p.point.x, p.point.y) - 3) < 0.2,
+    )!;
+    expect(facet).toBeDefined();
+    const src = threadTargetsFromSelection(f, [facet.id], identityTransform());
+    expect(src!.targets).toHaveLength(1);
+    expect(src!.targets[0].internal).toBe(false);
+    expect(src!.targets[0].radius).toBeCloseTo(3, 1); // matched to the rim circle
+    // the facet spans the full boss height: the shape's declared length
+    expect(src!.targets[0].spanZ).toBeDefined();
+    expect(src!.targets[0].spanZ![0]).toBeCloseTo(5, 5);
+    expect(src!.targets[0].spanZ![1]).toBeCloseTo(-5, 5);
+  });
+
+  it('the flat face around a rim threads it too — ambiguous faces refuse', () => {
+    const geo = plateWithHole();
+    const f = detectFeatures(geo);
+    const topFace = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 2) < 1e-6,
+    )!;
+    expect(topFace).toBeDefined();
+    // the face's hole loop matches the Ø4 bore rim, its outer loop the Ø10
+    // plate outline — two sizes in one op: refused (the Ø check fires
+    // before the internal/external one; both refusals are the point)
+    expect(() => threadTargetsFromSelection(f, [topFace.id], identityTransform())).toThrowError(
+      /mixes diameters/,
+    );
+  });
+
+  it('a boxed bore: the floor face threads the bore it holds', () => {
+    // rectangle with a round hole — the top face's hole loop is the only
+    // circle-matching loop, so the face threads the bore unambiguously
+    const shape = new THREE.Shape();
+    shape.moveTo(-5, -5);
+    shape.lineTo(5, -5);
+    shape.lineTo(5, 5);
+    shape.lineTo(-5, 5);
+    shape.closePath();
+    const hole = new THREE.Path();
+    hole.absarc(0, 0, 2, 0, Math.PI * 2, true);
+    shape.holes.push(hole);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false }).toNonIndexed();
+    const f = detectFeatures(geo);
+    const topFace = f.planes.find(
+      (p) => Math.abs(p.normal.z - 1) < 1e-6 && Math.abs(p.point.z - 3) < 1e-6,
+    )!;
+    const src = threadTargetsFromSelection(f, [topFace.id], identityTransform());
+    expect(src!.targets).toHaveLength(1);
+    expect(src!.targets[0].internal).toBe(true);
+    expect(src!.targets[0].radius).toBeCloseTo(2, 5);
+  });
+
+  it('rejects mixing diameters — one op threads one size', () => {
+    const shape = new THREE.Shape();
+    shape.absarc(0, 0, 10, 0, Math.PI * 2, false);
+    const h1 = new THREE.Path();
+    h1.absarc(-4, 0, 2, 0, Math.PI * 2, true);
+    const h2 = new THREE.Path();
+    h2.absarc(4, 0, 1.5, 0, Math.PI * 2, true);
+    shape.holes.push(h1, h2);
+    const f = detectFeatures(new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed());
+    const rims = f.circles.filter((c) => c.inner && Math.abs(c.axis.z) > 0.99 && Math.abs(c.center.z - 2) < 0.01);
+    expect(rims.length).toBeGreaterThanOrEqual(2);
+    expect(() =>
+      threadTargetsFromSelection(f, rims.map((r) => r.id), identityTransform()),
+    ).toThrowError(/mixes diameters/);
+  });
+
+  it('a circle around the rotation axis points at the 4-axis Thread op', () => {
+    // a cylinder lying along X: its rims spin in place under indexing —
+    // threading around the stock is the rotary V-bit op's job
+    const g = new THREE.CylinderGeometry(5, 5, 20, 24, 1, false);
+    g.rotateZ(Math.PI / 2); // axis → X
+    const f = detectFeatures(g.toNonIndexed());
+    const rim = f.circles.find((c) => Math.abs(c.axis.x) > 0.99)!;
+    expect(rim).toBeDefined();
+    expect(() =>
+      threadTargetsFromSelection(f, [rim.id], identityTransform()),
+    ).toThrowError(/4-axis Thread op's job/);
+  });
+
+  it('a non-vertical wall asks for an Index op instead of refusing', () => {
+    const box = new THREE.BoxGeometry(4, 4, 4).toNonIndexed();
+    const f = detectFeatures(box);
+    const yFace = f.planes.find((p) => Math.abs(p.normal.y - 1) < 1e-6)!;
+    expect(() =>
+      threadTargetsFromSelection(f, [yFace.id], identityTransform()),
+    ).toThrowError(/not vertical in the cutting frame.*add an Index op/s);
   });
 });

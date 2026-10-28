@@ -107,11 +107,80 @@ describe('buildToolSpec', () => {
     expect(s.inside(25.001, 0)).toBe(false);
   });
 
-  it('threadmill approximates flat (documented v1)', () => {
-    const s = buildToolSpec(tool({ type: 'threadmill', diameter: 4, fluteLength: 8 }));
-    expect(s.radius).toBe(2);
-    expect(s.inside(0, 4)).toBe(true);
-    expect(s.inside(0, 4.0001)).toBe(false);
+  it('threadmill cuts the ISO 60° TOOTH FORM, not a flat wall (Alice, 2026-10-28)', () => {
+    // her M6 shop record: Ø4.8 cut, pitch 1, 3 teeth, shank 6, cutting
+    // length 18, OAL 50 — root Ø 4.8 − 1.2268 = 3.5732
+    const s = buildToolSpec(
+      tool({
+        type: 'threadmill',
+        diameter: 4.8,
+        pitch: 1,
+        flutes: 3,
+        shaftDiameter: 6,
+        fluteLength: 18,
+        overallLength: 50,
+      }),
+    );
+    const R = 2.4;
+    const rootR = 2.4 - 1.2268 / 2; // 1.7866
+    // the tooth half-span: p/12 tip flat + form depth at 30° ≈ 0.437·p
+    const span = 1 / 12 + (R - rootR) * Math.tan(Math.PI / 6);
+    expect(s.radius).toBe(R);
+    // the CUTTING solid is the toothed band alone: 2·span + 2·p ≈ 2.875mm
+    expect(s.fluteLen).toBeCloseTo(2 * span + 2, 6);
+    // at the tooth center the full cut radius, tip flat p/6 wide
+    expect(s.inside(span, R * R)).toBe(true);
+    expect(s.inside(span + 1 / 12 - 1e-9, R * R)).toBe(true);
+    expect(s.inside(span + 1 / 12 + 1e-6, R * R)).toBe(false);
+    // the flanks: mid-flank the tooth half-width is p/12 + half-form·tan30
+    // — the 60° form, NOT a flat wall (the root cylinder is solid all
+    // across the merged band, so the flank edge tests at mid-flank)
+    const midR = (rootR + R) / 2;
+    const midHalf = 1 / 12 + (R - midR) * Math.tan(Math.PI / 6);
+    expect(s.inside(span + midHalf - 1e-9, midR * midR)).toBe(true);
+    expect(s.inside(span + midHalf + 1e-6, midR * midR)).toBe(false);
+    // between teeth (3 at pitch spacing): solid at the ROOT circle only
+    expect(s.inside(1.0, rootR * rootR)).toBe(true); // the merged root body
+    expect(s.inside(1.0, (rootR + 0.05) ** 2)).toBe(false);
+    // the third tooth centered at span + 2
+    expect(s.inside(span + 2, R * R)).toBe(true);
+    // above the band: nothing cuts — the taper/shank are contact-only
+    expect(s.inside(3.0, rootR * rootR)).toBe(false);
+    expect(s.inside(3.0, 0)).toBe(false);
+    // the NECK (band → 18): CONSTANT root Ø through the whole cutting
+    // length — NOT a taper (her red-column report: a linear taper to the
+    // shank runs deeper than the crest at every height above the cut).
+    // At z=10 it is still Ø3.5732
+    expect(s.shankInside(10, (rootR - 0.01) ** 2)).toBe(true);
+    expect(s.shankInside(10, (rootR + 0.01) ** 2)).toBe(false);
+    // the shank (Ø6) starts only at the cutting length (18)
+    expect(s.shankInside(17, (rootR + 0.01) ** 2)).toBe(false);
+    expect(s.shankInside(18.5, (3.0) ** 2)).toBe(true); // the Ø6 shank
+    expect(s.shankInside(18.5, (3.0001) ** 2)).toBe(false);
+    expect(s.shankTop).toBe(50);
+    // the 1-TOOTH Makera shop record (Alice: "the makera ones are 1 tooth
+    // — the 3-tooth is a different brand"): a single trapezoid on the
+    // neck, no merged root body between teeth
+    const one = buildToolSpec(
+      tool({
+        type: 'threadmill',
+        diameter: 4.8,
+        pitch: 1,
+        flutes: 1,
+        shaftDiameter: 6,
+        fluteLength: 18,
+        overallLength: 50,
+      }),
+    );
+    expect(one.fluteLen).toBeCloseTo(2 * span, 6); // the band alone
+    expect(one.inside(span, R * R)).toBe(true);
+    expect(one.inside(1.0, rootR * rootR)).toBe(false); // no root body between
+    expect(one.inside(1.0, (rootR + 0.05) ** 2)).toBe(false);
+    expect(one.shankInside(10, (rootR - 0.01) ** 2)).toBe(true); // same neck
+    // no pitch on record — the flat fallback stays
+    const flat = buildToolSpec(tool({ type: 'threadmill', diameter: 4, fluteLength: 8 }));
+    expect(flat.inside(0, 4)).toBe(true);
+    expect(flat.inside(0, 4.0001)).toBe(false);
   });
 
   it('laser THROWS — the caller must skip laser moves before the kernel', () => {

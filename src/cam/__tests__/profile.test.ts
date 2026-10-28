@@ -20,7 +20,8 @@ function op(overrides: Partial<ProfileOp> = {}): ProfileOp {
     toolId: 't1',
     contours: [square(0, 10)],
     side: 'outside',
-    allowance: 0,
+    bottomAllowance: 0, // the 2026-10-28 split: floor stock
+    sideAllowance: 0, // …and the radial one — SIGNED
     topZ: 0,
     floorZ: -2,
     stepDown: 1,
@@ -127,12 +128,24 @@ describe('profile2d', () => {
     expect(Math.min(...xs)).toBeCloseTo(0, 5);
   });
 
-  it('honors a wall allowance', () => {
-    const res = profile2d(op({ allowance: 0.5 }), tool);
+  it('honors a wall allowance (the SPLIT side allowance)', () => {
+    const res = profile2d(op({ sideAllowance: 0.5 }), tool);
     const { xs } = loopExtents(res.moves);
     // outside + radius + allowance = 1.5mm out each side → 13mm across
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(12.9);
     expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(13.05);
+  });
+
+  it('NEGATIVE side allowance steps the path INSIDE the contour (the thread prep)', () => {
+    // Alice, 2026-10-28: the profile allowance split — side SIGNED so the
+    // prep can turn a boss down to `nominal − 2·tolerance` (the ISO-fit
+    // crest); a boss 0.006 over Ø14 with t=0.1 wants side = −0.106
+    const res = profile2d(op({ sideAllowance: -0.5 }), tool);
+    const { xs } = loopExtents(res.moves);
+    // the Ø2 test tool (r1): outside + 1 − 0.5 = +0.5mm out each side →
+    // 11mm across (stepped 0.5 IN from the 12mm allowance-0 path)
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(10.9);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(11.05);
   });
 
   it('steps levels and retracts safely between passes', () => {
@@ -147,10 +160,14 @@ describe('profile2d', () => {
     // one safe-Z retract per pass (plus the entry rapids carry safeZ too)
     const safeRetracts = res.moves.filter((m) => m.rapid && m.words.z === 5);
     expect(safeRetracts.length).toBe(6); // 3 entries + 3 retracts
-    // approach rapids stop half a mm above each even level (2.5/3 rungs)
+    // approach rapids stop half a mm ABOVE STANDING MATERIAL (the pocket2d
+    // convention, its 2026-10-26 fix): level 1 stands at the surface, each
+    // later level at the previous level's cut — never `levelZ + 0.5`, which
+    // ended the rapid 0.5 INSIDE the standing wall (Alice's 2026-10-28
+    // yellow-streak report: a rapid removing stock down the side)
     const approaches = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.z !== 5);
     expect(approaches.length).toBe(3);
-    expect(approaches.map((m) => m.words.z)).toEqual([0.5 - 2.5 / 3, 0.5 - (2 * 2.5) / 3, -2.5 + 0.5]);
+    expect(approaches.map((m) => m.words.z)).toEqual([0.5, 0.5 - 2.5 / 3, 0.5 - (2 * 2.5) / 3]);
   });
 
   it('clamps the wall pass to the stock footprint: open spans, centers inside', () => {
@@ -268,7 +285,6 @@ describe('profile2d', () => {
   it('rejects invalid parameters', () => {
     expect(() => profile2d(op({ floorZ: 1 }), tool)).toThrowError(/above topZ/);
     expect(() => profile2d(op({ contours: [] }), tool)).toThrowError(/contour/);
-    expect(() => profile2d(op({ allowance: -1 }), tool)).toThrowError(/allowance/);
   });
 
   it('pins the no-tabs output to the pre-tabs baseline', () => {
@@ -276,7 +292,9 @@ describe('profile2d', () => {
     expect(res.warnings).toEqual([]);
     expect(res.moves.length).toBe(50); // 2 levels × (entry 4 + 20 loop cuts + retract)
     expect(res.passes).toBe(2);
-    expect(res.estimatedMinutes).toBeCloseTo(0.1899418798617789, 6);
+    // the level-1 plunge charges its honest 1.5mm descent (approach above
+    // the surface + the 1mm level), not the old flat 0.5 clearance
+    expect(res.estimatedMinutes).toBeCloseTo(0.1999418798617789, 6);
   });
 });
 

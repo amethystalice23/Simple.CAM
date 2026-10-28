@@ -112,9 +112,35 @@ function toTool(remoteName, type, t) {
     }));
   if (presets.length > 0) tool.presets = presets;
   if (typeof g.SFDM === 'number') tool.shaftDiameter = g.SFDM;
-  if (typeof g.LCF === 'number') tool.fluteLength = g.LCF;
-  if (typeof g.OAL === 'number') tool.overallLength = g.OAL;
+  // Thread mills (Alice, 2026-10-28, from the Makera bit shop): the shank
+  // Ø is SFDM and it is RIGHT — the M6/M8 mills carry a 6mm shank
+  // (global.makera.com thread-milling-bit-6mm-shank), the M1–M5 a 1/8″
+  // (3.175) one. What SFDM does NOT carry is the CUTTING LENGTH — the
+  // thin taper between the tooth band and the shank: LCF is only the
+  // 2mm toothed band, but the taper (18mm on the M6, 24 on the M8) is
+  // what sets how deep a thread the bit can cut, and the simulator must
+  // model it as the flute or every full-depth helical thread paints as a
+  // shank collision. Shop-measured overrides per size:
+  const THREADMILL_CUTTING_LENGTH = {
+    'makera-thread-mills-carvera-m6-threadmill': 18,
+    'makera-thread-mills-carvera-m8-threadmill': 24,
+  };
+  if (type === 'threadmill' && tool.id && tool.id in THREADMILL_CUTTING_LENGTH) {
+    tool.fluteLength = THREADMILL_CUTTING_LENGTH[tool.id];
+  } else if (typeof g.LCF === 'number') {
+    tool.fluteLength = g.LCF;
+  }
+  // Makera's shop thread mills are 1-TOOTH (Alice, 2026-10-28: "the
+  // makera ones are 1 tooth, i have a different brand that is otherwise
+  // the same sizes but 3 tooth"); the Fusion record's NOF: 3 describes
+  // the generic 3-flute look, not the shop tool. flutes = the TOOTH count
+  // in our model — 1 tooth means the pitch stays editable (one profile
+  // cuts any pitch).
   if (typeof g.NOF === 'number') tool.flutes = g.NOF;
+  if (type === 'threadmill' && tool.flutes === 3) {
+    tool.flutes = 1;
+  }
+  if (typeof g.OAL === 'number') tool.overallLength = g.OAL;
   if (typeof t.BMC === 'string') tool.material = t.BMC.toLowerCase();
   if (type === 'vbit') {
     // TA is the per-side taper angle; our vAngle is the included angle

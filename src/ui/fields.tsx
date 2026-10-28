@@ -23,6 +23,8 @@ export function NumberField(props: {
   title?: string;
   /** extra classes on the wrapping label (e.g. layout tweaks) */
   className?: string;
+  /** read-only lock (e.g. a fixed-pitch thread mill's pitch) */
+  disabled?: boolean;
   onCommit: (v: number) => void;
 }) {
   const [text, setText] = useState(String(props.value));
@@ -40,6 +42,7 @@ export function NumberField(props: {
         type="number"
         step={props.step ?? 1}
         title={props.title}
+        disabled={props.disabled}
         value={text}
         onChange={(e) => commit(e.target.value)}
       />

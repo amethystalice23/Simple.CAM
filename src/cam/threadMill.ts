@@ -1,0 +1,442 @@
+/**
+ * 3-axis thread milling — helical interpolation in machine XYZ with a
+ * single-profile thread mill: no A, G94 throughout (PLAN.md ops table,
+ * SPEC 2026-10-28). Internal AND external threads from one op type.
+ *
+ * Mill-tested ground truth: examples/MakeraStudioGHM9_Stage3_TOP…
+ * `[T6]14ccw thread` — external M14×1 CCW cut with a Ø4.75 M6-form mill.
+ * Their proven EXTERNAL cycle, reproduced here: approach outside the boss
+ * at Rc + clearance → plunge beside the boss to the thread's BOTTOM
+ * (plunge-fed through the face band — never rapid that leg) → RADIAL
+ * feed in to Rc (no arc lead-in — the entry notch IS the bottom groove)
+ * → ASCENDING helix, ~0.15mm chords, at the cut feed → straight rapid
+ * up at the top (nothing stands above an external thread) → THE WHOLE
+ * CYCLE RUNS TWICE (their spring pass = a full second identical pass).
+ *
+ * Path radius (tool TIPS land on the groove bottom):
+ *  - external: tips at the ISO minor d3 → Rc = d3/2 + toolR − tolerance,
+ *    d3 = nominal − 1.2268·pitch (ISO 724 external minor, root-arc-
+ *    truncated — pins their X8.76 path to 3 decimals)
+ *  - internal: tips at the major → Rc = nominal/2 + tolerance − toolR
+ * Tolerance loosens the fit in both modes (deeper grooves), never the
+ * thread depth — fit is radial with a full-form tool.
+ *
+ * TOOL MODEL (Alice, from the Makera bit shop, 2026-10-28): the 1/3-tooth
+ * mills are a 2mm toothed band on a long thin CUTTING LENGTH (the taper
+ * before the shank — 18mm on the M6, 24 on the M8), then the shank (6mm on
+ * the M6/M8, 1/8″ on the smaller). fluteLength carries the CUTTING LENGTH
+ * (shop overrides in the import), so a full-depth helix keeps the shank
+ * clear: axially, the thread depth is capped by the cutting length, and by
+ * the overall length below the collet margin.
+ *
+ * INTERNAL cycle (no example exists — Alice's ruled design, 2026-10-28):
+ * approach at the bore CENTER (the prep pocket cleared it — rapiding
+ * inside is the documented contract), plunge to the thread bottom, radial
+ * OUT to Rc, ascend. Retract per target from the aside room
+ * (boreR − toolR): roomy → radial in to the center at feed (the exit
+ * notch) then a straight lift; tight → FOLLOW THE SPIRAL OUT — keep the
+ * helix going past the mouth until the form is clear of the face, needing
+ * no radial room (a straight lift while engaged drags the tooth through
+ * the threads; bore-sized Makera mills with ~10µm of room always exit
+ * this way).
+ *
+ * Multi-start: lead = starts × pitch; start k enters at bottomZ + k·pitch
+ * (groove k is groove 0 shifted up one pitch), each an ascending helix of
+ * the same depth. Rotation is the cw/ccw thread perception (the rotary
+ * Thread op's naming, Alice 2026-10-28): 'ccw' = left-hand, ascends CW
+ * viewed from above (their "14ccw" M14); 'cw' = right-hand, ascends CCW.
+ *
+ * RADIAL LADDER (Alice, 2026-10-28: "for tougher materials you might
+ * need to do this in multiple passes"): stepOver 0 = the full form in
+ * ONE radial pass (the Makera cycle); > 0 splits the radial span into
+ * even levels — each a full bottom-up thread at its own radius, deepest
+ * last, the spring repeating the final level.
+ */
+
+import type { Move, ThreadMillOp, ThreadMillTarget, Tool, Vec2 } from '../core/types';
+import { APPROACH_CLEARANCE } from './paths';
+
+/** ISO 724 EXTERNAL minor factor: d3 = nominal − 1.2268·pitch
+ * (root-arc-truncated; ground truth: M14×1 → their X8.76 path). */
+export const D3_FACTOR = 1.2268;
+/** ISO internal minor factor: d1 = nominal − 1.0825·pitch (the prep bore). */
+export const D1_FACTOR = 1.0825;
+/** Internal retract decision threshold, mm of aside room (boreR − toolR):
+ * at least this much and the tool steps aside and lifts; less and it
+ * follows the spiral out. */
+export const ASIDE_MARGIN = 0.2;
+
+/** Chord target per helix segment, mm (their file: 1°/segment at R8.76). */
+const CHORD_MM = 0.15;
+const SEGS_MIN = 64;
+const SEGS_MAX = 512;
+
+export interface ThreadMillResult {
+  moves: Move[];
+  /** full thread passes incl. the spring pass (one per target per cycle) */
+  passes: number;
+  /** cutting time estimate, minutes (excludes rapids) */
+  estimatedMinutes: number;
+  /** path radius of the FIRST target, mm — surfaced for the summary */
+  pathRadius: number;
+  /** per-target retract decisions + fit facts for the op summary */
+  notes: string[];
+}
+
+/** ISO 724 external minor diameter, mm. */
+export function externalMinorDiameter(nominalDiameter: number, pitch: number): number {
+  return nominalDiameter - D3_FACTOR * pitch;
+}
+
+/**
+ * Multi-tooth thread mill? `flutes` on a thread mill is the TOOTH count —
+ * the profiles stacked axially at ONE circumferential spot (Alice,
+ * 2026-10-28: "there are no flutes, the teeth appear in only one spot on
+ * the circumference"). A 3-tooth mill is HARD-LOCKED to its recorded pitch
+ * (the teeth must ride successive turns of one groove — a different pitch
+ * misaligns them); a 1-tooth mill cuts ANY pitch with its single profile,
+ * its recorded pitch being just the nominal default. Records with no
+ * tooth count read as multi-tooth — locking by default errs safe.
+ */
+export function isMultiTooth(tool: Tool): boolean {
+  return tool.flutes === undefined || tool.flutes >= 2;
+}
+
+/**
+ * Collet + handle margin below the overall length, mm — the part of the
+ * tool that must stay in the holder, so the max thread length a necked
+ * mill can reach is OAL − this (Alice, 2026-10-28: "the 50mm over length
+ * sets the max length of thread you could cut with one"). An assumption,
+ * documented: Makera's 1/3-tooth mills carry no handle-length field.
+ */
+export const COLLET_MARGIN_MM = 15;
+
+/** ISO internal minor diameter, mm — the prep bore the op recommends. */
+export function internalMinorDiameter(nominalDiameter: number, pitch: number): number {
+  return nominalDiameter - D1_FACTOR * pitch;
+}
+
+/** Tool-center path radius: external (tips at d3) / internal (tips at the major). */
+export function pathRadius(
+  nominalDiameter: number,
+  pitch: number,
+  toolR: number,
+  tolerance: number,
+  internal: boolean,
+): number {
+  return internal
+    ? nominalDiameter / 2 + tolerance - toolR
+    : externalMinorDiameter(nominalDiameter, pitch) / 2 + toolR - tolerance;
+}
+
+/** Helix segments per revolution for a 0.15mm chord, clamped 64–512. */
+export function segmentsPerRevolution(rc: number): number {
+  return Math.min(SEGS_MAX, Math.max(SEGS_MIN, Math.ceil((2 * Math.PI * rc) / CHORD_MM)));
+}
+
+export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
+  if (op.targets.length === 0) throw new Error('thread milling needs at least one target');
+  if (tool.type !== 'threadmill') {
+    throw new Error('thread milling needs a thread mill — pick one from the tool library');
+  }
+  if (!(tool.diameter > 0)) throw new Error('the thread mill has no cutting diameter set');
+  // PITCH: a multi-tooth mill is hard-locked to its recorded pitch (the
+  // teeth must ride successive turns of one groove); a 1-tooth mill cuts
+  // any pitch with its single profile (Alice, 2026-10-28)
+  if (isMultiTooth(tool)) {
+    if (tool.pitch === undefined) {
+      throw new Error(
+        `the ${tool.name} is a multi-tooth mill with no pitch set — its teeth only align at one fixed pitch; set the pitch in the library`,
+      );
+    }
+    if (Math.abs(tool.pitch - op.pitch) > 1e-9) {
+      throw new Error(
+        `the ${tool.name} mills a ${tool.pitch}mm pitch — this op wants ${op.pitch}mm; ` +
+          'pick the matching thread mill (a multi-tooth mill cannot cut another pitch)',
+      );
+    }
+  }
+  if (!(op.pitch > 0)) throw new Error('pitch must be positive');
+  if (!Number.isInteger(op.starts) || op.starts < 1) {
+    throw new Error('starts must be a whole number ≥ 1');
+  }
+  if (op.tolerance < 0) throw new Error('tolerance must be ≥ 0');
+  for (const t of op.targets) {
+    if (!(t.depth > 0)) throw new Error('each target needs a positive thread depth');
+  }
+  if (!(op.feed > 0)) throw new Error('feed must be positive');
+  if (!(op.plungeFeed > 0)) throw new Error('plunge feed must be positive');
+  if (!(op.safeClearance > 0)) throw new Error('safe clearance must be positive');
+
+  const toolR = tool.diameter / 2;
+  const lead = op.starts * op.pitch;
+  // cw/ccw thread perception, the rotary Thread op's naming (Alice,
+  // 2026-10-28): 'ccw' = left-hand = ascends CW viewed from above (their
+  // 14ccw M14 example); 'cw' = right-hand = ascends CCW
+  const dir = op.rotation === 'ccw' ? -1 : 1;
+  // travel clearance between targets: the highest mouth + clearance
+  const travelZ = Math.max(...op.targets.map((t) => t.topZ)) + op.safeClearance;
+
+  const moves: Move[] = [];
+  let minutes = 0;
+  let passes = 0;
+  const notes: string[] = [];
+  let firstRc: number | null = null;
+
+  op.targets.forEach((target: ThreadMillTarget, ti: number) => {
+    const boreR = target.internal
+      ? target.boreRadius && target.boreRadius > 0
+        ? target.boreRadius
+        : internalMinorDiameter(op.nominalDiameter, op.pitch) / 2
+      : 0;
+
+    if (target.internal) {
+      if (toolR >= boreR) {
+        throw new Error(
+          `the Ø${tool.diameter} mill does not fit the Ø${(boreR * 2).toFixed(2)} bore — ` +
+            'prep a larger bore or a slimmer mill',
+        );
+      }
+      // the SHANK must stay out of the bore when it oversizes it: the
+      // thread is then capped at the CUTTING LENGTH (the thin taper —
+      // 18mm on her M6), minus a pitch of form room at the mouth
+      const shank = tool.shaftDiameter ?? tool.diameter;
+      const cutting = tool.fluteLength ?? Infinity;
+      if (shank > boreR * 2 && target.depth > cutting - op.pitch) {
+        throw new Error(
+          `the Ø${shank} shank cannot enter the Ø${(boreR * 2).toFixed(2)} bore — this ` +
+            `thread is ${target.depth}mm but the ${tool.fluteLength}mm cutting length ` +
+            'caps it; use a longer-cutting or slimmer mill',
+        );
+      }
+    }
+
+    const Rc = pathRadius(op.nominalDiameter, op.pitch, toolR, op.tolerance, target.internal);
+    if (firstRc === null) {
+      firstRc = Rc;
+      notes.push(
+        `path radius Rc ${Rc.toFixed(3)}mm — tips land on the groove bottom ` +
+          `(${target.internal ? `internal, at the Ø${op.nominalDiameter} major` : `external, at the d3 minor Ø${externalMinorDiameter(op.nominalDiameter, op.pitch).toFixed(3)}`})`,
+      );
+    }
+    const bottomZ = target.topZ - target.depth;
+    const asideRoom = boreR - toolR; // 0 external — irrelevant there
+    // tight fit: less than a margin of aside room → follow the spiral out
+    const spiralExit = target.internal && asideRoom < ASIDE_MARGIN;
+    if (target.internal) {
+      notes.push(
+        spiralExit
+          ? `Ø${(boreR * 2).toFixed(2)} bore → spiral exit — only ~${asideRoom.toFixed(3)}mm of aside room; ` +
+              'a straight lift while engaged would drag the tooth through the threads (Alice, 2026-10-28)'
+          : `Ø${(boreR * 2).toFixed(2)} bore → aside retract (${asideRoom.toFixed(2)}mm of room)`,
+      );
+    } else {
+      // EXTERNAL, AXIAL: the shank crosses the crest radially on every
+      // thread (Rc − shankR < crestR always, for shankR ≥ toolR), so when
+      // the thread outruns the CUTTING LENGTH the shank sweeps the stock
+      // standing beside/above the thread — grinding it (Alice's tool model,
+      // 2026-10-28, shop-checked: the cutting length IS the thin taper
+      // before the shank — 18mm on her M6 — and it caps the thread).
+      const shank = tool.shaftDiameter ?? tool.diameter;
+      const cutting = tool.fluteLength ?? Infinity;
+      if (target.depth > cutting) {
+        throw new Error(
+          `this ${target.depth}mm thread outruns the ${tool.name}'s ${tool.fluteLength}mm ` +
+            `cutting length — above it the Ø${shank} shank sweeps the stock beside the ` +
+            'thread; use a longer-cutting mill (or split the thread into Z bands)',
+        );
+      }
+      notes.push(`Ø${op.nominalDiameter} boss → lifts straight off — nothing stands above an external thread`);
+      // the neck rides the crest plane EXACTLY at fit 0 (d3/2 + 0.6134·p
+      // = Ø/2): past tolerance 0 the constant-Ø neck shaves the crests
+      // tol-deep — real thread-milling physics, and the sim will paint
+      // it as a thin red ribbon along the crests (contact, not removal)
+      if (op.tolerance > 0) {
+        notes.push(
+          `the neck shaves the crests ~${op.tolerance.toFixed(2)}mm at this fit — the sim paints a thin red ribbon on the crest tops`,
+        );
+      }
+    }
+
+    // REACH (Alice, 2026-10-28: "the 50mm over length sets the max length
+    // of thread you could cut with one"): the part of the tool below the
+    // collet margin must cover the thread depth
+    const oal = tool.overallLength ?? Infinity;
+    if (target.depth > oal - COLLET_MARGIN_MM) {
+      throw new Error(
+        `this ${target.depth}mm thread is beyond the ${tool.name}'s reach — its ` +
+          `${tool.overallLength}mm overall length leaves about ` +
+          `${Math.max(0, oal - COLLET_MARGIN_MM).toFixed(0)}mm below the collet; use a longer mill`,
+      );
+    }
+
+    // RADIAL LADDER (Alice, 2026-10-28: "for tougher materials you might
+    // need to do this in multiple passes"): stepOver 0 = the full form in
+    // ONE radial pass (the Makera cycle); > 0 splits the radial span
+    // into even levels, each a full bottom-up thread at its own radius,
+    // deepest LAST, the spring repeating the final level. The span runs
+    // tip-first: from the start surface (the crest external / the prep
+    // bore d1 internal) to the final groove bottom.
+    const startTip = target.internal
+      ? internalMinorDiameter(op.nominalDiameter, op.pitch) / 2
+      : op.nominalDiameter / 2;
+    const finalTip = target.internal ? Rc + toolR : Rc - toolR;
+    const span = Math.abs(finalTip - startTip);
+    const levelCount = op.stepOver > 0 ? Math.max(1, Math.ceil(span / op.stepOver)) : 1;
+    if (levelCount > 1) {
+      notes.push(
+        `radial ladder: ${levelCount} levels of ${(span / levelCount).toFixed(3)}mm ` +
+          `(step over ${op.stepOver}mm, span ${span.toFixed(3)}mm)`,
+      );
+    }
+    const rcOfLevel = (li: number): number => {
+      const frac = li / levelCount;
+      const tip = target.internal ? startTip + span * frac : startTip - span * frac;
+      return target.internal ? tip - toolR : tip + toolR;
+    };
+
+    const at = (r: number, a: number): Vec2 => ({
+      x: target.center.x + r * Math.cos(a),
+      y: target.center.y + r * Math.sin(a),
+    });
+    const topSafeZ = target.topZ + op.safeClearance;
+
+    if (ti > 0) {
+      // between targets: lift to the travel clearance first, the next
+      // approach's rapid then travels XY at height (axis-separate)
+      moves.push({ words: { z: travelZ }, feed: 0, rapid: true, comment: 'travel clearance' });
+    }
+
+    for (let li = 1; li <= levelCount; li++) {
+      const levelRc = rcOfLevel(li);
+      const segs = segmentsPerRevolution(levelRc);
+      const approach = at(levelRc + op.safeClearance, 0); // external: outside the boss at angle 0
+      const grooveStart = at(levelRc, 0);
+      // THE FINAL LEVEL RUNS TWICE — the spring is a full second pass at
+      // the finished radius (Makera's cycle; intermediate levels once)
+      const cycles = li === levelCount ? 2 : 1;
+      for (let cycle = 0; cycle < cycles; cycle++) {
+      const spring = cycle === 1;
+      // approach: internal at the bore center, external outside the boss;
+      // XY at the current height, then descend to the target's safe Z
+      const approachPt = target.internal ? target.center : approach;
+      moves.push({
+        words: { x: approachPt.x, y: approachPt.y },
+        feed: 0,
+        rapid: true,
+        comment: spring ? 'spring pass' : target.internal ? 'approach at the bore center' : 'approach',
+      });
+      moves.push({ words: { z: topSafeZ }, feed: 0, rapid: true });
+
+      for (let k = 0; k < op.starts; k++) {
+        const startZ = bottomZ + k * op.pitch; // groove k = groove 0 shifted up one pitch
+        const endZ = startZ + target.depth;
+        const lastStart = k === op.starts - 1;
+
+        if (target.internal) {
+          // the prep pocket cleared the bore — rapid inside it, feed the
+          // last sliver to the groove bottom
+          moves.push({ words: { z: startZ + APPROACH_CLEARANCE }, feed: 0, rapid: true });
+          moves.push({
+            words: { z: startZ },
+            feed: op.plungeFeed,
+            comment: 'plunge to the thread bottom',
+          });
+          minutes += APPROACH_CLEARANCE / op.plungeFeed;
+        } else {
+          // beside the boss the tips may graze the face annulus — the
+          // mill-tested file plunge-feeds the whole leg; never rapid it
+          moves.push({
+            words: { z: startZ },
+            feed: op.plungeFeed,
+            comment: 'plunge to the thread bottom',
+          });
+          minutes += (topSafeZ - startZ) / op.plungeFeed;
+        }
+
+        // RADIAL ENTRY — no arc lead-in; the notch this cuts IS the bottom
+        moves.push({
+          words: { x: grooveStart.x, y: grooveStart.y },
+          feed: op.feed,
+          comment: 'radial entry',
+        });
+        minutes += (target.internal ? levelRc : op.safeClearance) / op.feed;
+
+        // ASCENDING HELIX: revs = depth/lead (fractional ends exactly at
+        // the top), lead/rev — 'ccw' ascends CW from above, 'cw' CCW
+        const revs = target.depth / lead;
+        const n = Math.max(1, Math.round(revs * segs));
+        let prev = grooveStart;
+        let prevZ = startZ;
+        for (let i = 1; i <= n; i++) {
+          const frac = i / n;
+          const a = dir * 2 * Math.PI * revs * frac;
+          const z = startZ + target.depth * frac;
+          const p = at(levelRc, a);
+          moves.push({ words: { x: p.x, y: p.y, z }, feed: op.feed });
+          minutes += Math.hypot(p.x - prev.x, p.y - prev.y, z - prevZ) / op.feed;
+          prev = p;
+          prevZ = z;
+        }
+
+        if (target.internal) {
+          if (spiralExit) {
+            // FOLLOW THE SPIRAL OUT: keep the same hand/ascend past the
+            // mouth until the form is clear — tip pitch + 0.5mm above the
+            // face (one groove height + margin), ≤ 1 extra revolution
+            const extraRevs = Math.min(1, (op.pitch + 0.5) / lead);
+            const en = Math.max(1, Math.round(extraRevs * segs));
+            for (let j = 1; j <= en; j++) {
+              const frac = j / en;
+              const a = dir * 2 * Math.PI * (revs + extraRevs * frac);
+              const z = endZ + extraRevs * lead * frac;
+              const p = at(levelRc, a);
+              moves.push({ words: { x: p.x, y: p.y, z }, feed: op.feed });
+              minutes += Math.hypot(p.x - prev.x, p.y - prev.y, z - prevZ) / op.feed;
+              prev = p;
+              prevZ = z;
+            }
+            // in air above the face at the Rc orbit — straight lift is safe
+            const exitZ = endZ + extraRevs * lead;
+            moves.push({ words: { z: Math.max(topSafeZ, exitZ) }, feed: 0, rapid: true });
+            if (!lastStart) {
+              // next start re-enters from the center
+              moves.push({
+                words: { x: target.center.x, y: target.center.y },
+                feed: 0,
+                rapid: true,
+                comment: `re-entering for start ${k + 2}/${op.starts}`,
+              });
+            }
+          } else {
+            // aside retract: radial in to the center at feed (crossing the
+            // top groove — the exit notch), then a straight lift
+            moves.push({
+              words: { x: target.center.x, y: target.center.y },
+              feed: op.feed,
+              comment: lastStart ? 'aside retract' : 'step aside for the next start',
+            });
+            minutes += levelRc / op.feed;
+            moves.push({ words: { z: topSafeZ }, feed: 0, rapid: true });
+          }
+        } else {
+          // external: nothing stands above the thread — straight lift,
+          // then back out to the approach point for the next start/cycle
+          moves.push({ words: { z: topSafeZ }, feed: 0, rapid: true });
+          if (!lastStart) {
+            moves.push({
+              words: { x: approach.x, y: approach.y },
+              feed: 0,
+              rapid: true,
+              comment: `re-entering for start ${k + 2}/${op.starts}`,
+            });
+          }
+        }
+      }
+      passes++; // one full thread pass over every start at this radius
+      }
+    }
+  });
+
+  return { moves, passes, estimatedMinutes: minutes, pathRadius: firstRc ?? 0, notes };
+}

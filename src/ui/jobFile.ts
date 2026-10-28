@@ -74,6 +74,23 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
         return { ...op, surfaceDiameter: null } as JobOp;
       }
     }
+    // thread-mill saves from the naming round (2026-10-28, hours old):
+    // hand 'right'/'left' → the cw/ccw thread perception (Alice: "dont
+    // use right-hand/left-hand as the other thread tool uses cw/ccw, so
+    // be consistant" — 'left' = 'ccw', their 14ccw example), and no
+    // stepOver yet → 0 (one full-form pass, unchanged behavior)
+    if (op.kind === 'threadMill') {
+      const rawHand = (op as { hand?: unknown }).hand;
+      const rawStep = (op as { stepOver?: unknown }).stepOver;
+      if (rawHand !== undefined || typeof rawStep !== 'number') {
+        const { hand: _handEra, ...rest } = op as typeof op & { hand?: unknown };
+        return {
+          ...rest,
+          rotation: rawHand === 'left' ? 'ccw' : rawHand === 'right' ? 'cw' : (op as { rotation?: 'cw' | 'ccw' }).rotation ?? 'cw',
+          stepOver: typeof rawStep === 'number' ? rawStep : 0,
+        } as JobOp;
+      }
+    }
     // pre-margin waterline saves (interim builds, 2026-10-25): derive the
     // tool Ø + allowance + step over at generation. Saves from the
     // tabs-era interim build may also carry a `tabs` field — dropped (the
@@ -102,6 +119,23 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
       const rawTabs = (op as { tabs?: unknown }).tabs;
       if (rawTabs !== null && typeof rawTabs !== 'object') {
         op = { ...op, tabs: null } as JobOp;
+      }
+    }
+    // pre-split profile saves (2026-10-28): the single `allowance` moved
+    // BOTH the floor and the wall — it migrates to bottom AND side alike.
+    // MUTATE (assign), never return: legacy saves lack the split AND the
+    // clearToStock/cutBeyondStock fields below, and an early return would
+    // skip those migrations (the tabs-era lesson).
+    if (op.kind === 'profile') {
+      const hasSplit =
+        typeof (op as { bottomAllowance?: unknown }).bottomAllowance === 'number' &&
+        typeof (op as { sideAllowance?: unknown }).sideAllowance === 'number';
+      if (!hasSplit) {
+        const a = typeof (op as { allowance?: unknown }).allowance === 'number'
+          ? (op as { allowance?: unknown }).allowance as number
+          : 0;
+        const { allowance: _old, ...rest } = op as typeof op & { allowance?: unknown };
+        op = { ...rest, bottomAllowance: a, sideAllowance: a } as JobOp;
       }
     }
     // pre-⇩ saves carry no floorFeatureId — detached is the null default

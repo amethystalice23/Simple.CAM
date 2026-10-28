@@ -27,7 +27,9 @@ import type {
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { planeExtents, transformFn } from './featureOverlays';
-import { opEdgeSource, resolveFeature, sourcesFor } from './featureSources';
+import { opEdgeSource, resolveFeature, sourcesFor, splitSelection } from './featureSources';
+import { threadTargetsFromSelection } from './opTargets';
+import { internalMinorDiameter } from '../cam/threadMill';
 import { ModelPanel } from './ModelPanel';
 import {
   artworkFromSvg,
@@ -45,6 +47,7 @@ import {
   newJobOp,
   OP_KINDS,
   prefillDepths,
+  prefillThreadMill,
   seedJobOpIds,
   type GeneratedOp,
 } from './jobGeneration';
@@ -75,7 +78,13 @@ const initialStock: Extract<Stock, { kind: 'cylinder' }> = {
   materialId: 'aluminum-6061',
 };
 
-const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v2'; // v2: corn bits split out of flat
+// v5 (2026-10-28 night): the Makera shop thread mills are 1-TOOTH (Alice:
+// "the makera ones are 1 tooth, i have a different brand that is otherwise
+// the same sizes but 3 tooth" — the Fusion NOF: 3 is the generic look, not
+// the shop tool) — the pitch stays editable on them. The simulator's neck
+// was also remodeled constant-Ø at the root through the cutting length (a
+// linear taper ran deeper than the crest at every height above the cut).
+const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v5';
 
 /**
  * Feature-picking caps: above this triangle count a model is a fine relief
@@ -377,6 +386,9 @@ export function App() {
           if (o.kind === 'thread') {
             return { ...o, nominalDiameter: diameter, pitch: metricPitch(diameter) ?? o.pitch };
           }
+          if (o.kind === 'threadMill') {
+            return { ...o, nominalDiameter: diameter, pitch: metricPitch(diameter) ?? o.pitch };
+          }
           return o;
         }),
       );
@@ -431,6 +443,19 @@ export function App() {
             ? o.featureIds.filter((x) => x !== id)
             : [...o.featureIds, id];
           let next = { ...o, featureIds } as JobOp;
+          if (o.featureIds.length === 0 && o.kind === 'threadMill') {
+            // the rim/wall/facet click resolves the whole thread spec: Ø,
+            // inside/outside, the rim depth — and the thread length when
+            // the click was the cylinder wall itself
+            next = prefillThreadMill(
+              next as Extract<JobOp, { kind: 'threadMill' }>,
+              sources,
+              id,
+              crown,
+              datumAngleBefore(ops, o.id),
+              stock,
+            );
+          }
           if (o.featureIds.length === 0 && p) {
             next = prefillDepths(next, featureDepthInFrame(o, p), crown);
           }
@@ -557,6 +582,41 @@ export function App() {
         ),
     };
   }, [ops, expandedOpId, geometry, stock]);
+
+  /** the expanded thread-mill op's intended AREA (2026-10-28): a ghost
+   * cylinder of the thread's cutting Ø spanning the start→end Z band at
+   * the resolved bore/boss, while that op's panel is open — live with the
+   * depth boxes and the selection/⇩ prefills. External shows the major Ø,
+   * internal the prep-bore d1 (the visible hole being threaded). Null
+   * until the selection resolves something. */
+  const threadPreview = useMemo(() => {
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!op || op.kind !== 'threadMill' || op.featureIds.length === 0) return null;
+    if (op.endDepth <= op.startDepth) return null;
+    const crown = stockTopZ(stock);
+    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    const rotate =
+      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    for (const part of splitSelection(sources, op.featureIds)) {
+      let src;
+      try {
+        src = threadTargetsFromSelection(part.source.features, part.ids, part.source.transform, rotate);
+      } catch {
+        continue; // a bad selection ghosts nothing — generation says why
+      }
+      if (src && src.targets.length > 0) {
+        return {
+          center: src.targets[0].center,
+          topZ: crown - op.startDepth,
+          bottomZ: crown - op.endDepth,
+          diameter: op.internal
+            ? internalMinorDiameter(op.nominalDiameter, op.pitch)
+            : op.nominalDiameter,
+        };
+      }
+    }
+    return null;
+  }, [ops, expandedOpId, sources, stock]);
 
   /** the expanded rotary op's intended result (edge-tracing §5): the
    * violet ghost cylinder about the stock axis — a spiral carve adds its
@@ -699,9 +759,19 @@ export function App() {
       const sd =
         o.kind === 'drill'
           ? o.peckDepth
-          : 'stepDown' in o
-            ? (o.stepDown as number | undefined) ?? 0
-            : 0;
+          : o.kind === 'threadMill'
+            ? // A thread is cut FULL AXIAL DEPTH in one helical pass — by
+              // tool design (the cutting length spans the whole thread), not
+              // a step-down choice. The radial Step over ladders the FORM
+              // radially, never the axial depth, so the honest intended
+              // removal per move is the full thread length and the
+              // classification reads it (her 2026-10-28 report: a yellow
+              // wall at any step over, because the moves were being read
+              // against the 0.61mm form depth).
+              o.endDepth - o.startDepth
+            : 'stepDown' in o
+              ? (o.stepDown as number | undefined) ?? 0
+              : 0;
       for (let k = 0; k < len; k++) perMove[mi + k] = sd;
       mi += len;
     }
@@ -893,6 +963,87 @@ export function App() {
       return [...prev.slice(0, at), face, ...prev.slice(at)];
     });
     setExpandedOpId(face.id); // open it for tool and feed tweaks
+  };
+
+  /** thread-mill op: insert the PREP toolpath right before it (Alice,
+   * 2026-10-28 — "offering to insert a suitable facing cut: external is a
+   * profile, internal is a pocket"), prefilled from the thread's own
+   * geometry. External → a PROFILE turning the boss to the major Ø
+   * (clear-to-stock, allowance = nominalR − bossR, negative to turn
+   * down); internal → a POCKET opening the bore to the ISO minor d1
+   * (allowance = boreR − d1R, negative when the modeled bore is
+   * undersize). Makera's own prep on the GHM9 example was exactly this
+   * shape: a flat-endmill contour down to Ø14 before the 14ccw thread. */
+  const insertPrepOp = (op: JobOp) => {
+    if (op.kind !== 'threadMill') return;
+    const prepTool = tools.find((t) => t.type === 'flat') ?? tools[0];
+    if (!prepTool) return;
+    const datum = datumAngleBefore(ops, op.id);
+    const rotate =
+      datum !== 0 ? indexedPointRotation(datum, rotaryCalibrationOf(stock).axisZ) : undefined;
+    // the modeled bore/boss radius from the op's own selection
+    let radius: number | null = null;
+    for (const part of splitSelection(sources, op.featureIds)) {
+      const src = threadTargetsFromSelection(
+        part.source.features,
+        part.ids,
+        part.source.transform,
+        rotate,
+      );
+      if (src && src.targets.length > 0) {
+        radius = src.targets[0].radius;
+        break;
+      }
+    }
+    const d1R = (op.nominalDiameter - 1.0825 * op.pitch) / 2;
+    let prep: JobOp;
+    if (op.internal) {
+      const base = newJobOp('pocket', prepTool, stock.materialId, stock);
+      prep = {
+        ...base,
+        featureIds: op.featureIds,
+        selectionIs: 'floor',
+        startDepth: op.startDepth,
+        // the bore runs past the thread's floor — form clearance below
+        endDepth: round2(op.endDepth + Math.max(1, op.pitch * 2)),
+        // the pocket's allowance insets the region: opening an OVERSIZE
+        // bore to d1 (positive); at/under size is 0 (a pocket cannot grow
+        // the region — open undersized bores by drilling them bigger).
+        // d1 derives from the THREAD's nominal (Alice, 2026-10-28: "the
+        // feature on the thread might not be the same as the thread
+        // diameter set"), never from the feature Ø
+        allowance: Math.max(0, radius === null ? 0 : round2(radius - d1R)),
+        cutBeyondStock: false,
+      } as JobOp;
+    } else {
+      const base = newJobOp('profile', prepTool, stock.materialId, stock);
+      prep = {
+        ...base,
+        featureIds: op.featureIds,
+        selectionIs: 'floor',
+        startDepth: 0, // turn from the crown down — air above the boss is free
+        endDepth: round2(op.endDepth + 1),
+        side: 'outside',
+        bottomAllowance: 0,
+        // SIGNED side offset (Alice, 2026-10-28): turn the boss DOWN TO
+        // the ISO-fit crest Ø `nominal − 2·tolerance` — the thread neck
+        // rides that crest at zero clearance, so the red streamers stop.
+        // Both ends derive from the THREAD (nominal + tolerance), the
+        // start from the resolved BOSS radius — they are independent
+        // ("the feature on the thread might not be the same as the
+        // thread diameter set"), so the offset is their honest
+        // difference, sign and all — never clamped
+        sideAllowance: radius === null ? 0 : round2((op.nominalDiameter - 2 * op.tolerance) / 2 - radius),
+        clearToStock: true, // clear the waste out to the stock wall
+        tabs: null,
+      } as JobOp;
+    }
+    setOps((prev) => {
+      const idx = prev.findIndex((o) => o.id === op.id);
+      const at = idx < 0 ? prev.length : idx;
+      return [...prev.slice(0, at), prep, ...prev.slice(at)];
+    });
+    setExpandedOpId(prep.id); // open it for tool and feed tweaks
   };
 
   /** start/stop editing an op's feature selection (enables measure mode) */
@@ -1262,6 +1413,7 @@ export function App() {
             viewDatum={viewDatum}
             pickKind={featurePick?.kind ?? null}
             facePreview={facePreview}
+            threadPreview={threadPreview}
             simChunks={showSim && carveSim.state.chunks.size > 0 ? carveSim.state.chunks : null}
             displayLayers={{
               stock: showStock,
@@ -1369,6 +1521,7 @@ export function App() {
               picking={featurePick}
               onFeaturePick={toggleFeaturePick}
               onInsertFacingOp={insertFacingOp}
+              onInsertPrepOp={insertPrepOp}
               onDeleteOp={(id) => {
                 const nextOps = ops.filter((o) => o.id !== id);
                 const nextGen = { ...generated };
