@@ -147,10 +147,14 @@ describe('profile2d', () => {
     // one safe-Z retract per pass (plus the entry rapids carry safeZ too)
     const safeRetracts = res.moves.filter((m) => m.rapid && m.words.z === 5);
     expect(safeRetracts.length).toBe(6); // 3 entries + 3 retracts
-    // approach rapids stop half a mm above each even level (2.5/3 rungs)
+    // approach rapids stop half a mm ABOVE STANDING MATERIAL (the pocket2d
+    // convention, its 2026-10-26 fix): level 1 stands at the surface, each
+    // later level at the previous level's cut — never `levelZ + 0.5`, which
+    // ended the rapid 0.5 INSIDE the standing wall (Alice's 2026-10-28
+    // yellow-streak report: a rapid removing stock down the side)
     const approaches = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.z !== 5);
     expect(approaches.length).toBe(3);
-    expect(approaches.map((m) => m.words.z)).toEqual([0.5 - 2.5 / 3, 0.5 - (2 * 2.5) / 3, -2.5 + 0.5]);
+    expect(approaches.map((m) => m.words.z)).toEqual([0.5, 0.5 - 2.5 / 3, 0.5 - (2 * 2.5) / 3]);
   });
 
   it('clamps the wall pass to the stock footprint: open spans, centers inside', () => {
@@ -282,7 +286,9 @@ describe('profile2d', () => {
     expect(res.warnings).toEqual([]);
     expect(res.moves.length).toBe(50); // 2 levels × (entry 4 + 20 loop cuts + retract)
     expect(res.passes).toBe(2);
-    expect(res.estimatedMinutes).toBeCloseTo(0.1899418798617789, 6);
+    // the level-1 plunge charges its honest 1.5mm descent (approach above
+    // the surface + the 1mm level), not the old flat 0.5 clearance
+    expect(res.estimatedMinutes).toBeCloseTo(0.1999418798617789, 6);
   });
 });
 
