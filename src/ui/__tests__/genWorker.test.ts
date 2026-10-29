@@ -166,7 +166,7 @@ describe('generation worker protocol', () => {
     expect(app.summary).toContain('raster row');
   });
 
-  it('contour4d: worker context reproduces the main-thread plan (stage A)', () => {
+  it('contour4d: worker context reproduces the main-thread roughs (plan + emission)', () => {
     const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
       kind: 'cylinder',
       length: 30,
@@ -181,12 +181,13 @@ describe('generation worker protocol', () => {
     const { app, worker } = throughBothSides(g, op, cylStock, [smallTool]);
     expect(app.error).toBeNull();
     expect(worker.error).toBeNull();
-    // stage A: the plan only, identical through both sides
-    expect(app.moves).toHaveLength(0);
-    expect(worker.moves).toHaveLength(0);
+    // the emission stage landed: real moves, identical through both
+    // sides, and the summary still carries the plan it emitted from
+    expect(app.moves.length).toBeGreaterThan(0);
+    expect(worker.moves.length).toBe(app.moves.length);
     expect(worker.summary).toBe(app.summary);
     expect(app.summary).toContain('plan:');
-    expect(app.summary).toContain('stage 1: plan only');
+    expect(app.summary).toContain('rough(s) emitted');
   });
 
   it('rotaryCarve: worker context reproduces the main-thread result', () => {

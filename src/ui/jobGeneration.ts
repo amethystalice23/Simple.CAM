@@ -1562,12 +1562,16 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         };
       }
       case 'contour4d': {
-        // STAGE A of the 4D contour (P3): the op computes its own
+        // THE 4D CONTOUR (P3), both stages: the op computes its own
         // orientation plan — the cleared-set map over the candidate
-        // ladder, greedy cover, honest report — and emits NO moves yet
-        // (stage B generates the per-orientation roughs at the chosen
-        // angles). The whole loaded model is the target, like the
-        // waterline; no selection, no user-chosen orientations.
+        // ladder, greedy cover, honest report — then EMITS the roughs:
+        // per chosen angle, an index move to its spoke and a waterline
+        // rough in the same rotated frame the map scored it in. Each
+        // rough is bounded by its own orientation's geometry (upper
+        // shadow, moat-only stop), so the orientations compose the way
+        // hand-stacked indexed roughs always have — the planner just
+        // picks the angles. The whole loaded model is the target, like
+        // the waterline; no selection, no user-chosen orientations.
         if (!ctx.geometry) return fail('needs a loaded model — the plan targets it');
         if (ctx.stock.axisMode !== '4-axis') {
           return fail('the 4D contour needs 4-axis stock — it rotates the part between roughing angles');
@@ -1577,11 +1581,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         }
         const cal = rotaryCalibrationOf(ctx.stock);
         const [sx0, sx1] = stockSpan(ctx.stock, 'x');
-        const positions = transformedPositions(ctx.geometry, ctx.transform);
+        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
         const ladder: number[] = [];
         for (let a = 0; a < 360; a += op.orientStep) ladder.push(a);
         const map = buildClearedMap({
-          positions,
+          positions: positions0,
           x0: sx0,
           x1: sx1,
           radius: cal.effectiveRadius,
@@ -1593,15 +1597,139 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const plan = greedyCover(map);
         const angles = plan.picks.map((p) => `${p.angle}°`);
         const pct = map.coverable > 0 ? (100 * plan.covered) / map.coverable : 100;
+        // STAGE B, the emission: greedy order (biggest coverage first —
+        // the bulk of the material comes off in the first orientations).
+        // The kernel runs BEFORE the index move is committed, so an
+        // orientation with nothing to rough costs no rotation; the
+        // machine A pile only ever grows by shortest-path hops between
+        // orientations that actually cut. The datum-discipline stamp in
+        // generateJobOp hands the borrowed datum back at the end.
+        const crown = stockTopZ(ctx.stock);
+        const stockBottom = stockSpan(ctx.stock, 'z')[0];
+        const moves: Move[] = [];
+        let minutes = 0;
+        let roughs = 0;
+        let levels = 0;
+        // per-orientation notes aggregated by KIND: the numbers are
+        // normalized to # and deduped within an orientation, then counted
+        // across orientations — 7 orientations × 4 warnings is a wall of
+        // near-identical text, and the kind + how many orientations it
+        // fired at is the readable (and still honest) form
+        const noteAgg = new Map<string, { example: string; orientations: number }>();
+        const noteOnce = (seen: Set<string>, s: string) => {
+          const key = s.replace(/-?\d+(?:\.\d+)?/g, '#');
+          if (seen.has(key)) return;
+          seen.add(key);
+          const e = noteAgg.get(key);
+          if (e) e.orientations++;
+          else noteAgg.set(key, { example: s, orientations: 1 });
+        };
+        let a = ctx.startA;
+        for (const [i, pick] of plan.picks.entries()) {
+          const seen = new Set<string>();
+          // the same frame mapping the waterline case uses at a datum:
+          // orientation θ of the map ≡ machine A at θ (indexedPointRotation
+          // and the map's ray cast are each other's inverse)
+          const { rotate } = indexFrame(pick.angle, ctx.stock);
+          const positions = rotate
+            ? (() => {
+                const out = new Float32Array(positions0.length);
+                for (let k = 0; k < positions0.length; k += 3) {
+                  const v = rotate({
+                    x: positions0[k],
+                    y: positions0[k + 1],
+                    z: positions0[k + 2],
+                  });
+                  out[k] = v.x;
+                  out[k + 1] = v.y;
+                  out[k + 2] = v.z;
+                }
+                return out;
+              })()
+            : positions0;
+          // model floor in THIS orientation's cutting frame — each
+          // rotation brings a different face lowest, so the ladder range
+          // is per-pick, clamped at the stock bottom (below it is the
+          // fixture, same rule as the waterline)
+          let modelMinZ = Infinity;
+          for (let k = 2; k < positions.length; k += 3) {
+            if (positions[k] < modelMinZ) modelMinZ = positions[k];
+          }
+          const res = waterlineRough({
+            positions,
+            // the contour4d op has no clear-to-stock toggle: the rough
+            // clears the model's column only, never out to the stock edge
+            // (per-orientation excess clearing would fight the other
+            // orientations' columns)
+            footprint: op.cutBeyondStock
+              ? undefined
+              : stockFootprint(ctx.stock, pick.angle % 360 !== 0),
+            topZ: crown,
+            floorZ: Math.max(modelMinZ, stockBottom),
+            stepDown: op.stepDown,
+            stepOver: op.stepOver,
+            allowance: op.allowance,
+            finishingOnly: op.finishingOnly,
+            clearToStock: false,
+            maxDepth: op.maxDepth ?? undefined,
+            // null = derive Ø + allowance + step over at generation, the
+            // waterline's own rule (job files stay tool-agnostic)
+            margin: op.margin ?? tool.diameter + op.allowance + op.stepOver,
+            tool,
+            feed,
+            plungeFeed,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+          });
+          if (res.moves.length === 0) {
+            noteOnce(seen, `orientation ${pick.angle}°: nothing to rough`);
+            continue;
+          }
+          const target = a + shortestATo(pick.angle, a);
+          if (Math.abs(target - a) > 1e-9) {
+            moves.push({
+              words: { a: target },
+              feed: 0,
+              rapid: true,
+              comment: `orientation ${i + 1}/${plan.picks.length}: index stock to A${pick.angle}°`,
+            });
+            a = target;
+          }
+          // NOT spread-push: a knight-sized rough is tens of thousands of
+          // moves, and f(...args) puts every one on the call stack
+          for (const mv of res.moves) moves.push(mv);
+          minutes += res.estimatedMinutes;
+          roughs++;
+          levels += res.levels.length;
+          for (const w of res.warnings) noteOnce(seen, w);
+          if (res.droppedChains > 0) {
+            noteOnce(
+              seen,
+              `${res.droppedChains} open chain(s) dropped — broken mesh, some levels incomplete`,
+            );
+          }
+        }
+        if (roughs === 0) {
+          return fail(
+            'nothing to rough — every chosen orientation already sits at the model surface',
+          );
+        }
+        const notes = [...noteAgg.values()].map(({ example, orientations }) =>
+          orientations > 1
+            ? orientations === roughs
+              ? `${example} (all ${roughs} orientations)`
+              : `${example} (at ${orientations} of ${roughs} orientations)`
+            : example,
+        );
         return {
-          moves: [],
-          minutes: 0,
+          moves,
+          minutes,
           error: null,
           summary:
             `plan: ${plan.picks.length} orientation(s) [${angles.join(', ')}] · ` +
             `${plan.covered}/${map.coverable} coverable cells (${pct.toFixed(0)}%) · ` +
             `${map.buriedEverywhere} unreachable (deep undercuts) · ` +
-            `stage 1: plan only — moves land with stage 2`,
+            `${roughs} rough(s) emitted, ${levels} level(s), ~${minutes.toFixed(1)} min` +
+            (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
       }
       case 'rasterContour': {

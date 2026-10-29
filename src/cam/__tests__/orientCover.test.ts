@@ -80,8 +80,8 @@ describe('greedyCover', () => {
   });
 });
 
-describe('the contour4d op (stage A: plan only)', () => {
-  it('plans a symmetric cylinder with a small orientation set and full coverage', async () => {
+describe('the contour4d op (plan + emission)', () => {
+  it('plans a symmetric cylinder with a small orientation set, full coverage, and emits its roughs', async () => {
     const { generateJobOp } = await import('../../ui/jobGeneration');
     const g = new THREE.CylinderGeometry(5, 5, 20, 48).toNonIndexed();
     const stock = {
@@ -118,9 +118,11 @@ describe('the contour4d op (stage A: plan only)', () => {
       datumAngle: 0,
     });
     expect(res.error).toBeNull();
-    expect(res.moves).toHaveLength(0); // stage A: the plan only
+    // stage B: the plan came with its roughs — real moves (each chosen
+    // orientation's waterline) and the emission line in the summary
+    expect(res.moves.length).toBeGreaterThan(0);
     expect(res.summary).toMatch(/plan: \d+ orientation/);
-    expect(res.summary).toContain('stage 1: plan only');
+    expect(res.summary).toContain('rough(s) emitted');
     // a symmetric cylinder: every orientation clears the same band, so
     // two opposite angles cover it — the greedy should not need more
     // than a handful even with the 12-candidate ladder

@@ -1166,9 +1166,9 @@ export type JobOp =
        * greedily covers the model's surface cells, and emits per-
        * orientation roughing at the chosen angles (the fields below
        * are each orientation pass's waterline parameters, since the
-       * emission stage generates waterline roughs at the chosen
-       * datums). The honest unreachable set is reported, never
-       * silently dropped.
+       * emission generates a waterline rough at every chosen datum).
+       * The honest unreachable set is reported, never silently
+       * dropped.
        */
       /** roughing stock left on the model for a finishing op, mm */
       allowance: number;
