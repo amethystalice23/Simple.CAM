@@ -33,5 +33,6 @@ export function buildWorkerGenContext(
     sources: oe ? [...sources, oe] : sources,
     datumAngle: payload.datumAngle,
     prevRpm: payload.prevRpm,
+    standing: payload.standing,
   };
 }

@@ -51,6 +51,7 @@ import {
   seedJobOpIds,
   type GeneratedOp,
 } from './jobGeneration';
+import type { StandingGrid } from '../cam/rotaryCarve';
 import { isHeavyGenOp } from './genWorkerProtocol';
 import { GEN_CANCELLED, useGenWorker } from './useGenWorker';
 import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
@@ -787,6 +788,9 @@ export function App() {
     prevRpm: number | undefined,
     /** progress position for the status line, e.g. "op 3/7" */
     where?: string,
+    /** P1: the standing-material grid threaded from the prior rotaryCarve
+     *  op — rides the payload (plain data, structured-cloneable) */
+    standing?: StandingGrid,
   ): Promise<GeneratedOp | null> => {
     const label = OP_KINDS.find((k) => k.kind === op.kind)?.label ?? op.kind;
     setGenNote(`Generating ${label}${where ? ` (${where})` : ''}…`);
@@ -802,6 +806,7 @@ export function App() {
         datumAngle: datum,
         startA: a,
         prevRpm,
+        standing,
       });
       return genWorker.currentToken() === token ? result : null;
     } catch (err) {
@@ -822,21 +827,38 @@ export function App() {
     let datum = 0; // Index ops establish the datum for the ops after them
     let a = 0; // the machine's accumulated A — ops continue from the last
     let prevRpm: number | undefined; // the running spindle speed
+    // P1: the standing-material grid, threaded op-to-op between rotaryCarve
+    // ops (the 4D-carve cross-orientation state). The grid carries its own
+    // shape + mint datum; the KERNEL re-indexes θ rows when an op runs at a
+    // different datum (an Index op rotated the part under the fixed grid).
+    // Machine-frame ops between rotary ops don't touch it — the datum
+    // discipline guarantees the part sits where it was generated against.
+    let standing: StandingGrid | undefined;
     let index = 0;
     for (const o of ops) {
       index++;
       if (genWorker.currentToken() !== token) return; // superseded mid-walk
       let result: GeneratedOp | null;
       if (isHeavyGenOp(o) && geometry) {
-        result = await generateOffThread(token, o, a, datum, prevRpm, `op ${index}/${ops.length}`);
+        result = await generateOffThread(token, o, a, datum, prevRpm, `op ${index}/${ops.length}`, standing);
         if (result === null) return; // superseded while the worker ran
       } else {
-        result = generateJobOp(o, { ...genCtx, datumAngle: datum, startA: a, prevRpm });
+        result = generateJobOp(o, {
+          ...genCtx,
+          datumAngle: datum,
+          startA: a,
+          prevRpm,
+          standing,
+        });
       }
       next[o.id] = result;
       a = result.finalA;
       // ops that stamp nothing (index) carry the previous spindle state through
       prevRpm = result.spindleRpm ?? prevRpm;
+      // the standing grid rides the result out of every rotaryCarve op and
+      // flows into the next op's context (the kernel ignores it for non-
+      // rotary ops; re-index happens inside rotaryCarve at its datum)
+      if (result.standing) standing = result.standing;
       if (o.kind === 'index') datum = o.angle;
     }
     setGenNote(null);

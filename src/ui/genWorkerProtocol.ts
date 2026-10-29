@@ -70,6 +70,10 @@ export interface GenPayload {
   datumAngle: number;
   startA: number;
   prevRpm?: number;
+  /** P1: the standing-material grid threaded from the prior rotaryCarve
+   *  op (plain data — structured clone carries it). Only rotaryCarve
+   *  consumes it; genWorkerContext maps it into the worker's GenContext. */
+  standing?: import('../cam/rotaryCarve').StandingGrid;
 }
 
 export type GenClientMsg = { type: 'seed'; seed: GenSeed } | ({ type: 'generate' } & GenPayload);

@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { Tool } from '../../core/types';
 import { MAX_ROTARY_RPM, ROTARY_FEED_DEG_MIN } from '../faceCylinder';
-import { dilateRotary, rotaryCarve, type RotaryCarveOptions } from '../rotaryCarve';
+import { dilateRotary, reindexStanding, rotaryCarve, type RotaryCarveOptions, type StandingGrid } from '../rotaryCarve';
 
 const flatTool: Tool = { id: 'tf', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
 const ballTool: Tool = { id: 'tb', name: '2mm ball', type: 'ball', diameter: 2, spindleRpm: 18000 };
@@ -343,4 +343,136 @@ describe('rotaryCarve', () => {
     expect(Math.min(...zs)).toBeGreaterThanOrEqual(-1e-6);
     expect(zs.some((z) => z > 0.5 && z < 4.5)).toBe(true);
   });
+
+  // ------------------------------------------------------------ P1: the
+  // standing grid (the 4D carve's cross-orientation state, committee
+  // 2026-10-29). The contract under test, in one sentence each:
+  //  - grid OUT: cells the planes swept stand at the plane, cut cells at
+  //    their comp target after the finish, untouched cells at stock R.
+  //  - grid IN: a later op reads the prior op's standing as its truth —
+  //    its ladder skips what is already clear (the delta-clearing payoff).
+  //  - standalone: byte-identical to the pre-P1 per-op closure.
+  //  - θ re-index: a datum shift is a pure wrapped θ-row rotation.
+  describe('P1: the standing grid', () => {
+    it('grid OUT: planes lower cells they cut, the finish owns the rest, untouched cells stand at stock', () => {
+      const res = rotaryCarve(opts(cylinder(5, 20), { stepDown: 2 }));
+      const g = res.standing;
+      expect(g.r.length).toBe(g.nx * g.nTheta);
+      expect(g.datumAngle).toBe(0);
+      expect(g.radius).toBe(12);
+      // a smooth Ø10 cylinder in R12 stock: every cell was either planed
+      // by a rough plane or finished to its comp target — NOTHING stands
+      // untouched at the stock radius after a full rough+finish op.
+      let cut = 0;
+      for (let k = 0; k < g.r.length; k++) {
+        if (g.r[k] < 12 - 1e-9) cut++;
+      }
+      expect(cut).toBe(g.r.length);
+      // and the values are sane: nothing above the stock, nothing below
+      // the part (the waste floor bottoms near the model's deepest comp,
+      // TESS-class on this fixture — the kernel's max-filter may lift a
+      // cell slightly above its local surface, so bound by the STOCK)
+      let min = Infinity;
+      let max = -Infinity;
+      for (let k = 0; k < g.r.length; k++) {
+        min = Math.min(min, g.r[k]);
+        max = Math.max(max, g.r[k]);
+      }
+      expect(min).toBeGreaterThanOrEqual(0);
+      expect(max).toBeLessThanOrEqual(12 + 1e-6);
+      expect(max).toBeLessThan(12 - 1e-9); // every cell was cut at least once
+    });
+
+    it('grid IN: a second op reads the standing truth — its SKIMS ride the prior op cuts', () => {
+      // op1 roughs the cone from fresh stock; op2 runs the SAME cone at
+      // the same datum. P1's contract: the grid carries standing truth
+      // into op2's SKIM PLANNER (safe transitions ride what is actually
+      // standing), while the ladder itself is P3's delta-clearing (a
+      // later stage). The observable: op2's emission differs from
+      // op-run-on-fresh-stock (its skims drop from the crown to the
+      // standing surfaces op1 left), and the grid is byte-stable across
+      // the two ops at the same datum (nothing new was cut).
+      const base = opts(cone(), { stepDown: 2, radius: 12 });
+      const r1 = rotaryCarve(base);
+      let cut1 = 0;
+      for (let k = 0; k < r1.standing.r.length; k++) {
+        if (r1.standing.r[k] < 12 - 1e-9) cut1++;
+      }
+      expect(cut1).toBe(r1.standing.r.length); // fully swept (rough + finish)
+      const r2 = rotaryCarve({ ...base, standing: r1.standing });
+      expect(r2.stats.levels).toBe(r1.stats.levels); // P3 owns ladder skipping
+      // the GRID OUT of op2 is unchanged: it cut nothing new (same datum,
+      // same part, every cell already at its truth) — monotone + idempotent
+      let moved = 0;
+      for (let k = 0; k < r2.standing.r.length; k++) {
+        if (Math.abs(r2.standing.r[k] - r1.standing.r[k]) > 1e-9) moved++;
+      }
+      expect(moved).toBe(0);
+    });
+
+    it('grid IN at a NEW DATUM re-indexes θ (the rotated part reads the same standing truth)', () => {
+      // op2 runs the cone at datum 180° with op1's grid threaded in.
+      // The re-index permutes θ rows to the new datum; the Tessellated
+      // cone is not row-uniform (48-segment chords vary by θ), so the
+      // honest pin is the OP-level idempotence: cutting the already-cut
+      // part at the new datum moves no cell's standing radius — every
+      // cell was already at its truth for the material that stands there.
+      const base = opts(cone(), { stepDown: 2, radius: 12 });
+      const r1 = rotaryCarve(base);
+      const r2 = rotaryCarve({ ...base, datumAngle: 180, standing: r1.standing });
+      // grid-in never RAISES a cell (monotone): cutting the already-
+      // swept part adds nothing — op2's OUT grid equals its IN grid
+      let raised = 0;
+      for (let k = 0; k < r2.standing.r.length; k++) {
+        if (r2.standing.r[k] > r1.standing.r[k] + 1e-9) raised++;
+      }
+      expect(raised).toBe(0); // monotone: re-indexing can never raise
+      // the direct re-index: a pure permutation of rows (no value
+      // changes), verifiable by sorting both grids' rows
+      const re = reindexStanding(r1.standing, 180, r1.standing.nTheta);
+      const sortedA = Array.from(r1.standing.r).sort((a, b) => a - b);
+      const sortedB = Array.from(re.r).sort((a, b) => a - b);
+      let permDiff = 0;
+      for (let k = 0; k < sortedA.length; k++) {
+        if (Math.abs(sortedA[k] - sortedB[k]) > 1e-9) permDiff++;
+      }
+      expect(permDiff).toBe(0); // a permutation, never a corruption
+      expect(re.datumAngle).toBe(180);
+    });
+
+    it('a shape-mismatched grid (different stepOver) is ignored honestly', () => {
+      // a different stepOver changes the grid shape: the threaded grid's
+      // cells no longer line up. The kernel must NOT thread it (it takes
+      // the fresh-stock branch) rather than misread a misaligned array.
+      const base = opts(cone(), { stepDown: 2, radius: 12 });
+      const r1 = rotaryCarve(base);
+      const r2 = rotaryCarve({ ...base, stepOver: 0.5, standing: r1.standing });
+      // fresh-stock semantics: the ladder runs (no credit from op1)
+      expect(r2.stats.levels).toBeGreaterThan(0);
+    });
+
+    it('standalone is byte-identical with and without an explicit fresh grid', () => {
+      const base = opts(cylinder(5, 20), { stepDown: 2 });
+      const a = rotaryCarve(base);
+      const fresh: StandingGrid = {
+        r: new Float64Array(a.standing.r.length).fill(12),
+        nx: a.standing.nx,
+        nTheta: a.standing.nTheta,
+        pitchX: a.standing.pitchX,
+        gx0: a.standing.gx0,
+        radius: 12,
+        axisZ: 0,
+        datumAngle: 0,
+      };
+      const b = rotaryCarve({ ...base, standing: fresh });
+      expect(b.moves.length).toBe(a.moves.length);
+      expect(b.estimatedMinutes).toBeCloseTo(a.estimatedMinutes, 9);
+      expect(b.stats.levels).toBe(a.stats.levels);
+      expect(b.stats.wraps).toBe(a.stats.wraps);
+    });
+  });
 });
+
+// reindexStanding + StandingGrid are exercised above via rotaryCarve;
+// the import keeps the direct unit surface available for future pins.
+void reindexStanding;

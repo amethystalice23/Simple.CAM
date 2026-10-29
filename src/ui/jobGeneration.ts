@@ -19,7 +19,7 @@ import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
 import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
-import { rotaryCarve } from '../cam/rotaryCarve';
+import { rotaryCarve, type StandingGrid } from '../cam/rotaryCarve';
 import { difference, offsetInward, offsetOutward } from '../cam/clipper';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
@@ -79,6 +79,13 @@ export interface GeneratedOp {
    * index/laser/no-stamp ops; the NEXT op's prevRpm, so back-to-back ops at
    * the same speed charge no ramp */
   spindleRpm?: number;
+  /**
+   * P1: this op's standing-material grid OUT (rotaryCarve only — the
+   * one op that cuts rotary stock). The physical radius still standing
+   * per (x,θ) cell after its cuts, at this op's datum, for the
+   * recalculation pass to thread into a following rotaryCarve op.
+   */
+  standing?: StandingGrid;
 }
 
 export interface GenContext {
@@ -98,6 +105,18 @@ export interface GenContext {
   /** the cutting datum for this op: the absolute A established by the
    * latest Index op preceding it in the job sequence (0 = flat) */
   datumAngle: number;
+  /**
+   * P1 cross-orientation standing material (the 4D carve): the standing
+   * grid from the previous rotaryCarve op, as the recalculation pass
+   * threads it — physical radius still standing per (x,θ) cell,
+   * θ-re-indexed to this op's datum inside the kernel when an Index op
+   * intervened. Defined = this op continues a multi-orientation
+   * sequence; undefined = fresh stock. Only rotaryCarve consumes it.
+   * NOT carried by recalcOne (a lone mid-sequence regen cannot know its
+   * predecessors' cuts — fresh-stock, the same honest limitation as
+   * startA threading).
+   */
+  standing?: StandingGrid;
   /** the spindle speed the PREVIOUS op left running, RPM — the ramp this
    * op charges is |its rpm − this|; undefined = a cold spindle (ramp from
    * 0). Threaded by the recalculation pass, never the generators. */
@@ -1660,6 +1679,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           strategy: op.strategy,
           datumAngle: ctx.datumAngle,
           startA: ctx.startA,
+          standing: ctx.standing,
           feed,
           plungeFeed,
           safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
@@ -1685,6 +1705,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
+          standing: res.standing,
           summary:
             (op.finishingOnly
               ? 'finishing pass only'

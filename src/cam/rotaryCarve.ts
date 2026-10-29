@@ -96,6 +96,60 @@ export interface RotaryCarveOptions {
   plungeFeed: number;
   /** rapid-travel lift above the stock radius, mm */
   safeClearance: number;
+  /**
+   * CROSS-ORIENTATION STANDING MATERIAL (P1 of the 4D carve, PLAN.md
+   * "True optimized 4D carve"): the standing grid from the PREVIOUS
+   * rotaryCarve op, as the recalculation pass threads it — grid in,
+   * grid out (the result carries this op's grid). STOCK-RADIUS space
+   * (the committee's unanimous 2026-10-29 verdict, 3 members on
+   * measured evidence): physical truth survives tool/allowance/
+   * orientation changes, while a compensated store both lies to the
+   * skim planner (clips 65.6% of a second op's transitions) and cannot
+   * be un-dilated (comp − standing is a variable offset, not a
+   * constant). Omitted = fresh stock (today's standalone behavior,
+   * byte-identical — pinned by probe maxdiff 0 against the old
+   * closure). Monotone: cuts only ever LOWER a cell. Re-indexed to
+   * this op's datum internally when an Index op intervened.
+   */
+  standing?: StandingGrid;
+}
+
+export interface StandingGrid {
+  /** physical stock radius still standing per cell, θ-major: cell (i,j)
+   *  at index j·nx + i — STOCK-RADIUS space (the P1 contract) */
+  r: Float64Array;
+  nx: number;
+  nTheta: number;
+  /** the grid's X pitch (gx0 + i·pitchX), mm */
+  pitchX: number;
+  /** grid X origin, mm */
+  gx0: number;
+  /** stock radius / axis height the grid was minted against */
+  radius: number;
+  axisZ: number;
+  /** the datumAngle the grid's θ=0 row corresponds to (the datum of the
+   *  op that minted it). An op at a different datum RE-INDEXES the grid
+   *  (θ rows shift by Δdatum/θstep, wrapped) — a rotation of the part
+   *  under a fixed grid, probe-verified a pure re-index (max err 7e-15). */
+  datumAngle: number;
+}
+
+/** Re-index a standing grid to a new datum: θ rows shift by the wrapped
+ *  row shift Δdatum/θstepDeg. The grid is (x,θ) in the STOCK's material
+ *  frame; rotating the part by Δ carries each cell's standing radius to
+ *  the row Δ rows earlier (the material at new-θ row j stood at old row
+ *  j + shift). Monotone structure preserved (values just move). */
+export function reindexStanding(grid: StandingGrid, datumAngle: number, nTheta: number): StandingGrid {
+  const dThetaDeg = 360 / nTheta;
+  let shift = Math.round((grid.datumAngle - datumAngle) / dThetaDeg);
+  shift = ((shift % nTheta) + nTheta) % nTheta;
+  if (shift === 0) return grid;
+  const r = new Float64Array(grid.r.length);
+  for (let j = 0; j < grid.nTheta; j++) {
+    const src = (j + shift) % grid.nTheta;
+    r.set(grid.r.subarray(src * grid.nx, (src + 1) * grid.nx), j * grid.nx);
+  }
+  return { ...grid, r, nTheta, datumAngle };
 }
 
 export interface RotaryCarveResult {
@@ -104,6 +158,14 @@ export interface RotaryCarveResult {
   estimatedMinutes: number;
   /** human-readable, surfaced verbatim in the op panel */
   warnings: string[];
+  /**
+   * The standing grid OUT (the P1 cross-op contract): the physical
+   * radius still standing per cell after this op — its `standing`
+   * input (or a fresh grid) updated by every plane swept and the
+   * finishing pass, at THIS op's datum. Thread into the next
+   * rotaryCarve op's options.
+   */
+  standing: StandingGrid;
   stats: {
     /** roughing levels (0 when finishingOnly) */
     levels: number;
@@ -301,6 +363,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     moves: [] as Move[],
     estimatedMinutes: 0,
     warnings: [],
+    standing: { r: new Float64Array(0), nx: 0, nTheta: 0, pitchX: 0, gx0: 0, radius: 0, axisZ: 0, datumAngle: 0 },
     stats: { levels: 0, wraps: 0, rows: 0, blockedCells: 0 },
   };
   if (o.positions.length < 9) return empty;
@@ -405,6 +468,52 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     }
   }
 
+  // THE STANDING GRID (P1): the PHYSICAL stock radius still standing per
+  // cell — the caller's threaded grid when the op sequence shares one
+  // (the 4D carve), else fresh stock; re-indexed to THIS op's datum if
+  // an Index op intervened (a rotation of the part under a fixed grid
+  // is a pure θ-row shift, reindexStanding). STOCK-RADIUS space (the
+  // unanimous 2026-10-29 committee verdict: physical truth survives
+  // tool/allowance/orientation changes; a compensated store cannot be
+  // un-dilated and lies to the skim planner). Semantics-preserving
+  // freeze of the old per-op closure (member-2 probe, maxdiff 0): a
+  // fresh grid = stock radius everywhere the ladder hasn't reached,
+  // EXCEPT finishingOnly standalone — no ladder, the documented
+  // "bulk already cleared ahead" assumption (the raster's), warned by
+  // the deep-plunge note — where cells stand at their comp targets.
+  // `cutTo` below records exactly the planes swept, GUARDED by the cut
+  // predicate (a plane removes material only where the sweep's
+  // `comp < level` held — the closure's rule; unguarded, a finishing-only
+  // op would pay crown tolls between rings, the test pins it).
+  const standing: StandingGrid =
+    o.standing && o.standing.nx === nx
+      ? o.standing.nTheta === nTheta && o.standing.pitchX === pitchX && o.standing.gx0 === gx0
+        ? reindexStanding(o.standing, o.datumAngle, nTheta)
+        : o.standing // a shape change (different stepOver/stock): treat as
+      :              // fresh stock below — the grid's cells no longer line up
+    {
+      r: levels.length === 0 ? Float64Array.from(comp) : new Float64Array(nx * nTheta).fill(o.radius),
+      nx,
+      nTheta,
+      pitchX,
+      gx0,
+      radius: o.radius,
+      axisZ: o.axisZ,
+      datumAngle: o.datumAngle,
+    };
+  if (standing.r.length !== nx * nTheta) {
+    throw new Error(
+      'standing grid must be nx × nTheta (thread the grid from the prior op of the same stock)',
+    );
+  }
+  /** record a plane swept: material below it is GONE, monotone — only
+   *  where the sweep's cut predicate held at this level */
+  const cutTo = (level: number) => {
+    for (let k = 0; k < standing.r.length; k++) {
+      if (comp[k] < level - 1e-9 && standing.r[k] > level) standing.r[k] = level;
+    }
+  };
+
   const moves: Move[] = [];
   const warnings: string[] = [];
   let minutes = 0;
@@ -478,30 +587,21 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   };
 
   /** Standing stock radius at a cell — NOT the compensated target: what
-   *  the tool would actually hit passing over the cell NOW. `phase` =
-   *  the roughing levels completed so far (the finish runs after them
-   *  all): a WASTE cell was planed by every level (standing = the last
-   *  plane), a MODEL cell by the deepest level that sat above its
-   *  surface (or never — stock stands at the crown down to it). The
-   *  old comp-based read was the 2026-10-26 skim bug: it credited cells
-   *  as clear BEFORE the planes cut them, so transitions could clip
-   *  the rough's own leftover ledges. */
-  const standingR = (i: number, j: number, phase: number) => {
-    const c = comp[j * nx + i];
-    // finishingOnly: no ladder of its own — the documented "bulk already
-    //  cleared ahead" assumption (the raster's), warned by the deep-
-    //  plunge note, reads the cells as cleared to their targets
-    if (levels.length === 0) return c;
-    const waste = dilated[j * nx + i] === -Infinity;
-    if (phase <= 0) return o.radius; // nothing planed yet
-    const last = Math.min(phase, levels.length) - 1;
-    if (waste) return levels[last]; // every plane cleared it
-    // the deepest level that still sat above this surface, else stock
-    for (let m = last; m >= 0; m--) {
-      if (levels[m] > c) return levels[m];
-    }
-    return o.radius; // no plane reached above: stock stands down to it
-  };
+   *  the tool would actually hit passing over the cell NOW. Reads the
+   *  P1 standing GRID (physical radius per cell, cross-op persistent
+   *  when the caller threads it) — the FREEZE of the old per-op ladder
+   *  reconstruction (committee 2026-10-29, probe maxdiff 0: the closure
+   *  always tracked plane heights, and `cutTo` records exactly the
+   *  planes swept, so the numbers are identical standalone). The old
+   *  comp-based read was the 2026-10-26 skim bug: it credited cells as
+   *  clear BEFORE the planes cut them, so transitions could clip the
+   *  rough's own leftover ledges. `phase` survives in the signature
+   *  only (spanMaxR/arcMaxR/goCut pass it); grid state replaced it.
+   *  finishingOnly: no ladder of its own — the documented "bulk already
+   *  cleared ahead" assumption (the raster's), warned by the deep-
+   *  plunge note; a THREADED grid carries the truth from the prior op,
+   *  the standalone assumption reads cells at stock radius. */
+  const standingR = (i: number, j: number, _phase: number) => standing.r[j * nx + i];
   /** tallest standing height over an X span at one θ row (a traverse leg) */
   const spanMaxR = (ia: number, ib: number, j: number, phase: number) => {
     let m = -Infinity;
@@ -753,6 +853,10 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
         }
       }
     }
+    // the plane swept the FULL grid width (a complete Makera pass —
+    // every strategy sweeps whole rows/rings/coils): material below it
+    // is gone, in every cell the plane sat above. Records the P1 grid.
+    cutTo(rL);
   });
 
   // ----------------------------------------------------------- the finish
@@ -874,6 +978,20 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
   // export footer both expect a safe exit height
   retract();
 
+  // the finish owns everything below the last rough plane: material
+  // remains ONLY where the compensated surface says it does, so the
+  // grid takes the tool-tip target per cut cell (its true standing
+  // radius after the pass). Air cells keep their waste-floor plane
+  // from the ladder — the finish's polyline never visits them.
+  if (!o.finishingOnly || levels.length > 0) {
+    for (let j = 0; j < nTheta; j++) {
+      for (let i = 0; i < nx; i++) {
+        const c = comp[j * nx + i];
+        if (c < standing.r[j * nx + i]) standing.r[j * nx + i] = c;
+      }
+    }
+  }
+
   if (blockedCells > 0) {
     warnings.push(
       `${blockedCells} grid cell(s) have material behind an air gap along the ray — ` +
@@ -897,6 +1015,7 @@ export function rotaryCarve(o: RotaryCarveOptions): RotaryCarveResult {
     moves,
     estimatedMinutes: minutes,
     warnings,
+    standing,
     stats: {
       levels: levels.length,
       wraps,
