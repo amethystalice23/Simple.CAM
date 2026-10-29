@@ -99,6 +99,18 @@ export interface WaterlineRoughOptions {
   feed: number;
   plungeFeed: number;
   safeClearance: number;
+  /**
+   * STAGE C standing-awareness (the 4D contour threads this): absent =
+   * byte-identical behavior. trimBand runs before pocketing (the
+   * moat-only stop and the undercut check still see the FULL region —
+   * decided behavior, the stop firing late costs Clipper work, never
+   * correctness); stampBand runs after a level's moves emitted
+   * successfully (never on the does-not-fit catch, which cut nothing).
+   */
+  standing?: {
+    trimBand: (bandTop: number, cut: number, region: Vec2[][]) => Vec2[][];
+    stampBand: (bandTop: number, cut: number, swept: Vec2[][]) => void;
+  };
 }
 
 export interface WaterlineRoughResult {
@@ -113,6 +125,9 @@ export interface WaterlineRoughResult {
   /** levels skipped because the clearing region vanished (the model section
    *  covers its whole silhouette column at that plane) */
   skippedLevels: number;
+  /** levels the standing-awareness hooks proved empty (STAGE C: the level
+   *  gate in trimBand returned [] — 0 when no hooks were threaded) */
+  standingSkips: number;
   /** human-readable, surfaced verbatim in the op panel */
   warnings: string[];
 }
@@ -306,6 +321,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   let passes = 0;
   let minutes = 0;
   let skippedLevels = 0;
+  let standingSkips = 0;
   let allowanceSkips = 0;
   let droppedSlivers = 0;
   let undercutWarned = false;
@@ -458,6 +474,20 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       region = finRegion;
     }
 
+    // STAGE C standing-awareness: trim the region to cells with standing
+    // material before pocketing. Runs AFTER the moat-only stop and the
+    // finishing branch (both decided on the FULL region — the stop firing
+    // late costs Clipper work, never correctness) and BEFORE the
+    // unreachable-opening block. An empty trim = the level provably cuts
+    // nothing but air: skip it without any Clipper pocketing at all.
+    if (o.standing) {
+      region = o.standing.trimBand(bandTop, cut, region);
+      if (region.length === 0) {
+        standingSkips++;
+        continue;
+      }
+    }
+
     // UNREACHABLE-STOCK HONESTY (clear-excess, Alice's 2026-10-26 knight
     // report): the morphological OPENING of the region by the tool — erode
     // by toolR, regrow by toolR — is exactly the area the disc can sweep
@@ -488,6 +518,15 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     // The bridge-window vanish case is gone with the tabs: the upper
     // shadow + moat-only stop already guarantee the rough never severs.
     const pocketRegion = region.map((c) => simplifyContour(c, SLICE_SIMPLIFY_TOL));
+
+    // STAGE C: the swept area for the standing stamp — the tool-disc
+    // OPENING of the simplified region the pocket actually cleared.
+    // Computed only when hooks are present (independent of clearToStock;
+    // the unreachable-stock warning above keeps its own logic). An empty
+    // opening stamps nothing — the safe direction.
+    const swept =
+      o.standing &&
+      offsetOutward(offsetInward(pocketRegion, o.tool.diameter / 2), o.tool.diameter / 2);
 
     // pocket the band in a single pocket level — the ladder's own stepping
     // already happened. TRAVEL at the crown + clearance, NOT band-top +
@@ -524,6 +563,10 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       passes += res.passes;
       minutes += res.estimatedMinutes;
       droppedSlivers += res.droppedLoops;
+      // STAGE C: record the removal only after the level actually emitted
+      // moves — the does-not-fit catch below cut nothing, so nothing may
+      // be stamped for it
+      if (o.standing && swept) o.standing.stampBand(bandTop, cut, swept);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!/does not fit/.test(msg)) throw e;
@@ -570,6 +613,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     estimatedMinutes: minutes,
     droppedChains,
     skippedLevels,
+    standingSkips,
     warnings,
   };
 }
