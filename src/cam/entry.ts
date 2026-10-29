@@ -50,6 +50,21 @@ export function helicalDescentFits(P: number, descent: number, stepDown: number)
   return perRev > 0 && Math.max(1, Math.ceil(descent / perRev)) <= MAX_RAMP_TRAVERSALS;
 }
 
+/**
+ * True when a STEP-DOWN-GOVERNED helical descent over perimeter `P` fits —
+ * the single-orbit bore mode (Alice's ruling, 2026-10-29: "step-down to set
+ * the steepness of the slope of the spiral"). Per-revolution descent is the
+ * step-down itself, so the turn count IS the ladder's level count — never
+ * degenerate relative to the ladder it replaces, and the gentle-entry
+ * traversal cap does not bind (the 3° cap would have needed 35 turns on
+ * her Ø4×8 pocket against the 24 cap — the ten overlapping per-level
+ * spirals she reported). Only a loop shorter than the minimum ramp stretch
+ * keeps the stepped ladder.
+ */
+export function boreDescentFits(P: number, stepDown: number): boolean {
+  return P >= MIN_RAMP_STRETCH && stepDown > 0;
+}
+
 export interface EntryResult {
   moves: Move[];
   /** feed-time of the entry, minutes */
@@ -132,6 +147,13 @@ export interface RampParams {
   toZ: number;
   stepDown: number;
   feed: number;
+  /**
+   * STEP-DOWN-GOVERNED mode (the single-orbit bore, Alice 2026-10-29):
+   * per-revolution descent is the step-down itself — the slope follows
+   * from the perimeter instead of the 3° entry cap, so the turn count
+   * IS the ladder's level count. Only meaningful on closed loops.
+   */
+  bore?: boolean;
 }
 
 /** Straight plunge — the fallback and the pure-air case. */
@@ -152,12 +174,14 @@ export function rampEntry(p: RampParams): EntryResult {
 
   if (p.closed) {
     // helical: whole revolutions of the loop itself, per-rev descent bounded
-    // by the cut-band rule (stepDown) and the slope (perimeter · tan)
+    // by the cut-band rule (stepDown) and — in the gentle-entry mode — the
+    // slope (perimeter · tan). The bore mode drops the slope bound: the
+    // step-down governs, the slope follows from the perimeter.
     const P = p.stretch;
     if (P < MIN_RAMP_STRETCH) return plungeEntry(p, 'loop too short to ramp');
-    const perRev = Math.min(p.stepDown, P * tanA);
+    const perRev = p.bore ? p.stepDown : Math.min(p.stepDown, P * tanA);
     const revs = Math.max(1, Math.ceil(descent / perRev));
-    if (revs > MAX_RAMP_TRAVERSALS) return plungeEntry(p, 'loop too short to ramp');
+    if (!p.bore && revs > MAX_RAMP_TRAVERSALS) return plungeEntry(p, 'loop too short to ramp');
 
     const moves: Move[] = [];
     for (let k = 0; k < revs; k++) {

@@ -16,7 +16,7 @@ import {
   totalArea,
   union,
 } from './clipper';
-import { arcTable, helicalDescentFits, rampEntry, type EntryMode } from './entry';
+import { arcTable, boreDescentFits, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
 export interface PocketResult {
@@ -166,24 +166,24 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   const flatPassCount = orbits.reduce((n, o) => n + o.length, 0);
 
   // CONTINUOUS DESCENT — the single helical cut (Alice's Studio note,
-  // 2026-10-28: small circular pockets cut as ONE helix). A pocket whose
+  // 2026-10-28: small circular pockets cut as ONE helix; slope ruling
+  // 2026-10-29: the STEP-DOWN sets the steepness — per-rev descent is
+  // the step-down, the slope follows from the perimeter). A pocket whose
   // whole clearable area is ONE orbit has no interior left to clear: the
   // orbit's band covers everything the tool can reach, so its ladder
   // collapses into one helical descent along the orbit plus the floor
-  // lap — the entry IS the roughing. Requires a real multi-level ladder
-  // (single-level callers like the waterline bands keep today's emission
+  // lap — the entry IS the roughing. The only zero-chip-load stretch is
+  // the first revolution's ramp-up; every turn after cuts a full
+  // step-down band. Requires a real multi-level ladder (single-level
+  // callers like the waterline bands keep today's emission
   // byte-identically), real material above (not the finishing
-  // assumption), and a descent that fits without degenerating.
+  // assumption), and a loop long enough to ramp at all.
   if (
     flatPassCount === 1 &&
     orbits[0].length === 1 &&
     levels.length > 1 &&
     !op.finishingOnly &&
-    helicalDescentFits(
-      arcTable(orbits[0][0])[orbits[0][0].length],
-      op.topZ + APPROACH_CLEARANCE - op.floorZ,
-      op.stepDown,
-    )
+    boreDescentFits(arcTable(orbits[0][0])[orbits[0][0].length], op.stepDown)
   ) {
     const loop = orbits[0][0];
     const start = loop[0];
@@ -208,6 +208,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
       toZ: op.floorZ,
       stepDown: op.stepDown,
       feed: op.plungeFeed,
+      bore: true,
     });
     moves.push(...entry.moves);
     minutes += entry.minutes;

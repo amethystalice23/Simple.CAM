@@ -444,4 +444,65 @@ describe('pocket2d', () => {
     expect(loops).toHaveLength(1);
     expect(loopArea(loops[0])).toBeCloseTo(2.2 * 2.2, 5);
   });
+
+  it('single-orbit pockets bore as ONE continuous helix (step-down sets the slope)', () => {
+    // Alice's test_block report (2026-10-29): a small-deep pocket whose
+    // ladder collapses to ONE orbit must cut as a single helical bore,
+    // not N per-level overlapping spirals. Her ruling: the STEP-DOWN
+    // sets the slope — per-revolution descent = stepDown, so the turn
+    // count is the ladder's level count (the 3° entry cap would have
+    // demanded 35 turns on a 4.7mm orbit and fallen back to the ladder).
+    // 4.6mm square, Ø2 tool, 1.3 step-over: inset 1 leaves a 2.6mm
+    // square (perimeter 10.4), inset 2 (3.3mm offset) vanishes → one
+    // orbit, 4 levels of 1mm.
+    const o = op({
+      regions: [square(-2.3, 4.6)],
+      floorZ: -4,
+      stepDown: 1,
+      stepOver: 1.3,
+    });
+    const res = pocket2d(o, tool);
+    expect(res.continuous).toBe(1);
+    expect(res.levels).toBe(4);
+    expect(res.passes).toBe(1);
+    expect(res.entries.helical).toBe(1);
+    expect(res.links).toBe(0);
+    // ONE helical run: every ramp leg strictly descends, riding the
+    // orbit's own vertices, and the descent lands exactly on the floor
+    const rampLegs = res.moves.filter(
+      (m) => !m.rapid && m.words.x !== undefined && m.words.z !== undefined,
+    );
+    expect(rampLegs.length).toBeGreaterThan(4 * 4); // 4 levels ≥ 4 revs of >4 legs
+    let prevZ = Infinity;
+    for (const m of rampLegs) {
+      expect(m.words.z!).toBeLessThan(prevZ - 1e-12);
+      prevZ = m.words.z!;
+    }
+    expect(rampLegs[rampLegs.length - 1].words.z).toBeCloseTo(o.floorZ, 9);
+    // per-revolution descent is the step-down: the run closes back on
+    // the orbit start once per revolution, and the FULL descent spans
+    // ceil(levels) revolutions of the orbit's perimeter
+    const loops = passLoops(res.moves);
+    expect(loops).toHaveLength(1); // the single floor lap after the bore
+    let perim = 0;
+    for (let i = 0; i < loops[0].length; i++) {
+      const p = loops[0][i];
+      const q = loops[0][(i + 1) % loops[0].length];
+      perim += Math.hypot(q.x - p.x, q.y - p.y);
+    }
+    // the bore is ONE continuous cut: between the first and last feed
+    // move there is no rapid at all — no per-level re-positioning, no
+    // mid-cut retract (the entry sequence's rapids all precede it)
+    const firstFeed = res.moves.findIndex((m) => !m.rapid);
+    const lastFeed = res.moves.map((m) => !m.rapid).lastIndexOf(true);
+    expect(res.moves.slice(firstFeed, lastFeed + 1).some((m) => m.rapid)).toBe(false);
+  });
+
+  it('a pocket with multiple orbits never bores (the ladder stays)', () => {
+    // the continuous-descent gate is single-orbit ONLY: a 10mm pocket
+    // with real interior keeps its stepped ladder and its links
+    const res = pocket2d(op({ floorZ: -2.5, stepDown: 1 }), tool);
+    expect(res.continuous).toBe(0);
+    expect(res.passes).toBe(12); // 3 levels × 4 orbits
+  });
 });
