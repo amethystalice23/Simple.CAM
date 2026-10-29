@@ -25,7 +25,7 @@ import type { Stock, Tool } from '../core/types';
 /** build stamp — the `ready` message carries it so the client can PROVE
  *  which worker version is running (the 2026-10-25 gaps debugging: a
  *  stale dev-server worker copy was a live suspect) */
-const SIM_BUILD = 'b11-boundary-chunks';
+const SIM_BUILD = 'b12-tipmarker';
 
 /** cooperative-slice budget, ms — the CARVE stays within one of these per
  *  slice so the worker yields often enough to serve control messages
@@ -142,10 +142,15 @@ function flushChunks(r: RunState) {
  *  slices to serve control messages */
 function slice(r: RunState) {
   const t0 = performance.now();
+  // the last pose carved this slice — the progress tip rides on it (b12:
+  // the viewport's live tool-tip marker; the pose IS material-frame, the
+  // same frame the chunks post in, so the client never re-derives)
+  let tip: Pose | null = null;
   while (r.cursor < r.poses.length) {
     const p = r.poses[r.cursor];
     if (p.moveIndex > r.target) break;
     carvePoses(r.grid, r.specs, [p], r.stats, r.moveStepDown);
+    tip = p;
     r.cursor++;
     if (performance.now() - t0 > SLICE_MS) break;
   }
@@ -165,6 +170,12 @@ function slice(r: RunState) {
     move: atEnd ? total : r.cursor > 0 ? r.poses[r.cursor - 1].moveIndex : 0,
     totalMoves: total,
     removedVoxels: r.stats.removed,
+    // tip = the LAST pose carved THIS slice — the dot lags at most one
+    // slice (~8ms of carving) behind the mesh; absent only when a slice
+    // carved nothing (progress before any pose)
+    ...(tip
+      ? { tip: { x: tip.x, y: tip.y, z: tip.z, ax: tip.ax, ay: tip.ay, az: tip.az } }
+      : {}),
   });
   if (atEnd) {
     post({

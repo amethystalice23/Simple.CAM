@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Move, Stock, Tool } from '../core/types';
-import type { ChunkMesh, SimResult, WorkerMsg } from '../sim/protocol';
+import type { ChunkMesh, SimResult, TipPose, WorkerMsg } from '../sim/protocol';
 
 export interface SimProgress {
   move: number;
@@ -26,6 +26,9 @@ export interface CarveSimState {
   result: SimResult | null;
   /** chunk id → chunk geometry (the Viewport builds meshes from these) */
   chunks: Map<number, ChunkMesh>;
+  /** live tool-tip pose from the latest `progress` (material frame, the
+   *  chunks' frame) — the Viewport's marker dot; cleared with the run */
+  tip: TipPose | null;
 }
 
 export interface CarveSim {
@@ -60,6 +63,7 @@ export function useCarveSim(): CarveSim {
     progress: null,
     result: null,
     chunks: new Map(),
+    tip: null,
   });
   const workerRef = useRef<Worker | null>(null);
   const tokenRef = useRef(0);
@@ -77,7 +81,7 @@ export function useCarveSim(): CarveSim {
     workerRef.current?.terminate();
     workerRef.current = null;
     // clear the overlay chunks too — dispose is also "clear the sim"
-    setState((s) => ({ ...s, running: false, build: null, progress: null, result: null, chunks: new Map() }));
+    setState((s) => ({ ...s, running: false, build: null, progress: null, result: null, chunks: new Map(), tip: null }));
   }, []);
 
   // tear down on unmount
@@ -113,6 +117,7 @@ export function useCarveSim(): CarveSim {
             progress: { move: 0, totalMoves: msg.totalMoves, removedVoxels: 0 },
             result: null,
             chunks: new Map(),
+            tip: null,
           }));
           // v1 result-first: carve the whole job in one command
           worker.postMessage({ type: 'carve', throughMove: Number.MAX_SAFE_INTEGER, token });
@@ -134,9 +139,11 @@ export function useCarveSim(): CarveSim {
           setState((s) => ({
             ...s,
             progress: { move: msg.move, totalMoves: msg.totalMoves, removedVoxels: msg.removedVoxels },
+            tip: msg.tip ?? null,
           }));
         } else if (msg.type === 'done') {
-          setState((s) => ({ ...s, running: false, result: msg.result }));
+          // the marker reads only while a run is in flight — done hides it
+          setState((s) => ({ ...s, running: false, result: msg.result, tip: null }));
           // v1 terminated the worker here; playback (2026-10-27) needs it
           // ALIVE after the run — return-to-start / scrub-behind post
           // `reset` + `carve` to re-carve (voxels cannot un-carve). The

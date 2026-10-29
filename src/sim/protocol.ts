@@ -82,5 +82,18 @@ export type WorkerMsg =
   /** `move` is the LAST CARVED move (or 0 before any pose / total at the
    *  very end) — b10 semantics; the worker also PARKS once its cursor
    *  passes the armed `carve` target instead of spinning (see the worker). */
-  | { type: 'progress'; token: number; move: number; totalMoves: number; removedVoxels: number }
+  | { type: 'progress'; token: number; move: number; totalMoves: number; removedVoxels: number; tip?: TipPose }
   | { type: 'done'; token: number; result: SimResult };
+
+/** the tool tip's live pose for the viewport marker (b12): the LAST CARVED
+ *  pose's tip position + tool axis, MATERIAL frame — the same frame the
+ *  chunk meshes are posted in, so the marker parents next to them with no
+ *  client-side re-derivation. Additive/optional: older clients ignore it. */
+export interface TipPose {
+  x: number;
+  y: number;
+  z: number;
+  ax: number;
+  ay: number;
+  az: number;
+}

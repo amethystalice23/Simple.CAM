@@ -1403,6 +1403,7 @@ export function App() {
             facePreview={facePreview}
             threadPreview={threadPreview}
             simChunks={showSim && carveSim.state.chunks.size > 0 ? carveSim.state.chunks : null}
+            simTip={showSim && carveSim.state.running ? carveSim.state.tip : null}
             displayLayers={{
               stock: showStock,
               model: showModel,

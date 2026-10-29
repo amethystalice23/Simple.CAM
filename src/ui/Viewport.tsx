@@ -171,6 +171,10 @@ interface Props {
    *  chunk id, machine-space positions baked in. The meshes parent into
    *  datumGroup so index rotation is free. */
   simChunks: Map<number, import('../sim/protocol').ChunkMesh> | null;
+  /** the live tool-tip pose from the carve sim's progress stream (b12) —
+   *  the marker dot's position + tool axis, MATERIAL frame (the chunks'
+   *  frame). Null = no run in flight → no marker. */
+  simTip: import('../sim/protocol').TipPose | null;
   /** display layers (the top-right Layers dropdown) + its toggle —
    *  Stock/Model/Features/Paths/Simulation visibility in one place */
   displayLayers: { stock: boolean; model: boolean; features: boolean; paths: boolean; simulation: boolean };
@@ -205,6 +209,7 @@ export function Viewport({
   facePreview,
   threadPreview,
   simChunks,
+  simTip,
   displayLayers,
   onToggleLayer,
   onToggleSelect,
@@ -1064,6 +1069,93 @@ export function Viewport({
       }
     }
   }, [simChunks, stock]);
+
+  // the sim's live tool-tip marker (b12, Alice's ask: "a marker for the
+  // tool tip position ... a dot, or an outline"): a small cyan sphere at
+  // the tip plus a slim stub along the tool axis so the approach direction
+  // reads. Parented into datumGroup — the tip pose is MATERIAL frame, the
+  // same frame the chunk meshes post in, so it lands exactly where the
+  // tool just carved, index rotation included. depthTest off + renderOrder
+  // above the chunks so the dot reads THROUGH standing stock (that is the
+  // point: finding the tool inside the carved cavity). Visible only while
+  // a run is in flight (running && tip); the hook clears tip on done/
+  // dispose, and this effect just hides the objects on null.
+  const simTipGroupRef = useRef<THREE.Group | null>(null);
+  useEffect(() => {
+    const datum = datumGroupRef.current;
+    if (!datum) return;
+    let g = simTipGroupRef.current;
+    if (g && g.parent !== datum) {
+      // the scene effect rebuilt the datum group (a stock change) — the old
+      // marker group is detached; drop it and build into the fresh one
+      disposeGroup(g);
+      datum.remove(g);
+      g = null;
+      delete (window as unknown as { __simTipMarker?: THREE.Group }).__simTipMarker;
+    }
+    if (!g) {
+      g = new THREE.Group();
+      g.name = 'sim-tip-marker';
+      // the dot
+      const dotMat = new THREE.MeshBasicMaterial({
+        color: 0x66d9ff,
+        transparent: true,
+        depthTest: false,
+      });
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), dotMat);
+      dot.renderOrder = 10;
+      dot.name = 'tip-dot';
+      g.add(dot);
+      // the axis stub: +Z in group-local space (a stub of the tool's shank
+      // direction, −axis); rebuilt per pose below from the two endpoints
+      const stubMat = new THREE.LineBasicMaterial({
+        color: 0x66d9ff,
+        transparent: true,
+        opacity: 0.85,
+        depthTest: false,
+      });
+      const stub = new THREE.Line(new THREE.BufferGeometry(), stubMat);
+      stub.renderOrder = 10;
+      stub.name = 'tip-stub';
+      g.add(stub);
+      g.visible = false;
+      datum.add(g);
+      simTipGroupRef.current = g;
+      // the browser smoke drivers' handle (scripts/smoke-tipmarker.mjs):
+      // three.js objects aren't DOM-inspectable, so the marker group is
+      // published on window for the probe — a debug hook, not app state
+      (window as unknown as { __simTipMarker?: THREE.Group }).__simTipMarker = g;
+    }
+    if (!simTip) {
+      g.visible = false;
+      if (!simChunks) {
+        // the sim session itself ended (Clear / dispose dropped the chunks)
+        // — the marker leaves the scene with it; a completed-but-displayed
+        // run only HIDES it (done cleared the tip, the chunks remain)
+        disposeGroup(g);
+        datum.remove(g);
+        simTipGroupRef.current = null;
+        delete (window as unknown as { __simTipMarker?: THREE.Group }).__simTipMarker;
+      }
+      return;
+    }
+    g.visible = true;
+    const dot = g.getObjectByName('tip-dot') as THREE.Mesh;
+    dot.position.set(simTip.x, simTip.y, simTip.z);
+    const stub = g.getObjectByName('tip-stub') as THREE.Line;
+    // the stub rises from the tip ALONG −axis (the shank side, out of the
+    // cut): min(flute 10mm) of approach direction, cheap to read
+    const len = 10;
+    stub.geometry.dispose();
+    stub.geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(simTip.x, simTip.y, simTip.z),
+      new THREE.Vector3(
+        simTip.x - simTip.ax * len,
+        simTip.y - simTip.ay * len,
+        simTip.z - simTip.az * len,
+      ),
+    ]);
+  }, [simTip, simChunks, stock]);
 
   // sim mode: the carved chunks replace the translucent stock, and the
   // Layer visibility (the Layers dropdown): Stock/Model ticks, and the
