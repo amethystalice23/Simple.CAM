@@ -49,16 +49,41 @@ export interface PocketResult {
 
 /**
  * The STAY-DOWN LINK SAFETY TEST (Alice's condition, 2026-10-29: only
- * link when the material is cleared): the link's swept capsule must lie
- * inside the union of the bands swept by the passes already cut at this
- * level PLUS the target pass's own band. The link may cross a sliver of
- * not-yet-cleared band, but never anything the adjacent passes were not
- * going to remove anyway — and never a wall, an island, or virgin stock
- * (those lie outside the union and the test rejects the link, falling
- * back to retract + ramp). Exact Clipper booleans, no sampling error;
- * the µm-grid noise floor is absorbed by LINK_AREA_EPS.
+ * link when the material is cleared) — TWO clauses, both exact:
+ *
+ * 1. SWEPT-FOOTPRINT: the link's swept capsule must lie inside the union
+ *    of the bands swept by the passes already cut at this level PLUS the
+ *    target pass's own band.
+ * 2. REMAINING MATERIAL (her 2026-10-29 nose-chop report, move 10182 of
+ *    Knight-2op: a 48mm link swept diagonally across the knight's nose and
+ *    removed 2,372 voxels of standing model): the capsule must also lie
+ *    inside the OP'S CLEARING REGIONS. The bands of clause 1 are 2D XY
+ *    areas — a band swept at this level says nothing about the material
+ *    STANDING ABOVE it, and a moat ring's bands (waterline levels) bridge
+ *    right across a narrow keep-out island: a chord over the island's
+ *    crown passes the band test while its flute column plows the nose.
+ *    The clearing region is the keep-out-respecting area the level was
+ *    TOLD to clear — a link crossing out of it is by definition cutting
+ *    something the op did not intend. Exact Clipper booleans; the µm-grid
+ *    noise floor is absorbed by LINK_AREA_EPS.
  */
 const LINK_AREA_EPS = 1e-4; // mm²
+
+/** True when the straight link from→to provably cuts nothing extra. */
+function linkIsClear(
+  from: Vec2,
+  to: Vec2,
+  toolR: number,
+  clearedBands: Vec2[][],
+  target: Vec2[],
+  regions: Vec2[][],
+): boolean {
+  const safe = union([...clearedBands, ...bandOf(target, toolR)]);
+  const rest = difference(offsetSegment(from, to, toolR), safe);
+  if (totalArea(rest) > LINK_AREA_EPS) return false;
+  const outside = difference(offsetSegment(from, to, toolR), regions);
+  return totalArea(outside) <= LINK_AREA_EPS;
+}
 
 /** Signed polygon area (shoelace) — CCW positive. */
 function signedArea(loop: Vec2[]): number {
@@ -78,13 +103,6 @@ function signedArea(loop: Vec2[]): number {
  */
 function bandOf(loop: Vec2[], toolR: number): Vec2[][] {
   return offsetOutward([signedArea(loop) < 0 ? [...loop].reverse() : loop], toolR);
-}
-
-/** True when the straight link from→to provably cuts nothing extra. */
-function linkIsClear(from: Vec2, to: Vec2, toolR: number, clearedBands: Vec2[][], target: Vec2[]): boolean {
-  const safe = union([...clearedBands, ...bandOf(target, toolR)]);
-  const rest = difference(offsetSegment(from, to, toolR), safe);
-  return totalArea(rest) <= LINK_AREA_EPS;
 }
 
 export interface PocketOptions {
@@ -267,7 +285,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
         const start = loop[0];
         const rest = restZ === levelZ ? cur : null;
 
-        if (rest !== null && linkIsClear(rest, start, toolR, clearedBands, loop)) {
+        if (rest !== null && linkIsClear(rest, start, toolR, clearedBands, loop, op.regions)) {
           // STAY DOWN: feed straight to the next pass's start at depth —
           // provably nothing the adjacent passes wouldn't remove anyway.
           // No entry at all: the tool is already at the cut level there.

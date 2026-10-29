@@ -181,7 +181,16 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     }
     // rising re-target only: the same/lower target is already armed (or
     // still being driven to) — re-sending is idempotent but per-frame
-    // would be noise
+    // would be noise. THE LOCKUP GUARD (Alice's 2026-10-29 report: "after
+    // a few clicks of speed multiplier and play/pause it locks up"):
+    // a pill-cycle off 'max' can leave the clock BEHIND the worker's
+    // already-carved cursor (the park retarget parks late — the worker
+    // finishes its in-flight slice past the target), and then no clock
+    // target ever exceeds the stale postedTarget — the loop spins posting
+    // nothing, forever. Heal it: clamp the post to at least the carved
+    // position, so an armed-behind gate re-arms to the truth.
+    const carvedNow = Math.min(carvedRef.current, total);
+    if (target < carvedNow) target = carvedNow;
     if (target > postedTargetRef.current) {
       postedTargetRef.current = target;
       sendRef.current({ type: 'carve', throughMove: target });
@@ -273,9 +282,23 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
       sendRef.current({ type: 'carve', throughMove: Number.MAX_SAFE_INTEGER });
     }
     // the bar follows the CARVED position while playing (per spec) — drop
-    // the paused commit, the clock owns the targets from here
+    // the paused commit, the clock owns the targets from here.
+    // PLAY RESYNC (her 2026-10-29 lockup report): the clock may sit BEHIND
+    // the worker's carved cursor — a max pause parks it (posted=carved),
+    // pill cycles while PAUSED never re-sync the clock, and a play then
+    // starts the clock minutes-of-simulation behind: no clock target
+    // exceeds the posted park for real minutes, nothing is posted, the
+    // readout freezes mid-"playing". Sync the clock to the carved cursor
+    // so play always resumes FROM THE TRUTH, never from a stale clock.
+    const carvedOnPlay = Math.min(carvedRef.current, totalRef.current);
+    clockRef.current = Math.max(clockRef.current, simMinutesAtMove(cumRef.current, carvedOnPlay));
     setCommit(null);
     setPlaying(true);
+    playingRef.current = true; // sync BEFORE the first frame — a batched
+    // render may not have committed when rAF fires (the pill cycles above
+    // queue state updates), and the loop's first-frame guard reads this
+    // ref: a stale false kills the loop on frame one, playing shows true,
+    // and the transport is dead until a re-click (her lockup report)
     startClock();
   }, [commitTo, startClock, stopClock]);
 
@@ -328,7 +351,11 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
   const cycleSpeed = useCallback(() => {
     const next = cycle(speedRef.current);
     if (playingRef.current) {
-      const carvedNow = carvedRef.current;
+      // the freshest carved position — progress messages update carvedRef
+      // asynchronously (a state effect), so read the mirror the loop sees;
+      // a STALE carved here rewound the clock behind the worker's cursor
+      // and the rising-gate dead-locked the replay (her lockup report)
+      const carvedNow = Math.min(carvedRef.current, totalRef.current);
       const mps = minutesPerSecond(next);
       if (mps === null) {
         // finite → max mid-flight: point the worker at the end (MAX, per
@@ -341,8 +368,9 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
       } else if (minutesPerSecond(speedRef.current) === null) {
         // max → finite mid-flight: the worker was driving to MAX — park it
         // at the carved position (a max-pause retarget), restart the clock
-        // at the reported position, and let the rising re-targets pick
-        // the carve back up
+        // AT THE CARVED SPOT (never behind — the park lands late, past the
+        // target, when the worker was mid-slice; a behind clock stalls the
+        // rising-gate), and let the re-targets pick the carve back up
         clockRef.current = simMinutesAtMove(cumRef.current, carvedNow);
         postedTargetRef.current = carvedNow;
         sendRef.current({ type: 'carve', throughMove: carvedNow });
