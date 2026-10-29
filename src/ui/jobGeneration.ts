@@ -302,7 +302,14 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         margin: null, // derive tool Ø + allowance + step over at generation
         cutBeyondStock: false, // the tool stays inside the declared stock
         clearToStock: false, // the model's column only; the toggle clears to the stock edge
-        maxDepth: null, // to the model floor; the 4-axis short-tool throttle
+        // PRE-POPULATED FROM THE FLUTE (2026-10-29 ruling: "default to
+        // sensible, warn not prevent") — a ladder deeper than the flute
+        // puts the shaft into standing stock (the collet follows); the
+        // flute length is the honest ceiling, the user overrides when
+        // they know the shape keeps the shaft clear, and the sim's red
+        // checks their claim. Absent flute data = no limit (null, the
+        // old behavior) — no default invented.
+        maxDepth: tool.fluteLength ?? null,
         finishingOnly: false, // full clearing per level; the toggle scrubs surfaces only
       };
     case 'rasterContour':

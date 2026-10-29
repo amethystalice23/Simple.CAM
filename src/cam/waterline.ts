@@ -540,6 +540,18 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       `allowance ≥ increment: ${allowanceSkips} level(s) had no band left to clear`,
     );
   }
+  // THE FLUTE-LIMIT REPORT (the 2026-10-29 pre-populate ruling's "warn
+  // not prevent" half): when maxDepth binds above the model floor, the
+  // ladder stops short on purpose and the user must SEE it — a silent
+  // short ladder looks like a finished rough. The default maxDepth is
+  // the tool's flute length (the shaft-in-stock ceiling), so this fires
+  // exactly where a short bit meets a deep part.
+  if (o.maxDepth !== undefined && o.maxDepth > 0 && floorZ > o.floorZ + 1e-9) {
+    warnings.push(
+      `max depth ${o.maxDepth}mm: ladder stops at z${fmt(floorZ)} — ` +
+        `${fmt(o.floorZ)} floor left standing (deeper cuts exceed the set depth; raise Max depth for a longer flute)`,
+    );
+  }
   if (droppedSlivers > 0) {
     // pinch noise, not a shape anyone asked for: a fine-mesh wall wobbles
     // ±0.05mm around its true circle, and where the moat's tool-center

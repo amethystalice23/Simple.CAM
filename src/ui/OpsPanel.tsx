@@ -665,7 +665,7 @@ function ParamFields(props: {
             value={op.maxDepth ?? 0}
             min={0}
             step={0.5}
-            title="Stops the ladder this deep below the crown — 0 = down to the model floor. The 4-axis short-tool throttle: limit each orientation's op to the depth its tool can reach alongside tall features (the simulation's red marks show where the collet would hit)"
+            title="Stops the ladder this deep below the crown — 0 = down to the model floor. Pre-filled from the tool's flute length (deeper than the flute, the shaft and collet ride into standing stock); override when you know the shape keeps the shaft clear — the simulation's red marks show where the collet would hit"
             onCommit={(v) => upd({ maxDepth: v > 0 ? v : null } as Partial<JobOp>)}
           />
           <FinishingOnlyCheck
@@ -1269,9 +1269,14 @@ export function OpsPanel(props: Props) {
       // kind re-derives it — a stale Ø-derived stepOver from the OLD tool is
       // the bug Alice caught 2026-10-25
       switch (op.kind) {
+        case 'waterline':
+          // the maxDepth default follows the new cutter's flute (the
+          // 2026-29 pre-populate ruling — same class as stepOver: a
+          // stale flute-derived ceiling from the OLD tool is wrong)
+          next = { ...next, stepDown, stepOver, maxDepth: t.fluteLength ?? null } as JobOp;
+          break;
         case 'pocket':
         case 'slicePocket':
-        case 'waterline':
         case 'faceCylinder':
         case 'rotaryCarve':
           next = { ...next, stepDown, stepOver } as JobOp;

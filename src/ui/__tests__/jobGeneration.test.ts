@@ -152,6 +152,20 @@ describe('newJobOp / defaults', () => {
     expect(defaultStepDown(presetTool, 'hardwood')).toBeCloseTo(1, 5);
   });
 
+  it('pre-populates the waterline max depth from the tool flute (the 2026-10-29 ruling)', () => {
+    // "default to sensible, warn not prevent": the flute length is the
+    // shaft-in-stock ceiling — a ladder deeper than the flute buries the
+    // shaft (her short-bit red report); the user overrides knowingly
+    const fluted: Tool = { ...smallTool, fluteLength: 17 };
+    const wl = newJobOp('waterline', fluted, boxStock.materialId, boxStock);
+    if (wl.kind !== 'waterline') throw new Error('kind');
+    expect(wl.maxDepth).toBe(17);
+    // a flute-less tool invents no limit (the old behavior)
+    const fluteless = newJobOp('waterline', smallTool, boxStock.materialId, boxStock);
+    if (fluteless.kind !== 'waterline') throw new Error('kind');
+    expect(fluteless.maxDepth).toBeNull();
+  });
+
   it('creates ops with unique ids', () => {
     const a = newJobOp('pocket', tool, boxStock.materialId, boxStock);
     const b = newJobOp('pocket', tool, boxStock.materialId, boxStock);
