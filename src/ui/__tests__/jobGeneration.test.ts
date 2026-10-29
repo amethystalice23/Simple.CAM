@@ -433,8 +433,9 @@ describe('generateJobOp', () => {
     };
     const on = generateJobOp({ ...online, featureIds: [rim] }, edgeCtx);
     expect(on.error).toBeNull();
-    // the full closed loop: a bare level comment, never a span comment
-    expect(on.moves.some((m) => m.comment === 'level z-2.00')).toBe(true);
+    // the full closed loop: the continuous descent of an unclipped loop
+    // (entry.ts era, 2026-10-29) — one descent comment, never a span one
+    expect(on.moves.some((m) => m.comment === 'continuous descent to z-2.00')).toBe(true);
     expect(on.moves.some((m) => m.comment?.includes('span '))).toBe(false);
     // and it really does leave the stock: y reaches −5
     const ys = on.moves.filter((m) => m.words.y !== undefined).map((m) => m.words.y!);

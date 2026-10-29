@@ -23,6 +23,13 @@
  * own surface) splits into one ladder per group — each must satisfy the
  * rule alone. Rotaries coordinating Z with A (G93) never collapse.
  *
+ * CONTINUOUS DESCENT (Alice's B, 2026-10-29) is the one sanctioned
+ * exception to the ladder's first-rung rule: a profile loop every level
+ * would cut unbroken collapses the whole ladder into ONE helical
+ * descent whose landing is the floor. There the ramp IS the ladder —
+ * the per-traversal band (assertRampBands) carries the cut-band rule,
+ * and the landing-exactness check still applies.
+ *
  * Out of scope, by the agreed convention: the finishingOnly single-pass
  * collapse (one level at the target — the op assumes the bulk above is
  * already gone; pinned as such in faceCylinder and honored identically by
@@ -324,10 +331,21 @@ describe('the global cut-band rule: never a band deeper than the step-down', () 
       ];
       for (const s of shapes) {
         const res = profile2d(profileOp({ floorZ: s.floorZ, stepDown: s.stepDown }), flat2);
-        assertCutBands(res.moves, 0, s.stepDown, -s.floorZ);
-        assertRampBands(res.moves, s.stepDown);
+        if (res.continuous > 0) {
+          // continuous descent: the ramp IS the ladder — the per-traversal
+          // band rule carries the cut-band guarantee, the landing must be
+          // exactly the floor (the sanctioned B exception, see header)
+          assertRampBands(res.moves, s.stepDown);
+          for (const l of depthLadders(res.moves, 0)) {
+            expect(l[l.length - 1]).toBeCloseTo(-s.floorZ, 9);
+          }
+        } else {
+          assertCutBands(res.moves, 0, s.stepDown, -s.floorZ);
+          assertRampBands(res.moves, s.stepDown);
+        }
       }
-      // tabbed: the deep levels cut span-by-span, all at their own level
+      // tabbed: the deep levels cut span-by-span, all at their own level —
+      // continuous descent never fires on an interrupted loop
       const tabbed = profile2d(
         profileOp({
           floorZ: -3,
@@ -336,6 +354,7 @@ describe('the global cut-band rule: never a band deeper than the step-down', () 
         }),
         flat2,
       );
+      expect(tabbed.continuous).toBe(0);
       assertCutBands(tabbed.moves, 0, 1, 3);
       assertRampBands(tabbed.moves, 1);
     });

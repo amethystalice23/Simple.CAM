@@ -14,7 +14,7 @@
 
 import type { Move, ProfileOp, Tool, Vec2 } from '../core/types';
 import { intersection, offsetInward, offsetOutward } from './clipper';
-import { arcTable, rampEntry, type EntryMode } from './entry';
+import { arcTable, helicalDescentFits, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 import { extractClipIntervals, pointAtArc } from './clipUtils';
 
@@ -29,6 +29,12 @@ export interface ProfileResult {
   warnings: string[];
   /** how each pass entered: helical / zigzag ramps, straight plunges */
   entries: Record<EntryMode, number>;
+  /**
+   * Loops that took CONTINUOUS DESCENT (Alice's B, 2026-10-29): the
+   * stepped ladder collapsed into one helical descent along the loop
+   * plus a final full-depth lap — no per-level re-entry at all.
+   */
+  continuous: number;
 }
 
 /** Tabs resolved for ONE offset loop: how many fit and their half-length. */
@@ -182,13 +188,38 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   // × 10 levels).
   let prevCut = op.topZ;
   const entries: Record<EntryMode, number> = { helical: 0, zigzag: 0, plunge: 0 };
+  let continuous = 0;
 
+  // CONTINUOUS DESCENT (Alice's B, 2026-10-29): a loop that every level
+  // would cut FULL and unbroken — no tabs, no stock-clip spans, real
+  // material above (not the finishing assumption), and a helical
+  // descent that fits without degenerating — collapses the stepped
+  // ladder into ONE descent along the loop plus a final full-depth lap.
+  // The wall is finished identically: every Z of it gets its final cut
+  // from the tool at that Z, from the descent's revolutions instead of
+  // the ladder's laps. Mode resolves by geometry alone, like the entry
+  // ladder (no knob); anything else keeps the stepped ladder below.
+  const steppedGeos: LoopGeo[] = [];
+  const continuousGeos: LoopGeo[] = [];
+  for (const geo of geos) {
+    const descent = op.topZ + APPROACH_CLEARANCE - op.floorZ;
+    const qualifies =
+      geo.tabs === null &&
+      geo.clip === null &&
+      !op.finishingOnly &&
+      helicalDescentFits(geo.perimeter, descent, op.stepDown);
+    (qualifies ? continuousGeos : steppedGeos).push(geo);
+  }
+
+  // The stepped ladder stays LEVEL-major: prevCut is shared standing-
+  // material state across geos per level, and geo-major would make a
+  // later geo's approach assume an earlier geo's floor.
   for (const levelZ of levels) {
     // below the tab top the groove is interrupted; at/above it the loop
     // cuts through the bridge material unbroken
     const spannedByTabs = tabs !== null && !tabsNoOp && levelZ < tabTop - 1e-9;
 
-    for (const geo of geos) {
+    for (const geo of steppedGeos) {
       const { loop, cum, perimeter: P, tabs: loopTabs, clip } = geo;
 
       // Combine clip intervals and tab intervals
@@ -346,5 +377,55 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
     }
   }
 
-  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, warnings, entries };
+  // the continuous-descent loops run AFTER the stepped ladder, each on
+  // its own full depth — they share nothing with prevCut (their material
+  // is untouched until they run, so they approach from the surface)
+  for (const geo of continuousGeos) {
+    const rotatedLoop = rotateToNearest(geo.loop, cur);
+    const start: Vec2 = rotatedLoop[0];
+    const cum = arcTable(rotatedLoop);
+    const approach = op.topZ + APPROACH_CLEARANCE;
+
+    moves.push({
+      words: { x: start.x, y: start.y },
+      feed: 0,
+      rapid: true,
+      comment: `continuous descent to z${op.floorZ.toFixed(2)}`,
+    });
+    moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    moves.push({ words: { z: approach }, feed: 0, rapid: true });
+    // the whole ladder in one helical descent along the loop — the same
+    // rampEntry machinery, toZ the floor (per-revolution band ≤ stepDown
+    // by construction, pinned by assertRampBands)
+    const entry = rampEntry({
+      loop: rotatedLoop,
+      cum,
+      sStart: 0,
+      stretch: cum[rotatedLoop.length],
+      closed: true,
+      band: op.topZ - op.floorZ,
+      fromZ: approach,
+      toZ: op.floorZ,
+      stepDown: op.stepDown,
+      feed: op.plungeFeed,
+    });
+    moves.push(...entry.moves);
+    minutes += entry.minutes;
+    entries[entry.mode]++;
+    // the final full-depth lap — the wall's last cut, exactly the lap
+    // the stepped ladder would have finished on
+    let prev = start;
+    for (let i = 1; i <= rotatedLoop.length; i++) {
+      const p = rotatedLoop[i % rotatedLoop.length];
+      moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+      minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
+      prev = p;
+    }
+    moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    cur = start;
+    passes++;
+    continuous++;
+  }
+
+  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, warnings, entries, continuous };
 }

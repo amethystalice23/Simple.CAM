@@ -112,3 +112,33 @@ export function difference(subject: Vec2[][], clip: Vec2[][]): Vec2[][] {
   c.Execute(ClipType.ctDifference, sol, PolyFillType.pftNonZero, PolyFillType.pftNonZero);
   return fromSolution(sol);
 }
+
+/**
+ * The capsule swept by a disc of radius `deltaMm` traveling the open
+ * segment a→b (open-round offset). The stay-down link test (entry era,
+ * 2026-10-29) subtracts the already-cut + target pass bands from this
+ * capsule: an empty difference means the link provably removes nothing
+ * the adjacent passes were not going to remove.
+ */
+export function offsetSegment(a: Vec2, b: Vec2, deltaMm: number): Vec2[][] {
+  const co = new ClipperOffset(MITER_LIMIT, ARC_TOL);
+  co.AddPath(toPath([a, b]), JoinType.jtRound, EndType.etOpenRound);
+  const sol: ClipperPath[] = [];
+  co.Execute(sol, deltaMm * SCALE);
+  return fromSolution(sol);
+}
+
+/** Total unsigned area of a contour set, mm² (shoelace over every ring). */
+export function totalArea(paths: Vec2[][]): number {
+  let sum = 0;
+  for (const p of paths) {
+    let a = 0;
+    for (let i = 0; i < p.length; i++) {
+      const u = p[i];
+      const v = p[(i + 1) % p.length];
+      a += u.x * v.y - v.x * u.y;
+    }
+    sum += Math.abs(a) / 2;
+  }
+  return sum;
+}

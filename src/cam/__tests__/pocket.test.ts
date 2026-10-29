@@ -63,6 +63,10 @@ function passLoops(moves: ReturnType<typeof pocket2d>['moves']): Vec2[][] {
       close();
       continue;
     }
+    if (m.comment?.includes('stay-down link')) {
+      close(); // a link ENDS the previous pass and starts the next
+      continue;
+    }
     if (m.words.z !== undefined && m.words.x !== undefined) continue; // ramp leg
     if (m.words.z !== undefined) {
       // straight-plunge fallback: the loop starts where the rapid positioned
@@ -205,9 +209,11 @@ describe('pocket2d', () => {
     const res = pocket2d(op({ topZ: -2, floorZ: -2 }), tool);
     expect(res.levels).toBe(1);
     // no material band at the entry: the honest entry is a straight plunge
-    // through air — z-only moves, every one at the finishing plane
-    expect(res.entries.plunge).toBe(res.passes);
+    // through air — z-only moves, every one at the finishing plane. Passes
+    // that provably link at depth do so instead (the safety test is
+    // geometric; the finishing plane is all air, so bands still hold).
     expect(res.entries.helical).toBe(0);
+    expect(res.entries.plunge + res.links).toBe(res.passes);
     const plunges = res.moves
       .filter((m) => !m.rapid && m.words.z !== undefined)
       .map((m) => m.words.z!);
@@ -253,15 +259,16 @@ describe('pocket2d', () => {
   it('ramps every material entry — never a straight plunge into stock', () => {
     // gap-analysis #4: an end mill plunging vertically rubs its center at
     // zero peripheral speed. Every pass that meets material enters along
-    // the loop (helical descent); a finishing level (band 0) plunges
-    // through air instead — pinned in its own test above.
+    // the loop (helical descent) or LINKS at depth from the previous
+    // pass (provably clear); a finishing level (band 0) plunges through
+    // air instead — pinned in its own test above.
     const res = pocket2d(op({ floorZ: -2.5, stepDown: 1 }), tool);
     expect(res.passes).toBe(12); // 3 levels × 4 inset loops
-    expect(res.entries.helical).toBe(12);
+    expect(res.entries.helical + res.links + res.entries.plunge).toBe(12);
     expect(res.entries.plunge).toBe(0);
+    expect(res.links).toBeGreaterThan(0);
     // each helical entry: strictly descending z on every leg, landing
-    // exactly on the cut level, and its first leg leaves the approach
-    // plane — never a vertical drop (a leg with x·y = 0 and z < 0)
+    // exactly on the cut level
     let i = 0;
     while (i < res.moves.length) {
       if (res.moves[i].words.z === undefined || res.moves[i].rapid || res.moves[i].words.x === undefined) {
@@ -287,6 +294,70 @@ describe('pocket2d', () => {
     }
   });
 
+  it('stay-down links: passes that provably clear feed straight at depth', () => {
+    // Alice's condition (2026-10-29): link only when the material is
+    // cleared — every point the tool sweeps on the link must lie within
+    // one tool radius of a pass loop it or a neighbor was going to cut.
+    // The 10mm pocket: k1 and k3 link; k1→k2's corner diagonal pokes
+    // outside the band union and honestly retracts instead.
+    const res = pocket2d(op(), tool);
+    expect(res.links).toBe(2);
+    const linkIdx = res.moves
+      .map((m, i) => (m.comment?.includes('stay-down link') ? i : -1))
+      .filter((i) => i >= 0);
+    expect(linkIdx).toHaveLength(2);
+    const toolR = 1;
+    const loops = passLoops(res.moves);
+    // the INDEPENDENT safety pin: sample each link segment (from the
+    // previous move's XY) and require every sample within toolR of some
+    // cut loop's path — the link provably sweeps no virgin material
+    for (const i of linkIdx) {
+      const m = res.moves[i];
+      expect(m.rapid).toBeFalsy();
+      expect(m.words.z).toBeUndefined(); // flat at the cut level, never a diagonal
+      expect(m.feed).toBe(500); // a cut move, not an entry
+      // the prior position: walk back over this pass's feed moves
+      let px = 0;
+      let py = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        const q = res.moves[j];
+        if (q.words.x !== undefined) {
+          px = q.words.x;
+          py = q.words.y!;
+          break;
+        }
+      }
+      const len = Math.hypot(m.words.x! - px, m.words.y! - py);
+      const steps = Math.max(2, Math.ceil(len / 0.05));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const sx = px + (m.words.x! - px) * t;
+        const sy = py + (m.words.y! - py) * t;
+        let best = Infinity;
+        for (const l of loops) {
+          for (let v = 0; v < l.length; v++) {
+            const a = l[v];
+            const b = l[(v + 1) % l.length];
+            const abx = b.x - a.x;
+            const aby = b.y - a.y;
+            const ab2 = abx * abx + aby * aby;
+            if (ab2 < 1e-18) continue; // the duplicated closing vertex
+            const f = Math.max(0, Math.min(1, ((sx - a.x) * abx + (sy - a.y) * aby) / ab2));
+            best = Math.min(best, Math.hypot(sx - (a.x + abx * f), sy - (a.y + aby * f)));
+          }
+          if (best <= toolR + 1e-6) break;
+        }
+        expect(best).toBeLessThanOrEqual(toolR + 1e-6);
+      }
+    }
+    // stay-down means exactly that: no rapid between the previous pass's
+    // last cut and the link, and none between the link and the next cut
+    for (const i of linkIdx) {
+      for (let j = i - 1; j >= i - 2; j--) expect(res.moves[j].rapid).toBeFalsy();
+      expect(res.moves[i + 1].rapid).toBeFalsy();
+    }
+  });
+
   it('pins the helical entry geometry: full revolutions of the cut loop', () => {
     // the 10mm region, Ø2 tool: the k=0 pass rides an 8mm square with
     // rounded corners. Level 1 descends 0.5 air + 1.0 band = 1.5mm;
@@ -294,7 +365,7 @@ describe('pocket2d', () => {
     // of 0.75mm each, riding the loop's own geometry and closing each
     // revolution back on the start vertex.
     const res = pocket2d(op(), tool);
-    expect(res.entries.helical).toBe(4);
+    expect(res.entries.helical).toBe(2); // k0 and k2 enter; k1, k3 link at depth
     // ramp runs = maximal chains of coordinated XY+Z feed moves
     const runs: ReturnType<typeof pocket2d>['moves'][] = [];
     let cur: ReturnType<typeof pocket2d>['moves'] = [];
@@ -306,7 +377,7 @@ describe('pocket2d', () => {
       }
     }
     if (cur.length > 0) runs.push(cur);
-    expect(runs.length).toBe(4);
+    expect(runs.length).toBe(2); // one ramp per unlinked entry (k0, k2)
     const run = runs[0];
     const last = run[run.length - 1];
     // the run lands exactly on the cut level, back on its start vertex

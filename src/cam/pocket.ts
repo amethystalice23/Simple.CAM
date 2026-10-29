@@ -7,7 +7,15 @@
  */
 
 import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
-import { intersection, offsetInward } from './clipper';
+import {
+  difference,
+  intersection,
+  offsetInward,
+  offsetOutward,
+  offsetSegment,
+  totalArea,
+  union,
+} from './clipper';
 import { arcTable, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
@@ -26,6 +34,52 @@ export interface PocketResult {
   droppedLoops: number;
   /** how each pass entered: helical / zigzag ramps, straight plunges */
   entries: Record<EntryMode, number>;
+  /**
+   * Stay-down links cut (Alice, 2026-10-29): passes that fed straight to
+   * their start at depth instead of retracting — each one provably
+   * removed nothing the adjacent passes were not going to remove.
+   */
+  links: number;
+}
+
+/**
+ * The STAY-DOWN LINK SAFETY TEST (Alice's condition, 2026-10-29: only
+ * link when the material is cleared): the link's swept capsule must lie
+ * inside the union of the bands swept by the passes already cut at this
+ * level PLUS the target pass's own band. The link may cross a sliver of
+ * not-yet-cleared band, but never anything the adjacent passes were not
+ * going to remove anyway — and never a wall, an island, or virgin stock
+ * (those lie outside the union and the test rejects the link, falling
+ * back to retract + ramp). Exact Clipper booleans, no sampling error;
+ * the µm-grid noise floor is absorbed by LINK_AREA_EPS.
+ */
+const LINK_AREA_EPS = 1e-4; // mm²
+
+/** Signed polygon area (shoelace) — CCW positive. */
+function signedArea(loop: Vec2[]): number {
+  let a = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const p = loop[i];
+    const q = loop[(i + 1) % loop.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a / 2;
+}
+
+/**
+ * The band swept by a cut pass: the loop dilated by the tool radius.
+ * Orientation is forced CCW — a CW ring (an island orbit) SHRINKS under
+ * a plain outward offset, but the band is orientation-free geometry.
+ */
+function bandOf(loop: Vec2[], toolR: number): Vec2[][] {
+  return offsetOutward([signedArea(loop) < 0 ? [...loop].reverse() : loop], toolR);
+}
+
+/** True when the straight link from→to provably cuts nothing extra. */
+function linkIsClear(from: Vec2, to: Vec2, toolR: number, clearedBands: Vec2[][], target: Vec2[]): boolean {
+  const safe = union([...clearedBands, ...bandOf(target, toolR)]);
+  const rest = difference(offsetSegment(from, to, toolR), safe);
+  return totalArea(rest) <= LINK_AREA_EPS;
 }
 
 export interface PocketOptions {
@@ -76,9 +130,19 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   // loop start (the yellow streak at each contour's plunge, Alice 2026-10-26)
   let standingZ = op.topZ;
   const entries: Record<EntryMode, number> = { helical: 0, zigzag: 0, plunge: 0 };
+  // stay-down state: after a pass the tool RESTS at `cur` at `restZ` — the
+  // retract is deferred so the next pass of the same level may link at
+  // depth. restZ survives across levels (a cross-level link would descend
+  // diagonally at an uncontrolled ramp angle, so it never qualifies —
+  // but the down-state must still flush the retract); clearedBands are
+  // per-level (bands swept at another level are not clear here).
+  let restZ: number | null = null;
+  let clearedBands: Vec2[][] = [];
+  let links = 0;
 
   for (const levelZ of levels) {
     const approachZ = Math.max(levelZ, standingZ) + APPROACH_CLEARANCE;
+    clearedBands = [];
     // passes from the wall inward in stepOver increments, until the region
     // vanishes under the offset
     for (let k = 0; k < 10000; k++) {
@@ -105,39 +169,57 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
         }
         const loop = rotateToNearest(raw, cur);
         const start = loop[0];
+        const rest = restZ === levelZ ? cur : null;
 
-        // travel first at the machine's existing height (after a tool
-        // change that is the swap macro's high park — never a diagonal
-        // descent across the table), then descend at the destination
-        moves.push({
-          words: { x: start.x, y: start.y },
-          feed: 0,
-          rapid: true,
-          comment: `level z${levelZ.toFixed(2)} pass ${k + 1}`,
-        });
-        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-        // rapid down to the approach plane (clear of the standing material),
-        // then FEED the entry: a helical descent along the loop itself —
-        // never a straight plunge into material (entry.ts)
-        moves.push({ words: { z: approachZ }, feed: 0, rapid: true });
-        const cum = arcTable(loop);
-        const entry = rampEntry({
-          loop,
-          cum,
-          sStart: 0,
-          stretch: cum[loop.length],
-          closed: true,
-          // finishing-only assumes the bulk above is gone — the entry is
-          // through air and plunges straight (the finishingOnly convention)
-          band: op.finishingOnly ? 0 : standingZ - levelZ,
-          fromZ: approachZ,
-          toZ: levelZ,
-          stepDown: op.stepDown,
-          feed: op.plungeFeed,
-        });
-        moves.push(...entry.moves);
-        minutes += entry.minutes;
-        entries[entry.mode]++;
+        if (rest !== null && linkIsClear(rest, start, toolR, clearedBands, loop)) {
+          // STAY DOWN: feed straight to the next pass's start at depth —
+          // provably nothing the adjacent passes wouldn't remove anyway.
+          // No entry at all: the tool is already at the cut level there.
+          moves.push({
+            words: { x: start.x, y: start.y },
+            feed: op.feed,
+            comment: `level z${levelZ.toFixed(2)} pass ${k + 1} — stay-down link`,
+          });
+          minutes += Math.hypot(start.x - rest.x, start.y - rest.y) / op.feed;
+          links++;
+        } else {
+          // retract the deferred previous pass, then travel first at the
+          // machine's existing height (after a tool change that is the
+          // swap macro's high park — never a diagonal descent across the
+          // table), then descend at the destination
+          if (restZ !== null) {
+            moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+          }
+          moves.push({
+            words: { x: start.x, y: start.y },
+            feed: 0,
+            rapid: true,
+            comment: `level z${levelZ.toFixed(2)} pass ${k + 1}`,
+          });
+          moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+          // rapid down to the approach plane (clear of the standing material),
+          // then FEED the entry: a helical descent along the loop itself —
+          // never a straight plunge into material (entry.ts)
+          moves.push({ words: { z: approachZ }, feed: 0, rapid: true });
+          const cum = arcTable(loop);
+          const entry = rampEntry({
+            loop,
+            cum,
+            sStart: 0,
+            stretch: cum[loop.length],
+            closed: true,
+            // finishing-only assumes the bulk above is gone — the entry is
+            // through air and plunges straight (the finishingOnly convention)
+            band: op.finishingOnly ? 0 : standingZ - levelZ,
+            fromZ: approachZ,
+            toZ: levelZ,
+            stepDown: op.stepDown,
+            feed: op.plungeFeed,
+          });
+          moves.push(...entry.moves);
+          minutes += entry.minutes;
+          entries[entry.mode]++;
+        }
 
         let prev = start;
         for (let i = 1; i <= loop.length; i++) {
@@ -147,8 +229,9 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
           prev = p;
         }
 
-        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         cur = start;
+        restZ = levelZ;
+        clearedBands = union([...clearedBands, ...bandOf(loop, toolR)]);
         passes++;
       }
     }
@@ -157,5 +240,18 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     standingZ = levelZ;
   }
 
-  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, droppedLoops, entries };
+  // the final pass's retract is deferred like all the others
+  if (restZ !== null) {
+    moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+  }
+
+  return {
+    moves,
+    levels: levels.length,
+    passes,
+    estimatedMinutes: minutes,
+    droppedLoops,
+    entries,
+    links,
+  };
 }

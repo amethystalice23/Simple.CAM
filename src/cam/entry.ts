@@ -38,6 +38,18 @@ const MIN_RAMP_STRETCH = 0.5;
 
 export type EntryMode = 'helical' | 'zigzag' | 'plunge';
 
+/**
+ * True when a closed-loop helical descent of `descent` over perimeter `P`
+ * stays within the traversal cap — never degenerating to a straight
+ * plunge. Callers qualify continuous-descent mode (the profile ladder
+ * collapse) with this: a deep or pinched loop keeps its stepped ladder.
+ */
+export function helicalDescentFits(P: number, descent: number, stepDown: number): boolean {
+  if (P < MIN_RAMP_STRETCH) return false;
+  const perRev = Math.min(stepDown, P * Math.tan((MAX_RAMP_ANGLE_DEG * Math.PI) / 180));
+  return perRev > 0 && Math.max(1, Math.ceil(descent / perRev)) <= MAX_RAMP_TRAVERSALS;
+}
+
 export interface EntryResult {
   moves: Move[];
   /** feed-time of the entry, minutes */

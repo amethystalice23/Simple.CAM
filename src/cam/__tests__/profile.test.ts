@@ -165,31 +165,53 @@ describe('profile2d', () => {
     expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(11.05);
   });
 
-  it('steps levels and retracts safely between passes', () => {
+  it('collapses the stepped ladder into one continuous descent (B)', () => {
+    // Alice's B (2026-10-29): a loop every level would cut full and
+    // unbroken descends continuously along itself — one helical entry
+    // (per-revolution band ≤ stepDown) plus ONE final full-depth lap,
+    // no per-level re-entry at all.
     const res = profile2d(op({ topZ: 0, floorZ: -2.5, stepDown: 1 }), tool);
-    expect(res.levels).toBe(3);
-    expect(res.passes).toBe(3); // one wall pass per level
-    // every entry lands on its level — the ramp run's last z word
+    expect(res.levels).toBe(3); // the depth plan itself is unchanged
+    expect(res.continuous).toBe(1);
+    expect(res.passes).toBe(1);
+    expect(res.entries.helical).toBe(1);
+    // every entry lands on the FLOOR — the ramp run's last z word
     const zs = res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!);
-    const runs: number[][] = [];
-    for (const z of zs) {
-      const last = runs[runs.length - 1];
-      if (!last || z > last[last.length - 1] + 1e-12) runs.push([z]);
-      else last.push(z);
+    expect(zs[zs.length - 1]).toBeCloseTo(-2.5, 9);
+    // the descent: 3mm from the approach plane at ≤ stepDown per rev →
+    // 3 revolutions, each closing back on the start vertex
+    const run: Move[] = [];
+    for (const m of res.moves) {
+      if (!m.rapid && m.words.z !== undefined && m.words.x !== undefined) run.push(m);
     }
-    const landings = [...new Set(runs.map((r) => r[r.length - 1].toFixed(3)))];
-    expect(landings).toEqual(['-0.833', '-1.667', '-2.500']);
-    // one safe-Z retract per pass (plus the entry rapids carry safeZ too)
-    const safeRetracts = res.moves.filter((m) => m.rapid && m.words.z === 5);
-    expect(safeRetracts.length).toBe(6); // 3 entries + 3 retracts
-    // approach rapids stop half a mm ABOVE STANDING MATERIAL (the pocket2d
-    // convention, its 2026-10-26 fix): level 1 stands at the surface, each
-    // later level at the previous level's cut — never `levelZ + 0.5`, which
-    // ended the rapid 0.5 INSIDE the standing wall (Alice's 2026-10-28
-    // yellow-streak report: a rapid removing stock down the side)
+    const last = run[run.length - 1];
+    expect(run.filter((m) => Math.hypot(m.words.x! - last.words.x!, m.words.y! - last.words.y!) < 1e-9)).toHaveLength(3);
+    let prevZ = Infinity;
+    for (const m of run) {
+      expect(m.words.z!).toBeLessThan(prevZ - 1e-12);
+      prevZ = m.words.z!;
+    }
+    // ONE entry approach + retract for the whole loop — the retract count
+    // that used to be one per level
+    expect(res.moves.filter((m) => m.rapid && m.words.z === 5)).toHaveLength(2);
     const approaches = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.z !== 5);
-    expect(approaches.length).toBe(3);
-    expect(approaches.map((m) => m.words.z)).toEqual([0.5, 0.5 - 2.5 / 3, 0.5 - (2 * 2.5) / 3]);
+    expect(approaches.map((m) => m.words.z)).toEqual([0.5]);
+  });
+
+  it('a deep loop that would degenerate keeps the stepped ladder', () => {
+    // 40.5mm descent at per-rev ≤ 1 needs 41 revolutions — past the ramp
+    // traversal cap, so continuous descent must NOT fire (a degenerate
+    // fallback there would be a straight full-depth plunge)
+    const res = profile2d(op({ topZ: 0, floorZ: -40, stepDown: 1 }), tool);
+    expect(res.continuous).toBe(0);
+    expect(res.passes).toBe(res.levels);
+  });
+
+  it('tabbed and stock-clipped loops never take continuous descent', () => {
+    const tabbed = profile2d(op({ tabs: { count: 2, height: 0.5, length: 2 } }), tool);
+    expect(tabbed.continuous).toBe(0);
+    const clipped = profile2d(op({ side: 'online', footprint: [square(-2, 9.03)] }), tool);
+    expect(clipped.continuous).toBe(0);
   });
 
   it('clamps the wall pass to the stock footprint: open spans, centers inside', () => {
@@ -312,9 +334,10 @@ describe('profile2d', () => {
   it('pins the no-tabs output to the pre-tabs baseline', () => {
     const res = profile2d(op(), tool);
     expect(res.warnings).toEqual([]);
-    expect(res.passes).toBe(2);
-    // every pass enters helically along the loop — never a straight plunge
-    expect(res.entries.helical).toBe(2);
+    // one continuous descent + one full-depth lap for the loop
+    expect(res.continuous).toBe(1);
+    expect(res.passes).toBe(1);
+    expect(res.entries.helical).toBe(1);
     expect(res.entries.plunge).toBe(0);
     // the estimate is the emitted geometry itself: every feed move's 3D
     // length at its own feed rate (ramps at plunge feed, cuts at cut feed)
