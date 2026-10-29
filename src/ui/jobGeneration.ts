@@ -416,6 +416,9 @@ function clearanceResult(
         feed,
         plungeFeed,
         safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+        // the frame rides the same collapsed ladder in finishing-only mode
+        // (the caller rewrites stepDown) — the same bulk-is-gone assumption
+        finishingOnly: op.finishingOnly,
       },
       tool,
     );
@@ -1234,6 +1237,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            finishingOnly: op.finishingOnly,
             // the stock clamp stays the outer bound: OFF = the declared
             // stock, ON = the stock dilated by one step-over (a region that
             // reaches the stock edge steps over it the same way)
@@ -1322,6 +1326,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               feed,
               plungeFeed,
               safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+              finishingOnly: op.finishingOnly,
             },
             tool,
           );
@@ -1357,6 +1362,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            finishingOnly: op.finishingOnly,
           },
           tool,
         );
@@ -1794,6 +1800,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             feed,
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            finishingOnly: op.finishingOnly,
             // Profile cut-over keeps the ORIGINAL meaning (Alice,
             // 2026-10-28): a single-cut op, so ON = permission to keep the
             // loop intact across obstacles (running out of stock to cut

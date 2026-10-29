@@ -1,12 +1,14 @@
 /**
  * 2.5D pocket clearing (PLAN.md Phase 1): stepped Z levels, contour-parallel
  * tool-center passes inset from the region (Clipper offsets, see clipper.ts).
- * Regions are machine-space XY contours (outer CCW, holes CW). v1 plunges
- * straight at each pass start (helical entry later).
+ * Regions are machine-space XY contours (outer CCW, holes CW). Entries ramp
+ * along the loop — helical descent, straight plunge only through air
+ * (entry.ts, gap-analysis #4).
  */
 
 import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
 import { intersection, offsetInward } from './clipper';
+import { arcTable, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
 export interface PocketResult {
@@ -22,6 +24,8 @@ export interface PocketResult {
    * caller decides whether that is worth reporting; 0 when no threshold.
    */
   droppedLoops: number;
+  /** how each pass entered: helical / zigzag ramps, straight plunges */
+  entries: Record<EntryMode, number>;
 }
 
 export interface PocketOptions {
@@ -71,6 +75,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   // taller than the clearance had the rapid itself plowing the band at every
   // loop start (the yellow streak at each contour's plunge, Alice 2026-10-26)
   let standingZ = op.topZ;
+  const entries: Record<EntryMode, number> = { helical: 0, zigzag: 0, plunge: 0 };
 
   for (const levelZ of levels) {
     const approachZ = Math.max(levelZ, standingZ) + APPROACH_CLEARANCE;
@@ -112,14 +117,27 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
         });
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         // rapid down to the approach plane (clear of the standing material),
-        // then feed the last stretch
+        // then FEED the entry: a helical descent along the loop itself —
+        // never a straight plunge into material (entry.ts)
         moves.push({ words: { z: approachZ }, feed: 0, rapid: true });
-        moves.push({
-          words: { z: levelZ },
+        const cum = arcTable(loop);
+        const entry = rampEntry({
+          loop,
+          cum,
+          sStart: 0,
+          stretch: cum[loop.length],
+          closed: true,
+          // finishing-only assumes the bulk above is gone — the entry is
+          // through air and plunges straight (the finishingOnly convention)
+          band: op.finishingOnly ? 0 : standingZ - levelZ,
+          fromZ: approachZ,
+          toZ: levelZ,
+          stepDown: op.stepDown,
           feed: op.plungeFeed,
-          comment: `plunge ${(op.topZ - levelZ).toFixed(2)}mm below surface`,
         });
-        minutes += (approachZ - levelZ) / op.plungeFeed;
+        moves.push(...entry.moves);
+        minutes += entry.minutes;
+        entries[entry.mode]++;
 
         let prev = start;
         for (let i = 1; i <= loop.length; i++) {
@@ -139,5 +157,5 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     standingZ = levelZ;
   }
 
-  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, droppedLoops };
+  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, droppedLoops, entries };
 }

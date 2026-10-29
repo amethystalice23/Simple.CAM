@@ -2066,13 +2066,34 @@ describe('honest time estimate (wrapper overhead)', () => {
 });
 
 describe("'Finishing pass only' (Alice, 2026-10-26 — one explicit rough/finish switch, every ladder op)", () => {
-  /** distinct commanded cut-Z values on a feed move (the level count) */
-  const cutPlanes = (res: ReturnType<typeof generateJobOp>): Set<string> =>
-    new Set(
-      res.moves
-        .filter((m) => !m.rapid && m.words.z !== undefined)
-        .map((m) => m.words.z!.toFixed(3)),
-    );
+  /** distinct commanded cut-Z values on a feed move (the level count).
+   *  Ramped entries (entry.ts) descend as coordinated XY+Z feed legs —
+   *  a run of them collapses to its LANDING z, the cut level it feeds. */
+  const cutPlanes = (res: ReturnType<typeof generateJobOp>): Set<string> => {
+    const planes = new Set<string>();
+    let rampLanding: string | null = null;
+    const flush = () => {
+      if (rampLanding !== null) {
+        planes.add(rampLanding);
+        rampLanding = null;
+      }
+    };
+    for (const m of res.moves) {
+      if (m.rapid) {
+        flush();
+        continue;
+      }
+      if (m.words.z === undefined) continue;
+      if (m.words.x !== undefined) {
+        rampLanding = m.words.z.toFixed(3);
+        continue;
+      }
+      flush();
+      planes.add(m.words.z.toFixed(3));
+    }
+    flush();
+    return planes;
+  };
 
   it('pocket: one level at the floor, straight down', () => {
     const rough = generateJobOp({ ...pocketOp, startDepth: 0, endDepth: 6, stepDown: 0.5 }, ctx);

@@ -13,11 +13,15 @@
  *   3. the ladder lands EXACTLY on its target — a shorter final remainder,
  *      never a stop short of it and never a step past.
  *
- * Reconstruction convention: every discrete-level generator steps depth as
- * Z-only feed moves (plunges / pecks / in-cut level steps at fixed XY/A), so
- * the ladders read straight off the moves. A generator that re-ladders per
- * path/strand/start/hole/edge (each starts again from its own surface)
- * splits into one ladder per group — each must satisfy the rule alone.
+ * Reconstruction convention: discrete-level generators step depth as
+ * Z-only feed moves (plunges / pecks / in-cut level steps at fixed XY/A).
+ * Ramped entries (entry.ts, 2026-10-29) descend along the cut path as
+ * coordinated XY+Z feed legs instead: a run of them collapses to its
+ * LANDING z (the cut level it feeds), while the per-traversal band those
+ * legs engage is pinned separately by assertRampBands. A generator that
+ * re-ladders per path/strand/start/hole/edge (each starts again from its
+ * own surface) splits into one ladder per group — each must satisfy the
+ * rule alone. Rotaries coordinating Z with A (G93) never collapse.
  *
  * Out of scope, by the agreed convention: the finishingOnly single-pass
  * collapse (one level at the target — the op assumes the bulk above is
@@ -98,20 +102,105 @@ function dedupeConsecutive(xs: number[]): number[] {
  * Feed-move z words → depth ladders below `topZ`, in emission order. A new
  * ladder starts whenever the depth falls back (a new path/strand/start/
  * hole/edge re-ladders from its own surface); duplicates inside a ladder
- * collapse. Rotaries whose level steps ride coordinated Z+A moves (the
- * face's spiral) are pinned in their own suites, not here.
+ * collapse. A run of ramp legs (coordinated XY+Z feed moves, entry.ts)
+ * collapses to its LANDING depth — the cut level it feeds. Rotaries whose
+ * level steps ride coordinated Z+A moves (the face's spiral) are pinned in
+ * their own suites, not here.
  */
 function depthLadders(moves: Move[], topZ: number): number[][] {
   const out: number[][] = [];
   let prev = -Infinity;
-  for (const m of moves) {
-    if (m.rapid || m.words.z === undefined) continue;
-    const d = topZ - m.words.z;
+  let rampLanding: number | null = null;
+  const rung = (z: number) => {
+    const d = topZ - z;
     if (d < prev - 1e-9 || out.length === 0) out.push([]);
     out[out.length - 1].push(d);
     prev = d;
+  };
+  const flush = () => {
+    if (rampLanding !== null) {
+      rung(rampLanding);
+      rampLanding = null;
+    }
+  };
+  for (const m of moves) {
+    if (m.rapid) {
+      flush();
+      continue;
+    }
+    const z = m.words.z;
+    if (z === undefined) continue;
+    if (m.words.a === undefined && m.words.x !== undefined) {
+      rampLanding = z; // ramp leg — the run collapses to its last z
+      continue;
+    }
+    flush();
+    rung(z);
   }
+  flush();
   return out.map(dedupeConsecutive);
+}
+
+/**
+ * THE RAMP RULE on ramped entries: every run of ramp legs descends
+ * monotonically (no re-ascent, no air double-plunge) and engages at most
+ * `stepDown` of fresh material per traversal — a zigzag leg or a helical
+ * revolution, whichever the geometry resolved to (entry.ts picks by
+ * geometry; traversals are recovered from XY direction reversals and
+ * returns to the entry point, whichever counts higher).
+ */
+function assertRampBands(moves: Move[], stepDown: number): void {
+  const isRampLeg = (m: Move) =>
+    !m.rapid && m.words.z !== undefined && m.words.a === undefined && m.words.x !== undefined;
+  let run: Move[] = [];
+  let entryX = 0;
+  let entryY = 0;
+  let fromZ = 0;
+  const check = () => {
+    if (run.length === 0) return;
+    let prevZ = Infinity;
+    let reversals = 0;
+    let revisits = 0;
+    let px = entryX;
+    let py = entryY;
+    let pdx = 0;
+    let pdy = 0;
+    for (let i = 0; i < run.length; i++) {
+      const m = run[i];
+      const x = m.words.x!;
+      const y = m.words.y ?? py;
+      const dx = x - px;
+      const dy = y - py;
+      const pd = Math.hypot(pdx, pdy);
+      const d = Math.hypot(dx, dy);
+      // a direction reversal is a zigzag leg turning back
+      if (i > 0 && pd > 0 && d > 0 && (pdx * dx + pdy * dy) / (pd * d) < -1e-9) reversals++;
+      // a return to the entry XY closes a helical revolution
+      if (Math.hypot(x - entryX, y - entryY) < 1e-9) revisits++;
+      expect(m.words.z!).toBeLessThan(prevZ - 1e-12);
+      prevZ = m.words.z!;
+      px = x;
+      py = y;
+      pdx = dx;
+      pdy = dy;
+    }
+    const traversals = Math.max(reversals + 1, revisits);
+    expect(fromZ - run[run.length - 1].words.z!).toBeLessThanOrEqual(traversals * stepDown + 1e-9);
+    run = [];
+  };
+  for (const m of moves) {
+    if (isRampLeg(m)) {
+      run.push(m);
+      continue;
+    }
+    check();
+    if (m.rapid && m.words.x !== undefined) {
+      entryX = m.words.x;
+      entryY = m.words.y ?? entryY;
+    }
+    if (m.rapid && m.words.z !== undefined) fromZ = m.words.z;
+  }
+  check();
 }
 
 /** THE RULE on one generator's moves: every band ≤ stepDown (never a
@@ -201,6 +290,7 @@ describe('the global cut-band rule: never a band deeper than the step-down', () 
       for (const s of shapes) {
         const res = pocket2d(pocketOp({ floorZ: s.floorZ, stepDown: s.stepDown }), flat2);
         assertCutBands(res.moves, 0, s.stepDown, -s.floorZ);
+        assertRampBands(res.moves, s.stepDown);
       }
     });
   });
@@ -235,6 +325,7 @@ describe('the global cut-band rule: never a band deeper than the step-down', () 
       for (const s of shapes) {
         const res = profile2d(profileOp({ floorZ: s.floorZ, stepDown: s.stepDown }), flat2);
         assertCutBands(res.moves, 0, s.stepDown, -s.floorZ);
+        assertRampBands(res.moves, s.stepDown);
       }
       // tabbed: the deep levels cut span-by-span, all at their own level
       const tabbed = profile2d(
@@ -246,6 +337,7 @@ describe('the global cut-band rule: never a band deeper than the step-down', () 
         flat2,
       );
       assertCutBands(tabbed.moves, 0, 1, 3);
+      assertRampBands(tabbed.moves, 1);
     });
   });
 

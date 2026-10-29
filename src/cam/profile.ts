@@ -14,6 +14,7 @@
 
 import type { Move, ProfileOp, Tool, Vec2 } from '../core/types';
 import { intersection, offsetInward, offsetOutward } from './clipper';
+import { arcTable, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 import { extractClipIntervals, pointAtArc } from './clipUtils';
 
@@ -26,6 +27,8 @@ export interface ProfileResult {
   estimatedMinutes: number;
   /** non-fatal notes: tab counts clamped, loops too short for tabs, … */
   warnings: string[];
+  /** how each pass entered: helical / zigzag ramps, straight plunges */
+  entries: Record<EntryMode, number>;
 }
 
 /** Tabs resolved for ONE offset loop: how many fit and their half-length. */
@@ -55,33 +58,26 @@ function calculateArea(loop: Vec2[]): number {
   return Math.abs(area) / 2;
 }
 
-/** Arc-length table of a closed loop (last entry closes back to vertex 0). */
-function arcTable(loop: Vec2[]): number[] {
-  const cum = [0];
-  for (let i = 0; i < loop.length; i++) {
-    const a = loop[i];
-    const b = loop[(i + 1) % loop.length];
-    cum.push(cum[i] + Math.hypot(b.x - a.x, b.y - a.y));
-  }
-  return cum;
-}
-
 /** Loop points strictly after arc `s0` up to and including `s1` (which may
  *  wrap past the perimeter): interior vertices kept whole, the end point
- *  interpolated on its segment. The start is NOT included — the plunge
- *  already sits there. */
+ *  interpolated on its segment. The start is NOT included — the entry
+ *  already sits there. Wrapped-span vertices behind s0 come around one
+ *  perimeter later, so hits are collected then sorted by TRAVEL arc —
+ *  base-arc order jumps ahead and back on spans holding vertices on both
+ *  sides of the wrap (dense contours; invisible on coarse squares). */
 function spanPoints(loop: Vec2[], cum: number[], s0: number, s1: number): Vec2[] {
   const n = loop.length;
   const P = cum[n];
-  const pts: Vec2[] = [];
+  const hits: { a: number; k: number }[] = [];
   for (let k = 0; k < n; k++) {
     const base = cum[k];
-    if (base >= s1 - 1e-9) break; // past the span end; every later vertex is too
-    // a vertex behind the start comes around again one perimeter later
+    if (base >= s1 - 1e-9) break;
     const a = base <= s0 + 1e-9 ? base + P : base;
     if (a >= s1 - 1e-9) continue;
-    pts.push(loop[k]);
+    hits.push({ a, k });
   }
+  hits.sort((u, v) => u.a - v.a);
+  const pts = hits.map(({ k }) => loop[k]);
   pts.push(pointAtArc(loop, cum, s1));
   return pts;
 }
@@ -185,6 +181,7 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
   // the side one entry wide (Alice's 2026-10-28 sim report: 84 voxels
   // × 10 levels).
   let prevCut = op.topZ;
+  const entries: Record<EntryMode, number> = { helical: 0, zigzag: 0, plunge: 0 };
 
   for (const levelZ of levels) {
     // below the tab top the groove is interrupted; at/above it the loop
@@ -266,12 +263,25 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         const approach = Math.max(levelZ, prevCut) + APPROACH_CLEARANCE;
         moves.push({ words: { z: approach }, feed: 0, rapid: true });
-        moves.push({
-          words: { z: levelZ },
+        // FEED the entry along the loop (helical descent) — never a
+        // straight plunge into standing material (entry.ts)
+        const cum = geo.tabs ? geo.cum : arcTable(rotatedLoop);
+        const entry = rampEntry({
+          loop: rotatedLoop,
+          cum,
+          sStart: 0,
+          stretch: cum[rotatedLoop.length],
+          closed: true,
+          // finishing-only assumes the bulk above is gone — air entry
+          band: op.finishingOnly ? 0 : prevCut - levelZ,
+          fromZ: approach,
+          toZ: levelZ,
+          stepDown: op.stepDown,
           feed: op.plungeFeed,
-          comment: `plunge ${(op.topZ - levelZ).toFixed(2)}mm below surface`,
         });
-        minutes += (approach - levelZ) / op.plungeFeed;
+        moves.push(...entry.moves);
+        minutes += entry.minutes;
+        entries[entry.mode]++;
 
         let prev = start;
         for (let i = 1; i <= rotatedLoop.length; i++) {
@@ -300,12 +310,25 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
           moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
           const approach = Math.max(levelZ, prevCut) + APPROACH_CLEARANCE;
           moves.push({ words: { z: approach }, feed: 0, rapid: true });
-          moves.push({
-            words: { z: levelZ },
+          // FEED the entry as a zigzag over the first stretch of the span —
+          // it stays inside [s0, s1], never cutting a tab bridge or leaving
+          // the declared stock (entry.ts)
+          const entry = rampEntry({
+            loop,
+            cum,
+            sStart: s0,
+            stretch: s1 - s0,
+            closed: false,
+            // finishing-only assumes the bulk above is gone — air entry
+            band: op.finishingOnly ? 0 : prevCut - levelZ,
+            fromZ: approach,
+            toZ: levelZ,
+            stepDown: op.stepDown,
             feed: op.plungeFeed,
-            comment: `plunge ${(op.topZ - levelZ).toFixed(2)}mm below surface`,
           });
-          minutes += (approach - levelZ) / op.plungeFeed;
+          moves.push(...entry.moves);
+          minutes += entry.minutes;
+          entries[entry.mode]++;
 
           let prev = from;
           for (const p of spanPoints(loop, cum, s0, s1)) {
@@ -323,5 +346,5 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
     }
   }
 
-  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, warnings };
+  return { moves, levels: levels.length, passes, estimatedMinutes: minutes, warnings, entries };
 }

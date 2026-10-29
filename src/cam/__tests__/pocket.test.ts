@@ -41,34 +41,58 @@ function loopArea(points: { x: number; y: number }[]): number {
   return a / 2;
 }
 
-/** Extract the XY loops of all cutting passes (plunge → segments → retract). */
+/** Extract the XY loops of all cutting passes (entry ramp → segments →
+ *  retract). Ramp legs are entry, not loop geometry — they position the
+ *  pass start; a straight plunge (the air/degenerate fallback) opens the
+ *  loop at the XY the rapids just positioned, as in v1. */
 function passLoops(moves: ReturnType<typeof pocket2d>['moves']): Vec2[][] {
   const loops: Vec2[][] = [];
   let current: Vec2[] | null = null;
   let lastX: number | null = null;
   let lastY: number | null = null;
+  const close = () => {
+    if (current && current.length > 2) loops.push(current);
+    current = null;
+  };
   for (const m of moves) {
     if (m.words.x !== undefined) {
       lastX = m.words.x;
       lastY = m.words.y!;
     }
     if (m.rapid) {
-      if (current && current.length > 2) loops.push(current);
-      current = null;
+      close();
       continue;
     }
+    if (m.words.z !== undefined && m.words.x !== undefined) continue; // ramp leg
     if (m.words.z !== undefined) {
-      // plunge: the loop starts at the XY the rapid just positioned
-      if (current && current.length > 2) loops.push(current);
+      // straight-plunge fallback: the loop starts where the rapid positioned
+      close();
       current = lastX !== null && lastY !== null ? [{ x: lastX, y: lastY }] : null;
       continue;
     }
-    if (m.words.x !== undefined && current) {
-      current.push({ x: m.words.x, y: m.words.y! });
+    if (m.words.x !== undefined) {
+      if (current === null && lastX !== null && lastY !== null) {
+        current = [{ x: lastX, y: lastY }]; // post-ramp cut start
+      }
+      if (current) current.push({ x: m.words.x, y: m.words.y! });
     }
   }
-  if (current && current.length > 2) loops.push(current);
+  close();
   return loops;
+}
+
+/** Landing depths of every entry — the z each pass's ramp or plunge ends
+ *  on (the cut level). Ramp runs collapse to their last z; a new run
+ *  starts whenever the depth does not descend. */
+function entryLandings(moves: ReturnType<typeof pocket2d>['moves']): number[] {
+  const zs = moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!);
+  const runs: number[][] = [];
+  for (const z of zs) {
+    const last = runs[runs.length - 1];
+    if (!last || z > last[last.length - 1] + 1e-12) runs.push([z]);
+    else last.push(z);
+  }
+  return runs.map((r) => r[r.length - 1]);
 }
 
 describe('pocket2d', () => {
@@ -91,11 +115,8 @@ describe('pocket2d', () => {
   it('steps Z levels clamped to the floor', () => {
     const res = pocket2d(op({ topZ: 0, floorZ: -2.5, stepDown: 1 }), tool);
     expect(res.levels).toBe(3);
-    const plunges = res.moves
-      .filter((m) => !m.rapid && m.words.z !== undefined)
-      .map((m) => m.words.z!)
-      .sort((a, b) => b - a);
-    const unique = [...new Set(plunges.map((z) => z.toFixed(3)))];
+    // every pass's ENTRY lands on its level — the ramp's last z word
+    const unique = [...new Set(entryLandings(res.moves).map((z) => z.toFixed(3)))];
     // even ladder (Alice's strategy, 2026-10-28): 2.5mm in n=3 equal
     // 0.8333… rungs — no thin remainder at the floor
     expect(unique).toEqual(['-0.833', '-1.667', '-2.500']);
@@ -183,6 +204,10 @@ describe('pocket2d', () => {
   it('cuts a single level when top equals floor (finishing pass)', () => {
     const res = pocket2d(op({ topZ: -2, floorZ: -2 }), tool);
     expect(res.levels).toBe(1);
+    // no material band at the entry: the honest entry is a straight plunge
+    // through air — z-only moves, every one at the finishing plane
+    expect(res.entries.plunge).toBe(res.passes);
+    expect(res.entries.helical).toBe(0);
     const plunges = res.moves
       .filter((m) => !m.rapid && m.words.z !== undefined)
       .map((m) => m.words.z!);
@@ -205,20 +230,129 @@ describe('pocket2d', () => {
   it('estimates cutting time from path lengths', () => {
     const res = pocket2d(op(), tool);
     expect(res.estimatedMinutes).toBeGreaterThan(0);
-    const loops = passLoops(res.moves);
-    let len = 0;
-    for (const l of loops) {
-      for (let i = 0; i < l.length; i++) {
-        const p = l[i];
-        const q = l[(i + 1) % l.length];
-        len += Math.hypot(q.x - p.x, q.y - p.y);
+    // the estimate is the emitted geometry itself: every feed move's 3D
+    // length at its own feed rate — ramp entries at plunge feed (they cut),
+    // loops at cut feed. Ramps replaced v1's vertical plunges, so the old
+    // per-pass (approach→depth)/plungeFeed term is gone with them.
+    let x = 0;
+    let y = 0;
+    let z = 0;
+    let minutes = 0;
+    for (const m of res.moves) {
+      const nx = m.words.x ?? x;
+      const ny = m.words.y ?? y;
+      const nz = m.words.z ?? z;
+      if (!m.rapid) minutes += Math.hypot(nx - x, ny - y, nz - z) / m.feed;
+      x = nx;
+      y = ny;
+      z = nz;
+    }
+    expect(res.estimatedMinutes).toBeCloseTo(minutes, 6);
+  });
+
+  it('ramps every material entry — never a straight plunge into stock', () => {
+    // gap-analysis #4: an end mill plunging vertically rubs its center at
+    // zero peripheral speed. Every pass that meets material enters along
+    // the loop (helical descent); a finishing level (band 0) plunges
+    // through air instead — pinned in its own test above.
+    const res = pocket2d(op({ floorZ: -2.5, stepDown: 1 }), tool);
+    expect(res.passes).toBe(12); // 3 levels × 4 inset loops
+    expect(res.entries.helical).toBe(12);
+    expect(res.entries.plunge).toBe(0);
+    // each helical entry: strictly descending z on every leg, landing
+    // exactly on the cut level, and its first leg leaves the approach
+    // plane — never a vertical drop (a leg with x·y = 0 and z < 0)
+    let i = 0;
+    while (i < res.moves.length) {
+      if (res.moves[i].words.z === undefined || res.moves[i].rapid || res.moves[i].words.x === undefined) {
+        i++;
+        continue;
+      }
+      const run: typeof res.moves = [];
+      while (
+        i < res.moves.length &&
+        !res.moves[i].rapid &&
+        res.moves[i].words.z !== undefined &&
+        res.moves[i].words.x !== undefined
+      ) {
+        run.push(res.moves[i]);
+        i++;
+      }
+      expect(run.length).toBeGreaterThan(1);
+      let prevZ = Infinity;
+      for (const m of run) {
+        expect(m.words.z!).toBeLessThan(prevZ - 1e-12);
+        prevZ = m.words.z!;
       }
     }
-    // plunges: passes × (approach-plane → cut depth) at plungeFeed; loops at
-    // cut feed. The approach plane sits APPROACH_CLEARANCE above the
-    // STANDING material (topZ at the first level — never a rapid through
-    // stock), so the plunge feeds 1.5 (0.5 air + the 1mm band) per pass
-    expect(res.estimatedMinutes).toBeCloseTo(len / 500 + (res.passes * 1.5) / 200, 5);
+  });
+
+  it('pins the helical entry geometry: full revolutions of the cut loop', () => {
+    // the 10mm region, Ø2 tool: the k=0 pass rides an 8mm square with
+    // rounded corners. Level 1 descends 0.5 air + 1.0 band = 1.5mm;
+    // per-rev is bounded by stepDown (1) and slope (3°) → 2 revolutions
+    // of 0.75mm each, riding the loop's own geometry and closing each
+    // revolution back on the start vertex.
+    const res = pocket2d(op(), tool);
+    expect(res.entries.helical).toBe(4);
+    // ramp runs = maximal chains of coordinated XY+Z feed moves
+    const runs: ReturnType<typeof pocket2d>['moves'][] = [];
+    let cur: ReturnType<typeof pocket2d>['moves'] = [];
+    for (const m of res.moves) {
+      if (!m.rapid && m.words.x !== undefined && m.words.z !== undefined) cur.push(m);
+      else if (cur.length > 0) {
+        runs.push(cur);
+        cur = [];
+      }
+    }
+    if (cur.length > 0) runs.push(cur);
+    expect(runs.length).toBe(4);
+    const run = runs[0];
+    const last = run[run.length - 1];
+    // the run lands exactly on the cut level, back on its start vertex
+    expect(last.words.z).toBeCloseTo(-1, 9);
+    // two full traversals of the k=0 loop: the cut pass that follows the
+    // ramp shares its geometry, so its perimeter is the rev length
+    const firstLoop = passLoops(res.moves)[0];
+    let perim = 0;
+    for (let i = 0; i < firstLoop.length; i++) {
+      const p = firstLoop[i];
+      const q = firstLoop[(i + 1) % firstLoop.length];
+      perim += Math.hypot(q.x - p.x, q.y - p.y);
+    }
+    // the entry position: the last x/y rapid before the run's first leg
+    const firstIdx = res.moves.indexOf(run[0]);
+    let entryX = 0;
+    let entryY = 0;
+    for (let i = firstIdx - 1; i >= 0; i--) {
+      if (res.moves[i].words.x !== undefined) {
+        entryX = res.moves[i].words.x!;
+        entryY = res.moves[i].words.y!;
+        break;
+      }
+    }
+    let len = 0;
+    let closes = 0;
+    let px = entryX;
+    let py = entryY;
+    let prevZ = Infinity;
+    for (let i = 0; i < run.length; i++) {
+      const m = run[i];
+      const dxy = Math.hypot(m.words.x! - px, m.words.y! - py);
+      len += dxy;
+      const dz = prevZ - m.words.z!;
+      // every leg rides the path at ≤ the max ramp slope
+      if (i > 0 && dz > 0) {
+        expect(dz / Math.max(dxy, 1e-12)).toBeLessThanOrEqual(Math.tan((3 * Math.PI) / 180) + 1e-9);
+      }
+      if (Math.hypot(m.words.x! - last.words.x!, m.words.y! - last.words.y!) < 1e-9) closes++;
+      expect(m.words.z!).toBeLessThan(prevZ - 1e-12);
+      prevZ = m.words.z!;
+      px = m.words.x!;
+      py = m.words.y!;
+    }
+    expect(closes).toBe(2); // each of the two revolutions closes on the start
+    expect(len).toBeCloseTo(2 * perim, 5);
   });
 
   it('drops closed passes shorter than minLoopPerimeter, counting them', () => {

@@ -604,6 +604,13 @@ export interface PocketOp {
   plungeFeed: number;
   /** rapid clearance above topZ, mm */
   safeClearance: number;
+  /**
+   * Finishing pass (Alice, 2026-10-26): the ladder is collapsed to ONE
+   * level at the floor and the bulk above it is ASSUMED already removed
+   * — the entry descends through air and plunges straight (entry.ts),
+   * never ramping at material that is not there.
+   */
+  finishingOnly?: boolean;
 }
 
 /** Peck-drill hole centers. Emitted as explicit G0/G1 moves (no cycles). */
@@ -681,6 +688,13 @@ export interface ProfileOp {
   safeClearance: number;
   /** cut-out tabs — absent = cut through in one piece (src/cam/profile.ts) */
   tabs?: ProfileTabs;
+  /**
+   * Finishing pass (Alice, 2026-10-26): the ladder is collapsed to ONE
+   * full-depth level and the bulk above it is ASSUMED already removed —
+   * the entry descends through air and plunges straight (entry.ts),
+   * never ramping at material that is not there.
+   */
+  finishingOnly?: boolean;
 }
 
 /**

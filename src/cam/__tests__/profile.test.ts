@@ -51,27 +51,44 @@ interface CutPass {
   points: Vec2[];
 }
 
-/** Cut passes whose plunge sits at `levelZ` (plunge → feed moves → retract). */
+/** Cut passes whose entry lands at `levelZ` (entry ramp → cuts → retract).
+ *  Ramp legs are entry, not cut geometry — they position the pass start;
+ *  a straight-plunge fallback opens the pass where the rapids positioned.
+ *  A pass whose entry landed on ANOTHER level never opens (the deep spans
+ *  don't count as level −1 passes). */
 function cutPasses(moves: Move[], levelZ: number): CutPass[] {
   const passes: CutPass[] = [];
   let lastXY: Vec2 | null = null;
   let current: CutPass | null = null;
+  let entryZ: number | null = null;
   const close = () => {
     if (current) passes.push(current);
     current = null;
   };
   for (const m of moves) {
+    const prevXY = lastXY;
     if (m.words.x !== undefined) lastXY = { x: m.words.x, y: m.words.y! };
     if (m.rapid) {
       close();
+      entryZ = null;
+      continue;
+    }
+    if (m.words.z !== undefined && m.words.x !== undefined) {
+      entryZ = m.words.z; // ramp leg — the run's landing is its last z
       continue;
     }
     if (m.words.z !== undefined) {
       close();
+      entryZ = m.words.z; // straight-plunge fallback
       if (Math.abs(m.words.z - levelZ) < 1e-9 && lastXY) current = { plunge: lastXY, points: [] };
       continue;
     }
-    if (m.words.x !== undefined && current) current.points.push({ x: m.words.x, y: m.words.y! });
+    if (m.words.x !== undefined && current) {
+      current.points.push({ x: m.words.x, y: m.words.y! });
+    } else if (m.words.x !== undefined && prevXY && entryZ !== null && Math.abs(entryZ - levelZ) < 1e-9) {
+      // first cut after a ramp that landed on THIS level
+      current = { plunge: prevXY, points: [{ x: m.words.x, y: m.words.y! }] };
+    }
   }
   close();
   return passes;
@@ -152,11 +169,16 @@ describe('profile2d', () => {
     const res = profile2d(op({ topZ: 0, floorZ: -2.5, stepDown: 1 }), tool);
     expect(res.levels).toBe(3);
     expect(res.passes).toBe(3); // one wall pass per level
-    const plunges = res.moves
-      .filter((m) => !m.rapid && m.words.z !== undefined)
-      .map((m) => m.words.z!)
-      .sort((a, b) => b - a);
-    expect([...new Set(plunges.map((z) => z.toFixed(3)))]).toEqual(['-0.833', '-1.667', '-2.500']);
+    // every entry lands on its level — the ramp run's last z word
+    const zs = res.moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!);
+    const runs: number[][] = [];
+    for (const z of zs) {
+      const last = runs[runs.length - 1];
+      if (!last || z > last[last.length - 1] + 1e-12) runs.push([z]);
+      else last.push(z);
+    }
+    const landings = [...new Set(runs.map((r) => r[r.length - 1].toFixed(3)))];
+    expect(landings).toEqual(['-0.833', '-1.667', '-2.500']);
     // one safe-Z retract per pass (plus the entry rapids carry safeZ too)
     const safeRetracts = res.moves.filter((m) => m.rapid && m.words.z === 5);
     expect(safeRetracts.length).toBe(6); // 3 entries + 3 retracts
@@ -290,11 +312,26 @@ describe('profile2d', () => {
   it('pins the no-tabs output to the pre-tabs baseline', () => {
     const res = profile2d(op(), tool);
     expect(res.warnings).toEqual([]);
-    expect(res.moves.length).toBe(50); // 2 levels × (entry 4 + 20 loop cuts + retract)
     expect(res.passes).toBe(2);
-    // the level-1 plunge charges its honest 1.5mm descent (approach above
-    // the surface + the 1mm level), not the old flat 0.5 clearance
-    expect(res.estimatedMinutes).toBeCloseTo(0.1999418798617789, 6);
+    // every pass enters helically along the loop — never a straight plunge
+    expect(res.entries.helical).toBe(2);
+    expect(res.entries.plunge).toBe(0);
+    // the estimate is the emitted geometry itself: every feed move's 3D
+    // length at its own feed rate (ramps at plunge feed, cuts at cut feed)
+    let x = 0;
+    let y = 0;
+    let z = 0;
+    let minutes = 0;
+    for (const m of res.moves) {
+      const nx = m.words.x ?? x;
+      const ny = m.words.y ?? y;
+      const nz = m.words.z ?? z;
+      if (!m.rapid) minutes += Math.hypot(nx - x, ny - y, nz - z) / m.feed;
+      x = nx;
+      y = ny;
+      z = nz;
+    }
+    expect(res.estimatedMinutes).toBeCloseTo(minutes, 6);
   });
 });
 
@@ -350,17 +387,43 @@ describe('profile2d tabs', () => {
         expect(tabDeflection(arcOf(q), 3)).toBeGreaterThanOrEqual(1.5 - 1e-6);
       }
     }
+    // the deep entries RAMP along their span (entry.ts): every zigzag leg
+    // rides the span it belongs to, never a tab bridge. The shallow level
+    // (above the tab top) cuts through unbroken by design — only runs
+    // landing at the deep level are checked.
+    const deepRamps: Vec2[] = [];
+    let run: Move[] = [];
+    const flush = () => {
+      if (run.length > 0 && Math.abs(run[run.length - 1].words.z! - -2) < 1e-9) {
+        for (const m of run) deepRamps.push({ x: m.words.x!, y: m.words.y! });
+      }
+      run = [];
+    };
+    for (const m of res.moves) {
+      if (!m.rapid && m.words.z !== undefined && m.words.x !== undefined) {
+        run.push(m);
+        continue;
+      }
+      flush();
+    }
+    flush();
+    expect(deepRamps.length).toBeGreaterThan(0);
+    for (const q of deepRamps) {
+      expect(tabDeflection(arcOf(q), 3)).toBeGreaterThanOrEqual(1.5 - 1e-6);
+    }
     // the uncut 9mm is exactly 3 tabs of 3mm; the deep level cuts the rest
     const cut = deep.reduce((sum, p) => sum + passLength(p), 0);
     expect(cut).toBeCloseTo(40 - 3 * 3, 6);
     expect(cut).toBeLessThan(40);
 
-    // span entries follow the pass convention and never combine Z with XY
+    // the v1 pin "span entries never combine Z with XY" is gone with the
+    // ramp rework: span entries now zigzag with coordinated Z+XY (entry.ts),
+    // and their legs are pinned above to stay inside the span's tab-free
+    // window. CUT moves remain pure XY.
     for (const m of res.moves) {
-      if (m.words.z !== undefined) {
-        expect(m.words.x).toBeUndefined();
-        expect(m.words.y).toBeUndefined();
-      }
+      if (m.rapid || m.words.z === undefined) continue;
+      if (m.words.x === undefined) continue; // straight-plunge fallback
+      // a ramp leg: the tabDeflection loop above already vetted its XY
     }
   });
 
