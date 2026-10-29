@@ -104,6 +104,7 @@ describe('the contour4d op (plan + emission)', () => {
       orientStep: 30,
       margin: null,
       cutBeyondStock: false,
+      clearToStock: true,
       finishingOnly: false,
     };
     const res = generateJobOp(op, {

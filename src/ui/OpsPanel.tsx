@@ -718,19 +718,26 @@ function ParamFields(props: {
             title="Per-orientation roughing depth limit below the crown — pre-filled from the tool's flute length, same as the waterline: deeper than the flute, the shaft and collet ride into standing stock. Override when you know the shape keeps the shaft clear — the simulation's red marks check the claim"
             onCommit={(v) => upd({ maxDepth: v > 0 ? v : null } as Partial<JobOp>)}
           />
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={op.clearToStock}
+              onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>clear excess stock</span>
+          </label>
           <FinishingOnlyCheck
             op={op}
             upd={upd}
             allowanceKey="allowance"
-            title="Per-orientation finishing scrub only — the emission stage (when it lands) passes this through to each chosen angle's rough"
+            title="Per-orientation finishing scrub only — passed through to each chosen angle's rough"
           />
           <p className="hint">
             plans its own index angles: no hand-tuned orientation stacks. The planner maps which
             surface cells each candidate angle can clear, greedily picks the minimal set that
-            covers the model, and reports the chosen angles, the coverage, and the honest
-            unreachable set (deep undercuts no angle reaches). The roughing fields apply to each
-            chosen angle's pass when the emission stage lands — for now the op reports the plan
-            only, so you can react to the chosen angles before any moves exist.
+            covers the model, and emits a rough at every chosen angle — the chosen angles, the
+            coverage, and the honest unreachable set (deep undercuts no angle reaches) all report
+            in the summary. The roughing fields apply to each chosen angle's pass.
           </p>
         </>
       );

@@ -172,6 +172,17 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
       }
       return normalized;
     }
+    // contour4d saves from the plan-only stage carried no clearToStock —
+    // the excess clear is the DEFAULT (Alice 2026-10-29: without it the
+    // rough strands waste columns around the part, and the chunks drop
+    // or fly off mid-job, leaving later orientations plotting against
+    // stock that moved)
+    if (op.kind === 'contour4d') {
+      const rawClear = (op as { clearToStock?: unknown }).clearToStock;
+      if (rawClear !== true && rawClear !== false) {
+        return { ...op, clearToStock: true } as JobOp;
+      }
+    }
     if (op.kind === 'chamfer') {
       // ops saved before all four fields existed (or by a mid-build dev
       // state) carry undefined values — the panel select then displays the

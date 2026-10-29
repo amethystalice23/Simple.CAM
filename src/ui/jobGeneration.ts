@@ -329,6 +329,11 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         orientStep: 30, // her 2026-10-29 ruling: "30 for now"
         margin: null,
         cutBeyondStock: false,
+        // DEFAULT ON (her 2026-10-29 sim report: without the excess
+        // clear, big waste chunks strand around the part and drop/fly
+        // off mid-job — the later orientations then plot against stock
+        // that moved)
+        clearToStock: true,
         maxDepth: tool.fluteLength ?? null, // the flute default, same ruling
         finishingOnly: false,
       };
@@ -1657,20 +1662,21 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           }
           const res = waterlineRough({
             positions,
-            // the contour4d op has no clear-to-stock toggle: the rough
-            // clears the model's column only, never out to the stock edge
-            // (per-orientation excess clearing would fight the other
-            // orientations' columns)
-            footprint: op.cutBeyondStock
-              ? undefined
-              : stockFootprint(ctx.stock, pick.angle % 360 !== 0),
+            // the waterline's own footprint rule, verbatim: clear-excess
+            // WINS over cut-over (the clear needs the footprint — every
+            // level clears out to the stock edge), cut-over alone skips
+            // the clip so the boundary pass may leave the stock
+            footprint:
+              op.clearToStock || !op.cutBeyondStock
+                ? stockFootprint(ctx.stock, pick.angle % 360 !== 0)
+                : undefined,
             topZ: crown,
             floorZ: Math.max(modelMinZ, stockBottom),
             stepDown: op.stepDown,
             stepOver: op.stepOver,
             allowance: op.allowance,
             finishingOnly: op.finishingOnly,
-            clearToStock: false,
+            clearToStock: op.clearToStock,
             maxDepth: op.maxDepth ?? undefined,
             // null = derive Ø + allowance + step over at generation, the
             // waterline's own rule (job files stay tool-agnostic)

@@ -1183,6 +1183,13 @@ export type JobOp =
        *  rough */
       margin: number | null;
       cutBeyondStock: boolean;
+      /** CLEAR EXCESS STOCK (Alice 2026-10-29, DEFAULT ON): every
+       * level of every orientation's rough clears out to the stock
+       * edge, like the waterline's own toggle. Without it the rough
+       * strands waste columns around the part — big chunks that drop
+       * or fly off mid-job, leaving the later orientations (and any
+       * standing-material model) plotting against stock that moved */
+      clearToStock: boolean;
       maxDepth?: number | null;
       finishingOnly?: boolean;
     })
