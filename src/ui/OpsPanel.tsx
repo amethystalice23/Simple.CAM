@@ -696,6 +696,44 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'contour4d':
+      return (
+        <>
+          <NumberField label="Allowance (mm)" value={op.allowance} min={0} step={0.05} onCommit={(v) => upd({ allowance: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <NumberField
+            label="Orientation step (°)"
+            value={op.orientStep}
+            min={5}
+            step={5}
+            title="The planner's candidate-ladder spacing: it evaluates every orientation this many degrees apart and picks the minimal set that covers the model. Denser ladders cost more planning time and may shave an orientation off the chosen set; 30° is the default"
+            onCommit={(v) => upd({ orientStep: v } as Partial<JobOp>)}
+          />
+          <NumberField
+            label="Max depth (mm)"
+            value={op.maxDepth ?? 0}
+            min={0}
+            step={0.5}
+            title="Per-orientation roughing depth limit below the crown — pre-filled from the tool's flute length, same as the waterline: deeper than the flute, the shaft and collet ride into standing stock. Override when you know the shape keeps the shaft clear — the simulation's red marks check the claim"
+            onCommit={(v) => upd({ maxDepth: v > 0 ? v : null } as Partial<JobOp>)}
+          />
+          <FinishingOnlyCheck
+            op={op}
+            upd={upd}
+            allowanceKey="allowance"
+            title="Per-orientation finishing scrub only — the emission stage (when it lands) passes this through to each chosen angle's rough"
+          />
+          <p className="hint">
+            plans its own index angles: no hand-tuned orientation stacks. The planner maps which
+            surface cells each candidate angle can clear, greedily picks the minimal set that
+            covers the model, and reports the chosen angles, the coverage, and the honest
+            unreachable set (deep undercuts no angle reaches). The roughing fields apply to each
+            chosen angle's pass when the emission stage lands — for now the op reports the plan
+            only, so you can react to the chosen angles before any moves exist.
+          </p>
+        </>
+      );
     case 'rasterContour':
       return (
         <>

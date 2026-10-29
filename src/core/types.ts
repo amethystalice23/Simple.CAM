@@ -1157,6 +1157,36 @@ export type JobOp =
       finishingOnly?: boolean;
     })
   | (JobOpBase & {
+      kind: 'contour4d';
+      /**
+       * THE 4D CONTOUR (P3 of the true-4D plan, named per her own file
+       * and usage): a whole-model multi-orientation rough that PLANS
+       * its own index angles — no user-chosen orientations. The
+       * planner runs the cleared-set map over a candidate ladder,
+       * greedily covers the model's surface cells, and emits per-
+       * orientation roughing at the chosen angles (the fields below
+       * are each orientation pass's waterline parameters, since the
+       * emission stage generates waterline roughs at the chosen
+       * datums). The honest unreachable set is reported, never
+       * silently dropped.
+       */
+      /** roughing stock left on the model for a finishing op, mm */
+      allowance: number;
+      stepDown: number;
+      stepOver: number;
+      /** the candidate-ladder spacing, degrees — the planner evaluates
+       *  every orientStep around the circle (her 2026-10-29 ruling:
+       *  "30 for now" — the knob) */
+      orientStep: number;
+      /** per-orientation roughing fields — see the waterline op; the
+       *  emission stage passes them through to each chosen angle's
+       *  rough */
+      margin: number | null;
+      cutBeyondStock: boolean;
+      maxDepth?: number | null;
+      finishingOnly?: boolean;
+    })
+  | (JobOpBase & {
       kind: 'rasterContour';
       /**
        * Raster contour of the whole loaded model (PLAN.md Phase B): the

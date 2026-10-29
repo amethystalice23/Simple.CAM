@@ -17,6 +17,8 @@ import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
+import { buildClearedMap } from '../cam/clearedSet';
+import { greedyCover } from '../cam/orientCover';
 import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
 import { rotaryCarve, type StandingGrid } from '../cam/rotaryCarve';
@@ -128,6 +130,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'profile', label: 'Profile' },
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'waterline', label: 'Waterline contour' },
+  { kind: 'contour4d', label: '4D contour (multi-orientation rough)', rotaryOnly: true },
   { kind: 'rasterContour', label: 'Raster contour (3D finish)' },
   { kind: 'rotaryCarve', label: 'Rotary contour (4-axis)', rotaryOnly: true },
   { kind: 'drill', label: 'Drill' },
@@ -311,6 +314,23 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         // old behavior) — no default invented.
         maxDepth: tool.fluteLength ?? null,
         finishingOnly: false, // full clearing per level; the toggle scrubs surfaces only
+      };
+    case 'contour4d':
+      // the 4D contour (P3): the planner owns the orientations; the
+      // per-orientation rough fields mirror the waterline defaults (the
+      // emission stage generates waterline roughs at the chosen angles),
+      // orientStep is her 30° ladder knob
+      return {
+        ...base,
+        kind,
+        allowance: 0.2,
+        stepDown: Math.max(stepDown, 0.5),
+        stepOver: defaultStepOver(tool),
+        orientStep: 30, // her 2026-10-29 ruling: "30 for now"
+        margin: null,
+        cutBeyondStock: false,
+        maxDepth: tool.fluteLength ?? null, // the flute default, same ruling
+        finishingOnly: false,
       };
     case 'rasterContour':
       // the paired SURFACE pass (PLAN.md Phase B): default allowance 0 —
@@ -1539,6 +1559,49 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             (op.finishingOnly ? ', finishing pass only (surface scrub, waste cleared at the floor level)' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
+        };
+      }
+      case 'contour4d': {
+        // STAGE A of the 4D contour (P3): the op computes its own
+        // orientation plan — the cleared-set map over the candidate
+        // ladder, greedy cover, honest report — and emits NO moves yet
+        // (stage B generates the per-orientation roughs at the chosen
+        // angles). The whole loaded model is the target, like the
+        // waterline; no selection, no user-chosen orientations.
+        if (!ctx.geometry) return fail('needs a loaded model — the plan targets it');
+        if (ctx.stock.axisMode !== '4-axis') {
+          return fail('the 4D contour needs 4-axis stock — it rotates the part between roughing angles');
+        }
+        if (!(op.orientStep > 0) || op.orientStep >= 360) {
+          return fail('orientation step must be between 0° and 360°');
+        }
+        const cal = rotaryCalibrationOf(ctx.stock);
+        const [sx0, sx1] = stockSpan(ctx.stock, 'x');
+        const positions = transformedPositions(ctx.geometry, ctx.transform);
+        const ladder: number[] = [];
+        for (let a = 0; a < 360; a += op.orientStep) ladder.push(a);
+        const map = buildClearedMap({
+          positions,
+          x0: sx0,
+          x1: sx1,
+          radius: cal.effectiveRadius,
+          axisZ: cal.axisZ,
+          thetaStepOver: op.stepOver,
+          tool: { diameter: tool.diameter },
+          orientations: ladder,
+        });
+        const plan = greedyCover(map);
+        const angles = plan.picks.map((p) => `${p.angle}°`);
+        const pct = map.coverable > 0 ? (100 * plan.covered) / map.coverable : 100;
+        return {
+          moves: [],
+          minutes: 0,
+          error: null,
+          summary:
+            `plan: ${plan.picks.length} orientation(s) [${angles.join(', ')}] · ` +
+            `${plan.covered}/${map.coverable} coverable cells (${pct.toFixed(0)}%) · ` +
+            `${map.buriedEverywhere} unreachable (deep undercuts) · ` +
+            `stage 1: plan only — moves land with stage 2`,
         };
       }
       case 'rasterContour': {
