@@ -1419,13 +1419,32 @@ export function App() {
             opSelection={resolvedSelection}
             primitives={primitives}
             previewMoves={previewMoves}
+            playbackMove={
+              // THE TRAIL RIDES THE WORKER'S TRUTH (Alice's 2026-10-29
+              // pause report: the trail and the tool marker must sit
+              // together — the marker follows the worker's last CARVED
+              // pose, so the trail clusters around the CARVED move, not
+              // the transport clock's ahead-of-carve target; at 8× the
+              // clock leads the carve by tens of moves and the two
+              // split apart, the marker "vanishing" far behind the
+              // trail). The transport's bar keeps its clock — it is the
+              // plan — but trail and marker both show the carve.
+              carveSim.state.progress ? carveSim.state.progress.move : null
+            }
             slicePreview={slicePreview}
             viewDatum={viewDatum}
             pickKind={featurePick?.kind ?? null}
             facePreview={facePreview}
             threadPreview={threadPreview}
             simChunks={showSim && carveSim.state.chunks.size > 0 ? carveSim.state.chunks : null}
-            simTip={showSim && carveSim.state.running ? carveSim.state.tip : null}
+            // the marker gate is the TIP's EXISTENCE, not `running` —
+            // running flips false at `done` and nothing ever restores it
+            // (rewind + play re-carves through `carve` messages, which
+            // never re-run `ready`), so a running-gated marker shows on
+            // the FIRST pass only and vanishes on every rewind/pause
+            // after it (her 2026-10-29 report). The tip is null at done
+            // (tool parked) and on dispose — those still hide it.
+            simTip={showSim ? carveSim.state.tip : null}
             displayLayers={{
               stock: showStock,
               model: showModel,

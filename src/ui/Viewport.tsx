@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { originSpan, rotaryCalibrationOf } from '../core/types';
 import type { FeaturePickKind, ModelTransform, Move, Primitive, Stock } from '../core/types';
-import { movesToSegments } from './toolpathPreview';
+import { movesToSegmentMoves } from './toolpathPreview';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import type { FeatureSource } from './featureSources';
 import { primitiveGeometry, primitivePose } from './featureSources';
@@ -126,6 +129,17 @@ interface Props {
   primitives: Primitive[];
   /** generated moves to draw (PLAN.md "Toolpath preview") */
   previewMoves: Move[] | null;
+  /**
+   * THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): the transport's current
+   * move while a playback highlights paths — null = the full-opacity static
+   * preview (no playback). When set, paths render as a TRAIL: the current
+   * move and the next two at 50%, the three previous at 15/10/5%, and
+   * everything older at a 4% floor — the cloud fades to a readable ribbon
+   * that shows where the tool has just been and where it goes next.
+   * Alice's ceiling rule: NO path line ever exceeds 50% — full opacity is
+   * the model's alone.
+   */
+  playbackMove: number | null;
   /** the expanded slice-pocket op's section plane (edge-tracing §5): the
    * machine Z to draw the plane + contour at, the datum rotation for
    * slicing the rotated part, and the callback a drag of the plane
@@ -203,6 +217,7 @@ export function Viewport({
   opSelection,
   primitives,
   previewMoves,
+  playbackMove,
   slicePreview,
   viewDatum,
   pickKind,
@@ -289,6 +304,10 @@ export function Viewport({
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1d21);
+    // the browser smokes' scene handle (the __simTipMarker convention):
+    // three.js scenes aren't DOM-inspectable, so the smoke drivers walk
+    // from here — a debug hook for scripts/, never app state
+    (window as unknown as { __scene?: THREE.Scene }).__scene = scene;
     // both projections exist up front; the toggle re-points controls,
     // render, and the snap math at the active one (swapProjection below)
     const persp = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
@@ -792,6 +811,12 @@ export function Viewport({
       ortho.right = (viewH / 2) * aspect;
       ortho.updateProjectionMatrix();
       renderer.setSize(el.clientWidth, el.clientHeight);
+      // the fat-line materials (the playback trail) need the drawing
+      // buffer size to map linewidth to true screen pixels
+      scene.traverse((o) => {
+        const m = (o as THREE.Object3D & { material?: unknown }).material;
+        if (m instanceof LineMaterial) m.resolution.set(el.clientWidth, el.clientHeight);
+      });
     };
     const observer = new ResizeObserver(onResize);
     observer.observe(el);
@@ -1096,16 +1121,22 @@ export function Viewport({
     if (!g) {
       g = new THREE.Group();
       g.name = 'sim-tip-marker';
-      // the dot
-      const dotMat = new THREE.MeshBasicMaterial({
+      // the tool silhouette: a SMALL INVERTED CONE, 30% transparent
+      // (Alice, 2026-10-29: "make the dot of the tool tip instead be a
+      // small 30% transparent inverted cone") — the cone's base sits AT
+      // the tip (the cutting edge, where the Ø is), apex up along the
+      // shank: it reads as the tool itself rather than a generic dot.
+      const coneMat = new THREE.MeshBasicMaterial({
         color: 0x66d9ff,
         transparent: true,
+        opacity: 0.3, // 30% transparent per the spec
         depthTest: false,
+        side: THREE.DoubleSide, // a translucent shell reads from both sides
       });
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), dotMat);
-      dot.renderOrder = 10;
-      dot.name = 'tip-dot';
-      g.add(dot);
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.8, 2.5, 16), coneMat);
+      cone.renderOrder = 10;
+      cone.name = 'tip-dot';
+      g.add(cone);
       // the axis stub: +Z in group-local space (a stub of the tool's shank
       // direction, −axis); rebuilt per pose below from the two endpoints
       const stubMat = new THREE.LineBasicMaterial({
@@ -1140,8 +1171,26 @@ export function Viewport({
       return;
     }
     g.visible = true;
-    const dot = g.getObjectByName('tip-dot') as THREE.Mesh;
-    dot.position.set(simTip.x, simTip.y, simTip.z);
+    const cone = g.getObjectByName('tip-dot') as THREE.Mesh;
+    // the cone's axis: apex toward −(tool axis) — the shank side. Three.js
+    // cones point +Y; rotate +Y onto the shank direction. The BASE sits at
+    // the tip (the cutting edge), so the cone's center offsets half the
+    // height along the shank direction.
+    // FLIP: the APEX sits at the tool tip and the cone opens UPWARD along
+    // the shank (Alice, 2026-10-29: "smaller and the other way up") —
+    // read it as the tool's taper INTO the material. −(tool axis) is the
+    // shank side; the apex at the tip means the center offsets half the
+    // height along the shank and the cone points BACK down that axis.
+    const shank = new THREE.Vector3(-simTip.ax, -simTip.ay, -simTip.az).normalize();
+    const half = 1.25; // half the cone height
+    cone.position.set(
+      simTip.x + shank.x * half,
+      simTip.y + shank.y * half,
+      simTip.z + shank.z * half,
+    );
+    // the cone's +Y (apex side) points back INTO the cut, i.e. along the
+    // TOOL axis: apex at the tip, base opening toward the shank
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), shank.clone().negate());
     const stub = g.getObjectByName('tip-stub') as THREE.Line;
     // the stub rises from the tip ALONG −axis (the shank side, out of the
     // cut): min(flute 10mm) of approach direction, cheap to read
@@ -1156,6 +1205,90 @@ export function Viewport({
       ),
     ]);
   }, [simTip, simChunks, stock]);
+
+  // THE PLAYBACK TRAIL (Alice's spec + 2026-10-29 correction, verbatim:
+  // "display a small cluster of moves around the current cut ... you get
+  // a clear idea of where it has just been and where its going whilst
+  // its rendering the cut, but without cluttering the screen" — and the
+  // correction: the trail rides WITH THE SIMULATION + the tool marker,
+  // NOT as part of the Paths view, which stays the full nest). A SHORT
+  // cluster only — current move + the next two at 50%, the three
+  // previous at 15/10/5% — NOTHING ELSE: no floor of the whole job.
+  // Alice's ceiling: no path line exceeds 50%; full opacity is the
+  // model's alone. Rapids one shade under their cut twin. Parented into
+  // datumGroup beside the marker and the chunks (the same display frame
+  // movesToSegmentMoves maps into), rebuilt per transport position.
+  useEffect(() => {
+    const datum = datumGroupRef.current;
+    if (!datum || !previewMoves || playbackMove === null || !displayLayers.simulation) return;
+    const segs = movesToSegmentMoves(previewMoves, stock);
+    const cur = playbackMove;
+    // the SHORT cluster: Δmove ∈ [−3, +2]. Map each Δ to its opacity.
+    const band = (d: number): number | null => {
+      if (d >= 0 && d <= 2) return 0.5; // current + the next two
+      if (d === -1) return 0.15;
+      if (d === -2) return 0.1;
+      if (d === -3) return 0.05;
+      return null; // outside the cluster: NOT DRAWN (no whole-job floor)
+    };
+    const classes = new Map<number, { feed: number[]; rapid: number[] }>();
+    const add = (dMove: number) => {
+      let c = classes.get(dMove);
+      if (!c) { c = { feed: [], rapid: [] }; classes.set(dMove, c); }
+      return c;
+    };
+    for (let s = 0; s < segs.feedMoves.length; s++) {
+      const d = segs.feedMoves[s] - cur;
+      if (band(d) === null) continue;
+      add(d).feed.push(
+        segs.feed[s * 6], segs.feed[s * 6 + 1], segs.feed[s * 6 + 2],
+        segs.feed[s * 6 + 3], segs.feed[s * 6 + 4], segs.feed[s * 6 + 5],
+      );
+    }
+    for (let s = 0; s < segs.rapidMoves.length; s++) {
+      const d = segs.rapidMoves[s] - cur;
+      if (band(d) === null) continue;
+      add(d).rapid.push(
+        segs.rapid[s * 6], segs.rapid[s * 6 + 1], segs.rapid[s * 6 + 2],
+        segs.rapid[s * 6 + 3], segs.rapid[s * 6 + 4], segs.rapid[s * 6 + 5],
+      );
+    }
+    const objects: LineSegments2[] = [];
+    // WIDTH (Alice's ask, 2026-10-29: "make those lines a bit thicker,
+    // they are translucent its fine to be a few pixels wide"): the stock
+    // LineSegments/LineBasicMaterial linewidth is driver-ignored (1px),
+    // so the trail renders through the fat-line pipeline — LineSegments2
+    // with a screen-space pixel width. Translucent + a few px wide reads
+    // cleanly against the carved voxels.
+    const mkFat = (pts: number[], color: number, opacity: number) => {
+      const g = new LineSegmentsGeometry();
+      g.setPositions(pts);
+      const m = new LineMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthTest: false,
+        linewidth: 6, // screen pixels (Alice, 2026-10-29: "twice their current width")
+      });
+      m.resolution.set(host.current?.clientWidth ?? 800, host.current?.clientHeight ?? 600);
+      const line = new LineSegments2(g, m);
+      line.renderOrder = 10;
+      datum.add(line);
+      objects.push(line);
+    };
+    for (const [d, c] of classes) {
+      const o = band(d)!;
+      if (c.feed.length > 0) mkFat(c.feed, 0xffd27f, o);
+      if (c.rapid.length > 0) mkFat(c.rapid, 0xe05555, Math.max(0.03, o * 0.7));
+    }
+    return () => {
+      for (const l of objects) {
+        datum.remove(l);
+        l.geometry.dispose();
+        (l.material as THREE.Material).dispose();
+      }
+    };
+  }, [previewMoves, playbackMove, displayLayers.simulation, stock]);
 
   // sim mode: the carved chunks replace the translucent stock, and the
   // Layer visibility (the Layers dropdown): Stock/Model ticks, and the
@@ -1311,11 +1444,21 @@ export function Viewport({
     };
   }, [sources, stock, displayLayers.features, opSelection, selectedObjectId]);
 
-  // toolpath preview: feed/rapid polylines straight from the Move[] IR
+  // toolpath preview: feed/rapid polylines straight from the Move[] IR.
+  // THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): while a playback
+  // highlights paths (playbackMove set), segments render by their move-
+  // distance from the transport's current move — current + next two at
+  // 50%, the three previous at 15/10/5%, everything older at a 4% floor —
+  // the full-opacity cloud becomes a readable ribbon of where the tool
+  // has just been and where it goes next. Alice's ceiling: no path line
+  // ever exceeds 50% (full opacity is the model's alone); rapids ride
+  // below their cut-class twin. Static preview (playbackMove null)
+  // keeps today's full-opacity render — a paused playback keeps the
+  // trail (the committed position drives it).
   useEffect(() => {
     const group = featureGroupRef.current;
     if (!group || !previewMoves || !displayLayers.paths) return;
-    const segs = movesToSegments(previewMoves, stock);
+    const segs = movesToSegmentMoves(previewMoves, stock);
     const mk = (pts: number[], color: number, opacity: number, order: number) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
@@ -1328,8 +1471,10 @@ export function Viewport({
       return line;
     };
     const objects: THREE.LineSegments[] = [];
-    // feed cuts: amber. Rapids: RED — air moves unmistakable at a glance
-    // (Alice's 2026-10-26 ask: diagnose travel collisions by eye)
+    // THE PATHS LAYER IS THE FULL NEST, ALWAYS FULL OPACITY (Alice's
+    // 2026-10-29 correction: the trail is NOT part of the Paths view —
+    // that view exists to show every path at once; the trail lives with
+    // the simulation). Feed cuts amber, rapids red.
     if (segs.feed.length > 0) objects.push(mk(segs.feed, 0xffd27f, 0.95, 8));
     if (segs.rapid.length > 0) objects.push(mk(segs.rapid, 0xe05a5a, 0.9, 9));
     return () => {

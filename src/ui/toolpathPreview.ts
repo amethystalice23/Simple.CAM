@@ -26,15 +26,54 @@ export interface PreviewSegments {
   rapid: number[];
 }
 
+/**
+ * Segments + the MOVE INDEX each segment belongs to (the playback trail,
+ * 2026-10-29): one index per emitted segment pair, matching the feed/rapid
+ * arrays pair-for-pair, so the viewport can fade paths by their distance in
+ * move order from the transport's current move. Segments subdivided from
+ * one long rotary move share that move's index (the trail fades the whole
+ * interpolated helix as one move — the transport walks move indices).
+ */
+export interface PreviewSegmentMoves {
+  feed: number[];
+  rapid: number[];
+  /** move index per feed segment (length = feed.length / 6) */
+  feedMoves: number[];
+  /** move index per rapid segment (length = rapid.length / 6) */
+  rapidMoves: number[];
+}
+
 export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegments {
+  return segmentize(moves, stock);
+}
+
+export function movesToSegmentMoves(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
+  const s = segmentize(moves, stock);
+  return { feed: s.feed, rapid: s.rapid, feedMoves: s.feedMoves, rapidMoves: s.rapidMoves };
+}
+
+function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
   const rotary = stock?.axisMode === '4-axis';
   const axisZ = rotary ? rotaryCalibrationOf(stock).axisZ : 0;
   const pos = { x: 0, y: 0, z: 0, a: 0 };
   const feed: number[] = [];
   const rapid: number[] = [];
+  const feedMoves: number[] = [];
+  const rapidMoves: number[] = [];
 
-  const emit = (target: number[], x: number, y: number, z: number) => {
-    target.push(x, y, z);
+  // one SEGMENT (vertex pair) per call — the move index pushed exactly
+  // once with the pair. The length-modulo pairing this replaces fired on
+  // alternating pushes (every OTHER segment got an index) and misaligned
+  // indices with positions (caught by the synthetic coherence check).
+  const emit = (
+    target: number[],
+    targetMoves: number[],
+    mi: number,
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+  ) => {
+    target.push(x0, y0, z0, x1, y1, z1);
+    targetMoves.push(mi);
   };
 
   // the first move only positions the tool — no segment into it (the
@@ -43,6 +82,7 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
   // long rotary moves; prev is the mapped display point.
   let prev: { x: number; y: number; z: number } | null = null;
   let prevM: { x: number; y: number; z: number; a: number } | null = null;
+  let mIdx = 0;
 
   const toDisplay = (th: number, y: number, z: number): [number, number] => {
     const zrel = z - axisZ;
@@ -54,6 +94,12 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
   const ROT_STEP_DEG = 15;
 
   for (const m of moves) {
+    // mi = the ARRAY index, 0-based — the same basis the worker's
+    // progress.move reports (the pre-increment this replaces shifted
+    // every segment's move index +1, splitting the trail one move off
+    // the tool marker's position)
+    const mi = mIdx;
+    mIdx++;
     pos.x = m.words.x ?? pos.x;
     pos.y = m.words.y ?? pos.y;
     pos.z = m.words.z ?? pos.z;
@@ -74,6 +120,7 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
     }
 
     const target = m.rapid ? rapid : feed;
+    const targetMoves = m.rapid ? rapidMoves : feedMoves;
     const isRotary = rotary && m.words.a !== undefined;
     const da = isRotary && prevM ? pos.a - prevM.a : 0;
 
@@ -90,8 +137,7 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
         const mz = from.z + (pos.z - from.z) * t;
         const ma = from.a + da * t;
         const [dy, dz] = toDisplay((ma * Math.PI) / 180, my, mz);
-        emit(target, prev.x, prev.y, prev.z);
-        emit(target, mx, dy, dz);
+        emit(target, targetMoves, mi, prev.x, prev.y, prev.z, mx, dy, dz);
         prev = { x: mx, y: dy, z: dz };
       }
     } else {
@@ -108,13 +154,12 @@ export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegm
         [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
       }
       if (prev) {
-        emit(target, prev.x, prev.y, prev.z);
-        emit(target, x, y, z);
+        emit(target, targetMoves, mi, prev.x, prev.y, prev.z, x, y, z);
       }
       prev = { x, y, z };
     }
     prevM = { ...pos };
   }
 
-  return { feed, rapid };
+  return { feed, rapid, feedMoves, rapidMoves };
 }
