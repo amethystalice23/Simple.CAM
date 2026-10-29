@@ -1315,9 +1315,15 @@ export function OpsPanel(props: Props) {
       // the bug Alice caught 2026-10-25
       switch (op.kind) {
         case 'waterline':
+        case 'contour4d':
           // the maxDepth default follows the new cutter's flute (the
           // 2026-29 pre-populate ruling — same class as stepOver: a
-          // stale flute-derived ceiling from the OLD tool is wrong)
+          // stale flute-derived ceiling from the OLD tool is wrong).
+          // contour4d joined by her 2026-10-29 plank report: the kind
+          // was missing from this switch, so a tool change re-derived
+          // NOTHING and a longer-flute cutter kept the old tool's
+          // shallow ceiling — the ladder stopped high and left a plank
+          // of stock standing
           next = { ...next, stepDown, stepOver, maxDepth: t.fluteLength ?? null } as JobOp;
           break;
         case 'pocket':
