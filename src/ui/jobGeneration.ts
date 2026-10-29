@@ -1254,6 +1254,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
+            (res.continuous > 0 ? ', continuous descent' : '') +
+            (res.links > 0 ? `, ${res.links} stay-down link(s)` : '') +
             (op.finishingOnly ? ', finishing pass only' : '') +
             (op.cutBeyondStock ? ', step-over past the edge' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min`,

@@ -16,7 +16,7 @@ import {
   totalArea,
   union,
 } from './clipper';
-import { arcTable, rampEntry, type EntryMode } from './entry';
+import { arcTable, helicalDescentFits, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
 export interface PocketResult {
@@ -40,6 +40,11 @@ export interface PocketResult {
    * removed nothing the adjacent passes were not going to remove.
    */
   links: number;
+  /**
+   * 1 when the whole pocket took CONTINUOUS DESCENT (the single
+   * helical cut for one-orbit pockets — the entry is the roughing).
+   */
+  continuous: number;
 }
 
 /**
@@ -121,7 +126,6 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   let cur: Vec2 | null = null;
   let passes = 0;
   let minutes = 0;
-  let droppedLoops = 0;
   // the highest material a plunge in this level can meet: the surface at the
   // first level, the previous level's cut plane after that (this level's
   // region was cleared down to it). The approach rapid must stop
@@ -130,6 +134,106 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   // loop start (the yellow streak at each contour's plunge, Alice 2026-10-26)
   let standingZ = op.topZ;
   const entries: Record<EntryMode, number> = { helical: 0, zigzag: 0, plunge: 0 };
+
+  // HOIST the pass structure: the insets are level-independent (the region
+  // is the same at every level), so the surviving orbits are computed once —
+  // every level cut the identical offsets, re-derived per level until now.
+  const orbits: Vec2[][][] = [];
+  let droppedRaw = 0;
+  for (let k = 0; k < 10000; k++) {
+    let loops = offsetInward(op.regions, toolR + k * op.stepOver);
+    if (op.footprint && op.footprint.length > 0) {
+      loops = intersection(loops, op.footprint);
+    }
+    if (loops.length === 0) break;
+    const surviving = loops.filter((raw) => {
+      if (opts.minLoopPerimeter === undefined) return true;
+      let perim = 0;
+      for (let i = 0; i < raw.length; i++) {
+        const p = raw[i];
+        const q = raw[(i + 1) % raw.length];
+        perim += Math.hypot(q.x - p.x, q.y - p.y);
+      }
+      if (perim < opts.minLoopPerimeter) return false;
+      return true;
+    });
+    droppedRaw += loops.length - surviving.length;
+    orbits.push(surviving);
+  }
+  // the threshold drops were counted once here — the contract counts them
+  // SUMMED OVER LEVELS (every level drops the same orbits)
+  const droppedLoops = droppedRaw * levels.length;
+  const flatPassCount = orbits.reduce((n, o) => n + o.length, 0);
+
+  // CONTINUOUS DESCENT — the single helical cut (Alice's Studio note,
+  // 2026-10-28: small circular pockets cut as ONE helix). A pocket whose
+  // whole clearable area is ONE orbit has no interior left to clear: the
+  // orbit's band covers everything the tool can reach, so its ladder
+  // collapses into one helical descent along the orbit plus the floor
+  // lap — the entry IS the roughing. Requires a real multi-level ladder
+  // (single-level callers like the waterline bands keep today's emission
+  // byte-identically), real material above (not the finishing
+  // assumption), and a descent that fits without degenerating.
+  if (
+    flatPassCount === 1 &&
+    orbits[0].length === 1 &&
+    levels.length > 1 &&
+    !op.finishingOnly &&
+    helicalDescentFits(
+      arcTable(orbits[0][0])[orbits[0][0].length],
+      op.topZ + APPROACH_CLEARANCE - op.floorZ,
+      op.stepDown,
+    )
+  ) {
+    const loop = orbits[0][0];
+    const start = loop[0];
+    const cum = arcTable(loop);
+    const approach = op.topZ + APPROACH_CLEARANCE;
+    moves.push({
+      words: { x: start.x, y: start.y },
+      feed: 0,
+      rapid: true,
+      comment: `continuous descent to z${op.floorZ.toFixed(2)}`,
+    });
+    moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    moves.push({ words: { z: approach }, feed: 0, rapid: true });
+    const entry = rampEntry({
+      loop,
+      cum,
+      sStart: 0,
+      stretch: cum[loop.length],
+      closed: true,
+      band: op.topZ - op.floorZ,
+      fromZ: approach,
+      toZ: op.floorZ,
+      stepDown: op.stepDown,
+      feed: op.plungeFeed,
+    });
+    moves.push(...entry.moves);
+    minutes += entry.minutes;
+    entries[entry.mode]++;
+    // the floor lap — the orbit's final full pass, exactly the lap the
+    // stepped ladder would have finished on
+    let prev = start;
+    for (let i = 1; i <= loop.length; i++) {
+      const p = loop[i % loop.length];
+      moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+      minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
+      prev = p;
+    }
+    moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    return {
+      moves,
+      levels: levels.length,
+      passes: 1,
+      estimatedMinutes: minutes,
+      droppedLoops,
+      entries,
+      links: 0,
+      continuous: 1,
+    };
+  }
+
   // stay-down state: after a pass the tool RESTS at `cur` at `restZ` — the
   // retract is deferred so the next pass of the same level may link at
   // depth. restZ survives across levels (a cross-level link would descend
@@ -145,28 +249,8 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     clearedBands = [];
     // passes from the wall inward in stepOver increments, until the region
     // vanishes under the offset
-    for (let k = 0; k < 10000; k++) {
-      let loops = offsetInward(op.regions, toolR + k * op.stepOver);
-      if (op.footprint && op.footprint.length > 0) {
-        loops = intersection(loops, op.footprint);
-      }
-      if (loops.length === 0) break;
-
-      for (const raw of loops) {
-        // a closed pass shorter than the threshold is pinch noise, not
-        // clearing (see PocketOptions.minLoopPerimeter)
-        if (opts.minLoopPerimeter !== undefined) {
-          let perim = 0;
-          for (let i = 0; i < raw.length; i++) {
-            const p = raw[i];
-            const q = raw[(i + 1) % raw.length];
-            perim += Math.hypot(q.x - p.x, q.y - p.y);
-          }
-          if (perim < opts.minLoopPerimeter) {
-            droppedLoops++;
-            continue;
-          }
-        }
+    for (let k = 0; k < orbits.length; k++) {
+      for (const raw of orbits[k]) {
         const loop = rotateToNearest(raw, cur);
         const start = loop[0];
         const rest = restZ === levelZ ? cur : null;
@@ -253,5 +337,6 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     droppedLoops,
     entries,
     links,
+    continuous: 0,
   };
 }
