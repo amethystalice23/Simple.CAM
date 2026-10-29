@@ -64,6 +64,17 @@ function calculateArea(loop: Vec2[]): number {
   return Math.abs(area) / 2;
 }
 
+/** Signed shoelace area — CCW positive (the climb-orientation test). */
+function signedArea(loop: Vec2[]): number {
+  let a = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const p = loop[i];
+    const q = loop[(i + 1) % loop.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a / 2;
+}
+
 /** Loop points strictly after arc `s0` up to and including `s1` (which may
  *  wrap past the perimeter): interior vertices kept whole, the end point
  *  interpolated on its segment. The start is NOT included — the entry
@@ -114,7 +125,19 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
     paths = op.contours;
   } else {
     const offset = toolR + op.sideAllowance;
-    paths = op.side === 'outside' ? offsetOutward(op.contours, offset) : offsetInward(op.contours, offset);
+    // CLIMB MILLING (Alice's ruling, 2026-10-29: always climb, no
+    // option): the offset loop travels with the material on the LEFT.
+    // Outside (a boss, material inside the loop): Clipper preserves the
+    // contour's CCW winding — already climb, untouched. Inside (a bore,
+    // material outside the loop): travel must be CW — a CCW result
+    // (signed area > 0) is reversed; a CW input hole keeps its winding
+    // through the inward offset and is already correct.
+    paths =
+      op.side === 'outside'
+        ? offsetOutward(op.contours, offset)
+        : offsetInward(op.contours, offset).map((p) =>
+            signedArea(p) > 0 ? [...p].reverse() : p,
+          );
   }
   if (paths.length === 0) {
     throw new Error('profile offset leaves no path — tool too large for an inside profile?');

@@ -136,6 +136,23 @@ describe('profile2d', () => {
     // 10mm square inset by 1mm: 8mm across
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(7.9);
     expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(8.05);
+    // ALWAYS CLIMB (Alice's ruling, 2026-10-29): an inside profile's
+    // material (the wall) lies OUTSIDE the loop, so travel is CW —
+    // negative shoelace area. Outside profiles cut CCW (boss on the
+    // left) and online paths keep the drawn direction, neither pinned
+    // here; the climb pin for the outside family lives in pocket.test.
+    const passes = cutPasses(res.moves, op({ side: 'inside' }).floorZ);
+    expect(passes.length).toBeGreaterThan(0);
+    for (const p of passes) {
+      let a = 0;
+      const ring = [p.plunge, ...p.points];
+      for (let i = 0; i < ring.length; i++) {
+        const u = ring[i];
+        const v = ring[(i + 1) % ring.length];
+        a += u.x * v.y - v.x * u.y;
+      }
+      expect(a / 2).toBeLessThan(0);
+    }
   });
 
   it('follows the line exactly in online mode', () => {

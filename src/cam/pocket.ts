@@ -138,6 +138,16 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   // HOIST the pass structure: the insets are level-independent (the region
   // is the same at every level), so the surviving orbits are computed once —
   // every level cut the identical offsets, re-derived per level until now.
+  // EVERY orbit is REVERSED for CLIMB milling (Alice's ruling, 2026-10-29:
+  // always climb, no option — the machine target is modern stiff-frame
+  // desktop CNC, where climb's full-thickness tooth entry shears cleaner
+  // and conventional's zero-thickness rub is pure loss, the same rub
+  // mechanism as the bore entry ramp-up she pinned). Clipper preserves
+  // winding through the offset, so the orientation names the family: a
+  // CCW result is an outer-wall orbit (material outside the loop — CW
+  // travel puts the wall on the LEFT), a CW result grew from a hole
+  // (island orbit, material inside — CCW travel puts the island on the
+  // LEFT). Both families reverse, uniformly.
   const orbits: Vec2[][][] = [];
   let droppedRaw = 0;
   for (let k = 0; k < 10000; k++) {
@@ -146,6 +156,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
       loops = intersection(loops, op.footprint);
     }
     if (loops.length === 0) break;
+    loops = loops.map((raw) => [...raw].reverse());
     const surviving = loops.filter((raw) => {
       if (opts.minLoopPerimeter === undefined) return true;
       let perim = 0;

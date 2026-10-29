@@ -107,13 +107,15 @@ describe('pocket2d', () => {
     // loops; the fifth inset degenerates to a point and drops out
     expect(res.passes).toBe(4);
     const loops = passLoops(res.moves);
-    const areas = loops.map(loopArea).sort((a, b) => b - a);
+    const areas = loops.map((l) => Math.abs(loopArea(l))).sort((a, b) => b - a);
     // largest pass ≈ 8mm square with round corners (8² − (4−π))
     expect(areas[0]).toBeGreaterThan(60);
     expect(areas[0]).toBeLessThanOrEqual(64);
     expect(areas[areas.length - 1]).toBeGreaterThan(0);
-    // outer loops are CCW (positive area) — conventional for pockets
-    expect(areas[0]).toBeGreaterThan(0);
+    // CLIMB MILLING (Alice's ruling, 2026-10-29: always climb): outer-wall
+    // orbits travel CW — the material (the wall, outside the loop) sits on
+    // the LEFT of travel. CW = negative shoelace area.
+    expect(loopArea(loops[0])).toBeLessThan(0);
   });
 
   it('steps Z levels clamped to the floor', () => {
@@ -442,7 +444,7 @@ describe('pocket2d', () => {
     expect(filtered.droppedLoops).toBe(1);
     const loops = passLoops(filtered.moves);
     expect(loops).toHaveLength(1);
-    expect(loopArea(loops[0])).toBeCloseTo(2.2 * 2.2, 5);
+    expect(Math.abs(loopArea(loops[0]))).toBeCloseTo(2.2 * 2.2, 5);
   });
 
   it('single-orbit pockets bore as ONE continuous helix (step-down sets the slope)', () => {
@@ -504,5 +506,33 @@ describe('pocket2d', () => {
     const res = pocket2d(op({ floorZ: -2.5, stepDown: 1 }), tool);
     expect(res.continuous).toBe(0);
     expect(res.passes).toBe(12); // 3 levels × 4 orbits
+  });
+
+  it('ALWAYS CLIMB: walls on the left — outer orbits CW, island orbits CCW', () => {
+    // Alice's ruling, 2026-10-29: always climb, no option. The material a
+    // pass cuts must sit on the LEFT of travel. An outer-wall orbit (the
+    // pocket's rim, material OUTSIDE the loop) therefore travels CW
+    // (negative shoelace); an island orbit (a hole's rim grown by the
+    // insets, material INSIDE the loop) travels CCW (positive). The old
+    // emission was uniformly the reverse — conventional milling on every
+    // wall, a documented accident.
+    // concentric fixture: 14mm outer, 4mm hole, step-over 2 — exactly one
+    // wall orbit (the 12mm inset loop) and one island orbit (the hole's
+    // 6mm grown rim); the k=1 inset (3mm) empties the annulus, so no
+    // third pass and no degenerate merge sliver to classify
+    const outer = [square(0, 14)];
+    const hole: Vec2[] = [...square(5, 4)].reverse(); // CW hole → an island
+    const res = pocket2d(op({ regions: [...outer, hole], stepOver: 2 }), tool);
+    expect(res.passes).toBe(2);
+    const loops = passLoops(res.moves);
+    expect(loops).toHaveLength(2);
+    // classify by SIZE: the island orbit (the hole's grown rim) is the
+    // small loop; the wall orbit is the big one
+    const [small, big] = [...loops].sort(
+      (u, v) => Math.abs(loopArea(u)) - Math.abs(loopArea(v)),
+    );
+    expect(loopArea(small)).toBeGreaterThan(0); // island orbit → CCW
+    expect(loopArea(big)).toBeLessThan(0); // outer-wall orbit → CW
+    void hole;
   });
 });
