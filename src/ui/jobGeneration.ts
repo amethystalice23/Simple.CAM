@@ -19,6 +19,7 @@ import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
 import { buildClearedMap } from '../cam/clearedSet';
 import { greedyCover } from '../cam/orientCover';
+import { adoptStanding, standingHooksFor } from '../cam/standingClear';
 import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
 import { rotaryCarve, type StandingGrid } from '../cam/rotaryCarve';
@@ -82,10 +83,11 @@ export interface GeneratedOp {
    * the same speed charge no ramp */
   spindleRpm?: number;
   /**
-   * P1: this op's standing-material grid OUT (rotaryCarve only — the
-   * one op that cuts rotary stock). The physical radius still standing
-   * per (x,θ) cell after its cuts, at this op's datum, for the
-   * recalculation pass to thread into a following rotaryCarve op.
+   * P1: this op's standing-material grid OUT (rotaryCarve and the 4D
+   * contour — the ops that cut rotary stock). The physical radius still
+   * standing per (x,θ) cell after its cuts, at this op's datum, for the
+   * recalculation pass to thread into a following stock-removing op
+   * (another contour4d at a tighter allowance, a rotary carve).
    */
   standing?: StandingGrid;
 }
@@ -1602,6 +1604,24 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const plan = greedyCover(map);
         const angles = plan.picks.map((p) => `${p.angle}°`);
         const pct = map.coverable > 0 ? (100 * plan.covered) / map.coverable : 100;
+        // STAGE C — the standing grid: the op's own record of what each
+        // orientation removed, threaded pick-to-pick so later roughs cut
+        // only their delta (the measured ~75% of multi-orientation rough
+        // time is re-cut air). Adopted from a previous op's export when
+        // the op sequence shares one (ctx.standing — P1's cross-op
+        // threading, a second contour4d at a tighter allowance consumes the
+        // first's grid), else fresh stock. Minted at the SESSION DATUM: the
+        // hooks' angle convention is pick + datumAngle (standingClear's
+        // pinned rule — a grid indexed at datum D takes the cutting angle
+        // in the same frame the Index op established).
+        const standing = adoptStanding(ctx.standing, {
+          x0: sx0,
+          x1: sx1,
+          radius: cal.effectiveRadius,
+          axisZ: cal.axisZ,
+          thetaStepOver: op.stepOver,
+          datumAngle: ctx.datumAngle,
+        });
         // STAGE B, the emission: greedy order (biggest coverage first —
         // the bulk of the material comes off in the first orientations).
         // The kernel runs BEFORE the index move is committed, so an
@@ -1615,6 +1635,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         let minutes = 0;
         let roughs = 0;
         let levels = 0;
+        let pruned = 0;
         // per-orientation notes aggregated by KIND: the numbers are
         // normalized to # and deduped within an orientation, then counted
         // across orientations — 7 orientations × 4 warnings is a wall of
@@ -1662,6 +1683,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           }
           const res = waterlineRough({
             positions,
+            // the standing hooks: trim this level's region to cells with
+            // material still standing, stamp the sweep back after — the
+            // SAFETY direction is pinned in standingClear (a wrong
+            // bookkeeping cell fails toward EXTRA cutting, never uncut
+            // waste; the keep-out stays model-based, untouched by this)
+            standing: standingHooksFor(standing, pick.angle + ctx.datumAngle),
             // the waterline's own footprint rule, verbatim: clear-excess
             // WINS over cut-over (the clear needs the footprint — every
             // level clears out to the stock edge), cut-over alone skips
@@ -1706,6 +1733,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           minutes += res.estimatedMinutes;
           roughs++;
           levels += res.levels.length;
+          if (res.standingSkips > 0) {
+            pruned += res.standingSkips;
+            noteOnce(seen, `${res.standingSkips} level(s) pruned — no standing material left in the band`);
+          }
           for (const w of res.warnings) noteOnce(seen, w);
           if (res.droppedChains > 0) {
             noteOnce(
@@ -1730,11 +1761,17 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           moves,
           minutes,
           error: null,
+          // the standing grid rides out (her 2026-10-29 ruling: baked in
+          // from the start) — a following stock-removing op adopts it and
+          // plans against what physically remains; finishing ops ignore it
+          standing,
           summary:
             `plan: ${plan.picks.length} orientation(s) [${angles.join(', ')}] · ` +
             `${plan.covered}/${map.coverable} coverable cells (${pct.toFixed(0)}%) · ` +
             `${map.buriedEverywhere} unreachable (deep undercuts) · ` +
-            `${roughs} rough(s) emitted, ${levels} level(s), ~${minutes.toFixed(1)} min` +
+            `${roughs} rough(s) emitted, ${levels} level(s)` +
+            (pruned > 0 ? `, ${pruned} pruned by the standing map` : '') +
+            `, ~${minutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
       }
