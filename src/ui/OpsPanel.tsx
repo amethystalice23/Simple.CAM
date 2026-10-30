@@ -665,7 +665,7 @@ function ParamFields(props: {
             value={op.maxDepth ?? 0}
             min={0}
             step={0.5}
-            title="Stops the ladder this deep below the crown — 0 = down to the model floor. The 4-axis short-tool throttle: limit each orientation's op to the depth its tool can reach alongside tall features (the simulation's red marks show where the collet would hit)"
+            title="Stops the ladder this deep below the crown — 0 = down to the model floor. Pre-filled from the tool's flute length (deeper than the flute, the shaft and collet ride into standing stock); override when you know the shape keeps the shaft clear — the simulation's red marks show where the collet would hit"
             onCommit={(v) => upd({ maxDepth: v > 0 ? v : null } as Partial<JobOp>)}
           />
           <FinishingOnlyCheck
@@ -693,6 +693,51 @@ function ParamFields(props: {
             (default: tool Ø + allowance + step over) keeps the moat two tool passes wide, so
             mesh noise on the model's wall cannot pinch the perimeter pass into
             plunge-per-sliver arcs
+          </p>
+        </>
+      );
+    case 'contour4d':
+      return (
+        <>
+          <NumberField label="Allowance (mm)" value={op.allowance} min={0} step={0.05} onCommit={(v) => upd({ allowance: v } as Partial<JobOp>)} />
+          <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
+          <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
+          <NumberField
+            label="Orientation step (°)"
+            value={op.orientStep}
+            min={5}
+            step={5}
+            title="The planner's candidate-ladder spacing: it evaluates every orientation this many degrees apart and picks the minimal set that covers the model. Denser ladders cost more planning time and may shave an orientation off the chosen set; 30° is the default"
+            onCommit={(v) => upd({ orientStep: v } as Partial<JobOp>)}
+          />
+          <NumberField
+            label="Max depth (mm)"
+            value={op.maxDepth ?? 0}
+            min={0}
+            step={0.5}
+            title="Per-orientation roughing depth limit below the crown — pre-filled from the tool's flute length, same as the waterline: deeper than the flute, the shaft and collet ride into standing stock. Override when you know the shape keeps the shaft clear — the simulation's red marks check the claim"
+            onCommit={(v) => upd({ maxDepth: v > 0 ? v : null } as Partial<JobOp>)}
+          />
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={op.clearToStock}
+              onChange={(e) => upd({ clearToStock: e.target.checked } as Partial<JobOp>)}
+            />
+            <span>clear excess stock</span>
+          </label>
+          <FinishingOnlyCheck
+            op={op}
+            upd={upd}
+            allowanceKey="allowance"
+            title="Per-orientation finishing scrub only — passed through to each chosen angle's rough"
+          />
+          <p className="hint">
+            plans its own index angles: no hand-tuned orientation stacks. The planner maps which
+            surface cells each candidate angle can clear, greedily picks the minimal set that
+            covers the model, and emits a rough at every chosen angle — the chosen angles, the
+            coverage, and the honest unreachable set (deep undercuts no angle reaches) all report
+            in the summary. The roughing fields apply to each chosen angle's pass.
           </p>
         </>
       );
@@ -1269,9 +1314,20 @@ export function OpsPanel(props: Props) {
       // kind re-derives it — a stale Ø-derived stepOver from the OLD tool is
       // the bug Alice caught 2026-10-25
       switch (op.kind) {
+        case 'waterline':
+        case 'contour4d':
+          // the maxDepth default follows the new cutter's flute (the
+          // 2026-29 pre-populate ruling — same class as stepOver: a
+          // stale flute-derived ceiling from the OLD tool is wrong).
+          // contour4d joined by her 2026-10-29 plank report: the kind
+          // was missing from this switch, so a tool change re-derived
+          // NOTHING and a longer-flute cutter kept the old tool's
+          // shallow ceiling — the ladder stopped high and left a plank
+          // of stock standing
+          next = { ...next, stepDown, stepOver, maxDepth: t.fluteLength ?? null } as JobOp;
+          break;
         case 'pocket':
         case 'slicePocket':
-        case 'waterline':
         case 'faceCylinder':
         case 'rotaryCarve':
           next = { ...next, stepDown, stepOver } as JobOp;

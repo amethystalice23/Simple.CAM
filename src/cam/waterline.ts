@@ -28,8 +28,8 @@
 
 import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
 import { difference, intersection, offsetInward, offsetOutward, union } from './clipper';
-import { simplifyContour, zLadder } from './paths';
-import { pocket2d } from './pocket';
+import { APPROACH_CLEARANCE, simplifyContour, zLadder } from './paths';
+import { bandOf, pocket2d } from './pocket';
 import { sliceAtZ, buildZIndex, type SliceResult } from './slicing';
 
 export interface WaterlineRoughOptions {
@@ -99,6 +99,31 @@ export interface WaterlineRoughOptions {
   feed: number;
   plungeFeed: number;
   safeClearance: number;
+  /**
+   * STAGE C standing-awareness (the 4D contour threads this): absent =
+   * byte-identical behavior. trimBand runs before pocketing (the
+   * moat-only stop and the undercut check still see the FULL region —
+   * decided behavior, the stop firing late costs Clipper work, never
+   * correctness); stampBand runs after a level's moves emitted
+   * successfully (never on the does-not-fit catch, which cut nothing).
+   */
+  standing?: {
+    trimBand: (bandTop: number, cut: number, region: Vec2[][]) => Vec2[][];
+    stampBand: (bandTop: number, cut: number, swept: Vec2[][]) => void;
+    /** honest approach ceiling over the trimmed region — the tallest
+     *  standing material, so the pocket's approach rapid never dives
+     *  through a column the ladder never cleared. Optional: a caller
+     *  without grid knowledge falls back to the band top (the ladder
+     *  assumption, today's behavior). */
+    computeCeiling?: (bandTop: number, cut: number, region: Vec2[][]) => number;
+    /** CLEARED-SPACE LEAD-IN (2026-10-30 spec): true when the entry disc
+     *  at (x,y) is provably swept clear to zSafe by earlier passes —
+     *  the pocket then plunges THERE and feeds to the orbit start,
+     *  engaging material with the peripheral edge instead of plunging
+     *  beside standing columns. Absent = no lead-in, today's entries. */
+    sweptClear?: (zSafe: number, x: number, y: number, toolR: number) => boolean;
+  };
+
 }
 
 export interface WaterlineRoughResult {
@@ -113,6 +138,9 @@ export interface WaterlineRoughResult {
   /** levels skipped because the clearing region vanished (the model section
    *  covers its whole silhouette column at that plane) */
   skippedLevels: number;
+  /** levels the standing-awareness hooks proved empty (STAGE C: the level
+   *  gate in trimBand returned [] — 0 when no hooks were threaded) */
+  standingSkips: number;
   /** human-readable, surfaced verbatim in the op panel */
   warnings: string[];
 }
@@ -306,6 +334,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   let passes = 0;
   let minutes = 0;
   let skippedLevels = 0;
+  let standingSkips = 0;
   let allowanceSkips = 0;
   let droppedSlivers = 0;
   let undercutWarned = false;
@@ -458,6 +487,22 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       region = finRegion;
     }
 
+    // STAGE C standing-awareness: trim the region to cells with standing
+    // material before pocketing. Runs AFTER the moat-only stop and the
+    // finishing branch (both decided on the FULL region — the stop firing
+    // late costs Clipper work, never correctness) and BEFORE the
+    // unreachable-opening block. An empty trim = the level provably cuts
+    // nothing but air: skip it without any Clipper pocketing at all.
+    let approachCeiling: number | undefined;
+    if (o.standing) {
+      const trimmedRegion = o.standing.trimBand(bandTop, cut, region);
+      if (trimmedRegion.length === 0) {
+        standingSkips++;
+        continue;
+      }
+      region = trimmedRegion;
+    }
+
     // UNREACHABLE-STOCK HONESTY (clear-excess, Alice's 2026-10-26 knight
     // report): the morphological OPENING of the region by the tool — erode
     // by toolR, regrow by toolR — is exactly the area the disc can sweep
@@ -479,6 +524,42 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
         unreachableWarned = true;
       }
     }
+
+    // HONEST APPROACH CEILING (Alice's 2026-10-30 yellow-streak report):
+    // the pocket's approach rapid assumes this orientation's previous
+    // level cleared everything above the band top at the loop start — the
+    // trim broke that premise (kept cells hold material the ladder never
+    // cleared, and the trim leaves a one-voxel boundary skin). The rapid
+    // can only plow what sits under the ENTRY DISC's footprint, so the
+    // ceiling is the tallest standing material over the OPENING — the
+    // area the disc can sweep — never over the whole region (never-swept
+    // residue at the crown would re-ladder every band; measured 20× the
+    // moves). It raises ONLY the approach plane and the entry ramp's
+    // fresh-material bound; the ladder itself stays single-level.
+    if (o.standing?.computeCeiling) {
+      const toolR = o.tool.diameter / 2;
+      const opening = offsetOutward(offsetInward(region, toolR), toolR);
+      const ceiling = o.standing.computeCeiling(bandTop, cut, opening);
+      // CLAMP to the skin class: one step-down above the band top. A cell
+      // on the region boundary conflates MODEL material beyond it (never
+      // touchable — the disc edge rides the boundary) into its standing
+      // z, so the raw ceiling re-machined whole boundary columns in the
+      // entry ramps (measured 3× the moves). The genuine plow risk is the
+      // trim/stamp residue, which the seeded safety oracle bounds to the
+      // skin — a band-worth of clamp covers it with the whole step-down
+      // to spare, at one extra ramp turn of cost.
+      approachCeiling = Math.max(bandTop, Math.min(ceiling, bandTop + o.stepDown));
+    }
+
+    // CLEARED-SPACE LEAD-IN (the 2026-10-30 spec, FreeCAD-validated): with
+    // a sweptClear query, an orbit entry beside standing material moves
+    // to the nearest provably-swept vertex and feeds in along the loop —
+    // the peripheral edge engages the wall. zSafe is the clamped ceiling
+    // + clearance: the same plane the raised approach uses, so the
+    // lead-in plunge is provably clear at exactly the height the
+    // fallback would rapid to.
+    const leadInZ = Math.max(bandTop, approachCeiling ?? -Infinity) + APPROACH_CLEARANCE;
+    const leadIn = o.standing?.sweptClear ? { sweptClear: o.standing.sweptClear, zSafe: leadInZ } : undefined;
 
     // Clipper's round-join offsets tessellate the region boundary at 25µm —
     // hundreds of near-collinear vertices per contour that make every pass
@@ -509,6 +590,10 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       // (pocket2d takes top == floor as a single level; roughing keeps the
       // band because its allowance-skip already suppressed those levels)
       topZ: Math.max(bandTop, cut),
+      // the honest approach ceiling (may be undefined — hooks absent):
+      // raises the approach plane and the entry ramp, never the ladder
+      approachCeiling,
+
       travelZ: o.topZ + o.safeClearance,
       floorZ: cut,
       stepDown: Math.max(bandTop - cut, 1e-9),
@@ -518,12 +603,28 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       safeClearance: o.safeClearance,
     };
     try {
-      const res = pocket2d(op, o.tool, { minLoopPerimeter: o.tool.diameter });
+      const res = pocket2d(op, o.tool, {
+        minLoopPerimeter: o.tool.diameter,
+        leadIn,
+      });
       moves.push(...res.moves);
       levels.push(cut);
       passes += res.passes;
       minutes += res.estimatedMinutes;
       droppedSlivers += res.droppedLoops;
+      // STAGE C: record the removal only after the level actually emitted
+      // moves — the does-not-fit catch below cut nothing, so nothing may
+      // be stamped for it. The swept area is the union of the SURVIVING
+      // orbits' tool-disc bands — NOT the region's morphological opening,
+      // which over-claims by the sliver orbits minLoopPerimeter dropped
+      // (their bands never ran). Built only when hooks are present; the
+      // hooks-absent path stays byte-identical.
+      if (o.standing) {
+        const toolR = o.tool.diameter / 2;
+        const bands = res.orbits.flatMap((orbit) => bandOf(orbit, toolR));
+        const swept = bands.length > 0 ? union(bands) : [];
+        o.standing.stampBand(bandTop, cut, swept);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!/does not fit/.test(msg)) throw e;
@@ -538,6 +639,18 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   if (allowanceSkips > 0) {
     warnings.push(
       `allowance ≥ increment: ${allowanceSkips} level(s) had no band left to clear`,
+    );
+  }
+  // THE FLUTE-LIMIT REPORT (the 2026-10-29 pre-populate ruling's "warn
+  // not prevent" half): when maxDepth binds above the model floor, the
+  // ladder stops short on purpose and the user must SEE it — a silent
+  // short ladder looks like a finished rough. The default maxDepth is
+  // the tool's flute length (the shaft-in-stock ceiling), so this fires
+  // exactly where a short bit meets a deep part.
+  if (o.maxDepth !== undefined && o.maxDepth > 0 && floorZ > o.floorZ + 1e-9) {
+    warnings.push(
+      `max depth ${o.maxDepth}mm: ladder stops at z${fmt(floorZ)} — ` +
+        `${fmt(o.floorZ)} floor left standing (deeper cuts exceed the set depth; raise Max depth for a longer flute)`,
     );
   }
   if (droppedSlivers > 0) {
@@ -558,6 +671,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     estimatedMinutes: minutes,
     droppedChains,
     skippedLevels,
+    standingSkips,
     warnings,
   };
 }

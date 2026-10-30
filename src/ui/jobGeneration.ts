@@ -17,6 +17,9 @@ import { chamfer } from '../cam/chamfer';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
+import { buildClearedMap } from '../cam/clearedSet';
+import { greedyCover } from '../cam/orientCover';
+import { adoptStanding, standingHooksFor } from '../cam/standingClear';
 import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
 import { rotaryCarve, type StandingGrid } from '../cam/rotaryCarve';
@@ -80,10 +83,11 @@ export interface GeneratedOp {
    * the same speed charge no ramp */
   spindleRpm?: number;
   /**
-   * P1: this op's standing-material grid OUT (rotaryCarve only — the
-   * one op that cuts rotary stock). The physical radius still standing
-   * per (x,θ) cell after its cuts, at this op's datum, for the
-   * recalculation pass to thread into a following rotaryCarve op.
+   * P1: this op's standing-material grid OUT (rotaryCarve and the 4D
+   * contour — the ops that cut rotary stock). The physical radius still
+   * standing per (x,θ) cell after its cuts, at this op's datum, for the
+   * recalculation pass to thread into a following stock-removing op
+   * (another contour4d at a tighter allowance, a rotary carve).
    */
   standing?: StandingGrid;
 }
@@ -128,6 +132,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'profile', label: 'Profile' },
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'waterline', label: 'Waterline contour' },
+  { kind: 'contour4d', label: '4D contour (multi-orientation rough)', rotaryOnly: true },
   { kind: 'rasterContour', label: 'Raster contour (3D finish)' },
   { kind: 'rotaryCarve', label: 'Rotary contour (4-axis)', rotaryOnly: true },
   { kind: 'drill', label: 'Drill' },
@@ -302,8 +307,37 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         margin: null, // derive tool Ø + allowance + step over at generation
         cutBeyondStock: false, // the tool stays inside the declared stock
         clearToStock: false, // the model's column only; the toggle clears to the stock edge
-        maxDepth: null, // to the model floor; the 4-axis short-tool throttle
+        // PRE-POPULATED FROM THE FLUTE (2026-10-29 ruling: "default to
+        // sensible, warn not prevent") — a ladder deeper than the flute
+        // puts the shaft into standing stock (the collet follows); the
+        // flute length is the honest ceiling, the user overrides when
+        // they know the shape keeps the shaft clear, and the sim's red
+        // checks their claim. Absent flute data = no limit (null, the
+        // old behavior) — no default invented.
+        maxDepth: tool.fluteLength ?? null,
         finishingOnly: false, // full clearing per level; the toggle scrubs surfaces only
+      };
+    case 'contour4d':
+      // the 4D contour (P3): the planner owns the orientations; the
+      // per-orientation rough fields mirror the waterline defaults (the
+      // emission stage generates waterline roughs at the chosen angles),
+      // orientStep is her 30° ladder knob
+      return {
+        ...base,
+        kind,
+        allowance: 0.2,
+        stepDown: Math.max(stepDown, 0.5),
+        stepOver: defaultStepOver(tool),
+        orientStep: 30, // her 2026-10-29 ruling: "30 for now"
+        margin: null,
+        cutBeyondStock: false,
+        // DEFAULT ON (her 2026-10-29 sim report: without the excess
+        // clear, big waste chunks strand around the part and drop/fly
+        // off mid-job — the later orientations then plot against stock
+        // that moved)
+        clearToStock: true,
+        maxDepth: tool.fluteLength ?? null, // the flute default, same ruling
+        finishingOnly: false,
       };
     case 'rasterContour':
       // the paired SURFACE pass (PLAN.md Phase B): default allowance 0 —
@@ -1531,6 +1565,213 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             (op.maxDepth && op.maxDepth > 0 ? `, ${op.maxDepth}mm max depth` : '') +
             (op.finishingOnly ? ', finishing pass only (surface scrub, waste cleared at the floor level)' : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
+            (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
+        };
+      }
+      case 'contour4d': {
+        // THE 4D CONTOUR (P3), both stages: the op computes its own
+        // orientation plan — the cleared-set map over the candidate
+        // ladder, greedy cover, honest report — then EMITS the roughs:
+        // per chosen angle, an index move to its spoke and a waterline
+        // rough in the same rotated frame the map scored it in. Each
+        // rough is bounded by its own orientation's geometry (upper
+        // shadow, moat-only stop), so the orientations compose the way
+        // hand-stacked indexed roughs always have — the planner just
+        // picks the angles. The whole loaded model is the target, like
+        // the waterline; no selection, no user-chosen orientations.
+        if (!ctx.geometry) return fail('needs a loaded model — the plan targets it');
+        if (ctx.stock.axisMode !== '4-axis') {
+          return fail('the 4D contour needs 4-axis stock — it rotates the part between roughing angles');
+        }
+        if (!(op.orientStep > 0) || op.orientStep >= 360) {
+          return fail('orientation step must be between 0° and 360°');
+        }
+        const cal = rotaryCalibrationOf(ctx.stock);
+        const [sx0, sx1] = stockSpan(ctx.stock, 'x');
+        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
+        const ladder: number[] = [];
+        for (let a = 0; a < 360; a += op.orientStep) ladder.push(a);
+        const map = buildClearedMap({
+          positions: positions0,
+          x0: sx0,
+          x1: sx1,
+          radius: cal.effectiveRadius,
+          axisZ: cal.axisZ,
+          thetaStepOver: op.stepOver,
+          tool: { diameter: tool.diameter },
+          orientations: ladder,
+        });
+        const plan = greedyCover(map);
+        const angles = plan.picks.map((p) => `${p.angle}°`);
+        const pct = map.coverable > 0 ? (100 * plan.covered) / map.coverable : 100;
+        // STAGE C — the standing grid: the op's own record of what each
+        // orientation removed, threaded pick-to-pick so later roughs cut
+        // only their delta (the measured ~75% of multi-orientation rough
+        // time is re-cut air). Adopted from a previous op's export when
+        // the op sequence shares one (ctx.standing — P1's cross-op
+        // threading, a second contour4d at a tighter allowance consumes the
+        // first's grid), else fresh stock. Minted at the SESSION DATUM: the
+        // hooks' angle convention is pick + datumAngle (standingClear's
+        // pinned rule — a grid indexed at datum D takes the cutting angle
+        // in the same frame the Index op established).
+        const standing = adoptStanding(ctx.standing, {
+          x0: sx0,
+          x1: sx1,
+          radius: cal.effectiveRadius,
+          axisZ: cal.axisZ,
+          thetaStepOver: op.stepOver,
+          datumAngle: ctx.datumAngle,
+        });
+        // STAGE B, the emission: greedy order (biggest coverage first —
+        // the bulk of the material comes off in the first orientations).
+        // The kernel runs BEFORE the index move is committed, so an
+        // orientation with nothing to rough costs no rotation; the
+        // machine A pile only ever grows by shortest-path hops between
+        // orientations that actually cut. The datum-discipline stamp in
+        // generateJobOp hands the borrowed datum back at the end.
+        const crown = stockTopZ(ctx.stock);
+        const stockBottom = stockSpan(ctx.stock, 'z')[0];
+        const moves: Move[] = [];
+        let minutes = 0;
+        let roughs = 0;
+        let levels = 0;
+        let pruned = 0;
+        // per-orientation notes aggregated by KIND: the numbers are
+        // normalized to # and deduped within an orientation, then counted
+        // across orientations — 7 orientations × 4 warnings is a wall of
+        // near-identical text, and the kind + how many orientations it
+        // fired at is the readable (and still honest) form
+        const noteAgg = new Map<string, { example: string; orientations: number }>();
+        const noteOnce = (seen: Set<string>, s: string) => {
+          const key = s.replace(/-?\d+(?:\.\d+)?/g, '#');
+          if (seen.has(key)) return;
+          seen.add(key);
+          const e = noteAgg.get(key);
+          if (e) e.orientations++;
+          else noteAgg.set(key, { example: s, orientations: 1 });
+        };
+        let a = ctx.startA;
+        for (const [i, pick] of plan.picks.entries()) {
+          const seen = new Set<string>();
+          // the same frame mapping the waterline case uses at a datum:
+          // orientation θ of the map ≡ machine A at θ (indexedPointRotation
+          // and the map's ray cast are each other's inverse)
+          const { rotate } = indexFrame(pick.angle, ctx.stock);
+          const positions = rotate
+            ? (() => {
+                const out = new Float32Array(positions0.length);
+                for (let k = 0; k < positions0.length; k += 3) {
+                  const v = rotate({
+                    x: positions0[k],
+                    y: positions0[k + 1],
+                    z: positions0[k + 2],
+                  });
+                  out[k] = v.x;
+                  out[k + 1] = v.y;
+                  out[k + 2] = v.z;
+                }
+                return out;
+              })()
+            : positions0;
+          // model floor in THIS orientation's cutting frame — each
+          // rotation brings a different face lowest, so the ladder range
+          // is per-pick, clamped at the stock bottom (below it is the
+          // fixture, same rule as the waterline)
+          let modelMinZ = Infinity;
+          for (let k = 2; k < positions.length; k += 3) {
+            if (positions[k] < modelMinZ) modelMinZ = positions[k];
+          }
+          const res = waterlineRough({
+            positions,
+            // the standing hooks: trim this level's region to cells with
+            // material still standing, stamp the sweep back after — the
+            // SAFETY direction is pinned in standingClear (a wrong
+            // bookkeeping cell fails toward EXTRA cutting, never uncut
+            // waste; the keep-out stays model-based, untouched by this)
+            standing: standingHooksFor(standing, pick.angle + ctx.datumAngle, tool.diameter),
+            // the waterline's own footprint rule, verbatim: clear-excess
+            // WINS over cut-over (the clear needs the footprint — every
+            // level clears out to the stock edge), cut-over alone skips
+            // the clip so the boundary pass may leave the stock
+            footprint:
+              op.clearToStock || !op.cutBeyondStock
+                ? stockFootprint(ctx.stock, pick.angle % 360 !== 0)
+                : undefined,
+            topZ: crown,
+            floorZ: Math.max(modelMinZ, stockBottom),
+            stepDown: op.stepDown,
+            stepOver: op.stepOver,
+            allowance: op.allowance,
+            finishingOnly: op.finishingOnly,
+            clearToStock: op.clearToStock,
+            maxDepth: op.maxDepth ?? undefined,
+            // null = derive Ø + allowance + step over at generation, the
+            // waterline's own rule (job files stay tool-agnostic)
+            margin: op.margin ?? tool.diameter + op.allowance + op.stepOver,
+            tool,
+            feed,
+            plungeFeed,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+          });
+          if (res.moves.length === 0) {
+            noteOnce(seen, `orientation ${pick.angle}°: nothing to rough`);
+            continue;
+          }
+          const target = a + shortestATo(pick.angle, a);
+          if (Math.abs(target - a) > 1e-9) {
+            moves.push({
+              words: { a: target },
+              feed: 0,
+              rapid: true,
+              comment: `orientation ${i + 1}/${plan.picks.length}: index stock to A${pick.angle}°`,
+            });
+            a = target;
+          }
+          // NOT spread-push: a knight-sized rough is tens of thousands of
+          // moves, and f(...args) puts every one on the call stack
+          for (const mv of res.moves) moves.push(mv);
+          minutes += res.estimatedMinutes;
+          roughs++;
+          levels += res.levels.length;
+          if (res.standingSkips > 0) {
+            pruned += res.standingSkips;
+            noteOnce(seen, `${res.standingSkips} level(s) pruned — no standing material left in the band`);
+          }
+          for (const w of res.warnings) noteOnce(seen, w);
+          if (res.droppedChains > 0) {
+            noteOnce(
+              seen,
+              `${res.droppedChains} open chain(s) dropped — broken mesh, some levels incomplete`,
+            );
+          }
+        }
+        if (roughs === 0) {
+          return fail(
+            'nothing to rough — every chosen orientation already sits at the model surface',
+          );
+        }
+        const notes = [...noteAgg.values()].map(({ example, orientations }) =>
+          orientations > 1
+            ? orientations === roughs
+              ? `${example} (all ${roughs} orientations)`
+              : `${example} (at ${orientations} of ${roughs} orientations)`
+            : example,
+        );
+        return {
+          moves,
+          minutes,
+          error: null,
+          // the standing grid rides out (her 2026-10-29 ruling: baked in
+          // from the start) — a following stock-removing op adopts it and
+          // plans against what physically remains; finishing ops ignore it
+          standing,
+          summary:
+            `plan: ${plan.picks.length} orientation(s) [${angles.join(', ')}] · ` +
+            `${plan.covered}/${map.coverable} coverable cells (${pct.toFixed(0)}%) · ` +
+            `${map.buriedEverywhere} unreachable (deep undercuts) · ` +
+            `${roughs} rough(s) emitted, ${levels} level(s)` +
+            (pruned > 0 ? `, ${pruned} pruned by the standing map` : '') +
+            `, ~${minutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
       }

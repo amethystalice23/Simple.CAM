@@ -432,6 +432,21 @@ describe('waterlineRough', () => {
     // moved the stop one level deeper — update the z and the levels/keep
   });
 
+  it('maxDepth stops the ladder early and SAYS so (the flute default reports)', () => {
+    // the 2026-10-29 pre-populate ruling's kernel half: when maxDepth
+    // binds above the model floor the ladder stops on purpose, and a
+    // silent short ladder looks like a finished rough — the warning must
+    // name the stop and the floor left standing
+    const res = waterlineRough(opts({ maxDepth: 4 }));
+    expect(res.levels.length).toBeGreaterThan(0);
+    // every cut plane sits above the crown − maxDepth
+    expect(cutPoints(res.moves).every((p) => p.z > -4)).toBe(true);
+    expect(res.warnings.some((w) => /max depth 4mm.*ladder stops/.test(w))).toBe(true);
+    // no maxDepth = no warning (old behavior, null default for flute-less tools)
+    const free = waterlineRough(opts({}));
+    expect(free.warnings.some((w) => /max depth/.test(w))).toBe(false);
+  });
+
   it('warns once about a band that widens upward (undercut)', () => {
     // hourglass: a cone widening from r1 to r3 near the crown, narrowing
     // back to r1, then flaring out to an r5 base at the floor. The waist

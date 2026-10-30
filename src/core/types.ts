@@ -611,6 +611,17 @@ export interface PocketOp {
    * never ramping at material that is not there.
    */
   finishingOnly?: boolean;
+  /**
+   * HONEST APPROACH CEILING (2026-10-30, the 4D contour's yellow streaks):
+   * machine Z of the tallest standing material under the entry disc's
+   * footprint, when the caller KNOWS it (the waterline rough with a
+   * standing-stock grid — a trimmed orientation's previous levels may have
+   * cleared nothing above the band top, so the ladder assumption behind
+   * topZ is broken). Raises the approach rapid's stop plane and the entry
+   * ramp's fresh-material bound; the ladder itself is untouched. Absent:
+   * topZ is the honest surface, exactly today's behavior.
+   */
+  approachCeiling?: number;
 }
 
 /** Peck-drill hole centers. Emitted as explicit G0/G1 moves (no cycles). */
@@ -1154,6 +1165,43 @@ export type JobOp =
        * have no surface to scrub and are skipped. Assumes a rough at
        * allowance ran ahead; the step-down still sets the level density.
        */
+      finishingOnly?: boolean;
+    })
+  | (JobOpBase & {
+      kind: 'contour4d';
+      /**
+       * THE 4D CONTOUR (P3 of the true-4D plan, named per her own file
+       * and usage): a whole-model multi-orientation rough that PLANS
+       * its own index angles — no user-chosen orientations. The
+       * planner runs the cleared-set map over a candidate ladder,
+       * greedily covers the model's surface cells, and emits per-
+       * orientation roughing at the chosen angles (the fields below
+       * are each orientation pass's waterline parameters, since the
+       * emission generates a waterline rough at every chosen datum).
+       * The honest unreachable set is reported, never silently
+       * dropped.
+       */
+      /** roughing stock left on the model for a finishing op, mm */
+      allowance: number;
+      stepDown: number;
+      stepOver: number;
+      /** the candidate-ladder spacing, degrees — the planner evaluates
+       *  every orientStep around the circle (her 2026-10-29 ruling:
+       *  "30 for now" — the knob) */
+      orientStep: number;
+      /** per-orientation roughing fields — see the waterline op; the
+       *  emission stage passes them through to each chosen angle's
+       *  rough */
+      margin: number | null;
+      cutBeyondStock: boolean;
+      /** CLEAR EXCESS STOCK (Alice 2026-10-29, DEFAULT ON): every
+       * level of every orientation's rough clears out to the stock
+       * edge, like the waterline's own toggle. Without it the rough
+       * strands waste columns around the part — big chunks that drop
+       * or fly off mid-job, leaving the later orientations (and any
+       * standing-material model) plotting against stock that moved */
+      clearToStock: boolean;
+      maxDepth?: number | null;
       finishingOnly?: boolean;
     })
   | (JobOpBase & {

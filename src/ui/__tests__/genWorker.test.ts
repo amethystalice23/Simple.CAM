@@ -114,6 +114,7 @@ function throughBothSides(
 describe('generation worker protocol', () => {
   it('routes exactly the heavy kinds', () => {
     expect([...HEAVY_GEN_KINDS].sort()).toEqual([
+      'contour4d',
       'rasterContour',
       'rotaryCarve',
       'slicePocket',
@@ -163,6 +164,30 @@ describe('generation worker protocol', () => {
     const { app } = throughBothSides(brick, op, boxStock, [smallTool]);
     expect(app.error).toBeNull();
     expect(app.summary).toContain('raster row');
+  });
+
+  it('contour4d: worker context reproduces the main-thread roughs (plan + emission)', () => {
+    const cylStock: Extract<Stock, { kind: 'cylinder' }> = {
+      kind: 'cylinder',
+      length: 30,
+      xOrigin: 'mid',
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8 },
+      axisMode: '4-axis',
+      materialId: 'aluminum-6061',
+    };
+    const g = new THREE.CylinderGeometry(4, 4, 20, 32).toNonIndexed();
+    g.rotateZ(Math.PI / 2); // on the rotation axis
+    const op = newJobOp('contour4d', smallTool, 'aluminum-6061', cylStock);
+    const { app, worker } = throughBothSides(g, op, cylStock, [smallTool]);
+    expect(app.error).toBeNull();
+    expect(worker.error).toBeNull();
+    // the emission stage landed: real moves, identical through both
+    // sides, and the summary still carries the plan it emitted from
+    expect(app.moves.length).toBeGreaterThan(0);
+    expect(worker.moves.length).toBe(app.moves.length);
+    expect(worker.summary).toBe(app.summary);
+    expect(app.summary).toContain('plan:');
+    expect(app.summary).toContain('rough(s) emitted');
   });
 
   it('rotaryCarve: worker context reproduces the main-thread result', () => {

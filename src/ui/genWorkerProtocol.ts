@@ -24,6 +24,7 @@ import type { GeneratedOp } from './jobGeneration';
 export const HEAVY_GEN_KINDS: ReadonlySet<JobOp['kind']> = new Set([
   'slicePocket',
   'waterline',
+  'contour4d', // the orientation plan's cleared-set map is minutes-class on fine meshes
   'rasterContour',
   'rotaryCarve',
 ]);
