@@ -849,7 +849,10 @@ become our spec:
    simply never fires on same-level links, and cross-orientation
    DEEPER stamps (a following op) would still chain. DECIDED NEXT
    after Alice's real-knight cut (does the 29% chained profile even
-   matter in minutes?).
+   matter in minutes?). **Alice 2026-10-30: NOT blocking the finishing
+   op — the finish consumes the grid as a rest map (where the
+   conservative direction is correct) and targets the model surface,
+   not same-level plane proofs. Deferred until it matters.**
 
 Safety invariants unchanged: the keep-out is never crossed, no
 straight plunge through material, hooks-absent emission byte-identical,
