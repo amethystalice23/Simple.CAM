@@ -285,7 +285,11 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   let links = 0;
 
   for (const levelZ of levels) {
-    const approachZ = Math.max(levelZ, standingZ) + APPROACH_CLEARANCE;
+    // the entry-disc ceiling (trimmed standing material the ladder never
+    // cleared) raises the approach plane above the standing surface when
+    // the caller knows one — absent, max() is a no-op on -Infinity
+    const entryTop = Math.max(standingZ, op.approachCeiling ?? -Infinity);
+    const approachZ = Math.max(levelZ, entryTop) + APPROACH_CLEARANCE;
     clearedBands = [];
     // passes from the wall inward in stepOver increments, until the region
     // vanishes under the offset
@@ -333,8 +337,14 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
             stretch: cum[loop.length],
             closed: true,
             // finishing-only assumes the bulk above is gone — the entry is
-            // through air and plunges straight (the finishingOnly convention)
-            band: op.finishingOnly ? 0 : standingZ - levelZ,
+            // through air and plunges straight (the finishingOnly
+            // convention). Otherwise the FRESH material this entry removes
+            // is measured from the honest entry top: the ladder's standing
+            // surface, raised by the entry-disc ceiling when the caller
+            // knows one (2026-10-30) — the ramp then bounds its per-rev
+            // descent through the extra column instead of the rapid
+            // plowing it.
+            band: op.finishingOnly ? 0 : entryTop - levelZ,
             fromZ: approachZ,
             toZ: levelZ,
             stepDown: op.stepDown,

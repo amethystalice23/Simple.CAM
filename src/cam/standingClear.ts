@@ -87,8 +87,8 @@
  * handed (which `adoptStanding` guarantees is the caller's own copy).
  * Stamping LOWERS cells monotonically; the grid stays stock-radius space
  * per the P1 contract.
+ *
  */
-
 import type { Vec2 } from '../core/types';
 import { difference } from './clipper';
 import { reindexStanding, type StandingGrid } from './rotaryCarve';
@@ -256,6 +256,8 @@ export function standingHooksFor(
   stampBand: (bandTop: number, cut: number, swept: Vec2[][]) => void;
   /** the underlying per-orientation view (tests/diagnostics) */
   view: StandingBandView;
+  /** compute the honest standing ceiling over the level's kept cells */
+  computeCeiling: (bandTop: number, cut: number, region: Vec2[][]) => number;
 } {
   const A = (angleDeg * Math.PI) / 180;
   const nTheta = grid.nTheta;
@@ -429,6 +431,62 @@ export function standingHooksFor(
     return out;
   };
 
+  /** The honest approach ceiling: the tallest standing material over the
+   *  level's kept (trimmed) region, in the waterline frame. A cell
+   *  contributes iff it still holds live material above the cut plane
+   *  (liveRange — the same predicate the trim trusts) AND its (x,y)
+   *  projection lands inside the region. The pocket's approach rapid
+   *  stops above this, so a trimmed orientation never dives it through
+   *  a column the ladder never cleared (the 2026-10-30 yellow-streak
+   *  report). No live cell in-region = the band top is honest already.
+   *  bbox pretest per cell — the point-in-polygon pass only runs on the
+   *  region's own cells (stampBand culls the same way). */
+  const computeCeiling = (bandTop: number, cut: number, region: Vec2[][]): number => {
+    if (region.length === 0) return bandTop;
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    for (const loop of region) {
+      for (const p of loop) {
+        if (p.x < bx0) bx0 = p.x;
+        if (p.x > bx1) bx1 = p.x;
+        if (p.y < by0) by0 = p.y;
+        if (p.y > by1) by1 = p.y;
+      }
+    }
+    let maxZ = -Infinity;
+    for (let j = 0; j < nTheta; j++) {
+      const c = cHi[j];
+      const s = sin[j];
+      for (let i = 0; i < grid.nx; i++) {
+        if (liveRange(i, j, cut) === null) continue;
+        const x = xAt(i);
+        const r = grid.r[j * grid.nx + i];
+        const y = r * s;
+        if (x < bx0 || x > bx1 || y < by0 || y > by1) continue;
+        const z = grid.axisZ + r * c;
+        if (z > maxZ && pointInRegion({ x, y }, region)) maxZ = z;
+      }
+    }
+    return maxZ > cut ? maxZ : bandTop;
+  };
+
+  const pointInRegion = (pt: Vec2, region: Vec2[][]): boolean => {
+    for (const loop of region) {
+      if (pointInContour(pt, loop)) return true;
+    }
+    return false;
+  };
+
+  const pointInContour = (pt: Vec2, c: Vec2[]): boolean => {
+    let inside = false;
+    for (let i = 0, j = c.length - 1; i < c.length; j = i++) {
+      const xi = c[i].x, yi = c[i].y, xj = c[j].x, yj = c[j].y;
+      if ((yi > pt.y) !== (yj > pt.y) && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  };
+
   const stampBand = (_bandTop: number, cut: number, swept: Vec2[][]): void => {
     if (swept.length === 0) return;
     // bbox cull over the swept polygon set
@@ -503,5 +561,5 @@ export function standingHooksFor(
     }
   };
 
-  return { trimBand, stampBand, view };
+  return { trimBand, stampBand, view, computeCeiling };
 }

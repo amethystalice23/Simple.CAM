@@ -110,7 +110,14 @@ export interface WaterlineRoughOptions {
   standing?: {
     trimBand: (bandTop: number, cut: number, region: Vec2[][]) => Vec2[][];
     stampBand: (bandTop: number, cut: number, swept: Vec2[][]) => void;
+    /** honest approach ceiling over the trimmed region — the tallest
+     *  standing material, so the pocket's approach rapid never dives
+     *  through a column the ladder never cleared. Optional: a caller
+     *  without grid knowledge falls back to the band top (the ladder
+     *  assumption, today's behavior). */
+    computeCeiling?: (bandTop: number, cut: number, region: Vec2[][]) => number;
   };
+
 }
 
 export interface WaterlineRoughResult {
@@ -480,12 +487,14 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     // late costs Clipper work, never correctness) and BEFORE the
     // unreachable-opening block. An empty trim = the level provably cuts
     // nothing but air: skip it without any Clipper pocketing at all.
+    let approachCeiling: number | undefined;
     if (o.standing) {
-      region = o.standing.trimBand(bandTop, cut, region);
-      if (region.length === 0) {
+      const trimmedRegion = o.standing.trimBand(bandTop, cut, region);
+      if (trimmedRegion.length === 0) {
         standingSkips++;
         continue;
       }
+      region = trimmedRegion;
     }
 
     // UNREACHABLE-STOCK HONESTY (clear-excess, Alice's 2026-10-26 knight
@@ -508,6 +517,32 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
         );
         unreachableWarned = true;
       }
+    }
+
+    // HONEST APPROACH CEILING (Alice's 2026-10-30 yellow-streak report):
+    // the pocket's approach rapid assumes this orientation's previous
+    // level cleared everything above the band top at the loop start — the
+    // trim broke that premise (kept cells hold material the ladder never
+    // cleared, and the trim leaves a one-voxel boundary skin). The rapid
+    // can only plow what sits under the ENTRY DISC's footprint, so the
+    // ceiling is the tallest standing material over the OPENING — the
+    // area the disc can sweep — never over the whole region (never-swept
+    // residue at the crown would re-ladder every band; measured 20× the
+    // moves). It raises ONLY the approach plane and the entry ramp's
+    // fresh-material bound; the ladder itself stays single-level.
+    if (o.standing?.computeCeiling) {
+      const toolR = o.tool.diameter / 2;
+      const opening = offsetOutward(offsetInward(region, toolR), toolR);
+      const ceiling = o.standing.computeCeiling(bandTop, cut, opening);
+      // CLAMP to the skin class: one step-down above the band top. A cell
+      // on the region boundary conflates MODEL material beyond it (never
+      // touchable — the disc edge rides the boundary) into its standing
+      // z, so the raw ceiling re-machined whole boundary columns in the
+      // entry ramps (measured 3× the moves). The genuine plow risk is the
+      // trim/stamp residue, which the seeded safety oracle bounds to the
+      // skin — a band-worth of clamp covers it with the whole step-down
+      // to spare, at one extra ramp turn of cost.
+      approachCeiling = Math.max(bandTop, Math.min(ceiling, bandTop + o.stepDown));
     }
 
     // Clipper's round-join offsets tessellate the region boundary at 25µm —
@@ -539,6 +574,10 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       // (pocket2d takes top == floor as a single level; roughing keeps the
       // band because its allowance-skip already suppressed those levels)
       topZ: Math.max(bandTop, cut),
+      // the honest approach ceiling (may be undefined — hooks absent):
+      // raises the approach plane and the entry ramp, never the ladder
+      approachCeiling,
+
       travelZ: o.topZ + o.safeClearance,
       floorZ: cut,
       stepDown: Math.max(bandTop - cut, 1e-9),

@@ -611,6 +611,17 @@ export interface PocketOp {
    * never ramping at material that is not there.
    */
   finishingOnly?: boolean;
+  /**
+   * HONEST APPROACH CEILING (2026-10-30, the 4D contour's yellow streaks):
+   * machine Z of the tallest standing material under the entry disc's
+   * footprint, when the caller KNOWS it (the waterline rough with a
+   * standing-stock grid — a trimmed orientation's previous levels may have
+   * cleared nothing above the band top, so the ladder assumption behind
+   * topZ is broken). Raises the approach rapid's stop plane and the entry
+   * ramp's fresh-material bound; the ladder itself is untouched. Absent:
+   * topZ is the honest surface, exactly today's behavior.
+   */
+  approachCeiling?: number;
 }
 
 /** Peck-drill hole centers. Emitted as explicit G0/G1 moves (no cycles). */

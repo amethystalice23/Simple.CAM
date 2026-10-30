@@ -544,3 +544,77 @@ describe('waterline standing hooks', () => {
     }
   });
 });
+
+describe('standingClear ceiling', () => {
+  it('the honest approach ceiling: fresh stock tops at the pole row, stamps cap it at the cut plane, and nothing-live keeps the band top', () => {
+    const g = mintStandingStock(geo());
+    const { computeCeiling } = standingHooksFor(g, 0);
+    // fresh Ø20 stock on axis z0: the tallest standing material over any
+    // region containing the pole is R itself (axisZ + R·1)
+    expect(computeCeiling(5, 0, bigRegion())).toBeCloseTo(10, 9);
+    // no region → nothing to raise above; the band top is honest
+    expect(computeCeiling(5, 0, [])).toBe(5);
+    // a cut plane above all standing material: no live cell, band top
+    expect(computeCeiling(5, 11, bigRegion())).toBe(5);
+
+    // after a full-disc stamp at plane z5, the ceiling sits at that plane
+    // plus the clamp-at-stock rows' residue (a mid-latitude row whose
+    // plane-radius 5/cos(φ) exceeds R keeps full stock, standing a hair
+    // above the plane at the slab edge — honest, never under it)
+    const g2 = mintStandingStock(geo());
+    const { stampBand, computeCeiling: cc2 } = standingHooksFor(g2, 0);
+    stampBand(10, 5, bigRegion());
+    expect(cc2(6, 0, bigRegion())).toBeGreaterThan(5);
+    expect(cc2(6, 0, bigRegion())).toBeLessThan(5.5);
+  });
+});
+
+describe('waterline standing ceiling', () => {
+  const tool = { id: 't1', name: '2mm flat', type: 'flat' as const, diameter: 2, spindleRpm: 18000 };
+  const positions = (() => {
+    const apex: [number, number, number] = [0, 0, 0];
+    const c: [number, number, number][] = [
+      [-5, -5, -10], [5, -5, -10], [5, 5, -10], [-5, 5, -10],
+    ];
+    const tri: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      tri.push(...apex, ...c[i], ...c[(i + 1) % 4]);
+    }
+    return new Float32Array(tri);
+  })();
+  const opts = () => ({
+    positions: positions as ArrayLike<number>,
+    footprint: [[{ x: -15, y: -15 }, { x: 15, y: -15 }, { x: 15, y: 15 }, { x: -15, y: 15 }]] as Vec2[][],
+    topZ: 0, floorZ: -10, stepDown: 2.5, stepOver: 1, allowance: 0.5, margin: 3,
+    tool, feed: 500, plungeFeed: 200, safeClearance: 5,
+  });
+  /** passthrough trim/no-op stamp, with or without a fixed ceiling */
+  const stub = (ceiling?: number) => ({
+    trimBand: (_b: number, _c: number, region: Vec2[][]) => region,
+    stampBand: () => undefined,
+    ...(ceiling === undefined ? {} : { computeCeiling: () => ceiling }),
+  });
+  const rapidZs = (moves: { rapid: boolean; words: Record<string, number> }[]) =>
+    moves.filter((m) => m.rapid && m.words.z !== undefined).map((m) => m.words.z);
+
+  it('without a ceiling the approach plane stays at band top + APPROACH_CLEARANCE (0.5) — the pre-fix behavior', () => {
+    const res = waterlineRough({ ...opts(), standing: stub() });
+    const belowTravel = rapidZs(res.moves as never).filter((z) => z < 4.9);
+    expect(Math.max(...belowTravel)).toBeCloseTo(0.5, 9);
+  });
+
+  it('a ceiling above the band top raises the approach plane — clamped to one step-down, never the ladder (the 2026-10-30 yellow-streak fix)', () => {
+    const base = waterlineRough({ ...opts(), standing: stub() });
+    const raised = waterlineRough({ ...opts(), standing: stub(6) });
+    // the ceiling 6 clamps to band top + stepDown (0 + 2.5): the highest
+    // approach plane = clamp + APPROACH_CLEARANCE — clear of the skin,
+    // without re-machining boundary columns (the unclamped variant
+    // measured 3× the moves on the bench knight)
+    expect(Math.max(...rapidZs(raised.moves as never).filter((z) => z < 4.9))).toBeCloseTo(3.0, 9);
+    // the ladder is UNTOUCHED: identical orbit passes, the ceiling only
+    // lifts the approach plane and lengthens the entry ramps
+    const passes = (r: { moves: { comment?: string }[] }) =>
+      r.moves.filter((m) => /pass \d+/.test(m.comment ?? '')).length;
+    expect(passes(raised)).toBe(passes(base));
+  });
+});
