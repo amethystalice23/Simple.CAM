@@ -773,6 +773,49 @@ v1 deliberately excludes: playback transport, scrub-back, laser burn
 modeling (skipped + noted). Real-coin bench: 12.6k moves → 1.58M voxels in ~3s
 at 0.25mm pitch (400×200×200 grid).
 
+## Cleared-space lead-in — the 4D contour's entry spec (2026-10-30, literature-checked)
+
+The day's measurements, then the pause: Alice ruled we stop guessing and
+check industry/academic practice first. The survey (Fusion/HSM rest
+machining, FreeCAD PR #27908 — the only open-source rest implementation,
+Pal's ReSt computation, Petrzelka's 4-axis roughing) VALIDATES the stage-C
+stock model wholesale — an in-process stock model driving rest machining
+is exactly what every serious CAM system ships. The naive-combination
+problems we hit (plows at trimmed-band entries, non-monotonic response
+to partial fixes, thin-sliver left-overs) are the SAME problems FreeCAD
+hit and solved in their rest-machining rewrite, and their landed answers
+become our spec:
+
+1. **CLEARED-SPACE LEAD-IN (the yellow-streak fix).** A pass entry
+   never plunges at the engagement point. The pocket places each entry
+   in provably CLEARED space adjacent to the orbit start — swept bands,
+   the same thing stampBand records (and pocket2d already tracks
+   per-level as `clearedBands`) — then FEEDS to the orbit start at the
+   cut level. Implementation shape: entry candidate = a point whose
+   tool disc sits inside the current level's cleared bands (own level
+   first, previous levels' bands via the waterline's stamp state at
+   trimmed bands); route = feed move at depth from candidate to orbit
+   start, engaging the wall with the peripheral edge (Alice's
+   2026-10-30 intent: the cutting edge, not the tip). Falls back to
+   today's raised-approach when no cleared point exists on an orbit.
+   This REPLACES the failed scalar `entryClear` (asked the coarse
+   standing max) and the width-sweep over-cut (measured non-monotonic:
+   0.2mm growth made yellow WORSE — 87 vs 64 — partial engagement
+   creates new thin slivers, exactly the structure industry avoids).
+2. **THIN-STREAMER HONESTY (the left-overs).** Rest material thinner
+   than a threshold (Fusion's "Ignore Stock Less Than" analog) is NOT
+   roughed: left standing for the finishing pass, warned once per run
+   like the existing gap-narrower-than-tool class. No dummy islands,
+   no sliver-chasing with the roughing tool.
+3. **KEEP-DOWN CHAINING (the hop census's 975 plunge cycles)** —
+   deferred to after 1+2; FreeCAD's merged-rest-region/extension-
+   distance pattern is the prior art. The trimmed orientations are
+   6% chained today (measured, probe-hop-census).
+
+Safety invariants unchanged: the keep-out is never crossed, no
+straight plunge through material, hooks-absent emission byte-identical,
+bookkeeping fails toward extra cutting.
+
 ## Tool-shape accuracy (Alice's ruling, 2026-10-30)
 
 Roughing treats a ball/bull endmill as a full-Ø flat disc — the

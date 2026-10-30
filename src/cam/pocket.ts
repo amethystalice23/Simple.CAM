@@ -126,9 +126,23 @@ export interface PocketOptions {
    * really a "does not fit" the caller should surface instead.
    */
   minLoopPerimeter?: number;
-  /** a filter to pick the orbit start vertex; if provided, rotateToNearest
-   *  will search for the nearest vertex that satisfies this filter. */
-  startFilter?: (p: Vec2) => boolean;
+  /**
+   * CLEARED-SPACE LEAD-IN (2026-10-30, the FreeCAD-validated rest-
+   * machining pattern): true when the entry disc at (x, y) is provably
+   * swept clear to `zSafe` by earlier passes. When provided, an orbit
+   * whose start vertex is NOT clear looks for the nearest vertex whose
+   * entry IS clear; if one exists within the loop, the pocket rapids
+   * THERE, descends at band-top height (a true plunge through air),
+   * and FEEDS along the loop to the material — the wall is engaged by
+   * the peripheral edge, never the tip. Falls back to today's
+   * raised-approach entry when no vertex qualifies. Absent = today's
+   * emission, byte-identical.
+   */
+  leadIn?: {
+    sweptClear: (zSafe: number, x: number, y: number, toolR: number) => boolean;
+    /** the height the lead-in plunge descends to (the band top) */
+    zSafe: number;
+  };
 }
 
 export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): PocketResult {
@@ -286,6 +300,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
   let restZ: number | null = null;
   let clearedBands: Vec2[][] = [];
   let links = 0;
+  let leadIns = 0;
 
   for (const levelZ of levels) {
     // the entry-disc ceiling (trimmed standing material the ladder never
@@ -298,9 +313,43 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     // vanishes under the offset
     for (let k = 0; k < orbits.length; k++) {
       for (const raw of orbits[k]) {
-        const loop = rotateToNearest(raw, cur, opts.startFilter);
+        const loop = rotateToNearest(raw, cur);
         const start = loop[0];
         const rest = restZ === levelZ ? cur : null;
+
+        // THE RAISED-APPROACH ENTRY (the pre-lead-in emission, verbatim)
+        // — shared by the fallback and no-lead-in paths so hooks-absent
+        // behavior stays byte-identical.
+        const emitRaisedEntry = (retraveled: boolean): void => {
+          if (!retraveled && restZ !== null) {
+            moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+          }
+          moves.push({
+            words: { x: start.x, y: start.y },
+            feed: 0,
+            rapid: true,
+            comment: `level z${levelZ.toFixed(2)} pass ${k + 1}`,
+          });
+          moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+          moves.push({ words: { z: approachZ }, feed: 0, rapid: true });
+          const cum = arcTable(loop);
+          const entry = rampEntry({
+            loop,
+            cum,
+            sStart: 0,
+            stretch: cum[loop.length],
+            closed: true,
+            band: op.finishingOnly ? 0 : entryTop - levelZ,
+            fromZ: approachZ,
+            toZ: levelZ,
+            stepDown: op.stepDown,
+            feed: op.plungeFeed,
+          });
+          moves.push(...entry.moves);
+          minutes += entry.minutes;
+          entries[entry.mode]++;
+        };
+
 
         if (rest !== null && linkIsClear(rest, start, toolR, clearedBands, loop, op.regions)) {
           // STAY DOWN: feed straight to the next pass's start at depth —
@@ -313,49 +362,66 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
           });
           minutes += Math.hypot(start.x - rest.x, start.y - rest.y) / op.feed;
           links++;
-        } else {
-          // retract the deferred previous pass, then travel first at the
-          // machine's existing height (after a tool change that is the
-          // swap macro's high park — never a diagonal descent across the
-          // table), then descend at the destination
-          if (restZ !== null) {
-            moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-          }
-          moves.push({
-            words: { x: start.x, y: start.y },
-            feed: 0,
-            rapid: true,
-            comment: `level z${levelZ.toFixed(2)} pass ${k + 1}`,
-          });
-          moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
-          // rapid down to the approach plane (clear of the standing material),
-          // then FEED the entry: a helical descent along the loop itself —
-          // never a straight plunge into material (entry.ts)
-          moves.push({ words: { z: approachZ }, feed: 0, rapid: true });
+        } else if (
+          opts.leadIn &&
+          !op.finishingOnly &&
+          !opts.leadIn.sweptClear(levelZ, start.x, start.y, toolR)
+        ) {
+          // CLEARED-SPACE LEAD-IN: the orbit start's entry disc would
+          // touch standing material (the trim's boundary streamers — the
+          // 2026-10-30 yellow-streak class). Find the loop vertex whose
+          // entry disc IS provably swept clear with the SHORTEST feed-back
+          // arc to the start, rapid there, plunge through air to the cut,
+          // then FEED the remaining arc — the wall is engaged by the
+          // peripheral edge (Alice's 2026-10-30 intent), never a
+          // tip-plunge. No clear vertex = the raised approach below.
           const cum = arcTable(loop);
-          const entry = rampEntry({
-            loop,
-            cum,
-            sStart: 0,
-            stretch: cum[loop.length],
-            closed: true,
-            // finishing-only assumes the bulk above is gone — the entry is
-            // through air and plunges straight (the finishingOnly
-            // convention). Otherwise the FRESH material this entry removes
-            // is measured from the honest entry top: the ladder's standing
-            // surface, raised by the entry-disc ceiling when the caller
-            // knows one (2026-10-30) — the ramp then bounds its per-rev
-            // descent through the extra column instead of the rapid
-            // plowing it.
-            band: op.finishingOnly ? 0 : entryTop - levelZ,
-            fromZ: approachZ,
-            toZ: levelZ,
-            stepDown: op.stepDown,
-            feed: op.plungeFeed,
-          });
-          moves.push(...entry.moves);
-          minutes += entry.minutes;
-          entries[entry.mode]++;
+          const total = cum[loop.length];
+          let lead: { idx: number; back: number } | null = null;
+          for (let v = 0; v < loop.length; v++) {
+            if (!opts.leadIn.sweptClear(levelZ, loop[v].x, loop[v].y, toolR)) continue;
+            const back = (total - cum[v]) % total;
+            if (!lead || back < lead.back) lead = { idx: v, back };
+          }
+          if (lead && lead.back > 1e-6) {
+            if (restZ !== null) {
+              moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+            }
+            const entryPt = loop[lead.idx];
+            moves.push({
+              words: { x: entryPt.x, y: entryPt.y },
+              feed: 0,
+              rapid: true,
+              comment: `level z${levelZ.toFixed(2)} pass ${k + 1} — cleared-space lead-in`,
+            });
+            moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+            // sweptClear proved the disc clear ALL THE WAY DOWN TO levelZ,
+            // so both the rapid to min(zSafe, approachZ) and the plunge
+            // to the cut are through proven air
+            moves.push({ words: { z: Math.min(opts.leadIn.zSafe, approachZ) }, feed: 0, rapid: true });
+            moves.push({ words: { z: levelZ }, feed: op.plungeFeed, comment: 'lead-in plunge through swept air' });
+            // feed the arc from the lead vertex around to the start —
+            // every point on it is the loop's own cut path
+            let prevPt = entryPt;
+            for (let s = lead.idx + 1; s < loop.length; s++) {
+              const p = loop[s];
+              moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+              minutes += Math.hypot(p.x - prevPt.x, p.y - prevPt.y) / op.feed;
+              prevPt = p;
+            }
+            for (let s = 0; s < 1; s++) {
+              moves.push({ words: { x: start.x, y: start.y }, feed: op.feed, comment: 'lead-in engage' });
+              minutes += Math.hypot(start.x - prevPt.x, start.y - prevPt.y) / op.feed;
+            }
+            leadIns++;
+          } else {
+            // no clear vertex on this loop: the lead-in branch emitted
+            // NOTHING (no retract, no travel) — the raised entry must do
+            // both, exactly like the plain no-lead-in path
+            emitRaisedEntry(false);
+          }
+        } else {
+          emitRaisedEntry(false);
         }
 
         let prev = start;

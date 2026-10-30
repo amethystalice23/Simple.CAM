@@ -28,7 +28,7 @@
 
 import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
 import { difference, intersection, offsetInward, offsetOutward, union } from './clipper';
-import { simplifyContour, zLadder } from './paths';
+import { APPROACH_CLEARANCE, simplifyContour, zLadder } from './paths';
 import { bandOf, pocket2d } from './pocket';
 import { sliceAtZ, buildZIndex, type SliceResult } from './slicing';
 
@@ -116,6 +116,12 @@ export interface WaterlineRoughOptions {
      *  without grid knowledge falls back to the band top (the ladder
      *  assumption, today's behavior). */
     computeCeiling?: (bandTop: number, cut: number, region: Vec2[][]) => number;
+    /** CLEARED-SPACE LEAD-IN (2026-10-30 spec): true when the entry disc
+     *  at (x,y) is provably swept clear to zSafe by earlier passes —
+     *  the pocket then plunges THERE and feeds to the orbit start,
+     *  engaging material with the peripheral edge instead of plunging
+     *  beside standing columns. Absent = no lead-in, today's entries. */
+    sweptClear?: (zSafe: number, x: number, y: number, toolR: number) => boolean;
   };
 
 }
@@ -545,6 +551,16 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       approachCeiling = Math.max(bandTop, Math.min(ceiling, bandTop + o.stepDown));
     }
 
+    // CLEARED-SPACE LEAD-IN (the 2026-10-30 spec, FreeCAD-validated): with
+    // a sweptClear query, an orbit entry beside standing material moves
+    // to the nearest provably-swept vertex and feeds in along the loop —
+    // the peripheral edge engages the wall. zSafe is the clamped ceiling
+    // + clearance: the same plane the raised approach uses, so the
+    // lead-in plunge is provably clear at exactly the height the
+    // fallback would rapid to.
+    const leadInZ = Math.max(bandTop, approachCeiling ?? -Infinity) + APPROACH_CLEARANCE;
+    const leadIn = o.standing?.sweptClear ? { sweptClear: o.standing.sweptClear, zSafe: leadInZ } : undefined;
+
     // Clipper's round-join offsets tessellate the region boundary at 25µm —
     // hundreds of near-collinear vertices per contour that make every pass
     // offset ~20× slower and the emitted gcode ~5× longer, for boundary
@@ -589,19 +605,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     try {
       const res = pocket2d(op, o.tool, {
         minLoopPerimeter: o.tool.diameter,
-        startFilter: o.standing?.entryClear
-          ? (p) => o.standing.entryClear!(
-              Math.max(bandTop, Math.min(
-                o.standing.computeCeiling
-                  ? o.standing.computeCeiling(bandTop, cut, opening)
-                  : bandTop,
-                bandTop + o.stepDown,
-              )) + APPROACH_CLEARANCE,
-              p.x,
-              p.y,
-              o.tool.diameter / 2,
-            )
-          : undefined,
+        leadIn,
       });
       moves.push(...res.moves);
       levels.push(cut);

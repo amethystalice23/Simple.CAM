@@ -262,6 +262,12 @@ export function standingHooksFor(
    *  z_safe is typically bandTop + APPROACH_CLEARANCE.
    *  Returns true if NO cell that overlaps the entry disc has material above z_safe. */
   entryClear: (zSafe: number, x: number, y: number, toolR: number) => boolean;
+  /** CLEARED-SPACE LEAD-IN query: true when every grid cell the entry
+   *  disc touches is STAMPED-clear below zSafe — provably swept by an
+   *  earlier pass (the stamp's own condition, so a true answer is
+   *  exact, not sampled). The lead-in plunges there and feeds to the
+   *  orbit start, engaging the wall with the peripheral edge. */
+  sweptClear: (zSafe: number, x: number, y: number, toolR: number) => boolean;
 } {
   const A = (angleDeg * Math.PI) / 180;
   const nTheta = grid.nTheta;
@@ -615,5 +621,46 @@ export function standingHooksFor(
     return true;
   };
 
-  return { trimBand, stampBand, view, computeCeiling, entryClear };
+  /** CLEARED-SPACE LEAD-IN query (2026-10-30, the FreeCAD-validated spec):
+   *  can the tool DISC centered at machine-frame (x, y) descend to zSafe
+   *  without touching standing material? True only when EVERY grid cell
+   *  the disc's footprint touches is stamped-clear below zSafe — i.e.
+   *  the cell's standing radius is at/below the plane's bound at that
+   *  row (the exact condition stampBand enforces when it lowers a cell,
+   *  so a true answer is provably swept). Near-equator and
+   *  below-axis-plane rows never read clear (the stamp skips them —
+   *  the safe direction). Cells outside the grid read blocked. */
+  const sweptClear = (zSafe: number, x: number, y: number, toolR: number): boolean => {
+    const pitchX = grid.pitchX;
+    const iLo = Math.ceil((x - toolR - grid.gx0) / pitchX);
+    const iHi = Math.floor((x + toolR - grid.gx0) / pitchX);
+    if (iLo < 0 || iHi >= grid.nx) return false; // off-grid: conservatively blocked
+    const dzSafe = zSafe - grid.axisZ;
+    for (let i = iLo; i <= iHi; i++) {
+      const dx = xAt(i) - x;
+      const dyMax = Math.sqrt(Math.max(0, toolR * toolR - dx * dx));
+      for (let j = 0; j < nTheta; j++) {
+        const s = sin[j];
+        // the disc grazes the slab's angular extent; the slab-edge cos
+        // (cHi, ≤ row-center cos) demands the cell be clear at the WORST
+        // angle in the slab — matching liveRange's conservatism
+        const cEdge = cHi[j];
+        const r = grid.r[j * grid.nx + i];
+        // the cell's ray projects to y ∈ [0, r·s] (sign of s) — does that
+        // interval reach the disc's y-band at this column?
+        const yRay = r * s;
+        const yMin = Math.min(0, yRay);
+        const yMax = Math.max(0, yRay);
+        if (yMax < y - dyMax || yMin > y + dyMax) continue;
+        // the cell is in the disc's reach: it must be stamped clear at
+        // zSafe — its standing radius at or below the plane's slab-edge
+        // bound. cos ≤ equator: never clear (stamp never touched it).
+        if (cEdge <= EQUATOR_EPS) return false;
+        if (r > dzSafe / cEdge + X_EPS) return false;
+      }
+    }
+    return true;
+  };
+
+  return { trimBand, stampBand, view, computeCeiling, entryClear, sweptClear };
 }
