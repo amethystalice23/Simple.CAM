@@ -11,3 +11,5 @@ reference/
 .claude/
 .agents/
 CLAUDE.md
+# Untracked probe/scratch scripts — kept out of git status noise
+scripts/scratch/
