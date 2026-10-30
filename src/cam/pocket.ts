@@ -45,6 +45,14 @@ export interface PocketResult {
    * helical cut for one-orbit pockets — the entry is the roughing).
    */
   continuous: number;
+  /**
+   * The tool-center orbit loops that SURVIVED the minLoopPerimeter drop,
+   * flattened over inset passes (STAGE C: the standing stamp's swept area
+   * is built from these — sliver orbits never ran, so their bands must
+   * not be claimed as swept; the region's morphological opening
+   * over-claims exactly by them).
+   */
+  orbits: Vec2[][];
 }
 
 /**
@@ -100,8 +108,9 @@ function signedArea(loop: Vec2[]): number {
  * The band swept by a cut pass: the loop dilated by the tool radius.
  * Orientation is forced CCW — a CW ring (an island orbit) SHRINKS under
  * a plain outward offset, but the band is orientation-free geometry.
+ * (Also builds the stage-C stamp's swept bands from PocketResult.orbits.)
  */
-function bandOf(loop: Vec2[], toolR: number): Vec2[][] {
+export function bandOf(loop: Vec2[], toolR: number): Vec2[][] {
   return offsetOutward([signedArea(loop) < 0 ? [...loop].reverse() : loop], toolR);
 }
 
@@ -261,6 +270,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
       entries,
       links: 0,
       continuous: 1,
+      orbits: [loop],
     };
   }
 
@@ -368,5 +378,6 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     entries,
     links,
     continuous: 0,
+    orbits: orbits.flat(),
   };
 }

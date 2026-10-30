@@ -1688,7 +1688,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // SAFETY direction is pinned in standingClear (a wrong
             // bookkeeping cell fails toward EXTRA cutting, never uncut
             // waste; the keep-out stays model-based, untouched by this)
-            standing: standingHooksFor(standing, pick.angle + ctx.datumAngle),
+            standing: standingHooksFor(standing, pick.angle + ctx.datumAngle, tool.diameter),
             // the waterline's own footprint rule, verbatim: clear-excess
             // WINS over cut-over (the clear needs the footprint — every
             // level clears out to the stock edge), cut-over alone skips

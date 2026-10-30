@@ -29,7 +29,7 @@
 import type { Move, PocketOp, Tool, Vec2 } from '../core/types';
 import { difference, intersection, offsetInward, offsetOutward, union } from './clipper';
 import { simplifyContour, zLadder } from './paths';
-import { pocket2d } from './pocket';
+import { bandOf, pocket2d } from './pocket';
 import { sliceAtZ, buildZIndex, type SliceResult } from './slicing';
 
 export interface WaterlineRoughOptions {
@@ -519,15 +519,6 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     // shadow + moat-only stop already guarantee the rough never severs.
     const pocketRegion = region.map((c) => simplifyContour(c, SLICE_SIMPLIFY_TOL));
 
-    // STAGE C: the swept area for the standing stamp — the tool-disc
-    // OPENING of the simplified region the pocket actually cleared.
-    // Computed only when hooks are present (independent of clearToStock;
-    // the unreachable-stock warning above keeps its own logic). An empty
-    // opening stamps nothing — the safe direction.
-    const swept =
-      o.standing &&
-      offsetOutward(offsetInward(pocketRegion, o.tool.diameter / 2), o.tool.diameter / 2);
-
     // pocket the band in a single pocket level — the ladder's own stepping
     // already happened. TRAVEL at the crown + clearance, NOT band-top +
     // clearance: the uncleared stock outside the clearing region and the
@@ -565,8 +556,17 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       droppedSlivers += res.droppedLoops;
       // STAGE C: record the removal only after the level actually emitted
       // moves — the does-not-fit catch below cut nothing, so nothing may
-      // be stamped for it
-      if (o.standing && swept) o.standing.stampBand(bandTop, cut, swept);
+      // be stamped for it. The swept area is the union of the SURVIVING
+      // orbits' tool-disc bands — NOT the region's morphological opening,
+      // which over-claims by the sliver orbits minLoopPerimeter dropped
+      // (their bands never ran). Built only when hooks are present; the
+      // hooks-absent path stays byte-identical.
+      if (o.standing) {
+        const toolR = o.tool.diameter / 2;
+        const bands = res.orbits.flatMap((orbit) => bandOf(orbit, toolR));
+        const swept = bands.length > 0 ? union(bands) : [];
+        o.standing.stampBand(bandTop, cut, swept);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!/does not fit/.test(msg)) throw e;

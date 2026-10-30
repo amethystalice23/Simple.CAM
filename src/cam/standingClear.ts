@@ -10,10 +10,12 @@
  * THE SAFETY INVARIANT (the one thing that cannot be wrong): if the
  * bookkeeping is ever wrong, the failure must be EXTRA CUTTING (wasted
  * motion), never uncut waste and never a gouge. So: STAMP conservatively
- * (only reduce a cell's r when the cell's whole sampled band segment is
- * certainly inside the area actually swept — all-or-nothing), TRIM
+ * (only reduce a cell's r when its whole above-floor segment's plan
+ * extent lies within ONE covered interval of the swept set — exact, no
+ * sampled approximation), TRIM
  * conservatively (only subtract area certainly containing no work,
- * shrunk by the wedge-vs-rect margin before subtracting). The
+ * classified at the slab edge and shrunk by the wedge-vs-rect margin
+ * before subtracting). The
  * keep-out/upper-shadow logic stays 100% model-based — this module adds
  * nothing to safety, it only skips provably-empty air.
  *
@@ -63,16 +65,23 @@
  *    would forever read as work and the level gate would never fire;
  *    with it, the class stays provably empty, never a guess.)
  *
- * TRIM SAFETY REFINEMENT (a deviation from the stage-C brief's recipe,
- * forced by the invariant — see trimBand below): a no-work cell's own
- * wedge is provably empty FOR THAT CELL, but its PLAN-area rectangle can
- * still be crossed by a NEIGHBOURING cell's live material (a crown-side
- * cell whose ray passes through the same plan strip higher up).
- * Subtracting such a rectangle trims live work, and the following stamp's
- * radial samples then straddle the trimmed strip and under-stamp the
- * neighbour — uncut waste, the one forbidden direction. So every
- * candidate rectangle is filtered against the padded plan y-extents of
- * all LIVE above-plane material in its column before it may subtract.
+ * TRIM FORMULATION (a deviation from the stage-C brief's recipe, forced
+ * by the invariant — see trimBand below): the trim subtracts, per X
+ * column, the COMPLEMENT of the union of live strips. A plan point
+ * (x, y) can only carry work for a row whose above-plane material
+ * projects onto it (the row's liveRange radial interval, mapped through
+ * y = r·sin(φ)), so the gaps between merged padded live strips are
+ * provably air for EVERY row of the column — including whole no-work
+ * rays, whose honest span is everything above the cut plane
+ * (r ∈ [r_cut, R]; the original per-cell band-slice wedge
+ * [r_cut, r_top] died under the wedge-vs-rect margin m before Clipper —
+ * measured ~0.08% trim on the bench job). Subtracting anywhere a live
+ * ray projects would strand live material and under-stamp the neighbour
+ * — uncut waste, the one forbidden direction — hence the strips, padded
+ * by m for the ±dθ/2 slab-angle projection spread, are never touched
+ * (strips narrower than the op's tool are widened to tool width —
+ * pocket2d cannot enter them and would abandon the whole level — but
+ * wide strips keep the plain m pad).
  *
  * Pure module: no worker/UI deps, no gcode; mutates only the grid it was
  * handed (which `adoptStanding` guarantees is the caller's own copy).
@@ -229,14 +238,21 @@ export interface StandingBandView {
 export function standingHooksFor(
   grid: StandingGrid,
   angleDeg: number,
+  /** the op's tool diameter — live strips narrower than this cannot be
+   *  pocketed (pocket2d would abandon the level), so KEPT strips are
+   *  dilated symmetrically up to this width before the subtraction;
+   *  absent = no dilation */
+  toolDiameter?: number,
 ): {
   /** trim the level's clearing region to cells with work; [] = skip the
    *  level (the input region is never mutated) */
   trimBand: (bandTop: number, cut: number, region: Vec2[][]) => Vec2[][];
   /** record the swept removal after the level's moves emitted; `swept` =
-   *  the tool-disc OPENING of the region actually pocketed, floored at
-   *  `cut`. A cell is reduced only when ALL of its band-segment samples
-   *  land inside `swept` (all-or-nothing). */
+   *  the union of the tool-disc bands of the orbit passes actually cut,
+   *  floored at `cut`. A cell is reduced to the plane's bound only when
+   *  its whole above-floor segment's plan extent lies within ONE covered
+   *  y interval of `swept` at the cell's column line (exact, all-or-
+   *  nothing — a sampled test could straddle an unswept gap). */
   stampBand: (bandTop: number, cut: number, swept: Vec2[][]) => void;
   /** the underlying per-orientation view (tests/diagnostics) */
   view: StandingBandView;
@@ -246,10 +262,19 @@ export function standingHooksFor(
   const dTheta = (2 * Math.PI) / nTheta;
   const cos = new Float64Array(nTheta);
   const sin = new Float64Array(nTheta);
+  // the SLAB-EDGE cos: cos at the slab edge NEAREST the pole (φ = 0).
+  // Material classified at the row's CENTER ray can stand up to
+  // r·(cos_edge − cos_center) ≈ R·sin(dθ/2) above the plane at the slab
+  // edge — a center-classified no-live row can be live at its edge (the
+  // randomized oracle caught exactly this hole), so liveness classifies
+  // at the worst case instead.
+  const cHi = new Float64Array(nTheta);
   for (let j = 0; j < nTheta; j++) {
     const phi = j * dTheta - A;
     cos[j] = Math.cos(phi);
     sin[j] = Math.sin(phi);
+    const nearest = Math.max(0, Math.abs(Math.atan2(sin[j], cos[j])) - dTheta / 2);
+    cHi[j] = Math.cos(nearest);
   }
   const xAt = (i: number): number => grid.gx0 + i * grid.pitchX;
 
@@ -279,121 +304,117 @@ export function standingHooksFor(
   /**
    * The radial range of cell (i,j)'s material that stands ABOVE the plane
    * z=cut — empty (null) when nothing on its ray reaches above the plane.
-   * This is the honest per-cell live set (the near-equator FORCED-work
-   * treatment is deliberately not applied here: the interval exists to
-   * protect real material from the trim rectangles, and near-equator rays
-   * with the plane above the axis genuinely carry none).
+   * Classified at the SLAB EDGE (cHi): if cHi > 0 the plane bounds the ray
+   * at dz/cHi at the nearest edge, so live iff dz/cHi < r_st; if cHi ≤ 0
+   * the whole slab sits at/below the axis height, so only a plane below
+   * the axis leaves anything live. Feeds BOTH the trim and the level gate.
    */
   const liveRange = (i: number, j: number, cut: number): [number, number] | null => {
-    const c = cos[j];
     const r = grid.r[j * grid.nx + i];
     const dz = cut - grid.axisZ;
-    if (c > EQUATOR_EPS) {
-      const lo = Math.max(0, dz / c);
+    const cEdge = cHi[j];
+    if (cEdge > 0) {
+      const lo = Math.max(0, dz / cEdge);
       return lo < r ? [lo, r] : null;
     }
-    if (c < -EQUATOR_EPS) {
-      if (dz >= -X_EPS) return null; // plane at/above the axis: ray fully below
-      const hi = Math.min(r, dz / c); // dz/c > 0 here
-      return hi > X_EPS ? [0, hi] : null;
-    }
-    // near-equator: material above the plane needs r·c > dz; the ray's
-    // whole material sits within radius·EQUATOR_EPS of the axis height,
-    // so only a plane above that provably clears it
-    if (dz > grid.radius * EQUATOR_EPS) return null;
-    return [0, r]; // plane at/below the ray's grazing height: whole ray live
+    if (dz >= -X_EPS) return null; // plane at/above the axis: slab fully below
+    const hi = Math.min(r, dz / cEdge); // dz/cEdge > 0 here
+    return hi > X_EPS ? [0, hi] : null;
   };
 
-  const trimBand = (bandTop: number, cut: number, region: Vec2[][]): Vec2[][] => {
-    // 1. LEVEL GATE — one pass over the cells; a level with no work
-    //    anywhere returns [] before any Clipper work. This is where most
-    //    of the Stage C savings live.
+  const trimBand = (_bandTop: number, cut: number, region: Vec2[][]): Vec2[][] => {
+    // 1. LEVEL GATE — one pass over the cells; a level with no live
+    //    material anywhere returns [] before any Clipper work. This is
+    //    where most of the Stage C savings live. (bandTop bounds the
+    //    STAMP only — the trim skips everything provably above the cut
+    //    plane. Liveness classifies at the slab edge via liveRange, the
+    //    same predicate the subtraction below trusts.)
     let anyWork = false;
     gate: for (let j = 0; j < nTheta; j++) {
-      const c = cos[j];
-      if (Math.abs(c) < EQUATOR_EPS) {
-        anyWork = true;
-        break;
-      }
-      if (c > 0) {
-        const rCut = (cut - grid.axisZ) / c;
-        if (rCut <= 0) {
+      for (let i = 0; i < grid.nx; i++) {
+        if (liveRange(i, j, cut) !== null) {
           anyWork = true;
-          break;
+          break gate;
         }
-        for (let i = 0; i < grid.nx; i++) {
-          if (grid.r[j * grid.nx + i] > rCut) {
-            anyWork = true;
-            break gate;
-          }
-        }
-      } else if (cut < grid.axisZ - X_EPS) {
-        anyWork = true;
-        break;
       }
     }
     if (!anyWork) return [];
 
-    // 2. Subtract one conservative rectangle per no-work cell — but only
-    //    where the rectangle provably contains no live work from ANY cell
-    //    of its column (the live-interval filter; module docs). The
-    //    wedge-vs-rect margin m shrinks every rectangle and pads every
-    //    live interval, so a rectangle survives only where no
-    //    above-plane material's plan footprint (across the angular slab)
-    //    reaches it. x is exact (X doesn't rotate).
+    // 2. Subtract everything PROVABLY air, per X column. A plan point
+    //    (x, y) can only carry work for a row whose above-plane material
+    //    projects onto it — liveRange's radial interval mapped through
+    //    y = r·sin(φ_jw) — so the union of those live strips (padded by
+    //    the wedge-vs-rect margin m, which covers the ±dθ/2 slab-angle
+    //    projection spread) is the must-keep set, and the gaps between
+    //    the merged strips are air for EVERY row of the column. x is
+    //    exact (X doesn't rotate), so each gap subtracts as a rectangle
+    //    spanning the column's x slab.
+    //
+    //    This subsumes a per-cell no-work wedge: a no-work cell
+    //    contributes no strip, so its whole plan extent is subtractable
+    //    wherever no live neighbour projects — and the honest no-work
+    //    span is everything above the cut plane, r ∈ [r_cut, R], NOT the
+    //    band slice [r_cut, r_top]: the band top bounds what the STAMP
+    //    may claim, not what the TRIM may skip, and a stepDown-thin band
+    //    slice never survives m anyway (measured: ~0.08% trim on the
+    //    bench job, the Stage C failure this formulation replaces).
     const m = grid.radius * 2 * Math.sin(dTheta / 2) + X_EPS;
+    // SELECTIVE STRIP DILATION: a kept live strip narrower than the tool
+    // cannot be entered by pocket2d (the level gets abandoned wholesale —
+    // "clearing frame thinner than the tool"), so thin strips are widened
+    // symmetrically to tool diameter + 0.05 before the subtraction. Wide
+    // strips keep the plain m pad — a blanket inset measured 29.6% savings
+    // vs 75% unpadded, so the extra pad is for thin strips only.
+    const minStrip = toolDiameter !== undefined ? toolDiameter + 0.05 : 0;
+    // the gap range spans the region's own y-extent (a footprint may
+    // carry a margin past the stock radius; anything outside the region
+    // needs no subtraction anyway)
+    let rLo = Infinity;
+    let rHi = -Infinity;
+    for (const loop of region) {
+      for (const p of loop) {
+        if (p.y < rLo) rLo = p.y;
+        if (p.y > rHi) rHi = p.y;
+      }
+    }
+    if (!Number.isFinite(rLo)) return []; // empty region: nothing to trim
     const rects: Vec2[][] = [];
-    for (let j = 0; j < nTheta; j++) {
-      const c = cos[j];
-      const s = sin[j];
-      if (Math.abs(c) < EQUATOR_EPS) continue; // degenerate: keep everything
-      const rTop = rTopAt(bandTop, j);
-      for (let i = 0; i < grid.nx; i++) {
-        const r = grid.r[j * grid.nx + i];
-        let yLo: number;
-        let yHi: number;
-        if (c > EQUATOR_EPS) {
-          // no-work for this cell iff material stands at/below the cut
-          // plane; the wedge is r ∈ [r_cut, r_top] (empty beyond radius)
-          const rCut = (cut - grid.axisZ) / c;
-          if (rCut <= 0 || r > rCut || rCut > grid.radius) continue;
-          const y1 = rCut * s;
-          const y2 = rTop * s;
-          yLo = Math.min(y1, y2) + m;
-          yHi = Math.max(y1, y2) - m;
+    const iv: [number, number][] = [];
+    for (let i = 0; i < grid.nx; i++) {
+      iv.length = 0;
+      for (let j = 0; j < nTheta; j++) {
+        const live = liveRange(i, j, cut);
+        if (!live) continue;
+        const yLo = Math.min(live[0] * sin[j], live[1] * sin[j]) - m;
+        const yHi = Math.max(live[0] * sin[j], live[1] * sin[j]) + m;
+        if (yHi - yLo < minStrip) {
+          const mid = (yLo + yHi) / 2;
+          iv.push([mid - minStrip / 2, mid + minStrip / 2]);
         } else {
-          // below the cutting equator with the plane at/above the axis:
-          // the level provably touches nothing on this ray; the wedge is
-          // the ray's whole plan extent r ∈ [0, r_standing] (sin < 0, so
-          // y descends with r)
-          if (cut >= grid.axisZ - X_EPS) continue;
-          const ySurface = r * s;
-          yLo = Math.min(0, ySurface) + m;
-          yHi = Math.max(0, ySurface) - m;
+          iv.push([yLo, yHi]);
         }
-        if (yLo >= yHi) continue;
-        // live-interval filter: any other cell of this column whose
-        // above-plane material's padded plan y-extent meets the rect
-        // kills it (its ray crosses the rect's plan strip above the plane)
-        let blocked = false;
-        for (let jw = 0; jw < nTheta && !blocked; jw++) {
-          if (jw === j) continue;
-          const live = liveRange(i, jw, cut);
-          if (!live) continue;
-          const yA = live[0] * sin[jw];
-          const yB = live[1] * sin[jw];
-          const lo = Math.min(yA, yB) - m;
-          const hi = Math.max(yA, yB) + m;
-          if (lo < yHi && hi > yLo) blocked = true;
+      }
+      iv.sort((a, b) => a[0] - b[0]);
+      const xLo = xAt(i) - grid.pitchX / 2 - X_EPS;
+      const xHi = xAt(i) + grid.pitchX / 2 + X_EPS;
+      let prev = rLo;
+      for (let k = 0; k < iv.length; k++) {
+        if (iv[k][0] > prev) {
+          rects.push([
+            { x: xLo, y: prev },
+            { x: xHi, y: prev },
+            { x: xHi, y: iv[k][0] },
+            { x: xLo, y: iv[k][0] },
+          ]);
         }
-        if (blocked) continue;
-        const xLo = xAt(i) - grid.pitchX / 2 - X_EPS;
-        const xHi = xAt(i) + grid.pitchX / 2 + X_EPS;
+        if (iv[k][1] > prev) prev = iv[k][1];
+      }
+      if (prev < rHi) {
         rects.push([
-          { x: xLo, y: yLo },
-          { x: xHi, y: yLo },
-          { x: xHi, y: yHi },
-          { x: xLo, y: yHi },
+          { x: xLo, y: prev },
+          { x: xHi, y: prev },
+          { x: xHi, y: rHi },
+          { x: xLo, y: rHi },
         ]);
       }
     }
@@ -408,7 +429,7 @@ export function standingHooksFor(
     return out;
   };
 
-  const stampBand = (bandTop: number, cut: number, swept: Vec2[][]): void => {
+  const stampBand = (_bandTop: number, cut: number, swept: Vec2[][]): void => {
     if (swept.length === 0) return;
     // bbox cull over the swept polygon set
     let bx0 = Infinity;
@@ -423,50 +444,64 @@ export function standingHooksFor(
         if (p.y > by1) by1 = p.y;
       }
     }
+    // EXACT per-column coverage: walk the swept set's edges collecting
+    // even-odd y-crossings at x = x_i (a grid ray keeps x constant), then
+    // pair them into covered y intervals. Point-sampling the band segment
+    // could straddle an unswept gap and OVER-STAMP (the forbidden
+    // direction); the interval test is exact.
+    const cov: ([number, number][] | null)[] = new Array(grid.nx).fill(null);
+    for (let i = 0; i < grid.nx; i++) {
+      const x = xAt(i);
+      if (x < bx0 || x > bx1) continue;
+      const ys: number[] = [];
+      for (const loop of swept) {
+        for (let e = 0, f = loop.length - 1; e < loop.length; f = e++) {
+          const p = loop[e];
+          const q = loop[f];
+          if ((p.x > x) !== (q.x > x)) {
+            ys.push(q.y + ((p.y - q.y) * (x - q.x)) / (p.x - q.x));
+          }
+        }
+      }
+      if (ys.length < 2) continue;
+      ys.sort((a, b) => a - b);
+      const iv: [number, number][] = [];
+      for (let k = 0; k + 1 < ys.length; k += 2) iv.push([ys[k], ys[k + 1]]);
+      cov[i] = iv;
+    }
+    const dz = cut - grid.axisZ;
     for (let j = 0; j < nTheta; j++) {
       const c = cos[j];
       if (c <= EQUATOR_EPS) continue; // near-equator + lower half: never stamped
-      const rCut = (cut - grid.axisZ) / c;
-      if (rCut <= X_EPS) continue; // plane at/below the axis: not this level's bound
-      const rTop = rTopAt(bandTop, j);
+      // (a cut lower-half band leaves an annular hole the solid
+      // 0-to-r grid cannot represent; skipping under-stamps = safe)
+      const rAbove = Math.max(0, dz / c); // the plane's bound = the stamp target
+      const s = sin[j];
       const base = j * grid.nx;
       for (let i = 0; i < grid.nx; i++) {
+        const iv = cov[i];
+        if (!iv) continue;
         const r = grid.r[base + i];
-        if (r <= rCut) continue; // nothing standing above the plane
-        const hi = Math.min(r, rTop);
-        // the band's radial segment, sampled at its ends and midpoint —
-        // ALL three cutting-frame points must lie in the swept area for
-        // the stamp (any sample outside → the cell stays untouched)
-        let all = true;
-        for (let k = 0; k < 3; k++) {
-          const rr = k === 0 ? rCut : k === 1 ? (rCut + hi) / 2 : hi;
-          const x = xAt(i);
-          const y = rr * sin[j];
-          if (x < bx0 || x > bx1 || y < by0 || y > by1 || !insideSwept(x, y, swept)) {
-            all = false;
+        if (r <= rAbove + X_EPS) continue; // nothing standing above the plane
+        // the cell's WHOLE above-floor segment [rAbove, r] — not the band
+        // slice: material standing above bandTop was swept away by the
+        // same tool passes, and claiming it is not over-claiming
+        const yA = rAbove * s;
+        const yB = r * s;
+        const lo = Math.min(yA, yB);
+        const hi = Math.max(yA, yB);
+        // both segment ends inside ONE merged interval → the whole span
+        // is covered (intervals are contiguous; a gap between intervals
+        // would leave part of the segment unswept)
+        for (const [a, b] of iv) {
+          if (lo >= a && hi <= b) {
+            grid.r[base + i] = rAbove;
             break;
           }
         }
-        if (all) grid.r[base + i] = Math.min(r, rCut);
       }
     }
   };
 
   return { trimBand, stampBand, view };
-}
-
-/** even-odd point-in-polygon over a contour set (Clipper output: outer
- *  loops CCW, holes CW — even-odd reads the nesting correctly) */
-function insideSwept(x: number, y: number, contours: Vec2[][]): boolean {
-  let inside = false;
-  for (const c of contours) {
-    for (let i = 0, j = c.length - 1; i < c.length; j = i++) {
-      const yi = c[i].y;
-      const yj = c[j].y;
-      if ((yi > y) !== (yj > y) && x < ((c[j].x - c[i].x) * (y - yi)) / (yj - yi) + c[i].x) {
-        inside = !inside;
-      }
-    }
-  }
-  return inside;
 }

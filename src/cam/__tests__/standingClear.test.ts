@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Vec2 } from '../../core/types';
-import { totalArea } from '../clipper';
+import { difference, totalArea } from '../clipper';
 import { insideContours } from '../clipUtils';
 import { reindexStanding } from '../rotaryCarve';
 import {
@@ -105,13 +105,23 @@ describe('standingClear conventions', () => {
 });
 
 describe('standingClear trim', () => {
-  it('level gate: a grid fully stamped above a plane returns [] for the same band, region untouched', () => {
+  it('level gate: after a full-disc stamp at the plane the band cannot gate (slab-edge material stands above it), but the trim still removes most of the region', () => {
     const g = mintStandingStock(geo());
     const { stampBand, trimBand } = standingHooksFor(g, 0);
     stampBand(10, 5, bigRegion());
     const region = bigRegion();
     const before = JSON.stringify(region);
-    expect(trimBand(10, 5, region)).toEqual([]);
+    const trimmed = trimBand(10, 5, region);
+    // the stamp leaves rows at exactly the plane bound r = 5/cos(φ); at
+    // the slab edge nearest the pole the same radius reaches
+    // r·cHi — up to ~0.4mm ABOVE the plane — and the grid's per-row-max
+    // model cannot deny it, so every stamped row stays live (skipping
+    // the level would be the forbidden direction). The m-padded live
+    // slivers merge into a carpet across the mid band, so the trim only
+    // removes the far strips past the carpet — ~23% here — and the
+    // region itself is never mutated:
+    expect(trimmed.length).toBeGreaterThan(0);
+    expect(netArea(trimmed)).toBeLessThan(netArea(region) * 0.9);
     expect(JSON.stringify(region)).toBe(before); // identity, not mutated
   });
 
@@ -141,20 +151,24 @@ describe('standingClear trim', () => {
       const phi = j * dTheta - Math.PI / 2;
       expect(insideContours(xMid, 10 * Math.sin(phi), trimmed)).toBe(true);
     }
-    // deep-interior points of the stamped no-work rows whose rectangles
-    // survive the live-interval filter (φ ≈ 30°, 35.7°, 41.4°) are gone
-    for (const y of [3.94, 4.7, 5.5]) {
-      expect(insideContours(xMid, y, trimmed)).toBe(false);
-    }
+    // the stamped rows (θ ∈ (90°, 150°): cut to exactly the plane bound
+    // r = 5/cos) stay live under the slab-edge classification — material
+    // at that radius reaches r·cHi above the plane at the row's slab
+    // edge — so their slab-edge strips (y up to ≈ 9.2 at x=0) are kept;
+    // only the far field past the topmost live strip is provably air
+    expect(insideContours(xMid, 8.0, trimmed)).toBe(true);
+    expect(insideContours(xMid, 11.5, trimmed)).toBe(false);
+    expect(netArea(trimmed)).toBeLessThan(netArea(region) * 0.9);
   });
 
-  it('safety pin: a no-work wedge beside a full standing neighbour trims NOTHING (the live-interval counterexample)', () => {
+  it('safety pin: a no-work wedge beside a full standing neighbour keeps the neighbour strip (the live-interval counterexample)', () => {
     // cell at cutting angle φ=30° cut down to r=4 by a previous
-    // orientation; its wedge's plan strip (y ∈ [3.88, 4.00] at φ=30°) is
+    // orientation; its plan strip (y ∈ [2.89, 5.00] at φ=30°) is
     // crossed by the FRESH φ=24.3° neighbour's ray at height ~8.2 — well
     // above the z5 plane. Trimming there would strand live material and
-    // under-stamp the neighbour; the live-interval filter must drop the
-    // rectangle entirely.
+    // under-stamp the neighbour; the neighbour's padded live strip
+    // (y ∈ [0.66, 5.72]) must be kept. Only the provably-beyond-material
+    // far field (|y| past every ray's reach) may go.
     const g = mintStandingStock(geo());
     const dTheta = (2 * Math.PI) / g.nTheta;
     const j30 = Math.round((Math.PI / 6 + Math.PI / 2) / dTheta); // φ=+30° at A=90
@@ -162,8 +176,64 @@ describe('standingClear trim', () => {
     const { trimBand } = standingHooksFor(g, 90);
     const region = bigRegion();
     const trimmed = trimBand(10, 5, region);
-    expect(totalArea(trimmed)).toBeCloseTo(totalArea(region), 6);
+    // the neighbour's live strip survives the trim…
     expect(insideContours(0, 3.94, trimmed)).toBe(true);
+    expect(insideContours(0, 3.0, trimmed)).toBe(true);
+    expect(insideContours(0, 5.5, trimmed)).toBe(true);
+    // …while only the far field beyond every row's material reach goes
+    expect(insideContours(0, 11.5, trimmed)).toBe(false);
+    expect(totalArea(trimmed)).toBeLessThan(totalArea(region));
+  });
+
+  it('re-pin (H1): a stepDown-thin band trims the FULL no-work wedge [r_cut, R], not the band slice', () => {
+    // the real op's shape: band [bandTop, cut] is stepDown-thin. The band
+    // slice [r_cut, r_top] spans ≤ stepDown/cos in radius — under the
+    // ~1mm wedge-vs-rect margin (2m ≈ 2·0.998) every rectangle died
+    // before Clipper and the trim was inert (~0.08% on the bench job).
+    // The honest wedge is everything above the cut plane on a no-work
+    // ray: r ∈ [r_cut, R] — the band top bounds the STAMP, not the TRIM.
+    const g = mintStandingStock(geo({ thetaStepOver: 0.5 })); // nTheta 126, m ≈ 0.499
+    const dTheta = (2 * Math.PI) / g.nTheta;
+    // every upper-half row stamped down to r=5 (below the z=5 plane) by
+    // earlier orientations, except the work row near φ=45° which keeps
+    // fresh stock standing above the plane (so the gate passes)
+    const j45 = Math.round((Math.PI / 4) / dTheta);
+    for (let j = 0; j < g.nTheta; j++) {
+      const c = Math.cos(j * dTheta);
+      if (c > 1e-4 && Math.sin(j * dTheta) > 0 && j !== j45) {
+        for (let i = 0; i < g.nx; i++) g.r[j * g.nx + i] = 5;
+      }
+    }
+    const { trimBand } = standingHooksFor(g, 0);
+    const region = bigRegion();
+    const trimmed = trimBand(7, 5, region); // stepDown-thin band
+    expect(trimmed.length).toBeGreaterThan(0); // gate does not fire (work row)
+    // the band-slice era's plan strips (e.g. y ≈ [3.23, 4.29]) and every
+    // other gap between live strips go — points below the plane on every
+    // ray (2.5, 3.94) are provably air at this level…
+    expect(insideContours(0, 3.94, trimmed)).toBe(false);
+    expect(insideContours(0, 2.5, trimmed)).toBe(false);
+    // …while the work row's own padded live strip (φ=45.7°: live y ≈
+    // [5.1, 7.2] → kept [4.6, 7.7]) survives
+    expect(insideContours(0, 4.7, trimmed)).toBe(true);
+    expect(insideContours(0, 5.5, trimmed)).toBe(true);
+    expect(insideContours(0, 7.5, trimmed)).toBe(true);
+    expect(netArea(trimmed)).toBeLessThan(netArea(region) * 0.9);
+  });
+
+  it('re-pin (H1 safety): the extended wedge still dies against a fresh neighbour whose ray crosses it', () => {
+    // the H1 counterexample at a stepDown-thin band: the φ=28.6° no-work
+    // row's full wedge strip y ∈ [3.73, 3.79] is crossed by the FRESH
+    // φ=22.9° neighbour's ray (radius 5.4–10 up there, height ≫ z5); the
+    // live-interval filter must still drop the rectangle.
+    const g = mintStandingStock(geo());
+    const dTheta = (2 * Math.PI) / g.nTheta;
+    const j30 = Math.round((Math.PI / 6) / dTheta); // φ=+28.6° at A=0
+    for (let i = 0; i < g.nx; i++) g.r[j30 * g.nx + i] = 5;
+    const { trimBand } = standingHooksFor(g, 0);
+    const region = bigRegion();
+    const trimmed = trimBand(7, 5, region);
+    expect(insideContours(0, 3.76, trimmed)).toBe(true); // nothing trimmed there
   });
 
   it('safety pins: stamp needs full coverage; an all-work trim leaves the region alone', () => {
@@ -192,11 +262,14 @@ describe('standingClear trim', () => {
     expect(view.grid.r[j * g.nx + 20]).toBe(10);
     expect(view.cosRow(j)).toBeCloseTo(Math.cos(6 * ((2 * Math.PI) / g.nTheta)), 12);
 
-    // (c) a band reaching below the axis: every cell has work, nothing is
-    // provably empty → the region comes back unchanged
+    // (c) a band reaching below the axis: every cell has work (fresh
+    // grid) → the live strips carpet the whole plan and only the far
+    // field beyond every ray's material reach (|y| > R + m there, radius
+    // > R) may go
     const region = bigRegion();
     const trimmed = trimBand(0, -5, region);
-    expect(totalArea(trimmed)).toBeCloseTo(totalArea(region), 6);
+    expect(totalArea(trimmed)).toBeLessThan(totalArea(region));
+    expect(totalArea(trimmed)).toBeGreaterThan(totalArea(region) - 45);
   });
 });
 
@@ -256,6 +329,122 @@ describe('adoptStanding', () => {
     // …and a row deep inside the notch reads fully removed
     expect(adopted.r[6 * adopted.nx + 10]).toBe(0);
   });
+});
+
+// ---------------------------------------------------------------- oracle
+// SOUNDNESS ORACLE (ported from the committee's randomized probe,
+// scripts/probe-c5m6-analytic.ts fixture D): does ANY band material
+// (height above the floor plane) sit under a point the trim subtracted?
+// Material is checked at row centers AND slab edges — the same worst-case
+// model the slab-edge (cHi) classification must survive.
+function bandMaterialUnder(
+  grid: ReturnType<typeof mintStandingStock>,
+  angleDeg: number,
+  x: number,
+  y: number,
+  cut: number,
+): boolean {
+  const A = (angleDeg * Math.PI) / 180;
+  const dT = (2 * Math.PI) / grid.nTheta;
+  const i = Math.round((x - grid.gx0) / grid.pitchX);
+  if (i < 0 || i >= grid.nx) return false;
+  for (let j = 0; j < grid.nTheta; j++) {
+    const phiC = j * dT - A;
+    for (const phi of [phiC - dT / 2, phiC, phiC + dT / 2]) {
+      const s = Math.sin(phi);
+      if (Math.abs(s) < 1e-6) continue;
+      const r = y / s;
+      if (r < 0 || r > grid.r[j * grid.nx + i]) continue;
+      const z = grid.axisZ + r * Math.cos(phi);
+      if (z > cut + 1e-9) return true;
+    }
+  }
+  return false;
+}
+
+/** even-odd point-in-SET across all loops; visit each interior sample point */
+function sampleSet(loops: Vec2[][], step: number, visit: (x: number, y: number) => void): number {
+  let xmin = 1e9;
+  let xmax = -1e9;
+  let ymin = 1e9;
+  let ymax = -1e9;
+  for (const loop of loops)
+    for (const p of loop) {
+      xmin = Math.min(xmin, p.x);
+      xmax = Math.max(xmax, p.x);
+      ymin = Math.min(ymin, p.y);
+      ymax = Math.max(ymax, p.y);
+    }
+  let count = 0;
+  for (let x = xmin + step / 2; x < xmax; x += step)
+    for (let y = ymin + step / 2; y < ymax; y += step) {
+      let inside = false;
+      for (const loop of loops)
+        for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+          const yi = loop[i].y;
+          const yj = loop[j].y;
+          if ((yi > y) !== (yj > y) && x < ((loop[j].x - loop[i].x) * (y - yi)) / (yj - yi) + loop[i].x)
+            inside = !inside;
+        }
+      if (!inside) continue;
+      count++;
+      visit(x, y);
+    }
+  return count;
+}
+
+describe('standingClear soundness (randomized oracle)', () => {
+  it('grazing planes, random surfaces/orientations: zero band material in the trimmed-away area', () => {
+    const R = 45;
+    let seed = 12345; // fixed LCG — deterministic in CI
+    const rnd = (): number => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    let pts = 0;
+    let hits = 0;
+    for (let trial = 0; trial < 60; trial++) {
+      const g = mintStandingStock({
+        x0: -20,
+        x1: 20,
+        radius: R,
+        axisZ: 0,
+        thetaStepOver: 1.6,
+        datumAngle: 0,
+      });
+      const dT = (2 * Math.PI) / g.nTheta;
+      const band = rnd() * 40; // random surface radius 0..40
+      for (let j = 0; j < g.nTheta; j++)
+        for (let i = 0; i < g.nx; i++) {
+          // lumpy surface: base band plus a bump toward +theta
+          const phi = j * dT;
+          g.r[j * g.nx + i] = Math.min(R, Math.max(0, band + 12 * Math.cos(phi) * rnd()));
+        }
+      const A = rnd() * 360;
+      // adversarial plane: graze a random row's material top within ±1.5mm
+      const jg = Math.floor(rnd() * g.nTheta);
+      const ig = Math.floor(rnd() * g.nx);
+      const cut = Math.max(
+        -10,
+        Math.min(25, g.r[jg * g.nx + ig] * Math.cos(jg * dT - (A * Math.PI) / 180) + (rnd() - 0.5) * 3),
+      );
+      const bandTop = cut + 1 + rnd() * 8;
+      const region: Vec2[][] = [
+        [
+          { x: -20, y: -R - 4 },
+          { x: 20, y: -R - 4 },
+          { x: 20, y: R + 4 },
+          { x: -20, y: R + 4 },
+        ],
+      ];
+      const { trimBand } = standingHooksFor(g, A, 2);
+      const trimmed = trimBand(bandTop, cut, region);
+      if (trimmed.length === 0) continue;
+      const removed = difference(region, trimmed);
+      pts += sampleSet(removed, 0.6, (x, y) => {
+        if (bandMaterialUnder(g, A, x, y, cut)) hits++;
+      });
+    }
+    expect(hits).toBe(0);
+    expect(pts).toBeGreaterThan(1000); // the sweep actually sampled
+  }, 120_000);
 });
 
 describe('standingClear perf', () => {
