@@ -888,8 +888,10 @@ THE FRAME: the spindle never tilts, so the tool's attitude is fixed
 and the PART supplies every contact angle — per surface point,
 rotation A sweeps its normal through every non-X-parallel attitude
 exactly once per revolution. "Face matches face" is therefore a
-per-cell ALIGNMENT angle A\*(x,θ) = the surface normal's Y-Z angle −
-90° (the +Y contact attitude; −Y is A\*+180°), and each tool shape
+per-cell ALIGNMENT angle — for flank contact at the tool's −Y side
+(the pinned deliverable, swarfFinish.ts): **A\* = atan2(n.y, n.z) +
+90°** normalized [0,360), verified end-to-end through
+indexedPointRotation (the +Y attitude is A\*+180°). Each tool shape
 defines a CONTACT ENVELOPE around that alignment:
 
 - FLAT/CORN SIDE (SWARF/flank — the video's cut): contact iff the
