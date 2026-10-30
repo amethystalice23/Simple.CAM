@@ -143,6 +143,16 @@ export interface PocketOptions {
     /** the height the lead-in plunge descends to (the band top) */
     zSafe: number;
   };
+  /**
+   * KEEP-DOWN CHAINING corridor (2026-10-30, spec item 3): true when
+   * the tool disc moving from→to at cutZ passes through provably
+   * SWEPT material only (the standing grid's exact stamps — the
+   * knowledge the swept-band and region clauses lack between trimmed
+   * islands of a delta orientation). When provided, a link that fails
+   * the region-containment clause may still chain when this proves
+   * the corridor swept. Absent = today's two-clause test only.
+   */
+  sweptCorridor?: (cutZ: number, from: Vec2, to: Vec2, toolR: number) => boolean;
 }
 
 export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): PocketResult {
@@ -351,7 +361,15 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
         };
 
 
-        if (rest !== null && linkIsClear(rest, start, toolR, clearedBands, loop, op.regions)) {
+        if (
+          rest !== null &&
+          (linkIsClear(rest, start, toolR, clearedBands, loop, op.regions) ||
+            // spec item 3: the region clause fails between trimmed
+            // islands, but the standing grid's stamps can still prove
+            // the corridor swept — the FreeCAD merged-rest-region
+            // knowledge, exact where it says yes
+            (opts.sweptCorridor?.(levelZ, rest, start, toolR) ?? false))
+        ) {
           // STAY DOWN: feed straight to the next pass's start at depth —
           // provably nothing the adjacent passes wouldn't remove anyway.
           // No entry at all: the tool is already at the cut level there.

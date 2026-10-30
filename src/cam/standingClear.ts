@@ -268,6 +268,10 @@ export function standingHooksFor(
    *  exact, not sampled). The lead-in plunges there and feeds to the
    *  orbit start, engaging the wall with the peripheral edge. */
   sweptClear: (zSafe: number, x: number, y: number, toolR: number) => boolean;
+  /** KEEP-DOWN CHAINING corridor: can the tool disc moving from (x0,y0)
+   *  to (x1,y1) stay at cutZ through proven-swept material only? The
+   *  knowledge the 2D region test lacks between trimmed islands. */
+  segmentClear: (cutZ: number, x0: number, y0: number, x1: number, y1: number, toolR: number) => boolean;
 } {
   const A = (angleDeg * Math.PI) / 180;
   const nTheta = grid.nTheta;
@@ -662,5 +666,64 @@ export function standingHooksFor(
     return true;
   };
 
-  return { trimBand, stampBand, view, computeCeiling, entryClear, sweptClear };
+  /** KEEP-DOWN CHAINING CORRIDOR (spec item 3, 2026-10-30): can the tool
+   *  disc moving from machine-frame (x0,y0) to (x1,y1) feed at cutZ
+   *  through proven-clear material only? The hazard a link risks is
+   *  MATERIAL STANDING ABOVE cutZ anywhere the moving disc touches; the
+   *  read is the honest uniform bound — material anywhere in a cell's
+   *  slab, at any radius ≤ its standing r, tops at axisZ + r·cHi (upper
+   *  slabs) or at the axis itself (lower slabs), so a cell is clear
+   *  exactly when r·cHi ≤ dz (upper) / dz ≥ 0 (lower). DELIBERATELY NOT
+   *  sweptClear's read: the stamp writes the ROW-CENTER bound (the
+   *  pinned θ-row convention), so a cell freshly stamped AT the query
+   *  plane can never prove its own plane (cHi > cos_center always) —
+   *  only a stamp from a DEEPER plane, i.e. exactly the earlier-pass
+   *  corridors this query exists for; and sweptClear's
+   *  cos ≤ EQUATOR_EPS blanket blocks the whole lower half of the stock
+   *  even for planes above the axis, where lower-half material is
+   *  provably below the plane — the measured reason the lead-in fires
+   *  zero. Segment samples at a quarter X pitch: the sample discs
+   *  overlap so heavily that any cell slab the true capsule touches is
+   *  also touched by a sample disc, so testing the samples is
+   *  conservative (never reads clear what the capsule would hit). */
+  const segmentClear = (cutZ: number, x0: number, y0: number, x1: number, y1: number, toolR: number): boolean => {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const step = Math.min(grid.pitchX / 4, len > 0 ? len : Infinity);
+    const n = Math.max(1, Math.ceil(len / step));
+    for (let s = 0; s <= n; s++) {
+      const t = s / n;
+      const x = x0 + (x1 - x0) * t;
+      const y = y0 + (y1 - y0) * t;
+      // the disc test at this sample — sweptClear's geometry with the
+      // honest height read
+      const iLo = Math.ceil((x - toolR - grid.gx0) / grid.pitchX);
+      const iHi = Math.floor((x + toolR - grid.gx0) / grid.pitchX);
+      if (iLo < 0 || iHi >= grid.nx) return false; // off-grid: blocked
+      const dz = cutZ - grid.axisZ;
+      for (let i = iLo; i <= iHi; i++) {
+        const dx = xAt(i) - x;
+        const dyMax = Math.sqrt(Math.max(0, toolR * toolR - dx * dx));
+        for (let j = 0; j < nTheta; j++) {
+          const sRow = sin[j];
+          const r = grid.r[j * grid.nx + i];
+          const yRay = r * sRow;
+          const yMin = Math.min(0, yRay);
+          const yMax = Math.max(0, yRay);
+          if (yMax < y - dyMax || yMin > y + dyMax) continue;
+          const cEdge = cHi[j];
+          if (cEdge > EQUATOR_EPS) {
+            // upper slab: the tallest material tops at axisZ + r·cHi
+            if (r > dz / cEdge + X_EPS) return false;
+          } else if (dz < -X_EPS) {
+            // lower slab: material tops at the axis; a plane below the
+            // axis can hit it, a plane at/above never can
+            if (r > X_EPS) return false;
+          }
+        }
+      }
+    }
+    return true;
+  };
+
+  return { trimBand, stampBand, view, computeCeiling, entryClear, sweptClear, segmentClear };
 }
