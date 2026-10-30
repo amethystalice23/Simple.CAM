@@ -126,6 +126,9 @@ export interface PocketOptions {
    * really a "does not fit" the caller should surface instead.
    */
   minLoopPerimeter?: number;
+  /** a filter to pick the orbit start vertex; if provided, rotateToNearest
+   *  will search for the nearest vertex that satisfies this filter. */
+  startFilter?: (p: Vec2) => boolean;
 }
 
 export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): PocketResult {
@@ -295,7 +298,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     // vanishes under the offset
     for (let k = 0; k < orbits.length; k++) {
       for (const raw of orbits[k]) {
-        const loop = rotateToNearest(raw, cur);
+        const loop = rotateToNearest(raw, cur, opts.startFilter);
         const start = loop[0];
         const rest = restZ === levelZ ? cur : null;
 

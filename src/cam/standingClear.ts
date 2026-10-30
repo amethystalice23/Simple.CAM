@@ -88,7 +88,7 @@
  * Stamping LOWERS cells monotonically; the grid stays stock-radius space
  * per the P1 contract.
  *
- */
+ * */
 import type { Vec2 } from '../core/types';
 import { difference } from './clipper';
 import { reindexStanding, type StandingGrid } from './rotaryCarve';
@@ -258,6 +258,10 @@ export function standingHooksFor(
   view: StandingBandView;
   /** compute the honest standing ceiling over the level's kept cells */
   computeCeiling: (bandTop: number, cut: number, region: Vec2[][]) => number;
+  /** can the entry disc at (x,y) descend to z_safe without touching standing material?
+   *  z_safe is typically bandTop + APPROACH_CLEARANCE.
+   *  Returns true if NO cell that overlaps the entry disc has material above z_safe. */
+  entryClear: (zSafe: number, x: number, y: number, toolR: number) => boolean;
 } {
   const A = (angleDeg * Math.PI) / 180;
   const nTheta = grid.nTheta;
@@ -497,8 +501,8 @@ export function standingHooksFor(
     for (const loop of swept) {
       for (const p of loop) {
         if (p.x < bx0) bx0 = p.x;
-        if (p.x > bx1) bx1 = p.x;
         if (p.y < by0) by0 = p.y;
+        if (p.x > bx1) bx1 = p.x;
         if (p.y > by1) by1 = p.y;
       }
     }
@@ -561,5 +565,55 @@ export function standingHooksFor(
     }
   };
 
-  return { trimBand, stampBand, view, computeCeiling };
+  const entryClear = (zSafe: number, x: number, y: number, toolR: number): boolean => {
+    // The entry disc at (x,y) with radius toolR.
+    // We need to check every grid cell (i,j) that overlaps this disc.
+    // For each such cell, if it has material above zSafe, the entry is not clear.
+
+    // Grid cell (i,j) center is (xAt(i), r_j * sin(phi_j)) but the cell
+    // is actually a slab of width pitchX and angle dTheta.
+    // To be conservative and avoid expensive point-in-disc for every cell,
+    // we bound the disc to a box and check cells in that range.
+
+    const pitchX = grid.pitchX;
+    const iLo = Math.ceil((x - toolR - grid.gx0) / pitchX);
+    const iHi = Math.floor((x + toolR - grid.gx0) / pitchX);
+
+    if (iLo < 0 || iHi >= grid.nx) return false; // partially outside grid: conservatively blocked
+
+    const dzSafe = zSafe - grid.axisZ;
+
+    for (let i = iLo; i <= iHi; i++) {
+      const cx = xAt(i);
+      const dx = cx - x;
+      const dyMax = Math.sqrt(Math.max(0, toolR * toolR - dx * dx));
+
+      for (let j = 0; j < nTheta; j++) {
+        const s = sin[j];
+        const c = cHi[j]; // Use slab-edge cos for conservatism
+
+        // The cell's material on its ray is [0, grid.r[j * grid.nx + i]].
+        // Does this ray's projection (x_i, r * s) overlap the disc's y-range [y-dyMax, y+dyMax]?
+        // And is the material above zSafe?
+        const r = grid.r[j * grid.nx + i];
+        const yRay = r * s;
+        // Note: the ray's full projection is [0, r * s] (or [r * s, 0]).
+        const yMin = Math.min(0, yRay);
+        const yMax = Math.max(0, yRay);
+
+        if (yMax < y - dyMax || yMin > y + dyMax) continue;
+
+        // Material above zSafe?
+        if (c > 0) {
+          if (r > dzSafe / c) return false;
+        } else if (dzSafe < -X_EPS) {
+          // Plane below axis: everything is potentially above
+          if (r > X_EPS) return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  return { trimBand, stampBand, view, computeCeiling, entryClear };
 }

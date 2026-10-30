@@ -587,7 +587,22 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       safeClearance: o.safeClearance,
     };
     try {
-      const res = pocket2d(op, o.tool, { minLoopPerimeter: o.tool.diameter });
+      const res = pocket2d(op, o.tool, {
+        minLoopPerimeter: o.tool.diameter,
+        startFilter: o.standing?.entryClear
+          ? (p) => o.standing.entryClear!(
+              Math.max(bandTop, Math.min(
+                o.standing.computeCeiling
+                  ? o.standing.computeCeiling(bandTop, cut, opening)
+                  : bandTop,
+                bandTop + o.stepDown,
+              )) + APPROACH_CLEARANCE,
+              p.x,
+              p.y,
+              o.tool.diameter / 2,
+            )
+          : undefined,
+      });
       moves.push(...res.moves);
       levels.push(cut);
       passes += res.passes;
