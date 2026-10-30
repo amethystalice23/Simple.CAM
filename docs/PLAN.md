@@ -773,6 +773,24 @@ v1 deliberately excludes: playback transport, scrub-back, laser burn
 modeling (skipped + noted). Real-coin bench: 12.6k moves → 1.58M voxels in ~3s
 at 0.25mm pitch (400×200×200 grid).
 
+## Tool-shape accuracy (Alice's ruling, 2026-10-30)
+
+Roughing treats a ball/bull endmill as a full-Ø flat disc — the
+interchangeable roughing convention (exact for flats; conservative for
+round profiles: never gouges, leaves the rest for finishing). But at
+allowance = 0 the waterline does NOT exploit the ball's shape: vertical
+walls are still exact (a ball touches a vertical wall at its equator),
+while slopes and floors keep a skin where the sphere recedes inside the
+flat's cylinder. The shape-aware kernels live in `relief.ts` (flat disc
+/ ball hemisphere, pinned by tests) — the raster-contour family, not the
+waterline's 2.5D section model. When the 4D contour grows its
+per-orientation finishing pass, it must be raster-style with the
+ball-aware kernel in the rotated frame, inheriting relief's hemispherical
+compensation. FOR USER-FACING DOCS when they are written: call out which
+methods give the highest-accuracy finish — the ball-kernel raster ops —
+and note that section-based ladders (waterline family) cut ball tools
+as full-diameter discs.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
