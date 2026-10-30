@@ -876,6 +876,62 @@ methods give the highest-accuracy finish — the ball-kernel raster ops —
 and note that section-based ladders (waterline family) cut ball tools
 as full-diameter discs.
 
+## The true 4D finishing pass — normal-following contact envelopes (Alice's SWARF ruling, 2026-10-30)
+
+Origin: a Makera video (a Fusion toolpath) — an endmill/corn bit
+tracing a propeller blade's crest with the SIDE of the tool, long slow
+simultaneous X-Y-Z-A sweeps. Alice's ruling: the final pass must NOT
+pick fixed rotational angles — the tool's cutting face must match the
+object's face, all four axes moving to hold that match.
+
+THE FRAME: the spindle never tilts, so the tool's attitude is fixed
+and the PART supplies every contact angle — per surface point,
+rotation A sweeps its normal through every non-X-parallel attitude
+exactly once per revolution. "Face matches face" is therefore a
+per-cell ALIGNMENT angle A\*(x,θ) = the surface normal's Y-Z angle −
+90° (the +Y contact attitude; −Y is A\*+180°), and each tool shape
+defines a CONTACT ENVELOPE around that alignment:
+
+- FLAT/CORN SIDE (SWARF/flank — the video's cut): contact iff the
+  normal is exactly horizontal at A\*; the flute's span must cover the
+  contact height (fluteLength honesty — taller flanks need stepped
+  passes or reporting); on cross-section-convex parts the tool's
+  lower column clears automatically, concave flanks need the
+  column-clearance check (milestone 2).
+- FLAT BOTTOM (disc): normal ∥ tool axis — the raster-in-rotated-frame
+  case; separate kernel, later.
+- BALL (hemisphere): a WINDOW around A\* down to a glancing floor
+  (user knob, default n_z ≈ 0.3) — the general-coverage pass that
+  cleans what the side cannot hug.
+- V-FLANK: normal at the fixed half-angle — last.
+
+THE PLANNER: contact map per (x,θ) cell (surface point + outward
+normal + A\* + axial rake) → contact PATCHES = connected cell sets
+sweepable by one continuous monotone-A pass → per patch ONE long
+simultaneous XYZA sweep (G93, F on every line, rotary-ceiling clamped
+— the spiral-family emission machinery is the writer), A's RATE
+following the geometry (dwell on hard-to-align curvature, fast on
+easy wraps). Retract + re-approach between patches. Cells no envelope
+reaches are REPORTED (the rough's honesty class), never silent.
+
+Honest limits: pure-X normals are invisible to the radial sample (the
+implicit unreachable class, same as the rough's map); near-X normals
+are razor engagement — flagged by the axial-rake metric and admitted
+only when the milestone-2 clearance check passes; concave narrower
+than the tool; rotary-ceiling timing (surface an honest estimate — a
+full-wrap sweep is ≥9s minimum; propeller-class parts are genuinely
+slow, the video's "long slow sweeps" is exactly this).
+
+BUILD ORDER (Alice confirmed): SWARF flat-side first, ball glancing
+second, V-flank last. One op kind, kernel picked by the op's tool.
+
+MILESTONES: (1) the contact map (src/cam/swarfFinish.ts,
+buildContactMap: outward point + healed face normal + A\* + rake per
+cell, analytic-fixture pinned); (2) the flute column-clearance check
+per contact (a BVH column test at A\* — the gouge/no-gouge verdict);
+(3) patch segmentation + monotone-A pass emission; (4) coverage
+report + op wiring + honest time; (5) the ball window kernel.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
