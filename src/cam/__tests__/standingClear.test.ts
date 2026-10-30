@@ -19,6 +19,7 @@ import {
   type StandingGeometry,
 } from '../standingClear';
 import { waterlineRough } from '../waterline';
+import { pocket2d } from '../pocket';
 
 const geo = (over: Partial<StandingGeometry> = {}): StandingGeometry => ({
   x0: -10,
@@ -616,5 +617,131 @@ describe('waterline standing ceiling', () => {
     const passes = (r: { moves: { comment?: string }[] }) =>
       r.moves.filter((m) => /pass \d+/.test(m.comment ?? '')).length;
     expect(passes(raised)).toBe(passes(base));
+  });
+});
+
+describe('standingClear segmentClear (keep-down chaining corridor, spec item 3)', () => {
+  // A=0. The stamp writes the ROW-CENTER bound (the pinned θ-row
+  // convention), so a cell freshly stamped at plane 5 keeps its
+  // slab-edge residue topping a HAIR above 5 — the honest read (the
+  // same residue computeCeiling deliberately keeps) refuses a corridor
+  // at the stamp's own plane and proves one a step above. The real
+  // chaining use is cross-orientation: an earlier orientation's DEEPER
+  // stamp leaves cells far below the current level's plane.
+  it('raw stock blocks; a full stamp proves the corridor one step above its plane, not at it', () => {
+    const g = mintStandingStock(geo());
+    const { stampBand, segmentClear } = standingHooksFor(g, 0);
+    // raw stock at plane 5: blocked
+    expect(segmentClear(5, -5, 0, 5, 0, 1)).toBe(false);
+    stampBand(10, 5, bigRegion());
+    // at the stamp plane itself: the slab-edge residue stands a hair
+    // above it — honestly blocked (a stamp never proves its own plane)
+    expect(segmentClear(5, -5, 0, 5, 0, 1)).toBe(false);
+    // one step above: every cell's material tops at/below the plane
+    expect(segmentClear(6, -5, 0, 5, 0, 1)).toBe(true);
+  });
+
+  it('below-axis planes: never-stamped lower-half material blocks; above-axis planes read it clear (it cannot reach them)', () => {
+    const g = mintStandingStock(geo());
+    const { stampBand, segmentClear } = standingHooksFor(g, 0);
+    stampBand(10, 5, bigRegion());
+    // the stamp never touches cos ≤ eps rows (the lower half at A=0);
+    // their material tops at the AXIS, so a plane above the axis reads
+    // clear through them and a plane below the axis stays blocked
+    expect(segmentClear(5, -5, 9.5, 5, 9.5, 1)).toBe(true);
+    expect(segmentClear(-2, -5, 9.5, 5, 9.5, 1)).toBe(false);
+  });
+
+  it('a deeper stamp proves the shallower corridor (the cross-orientation chaining case)', () => {
+    const g = mintStandingStock(geo());
+    const { stampBand, segmentClear } = standingHooksFor(g, 0);
+    // an earlier orientation's ladder bottoms at plane 2: every upper
+    // cell is stamped to 2/cos — a level at plane 3 links through water
+    // proven clear a full plane deeper
+    stampBand(10, 2, bigRegion());
+    expect(segmentClear(3, -5, 0, 5, 0, 1)).toBe(true);
+    // but a level at plane 2 (the stamp's own plane) still reads the
+    // slab-edge residue — blocked, the honest direction
+    expect(segmentClear(2, -5, 0, 5, 0, 1)).toBe(false);
+  });
+
+  it('pocket2d chains a link between islands when the corridor proves it (integration)', () => {
+    // two disjoint square regions at one level; the plain two-clause
+    // test refuses the link (the capsule exits the regions); a corridor
+    // that says "swept" must let it chain. The pocket result's `links`
+    // count is the observable.
+    const tool = { id: 't1', name: '2mm flat', type: 'flat' as const, diameter: 2, spindleRpm: 18000 };
+    const op: Parameters<typeof pocket2d>[0] = {
+      kind: 'pocket',
+      id: 'linktest',
+      toolId: 't1',
+      regions: [
+        [ { x: -6, y: -4 }, { x: -2, y: -4 }, { x: -2, y: -0 }, { x: -6, y: 0 } ],
+        [ { x: 2, y: -4 }, { x: 6, y: -4 }, { x: 6, y: -0 }, { x: 2, y: 0 } ],
+      ],
+      topZ: 0,
+      floorZ: -2,
+      stepDown: 2,
+      stepOver: 1,
+      feed: 500,
+      plungeFeed: 200,
+      safeClearance: 5,
+    };
+    // sanity: without the corridor, the far island forces a fresh entry
+    const plain = pocket2d(op, tool);
+    expect(plain.entries.helical + plain.entries.zigzag + plain.entries.plunge).toBeGreaterThan(1);
+    // with an always-clear corridor, the islands chain in visit order
+    const chained = pocket2d(op, tool, {
+      sweptCorridor: () => true,
+    });
+    expect(chained.links).toBeGreaterThan(plain.links);
+  });
+});
+
+describe('waterline keep-down corridor (spec item 3 integration)', () => {
+  // the pyramid fixture's levels all sit in one island region, so the
+  // plain two-clause test already chains there; the pin here is the
+  // WIRING: a corridor hook that says NO must leave emission
+  // byte-identical (a false-only corridor is exactly today's behavior),
+  // and one that says YES can only ever ADD links, never remove them
+  const tool = { id: 't1', name: '2mm flat', type: 'flat' as const, diameter: 2, spindleRpm: 18000 };
+  const positions = (() => {
+    const apex: [number, number, number] = [0, 0, 0];
+    const c: [number, number, number][] = [
+      [-5, -5, -10], [5, -5, -10], [5, 5, -10], [-5, 5, -10],
+    ];
+    const tri: number[] = [];
+    for (let i = 0; i < 4; i++) tri.push(...apex, ...c[i], ...c[(i + 1) % 4]);
+    return new Float32Array(tri);
+  })();
+  const opts = () => ({
+    positions: positions as ArrayLike<number>,
+    footprint: [square(-15, 30)] as Vec2[][],
+    topZ: 0, floorZ: -10, stepDown: 2.5, stepOver: 1, allowance: 0.5, margin: 3,
+    tool, feed: 500, plungeFeed: 200, safeClearance: 5,
+  });
+  const stub = (segmentClear?: (z: number, x0: number, y0: number, x1: number, y1: number, r: number) => boolean) => ({
+    trimBand: (_b: number, _c: number, region: Vec2[][]) => region,
+    stampBand: () => undefined,
+    ...(segmentClear === undefined ? {} : { segmentClear }),
+  });
+
+  it('a never-clear corridor is byte-identical to no corridor (the hooks-absent contract)', () => {
+    const plain = waterlineRough(opts());
+    const refused = waterlineRough({ ...opts(), standing: stub(() => false) });
+    expect(JSON.stringify(refused.moves)).toBe(JSON.stringify(plain.moves));
+  });
+
+  it('an always-clear corridor never REMOVES a link the two-clause test made', () => {
+    const plain = waterlineRough(opts());
+    const chained = waterlineRough({ ...opts(), standing: stub(() => true) });
+    // links can only grow (the corridor is a third OR-clause), and the
+    // passes themselves are untouched: same count of orbit passes
+    const linkCount = (r: { moves: { comment?: string }[] }) =>
+      r.moves.filter((m) => /stay-down link/.test(m.comment ?? '')).length;
+    expect(linkCount(chained)).toBeGreaterThanOrEqual(linkCount(plain));
+    const passes = (r: { moves: { comment?: string }[] }) =>
+      r.moves.filter((m) => /pass \d+/.test(m.comment ?? '')).length;
+    expect(passes(chained)).toBe(passes(plain));
   });
 });

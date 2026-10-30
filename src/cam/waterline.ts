@@ -122,6 +122,11 @@ export interface WaterlineRoughOptions {
      *  engaging material with the peripheral edge instead of plunging
      *  beside standing columns. Absent = no lead-in, today's entries. */
     sweptClear?: (zSafe: number, x: number, y: number, toolR: number) => boolean;
+    /** KEEP-DOWN CHAINING corridor (2026-10-30 spec item 3): true when
+     *  the disc moving from→to at cutZ passes through proven-swept
+     *  material only — lets links chain between trimmed islands the
+     *  2D region test refuses. Absent = today's two-clause links. */
+    segmentClear?: (cutZ: number, x0: number, y0: number, x1: number, y1: number, toolR: number) => boolean;
   };
 
 }
@@ -560,6 +565,12 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
     // fallback would rapid to.
     const leadInZ = Math.max(bandTop, approachCeiling ?? -Infinity) + APPROACH_CLEARANCE;
     const leadIn = o.standing?.sweptClear ? { sweptClear: o.standing.sweptClear, zSafe: leadInZ } : undefined;
+    // the chaining corridor rides the same hooks (spec item 3): absent
+    // hooks = no corridor, byte-identical links
+    const sweptCorridor = o.standing?.segmentClear
+      ? (cutZ: number, from: Vec2, to: Vec2, toolR: number) =>
+          o.standing!.segmentClear!(cutZ, from.x, from.y, to.x, to.y, toolR)
+      : undefined;
 
     // Clipper's round-join offsets tessellate the region boundary at 25µm —
     // hundreds of near-collinear vertices per contour that make every pass
@@ -606,6 +617,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
       const res = pocket2d(op, o.tool, {
         minLoopPerimeter: o.tool.diameter,
         leadIn,
+        sweptCorridor,
       });
       moves.push(...res.moves);
       levels.push(cut);

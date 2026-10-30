@@ -20,6 +20,7 @@ import { profile2d } from '../cam/profile';
 import { buildClearedMap } from '../cam/clearedSet';
 import { greedyCover } from '../cam/orientCover';
 import { adoptStanding, standingHooksFor } from '../cam/standingClear';
+import { restMaterialReport } from '../cam/restMaterial';
 import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
 import { rotaryCarve, type StandingGrid } from '../cam/rotaryCarve';
@@ -1688,7 +1689,18 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // SAFETY direction is pinned in standingClear (a wrong
             // bookkeeping cell fails toward EXTRA cutting, never uncut
             // waste; the keep-out stays model-based, untouched by this)
-            standing: standingHooksFor(standing, pick.angle + ctx.datumAngle, tool.diameter),
+            standing: (() => {
+              const h = standingHooksFor(standing, pick.angle + ctx.datumAngle, tool.diameter);
+              // spec item 3: hand the chaining corridor through — the
+              // hooks object's segmentClear, verbatim
+              return {
+                trimBand: h.trimBand,
+                stampBand: h.stampBand,
+                computeCeiling: h.computeCeiling,
+                sweptClear: h.sweptClear,
+                segmentClear: h.segmentClear,
+              };
+            })(),
             // the waterline's own footprint rule, verbatim: clear-excess
             // WINS over cut-over (the clear needs the footprint — every
             // level clears out to the stock edge), cut-over alone skips
@@ -1743,6 +1755,26 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               seen,
               `${res.droppedChains} open chain(s) dropped — broken mesh, some levels incomplete`,
             );
+          }
+        }
+        // THIN-STREAMER HONESTY (spec item 2, the Fusion "Ignore Stock
+        // Less Than" analog): measure what the op's refusals left — the
+        // grid is fully stamped now, so this reads exactly what the next
+        // stock-removing op would adopt. Reported ONCE for the whole op
+        // (it is a property of the final state, not of any orientation),
+        // against the UN-rotated model (the grid's own datum is the
+        // session one; restMaterialReport reindexes to meet it).
+        {
+          const rest = restMaterialReport({
+            grid: standing,
+            positions: positions0,
+            allowance: op.allowance,
+            thinBelow: Math.max(0.2, op.stepOver),
+            toolDiameter: tool.diameter,
+          });
+          if (rest.note) {
+            const key = 'thin-streamer';
+            if (!noteAgg.has(key)) noteAgg.set(key, { example: rest.note, orientations: 1 });
           }
         }
         if (roughs === 0) {

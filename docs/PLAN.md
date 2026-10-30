@@ -807,10 +807,52 @@ become our spec:
    roughed: left standing for the finishing pass, warned once per run
    like the existing gap-narrower-than-tool class. No dummy islands,
    no sliver-chasing with the roughing tool.
+   **IMPLEMENTED 2026-10-30** (`src/cam/restMaterial.ts`): a pure
+   post-pass over the final standing grid vs the model's radial surface
+   — contiguous θ-runs of cells whose standing radius exceeds the
+   surface by more than the allowance (+0.05mm tessellation-wobble
+   tolerance, the measured fine-mesh wall noise) are rest; a run
+   narrower than max(0.2, stepOver) of arc at the surface is a thin
+   streamer, counted + volume'd, reported once per op in the summary.
+   Wider rest is deliberately NOT in the note — it is the
+   already-warned territory (maxDepth floor, deep undercuts, endcap
+   gap), kept only in the report struct (`wideRuns`) for diagnostics.
+   Bench knight: 27 thin streamers, ~23mm³ — the sub-voxel class the
+   forensics measured, now named in the op summary.
 3. **KEEP-DOWN CHAINING (the hop census's 975 plunge cycles)** —
    deferred to after 1+2; FreeCAD's merged-rest-region/extension-
    distance pattern is the prior art. The trimmed orientations are
    6% chained today (measured, probe-hop-census).
+   **WIRED 2026-10-30, FIRES ZERO ON THE BENCH — a representation
+   decision pending (Alice):** `segmentClear` in standingClear.ts (an
+   honest uniform-slab read — see its docstring) + pocket2d's optional
+   third OR-clause `sweptCorridor` + waterline threading. 22 tests pin
+   the wiring (never-clear = byte-identical, clear-only-adds-links);
+   the knight census is UNCHANGED (29% chained, delta orientations 0%).
+   ROOT CAUSE (probe-instrumented): the stamp writes the ROW-CENTER
+   bound (the pinned θ-row convention, r = z/cos_center), but the
+   corridor needs the SLAB-EDGE bound (r ≤ z/cHi); cHi > cos_center
+   always, so a cell freshly stamped at plane z carries slab-edge
+   residue standing a HAIR above z and can never prove a corridor at
+   z itself — the same residue computeCeiling deliberately keeps, and
+   the measured reason the lead-in fires zero on the knight too. The
+   delta orientations' levels sit exactly at the planes the earlier
+   orientations stamped, so every same-level corridor is blocked by
+   the residue. OPTIONS: (a) store a second slab-edge-bounded array
+   alongside r (exact but doubles the grid's memory and every stamp's
+   cost); (b) stamp at z − δ with δ = the row's worst residue
+   R·(cHi−cos_center)/cos_center (cheap, marginally over-claims by
+   δ — sub-µm for fine θ, mm-class at coarse θ); (c) have the read
+   tolerate the residue (r ≤ z/cHi + residue(j)) — the read stops
+   being a pure bound but the tolerance is the row's own quantization
+   noise; (d) leave it: the honest read is correct, the corridor
+   simply never fires on same-level links, and cross-orientation
+   DEEPER stamps (a following op) would still chain. DECIDED NEXT
+   after Alice's real-knight cut (does the 29% chained profile even
+   matter in minutes?). **Alice 2026-10-30: NOT blocking the finishing
+   op — the finish consumes the grid as a rest map (where the
+   conservative direction is correct) and targets the model surface,
+   not same-level plane proofs. Deferred until it matters.**
 
 Safety invariants unchanged: the keep-out is never crossed, no
 straight plunge through material, hooks-absent emission byte-identical,
