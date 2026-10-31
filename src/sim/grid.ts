@@ -28,8 +28,9 @@ export class VoxelGrid {
   /** occupancy, index = i + nx*(j + ny*k); 1 = material */
   readonly occ: Uint8Array;
   /** ghost classification, same indexing as occ: 0 none, 1 yellow
-   *  (wrongly removed), 2 red (shank contact — still solid). A fresh
-   *  VoxelGrid zeroes it; reset = a fresh grid, so it never carries over. */
+   *  (wrongly removed), 2 red (shank contact — still solid), 3 black burn
+   *  (laser mark — still solid, src/sim/laser.ts). A fresh VoxelGrid
+   *  zeroes it; reset = a fresh grid, so it never carries over. */
   readonly ghost: Uint8Array;
   /** per column (i + nx*j): highest filled k, −1 when the column is empty —
    *  maintained lazily by onCarved */

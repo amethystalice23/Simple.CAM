@@ -18,14 +18,15 @@ import { VoxelGrid } from './grid';
 import { buildToolSpec, type ToolSpec } from './toolShape';
 import { movesToPoses, type Pose } from './poses';
 import { carvePoses, emptyStats, type CarveStats } from './carve';
+import { laserBeamOf, createLaserState, laserMarkPose, type LaserBeam, type LaserState } from './laser';
 import { greedyMeshChunk, ghostMeshChunk } from './mesher';
 import { derivePitch } from './pitch';
-import type { Stock, Tool } from '../core/types';
+import type { Move, Stock, Tool } from '../core/types';
 
 /** build stamp — the `ready` message carries it so the client can PROVE
  *  which worker version is running (the 2026-10-25 gaps debugging: a
  *  stale dev-server worker copy was a live suspect) */
-const SIM_BUILD = 'b12-tipmarker';
+const SIM_BUILD = 'b13-lasermark';
 
 /** cooperative-slice budget, ms — the CARVE stays within one of these per
  *  slice so the worker yields often enough to serve control messages
@@ -47,6 +48,16 @@ interface RunState {
   token: number;
   grid: VoxelGrid;
   specs: (ToolSpec | null)[];
+  /** per tool: the beam disc for a LASER, null otherwise — a laser pose
+   *  routes to the marking core (laserMarkPose) instead of the carve
+   *  kernel (Alice's 2026-10-31 ruling: laser marks, it doesn't carve) */
+  lasers: (LaserBeam | null)[];
+  /** modal-power tracking across the ordered pose stream (Move.power is
+   *  sparse — see src/sim/laser.ts); fresh on every run AND reset */
+  laser: LaserState;
+  /** the move stream (poses reference moves by moveIndex — the laser
+   *  marker reads each move's own power word from here) */
+  moves: Move[];
   /** flat pose stream — carved up to `cursor` */
   poses: Pose[];
   cursor: number;
@@ -149,7 +160,14 @@ function slice(r: RunState) {
   while (r.cursor < r.poses.length) {
     const p = r.poses[r.cursor];
     if (p.moveIndex > r.target) break;
-    carvePoses(r.grid, r.specs, [p], r.stats, r.moveStepDown);
+    // laser tools mark (black burn trace), everything else carves — a
+    // laser pose must never reach carvePoses (its spec is null there)
+    const beam = p.tool < r.lasers.length ? r.lasers[p.tool] : null;
+    if (beam !== null) {
+      laserMarkPose(r.grid, beam, r.moves[p.moveIndex], p, r.laser, r.stats);
+    } else {
+      carvePoses(r.grid, r.specs, [p], r.stats, r.moveStepDown);
+    }
     tip = p;
     r.cursor++;
     if (performance.now() - t0 > SLICE_MS) break;
@@ -186,6 +204,7 @@ function slice(r: RunState) {
         gougeCount: r.stats.gouges,
         firstGougeMove: r.stats.firstGougeMove,
         laserSkipped: r.stats.laserSkipped,
+        laserMarked: r.stats.laserMarked,
         carveSeconds: performance.now() / 1000 - r.startSeconds,
         gougeVoxels: r.stats.gougedVoxels,
         collisionMoves: r.stats.collisions,
@@ -228,9 +247,10 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
       try {
         return buildToolSpec(t);
       } catch {
-        return null; // laser etc — its poses carve nothing
+        return null; // laser etc — its poses carve nothing (they MARK, below)
       }
     });
+    const lasers = tools.map(laserBeamOf);
     const poses = movesToPoses(
       moves,
       stock,
@@ -243,6 +263,9 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
       token: msg.token,
       grid,
       specs,
+      lasers,
+      laser: createLaserState(),
+      moves,
       poses,
       cursor: 0,
       target: -1,
@@ -303,6 +326,7 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
     run.cursor = 0;
     run.target = -1;
     run.stats = emptyStats();
+    run.laser = createLaserState(); // modal power restarts with the fresh grid
     run.startSeconds = performance.now() / 1000;
     // the full stock re-posts (every chunk, batched)
     {
