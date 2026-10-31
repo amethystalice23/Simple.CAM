@@ -1695,13 +1695,26 @@ describe('emitSwarfPass — validation', () => {
  * the FIRST pin hand-generalized a Ø1.5-f4 probe to Ø2/Ø6-f20 and failed
  * (3 red). Probed honest: rows ≥ 1 clear at EVERY probed Ø and flute
  * (the convex-tangent construction); the row-0 boundary-tie cells (the
- * filed artifact class) fit the Ø1.5 sphere but foul Ø2/Ø6 at f20 —
- * 6 clips, all j=0, the same artifact cells the flute column clips.
- * The floor-gate test moved to the CONE (ρ = 0.989 uniform): a prism's
- * normals are exactly radial (ρ = 1), so no sub-1 floor gates anything
- * there. Her knight at her quoted grid (s=0.6): the ball recovers
- * 81,253/82,440 (98.6%) vs the flank's 21,481 — the real answer to
- * "i will try again with a ball endmill".
+ * filed artifact class) fit the small ball alone (Ø1.5/Ø2 at f4) but foul
+ * the shaft band / wider ball — 6 clips, all j=0. The floor-gate test
+ * moved to the CONE (ρ = 0.989 uniform): a prism's normals are exactly
+ * radial (ρ = 1), so no sub-1 floor gates anything there. Her knight at
+ * her quoted grid (s=0.6): the ball recovers 77,832/82,440 (94.4%) vs
+ * the flank's 21,481 (26%) — the real answer to "i will try again with a
+ * ball endmill".
+ *
+ * THE 2026-10-31 GOUGE COMMITTEE (her Ø2.5-f15 run ground the neck,
+ * nose, and through-cut): the shipped kernel carried a ONE-CHARACTER
+ * bounds slip in the shapecast cull (box.min.y vs bb.MAX.y) that skipped
+ * every BVH node dipping into the capsule's y-band — 1,404 of her
+ * 17,534 cells read falsely CLEAR and the sweep ran through solid
+ * material (the sim's gouge class) — plus the shank was modeled at the
+ * BALL's Ø (her Ø3.175 shank on a Ø2.5 ball): tight cells cleared the
+ * model while the real shank ground (the sim's 307 shank-contact class).
+ * Fixed: the cull typo + a TWO-BAND capsule (ball toolR swept
+ * C..C+toolR; shaft shaftR = max(toolR, shaftDiameter??diameter)/2 over
+ * C+toolR..C+flute). A single wide radius was probed and REJECTED
+ * (clips 17,511/17,534 — every concave cell the ball fits).
  * =================================================================== */
 
 describe('ballAttitudeDeg / ballToolCenter — the window center (milestone 5)', () => {
@@ -1765,18 +1778,18 @@ describe('ballClearanceCheck — the bare convex cylinder (tangent graze, milest
   const BALL = (d: number, flute: number) => ({ ...TOOL(d, flute), type: 'ball' as const });
   const base = () => ({ positions, map, axisZ: AXIS_Z, radius: 12 });
 
-  it('the small ball clears EVERY cell (Ø1.5, any flute) — the row-0 stances fit the sphere', () => {
-    // PROBED 2026-10-31 (probes/knightverdict.ts ballkernel): Ø1.5 reads
-    // 325/325 CLEAR at BOTH f4 and f20 — the corrupt row-0 normals that
-    // clip the flute column still fit the small sphere locally (the
-    // envelope contrast: same fixture, same artifact cells, smaller
-    // envelope clears them).
+  it('the small ball alone clears EVERY cell (Ø1.5 f4) — the row-0 stances fit the sphere', () => {
+    // PROBED 2026-10-31 (probes/knightverdict.ts ballkernel): Ø1.5 at f4
+    // reads 325/325 CLEAR — the corrupt row-0 normals that clip the flute
+    // column still fit the small sphere locally (the envelope contrast:
+    // same fixture, same artifact cells, smaller envelope clears them).
+    // At f20 (or any bigger Ø) the row-0 artifact cells clip — the ball
+    // band alone clears them, the shaft band does not; rows ≥ 1 hold
+    // everywhere (the next test).
     expect(map.surfaceCells).toBe(13 * 25); // full grid, no air (the flute pin)
-    for (const flute of [4, 20]) {
-      const v = ballClearanceCheck({ ...base(), tool: BALL(1.5, flute) });
-      expect(v.length).toBe(map.surfaceCells);
-      for (let ci = 0; ci < v.length; ci++) expect(v[ci]).toBe(FLUTE_CLEAR);
-    }
+    const v = ballClearanceCheck({ ...base(), tool: BALL(1.5, 4) });
+    expect(v.length).toBe(map.surfaceCells);
+    for (let ci = 0; ci < v.length; ci++) expect(v[ci]).toBe(FLUTE_CLEAR);
   });
 
   it('rows ≥ 1 clear at EVERY Ø and flute (the convex-tangent construction); row-0 is the artifact class', () => {
@@ -1785,9 +1798,11 @@ describe('ballClearanceCheck — the bare convex cylinder (tangent graze, milest
     // every body point sits on the far side of the tangent plane, the
     // sphere touches only at the contact. The ROW-0 boundary-tie cells
     // (the filed buildContactMap artifact: normals healed inward) foul
-    // the ball once the sphere outgrows the local room — probed: Ø2/Ø6
-    // at f20 clip 6, all row j=0, the SAME artifact cells the flute
-    // column clips. Rows ≥ 1 stay CLEAR at every probed size.
+    // the ball once the sphere outgrows the local room or the shaft band
+    // enters — probed: 6 clips all row j=0 at every Ø×flute EXCEPT
+    // Ø1.5/Ø2 at f4 (the ball band alone fits them), the SAME artifact
+    // cells the flute column clips. Rows ≥ 1 stay CLEAR at every probed
+    // size.
     for (const d of [1.5, 2, 6]) {
       for (const flute of [4, 20]) {
         const v = ballClearanceCheck({ ...base(), tool: BALL(d, flute) });
@@ -1876,6 +1891,31 @@ describe('ballClearanceCheck — the bare convex cylinder (tangent graze, milest
     expect(() =>
       ballClearanceCheck({ ...base(), tool: { ...BALL(2, 20), fluteLength: undefined } }),
     ).toThrow(/fluteLength/);
+  });
+
+  it('the SHAFT band (the 2026-10-31 gouge fix): fat shank is verdict-silent on convex walls, all-clipping when degenerate', () => {
+    // The two-band capsule's shaft band (shaftR = max(toolR,
+    // shaftDiameter ?? diameter)/2, swept C+toolR..C+flute). PROBED on
+    // this fixture (probes/shankband.ts): her real shank (Ø3.175 on a
+    // Ø2.5 ball) flips ZERO cells — a convex body receeds from the
+    // tangent plane, so the fat shank clears; the shank only bites
+    // CONCAVE geometry (her knight's neck/nose, 72 cells on her mesh).
+    // A shank wider than the local room (Ø6 shank: shaftR 3 vs the
+    // surface at toolR 1.25 off the axis) clips EVERY cell — the
+    // mechanism visible, honestly degenerate.
+    const vThin = ballClearanceCheck({ ...base(), tool: BALL(2.5, 15) });
+    const vFat = ballClearanceCheck({
+      ...base(),
+      tool: { ...BALL(2.5, 15), shaftDiameter: 3.175 },
+    });
+    for (let ci = 0; ci < vThin.length; ci++) {
+      expect(vFat[ci]).toBe(vThin[ci]); // zero flips: convex walls clear the fat shank
+    }
+    const vHuge = ballClearanceCheck({
+      ...base(),
+      tool: { ...BALL(2.5, 15), shaftDiameter: 6 },
+    });
+    for (let ci = 0; ci < vHuge.length; ci++) expect(vHuge[ci]).toBe(FLUTE_CLIPPED);
   });
 });
 

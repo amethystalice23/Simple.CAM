@@ -978,6 +978,25 @@ the floor-gate test needed the CONE (ρ = 0.989) because a prism's
 normals are exactly radial — no sub-1 floor gates anything there).
 Wiring: one op kind, kernel by tool (flat/corn → flank, ball →
 window), glancingFloor knob on the op + panel, V-flank gate honest.
+THE SAME DAY, HER FIELD TEST GROUND THE PART (Ø2.5 f15 ball: "it
+gouges and reds on the neck the nose and the through cut at the base";
+sim: 156 rapid-gouge + 307 shank-contact moves) — committee (member 2,
+minimal diff, verified in main): the shipped kernel carried a
+ONE-CHARACTER bounds slip in the shapecast cull (box.min.y vs
+bb.MAX.y) that skipped every BVH node dipping into the capsule's
+y-band — 1,404 of her 17,534 cells read falsely CLEAR and the sweep
+ran through solid material (the gouge class) — plus the shank was
+modeled at the BALL's Ø: tight cells cleared the model while her
+Ø3.175 shank ground (the 307). FIX: the cull typo + a TWO-BAND
+capsule (ball toolR swept C..C+toolR; shaft shaftR =
+max(toolR, shaftDiameter ?? diameter)/2 over C+toolR..C+flute) — a
+single wide radius probed and REJECTED (clips 17,511/17,534, every
+concave cell the ball fits). Honest re-price: her knight at her
+quoted grid reads 77,832/82,440 (94.4%) under the fixed kernel — the
+typo had hidden 3,421 genuinely blocked cells (the 98.6% above was
+the typo's own number); the fat shank is verdict-silent on convex
+walls (probed zero flips on the fixture) and bites only concave
+geometry (72 cells on her mesh).
 
 ## Candidate future features (gap analysis, 2026-10-28)
 

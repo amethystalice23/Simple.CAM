@@ -1062,6 +1062,11 @@ export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
   }
   if (!(o.radius > 0)) throw new Error('bad stock radius: must be positive');
   const floor = o.glancingFloor ?? BALL_DEFAULT_FLOOR;
+  // the REAL shank above the ball is wider than the ball (the carve
+  // sim's own shank rule: shaftDiameter ?? diameter) — the capsule's
+  // shaft band carries the wider radius or tight cells clear the model
+  // while the real shank grinds (the 2026-10-31 gouge chase, H1)
+  const shaftR = Math.max(toolR, (o.tool.shaftDiameter ?? o.tool.diameter) / 2);
   if (!(floor > 0) || !(floor < 1)) {
     throw new Error('bad glancing floor: 0 < floor < 1');
   }
@@ -1077,6 +1082,7 @@ export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
   const bvh = new MeshBVH(geo, { targetLeafSize: 1 });
 
   const segStart = new THREE.Vector3();
+  const segMid = new THREE.Vector3();
   const segEnd = new THREE.Vector3();
   const seg = new THREE.Line3();
   const closest = new THREE.Vector3();
@@ -1094,53 +1100,72 @@ export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
       verdict[ci] = FLUTE_CLIPPED;
       continue;
     }
-    // the capsule: sphere r at the ball center C, shaft cylinder r from
-    // C up through fluteLength. BOTH machine endpoints rotate back
-    // through the pinned indexedPointRotation(−φ) — constructed, the
-    // committee lesson (the x the rotation preserves is C.x exact).
+    // the capsule, TWO BANDS (committee 2026-10-31, her knight's gouge
+    // chase): the BALL band — sphere toolR at the ball center C, swept
+    // C..C+toolR; the SHAFT band — cylinder shaftR (the REAL shank,
+    // shaftDiameter ?? diameter — the carve sim's own rule) over
+    // C+toolR..C+flute. BOTH machine endpoints rotate back through the
+    // pinned indexedPointRotation(−φ) — constructed, the committee
+    // lesson. The single-radius capsule this carried from milestone 5
+    // modeled the shank at the ball's Ø: her Ø2.5 ball on a Ø3.175
+    // shank read CLEAR on tight cells whose stances grind the real
+    // shank (the sim's 307 shank-contact class) — and a one-character
+    // bounds slip in the shapecast cull (box.min.y vs bb.MAX.y) skipped
+    // every BVH node dipping into the capsule's y-band, falsely CLEARing
+    // 1,404 of her 17,534 cells and sweeping the tool through solid
+    // material (the sim's gouge class). A single WIDE radius was probed
+    // and REJECTED (clips 17,511/17,534 — every concave cell the ball
+    // fits); the band split is the minimal honest form.
     const C = ballToolCenter(c.p, c.n, toolR, o.axisZ);
     const rotBack = indexedPointRotation(-ballAttitudeDeg(c.n), o.axisZ);
     segStart.copy(rotBack({ x: C.x, y: C.y, z: C.z }));
+    segMid.copy(rotBack({ x: C.x, y: C.y, z: C.z + toolR }));
     segEnd.copy(rotBack({ x: C.x, y: C.y, z: C.z + flute }));
-    seg.start.copy(segStart);
-    seg.end.copy(segEnd);
-    // the material-frame AABB of the capsule, padded by the swept radius
-    bb.min.x = C.x - toolR;
-    bb.max.x = C.x + toolR;
-    bb.min.y = Math.min(segStart.y, segEnd.y) - toolR;
-    bb.max.y = Math.max(segStart.y, segEnd.y) + toolR;
-    bb.min.z = Math.min(segStart.z, segEnd.z) - toolR;
-    bb.max.z = Math.max(segStart.z, segEnd.z) + toolR;
 
-    // 4. BVH shapecast: the capsule (radius toolR about the segment) vs
-    //    every triangle whose box the capsule's box reaches. A triangle
-    //    COLLIDES iff its true segment-distance < toolR AND it lies
-    //    outside the contacted neighborhood — the flute check's contract.
+    // 4. BVH shapecast PER BAND: the swept capsule (radius r about the
+    //    band's segment) vs every triangle whose box the band's padded
+    //    AABB reaches. A triangle COLLIDES iff its true segment-distance
+    //    < r AND it lies outside the contacted neighborhood — the flute
+    //    check's contract, per band.
     let hit = false;
-    bvh.shapecast({
-      intersectsBounds: (box) => {
-        if (hit) return false; // early-out once clipped
-        if (box.max.x < bb.min.x || box.min.x > bb.max.x) return false;
-        if (box.max.y < bb.min.y || box.min.y > bb.min.y) return false;
-        if (box.max.z < bb.min.z || box.min.z > bb.max.z) return false;
-        return true;
-      },
-      intersectsTriangle: (t) => {
-        if (hit) return true;
-        // the contacted neighborhood exclusion first (cheap): the
-        // touched face's own fan is legal contact, not collision
-        if (t.distanceToPoint(p3.set(c.p.x, c.p.y, c.p.z)) < exclusionR) {
-          return false;
-        }
-        const d = t.closestPointToSegment(seg, closest);
-        // 1 µm graze epsilon: exact-tangent triangles are legal contact
-        if (d < toolR - 1e-3) {
-          hit = true;
+    for (const [s, e, r] of [
+      [segStart, segMid, toolR],
+      [segMid, segEnd, shaftR],
+    ] as const) {
+      if (hit) break;
+      seg.start.copy(s);
+      seg.end.copy(e);
+      bb.min.x = C.x - r;
+      bb.max.x = C.x + r;
+      bb.min.y = Math.min(s.y, e.y) - r;
+      bb.max.y = Math.max(s.y, e.y) + r;
+      bb.min.z = Math.min(s.z, e.z) - r;
+      bb.max.z = Math.max(s.z, e.z) + r;
+      bvh.shapecast({
+        intersectsBounds: (box) => {
+          if (hit) return false; // early-out once clipped
+          if (box.max.x < bb.min.x || box.min.x > bb.max.x) return false;
+          if (box.max.y < bb.min.y || box.min.y > bb.max.y) return false;
+          if (box.max.z < bb.min.z || box.min.z > bb.max.z) return false;
           return true;
-        }
-        return false;
-      },
-    });
+        },
+        intersectsTriangle: (t) => {
+          if (hit) return true;
+          // the contacted neighborhood exclusion first (cheap): the
+          // touched face's own fan is legal contact, not collision
+          if (t.distanceToPoint(p3.set(c.p.x, c.p.y, c.p.z)) < exclusionR) {
+            return false;
+          }
+          const d = t.closestPointToSegment(seg, closest);
+          // 1 µm graze epsilon: exact-tangent triangles are legal contact
+          if (d < r - 1e-3) {
+            hit = true;
+            return true;
+          }
+          return false;
+        },
+      });
+    }
     if (hit) {
       verdict[ci] = FLUTE_CLIPPED;
     }
