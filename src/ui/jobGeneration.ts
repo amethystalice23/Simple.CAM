@@ -32,6 +32,7 @@ import {
   segmentContactPatches,
 } from '../cam/swarfFinish';
 import { difference, offsetInward, offsetOutward } from '../cam/clipper';
+import { engraveFillSpans } from '../cam/engraveFill';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
@@ -426,7 +427,18 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       // rod-end cases set a depth from the rim instead
       return { ...base, kind, depth: 0, stepDown, finishingOnly: false, rotation: 'cw' };
     case 'engrave':
-      return { ...base, kind, depth: 0.5, stepDown: 0.25, finishingOnly: false };
+      // fillStepOver prefills from the tool's TIP width (the engraved
+      // line: a V-bit's tipDiameter, a laser's kerf Ø) so the fill mode
+      // has a sane spacing the moment it's switched on
+      return {
+        ...base,
+        kind,
+        depth: 0.5,
+        stepDown: 0.25,
+        finishingOnly: false,
+        fillMode: 'outlines',
+        fillStepOver: engraveFillStepOver(tool),
+      };
     case 'threadMill': {
       // no stock/Ø defaults to read yet — the selection prefills the
       // thread (Ø/pitch/length from the rim or wall facet); M6-coarse
@@ -710,6 +722,16 @@ export function presetRates(
  */
 export function defaultStepOver(tool: Tool): number {
   return Math.max(0.1, Math.round(tool.diameter * 0.5 * 10) / 10);
+}
+
+/**
+ * Fill raster spacing default: the tool's ENGRAVING width, not the
+ * shank-side Ø — the raster's line spacing rides the width the tip
+ * actually marks (a V-bit's tipDiameter, a laser's kerf Ø). 0.1mm
+ * rounding like defaultStepOver, floored at 0.05 (the panel's min).
+ */
+export function engraveFillStepOver(tool: Tool): number {
+  return Math.max(0.05, Math.round((tool.tipDiameter ?? tool.diameter) * 10) / 10);
 }
 
 /**
@@ -2549,6 +2571,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const axisZ = rotaryCalibrationOf(ctx.stock).axisZ;
         const flatPaths: { x: number; y: number }[][] = [];
         const wrappedPaths: { x: number; y: number }[][] = [];
+        // the FILL candidates: selected paths both closed and painted
+        const flatLoops: { x: number; y: number }[][] = [];
+        const wrappedLoops: { x: number; y: number }[][] = [];
         let flatZ = 0;
         let wrapD = 0;
         for (const part of parts) {
@@ -2572,7 +2597,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
                 );
               }
               flatZ = z;
-              flatPaths.push(pts.map((p) => ({ x: p.x, y: p.y })));
+              const xy = pts.map((p) => ({ x: p.x, y: p.y }));
+              flatPaths.push(xy);
+              if (path.closed && path.filled) flatLoops.push(xy);
             } else {
               wrapD = aw.diameter;
               const r = aw.diameter / 2;
@@ -2604,14 +2631,46 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
                 uv.push({ x: u, y: p.x });
               });
               wrappedPaths.push(uv);
+              if (path.closed && path.filled) wrappedLoops.push(uv);
             }
           }
         }
         if (flatPaths.length > 0 && wrappedPaths.length > 0) {
           return fail('one engrave op cuts in one frame — split flat and wrapped artwork into separate ops');
         }
-        const paths = flatPaths.length > 0 ? flatPaths : wrappedPaths;
+        const flat = flatPaths.length > 0;
+        const paths = flat ? flatPaths : wrappedPaths;
         if (paths.length === 0) return fail(SEL);
+        // THE FILL PASS (Alice 2026-10-31): the outline pass above ALWAYS
+        // runs on every selected path; checked, the closed+filled ones
+        // also raster — scanlines along the machine's fast X (axial on
+        // the wrapped frame), even-odd regions so interior loops
+        // subtract (the ankh's hole), the SAME depth ladder per
+        // scanline. Scanlines are ordinary paths to the generator — its
+        // ladder, laser power stamping, and A accumulation apply as-is.
+        let fillLines = 0;
+        if (op.fillMode === 'outline+fill') {
+          const loops = (flat ? flatLoops : wrappedLoops).filter((l) => l.length >= 3);
+          if (loops.length > 0) {
+            // the fill spacing and the boundary inset read the SAME width
+            // — the tool's engraving line (TIP Ø / kerf), the round-1
+            // ruling engraveFillStepOver encodes; the full shank Ø here
+            // kept Alice's V-bit ~1.5mm off every artwork boundary
+            const stepOver = op.fillStepOver ?? engraveFillStepOver(tool);
+            const spans = engraveFillSpans({
+              loops,
+              stepOver,
+              // the beam clears by kerf alone; a bit clears by its TIP
+              // radius — shallow engraving marks with the tip, not the
+              // shank-side Ø (V-bit at depth cuts wider; the honest
+              // default is the tip, and the depth knob owns the rest)
+              inset: tool.type === 'laser' ? 0 : (tool.tipDiameter ?? tool.diameter) / 2,
+              stepAxis: flat ? 'y' : 'x',
+            });
+            paths.push(...spans);
+            fillLines = spans.length;
+          }
+        }
         const res = engrave({
           id: op.id,
           toolId: tool.id,
@@ -2655,7 +2714,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           moves: res.moves,
           minutes: res.estimatedMinutes,
           error: null,
-          summary: `${paths.length} path(s), ${op.depth}mm deep${op.finishingOnly ? ', finishing pass only' : ''}${limited}, ~${res.estimatedMinutes.toFixed(1)} min`,
+          summary:
+            `${paths.length - fillLines} path(s)${fillLines > 0 ? ` + ${fillLines} fill line(s)` : ''}, ` +
+            `${op.depth}mm deep${op.finishingOnly ? ', finishing pass only' : ''}${limited}, ` +
+            `~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
     }

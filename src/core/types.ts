@@ -505,6 +505,12 @@ export interface PathFeature {
   kind: 'path';
   id: string;
   points: Vec3[];
+  /** topology + paint carried from the SVG import (the fill pass): a
+   *  CLOSED path may bound a region; a FILLED one (SVG fill state:
+   *  inherited, default black) is a candidate for area fill. Absent =
+   *  old save → outline-only. */
+  closed?: boolean;
+  filled?: boolean;
 }
 
 /** A circle whose loop is an interior hole aligned to the machine drill axis. */
@@ -548,6 +554,11 @@ export type Primitive =
        * DOWN) — the import parse output, kept raw so the scale knob
        * stays live */
       paths: Vec2[][];
+      /** per-path topology + paint, parallel to `paths` (the engrave
+       * FILL pass, Alice 2026-10-31: "just because a path is closed
+       * does not guarantee its filled"). Absent (old saves) = no fill
+       * data → outline-only behavior, byte-identical. */
+      pathMeta?: { closed?: boolean; filled?: boolean }[];
       /** document extent, user units (centering + the scale math) */
       width: number;
       height: number;
@@ -1031,6 +1042,18 @@ export type JobOp =
       /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the depth ladder —
        *  one full-depth pass along the paths. */
       finishingOnly?: boolean;
+      /** FILL AREAS (Alice, 2026-10-31): the outline pass ALWAYS runs on
+       *  every selected path; 'outline+fill' additionally RASTERS the
+       *  selected closed+filled paths — scanlines along the machine's
+       *  fast X (axial on the wrapped frame; the bed-slinger idiom),
+       *  even-odd regions so interior loops subtract (the ankh's hole),
+       *  the same depth ladder per scanline, laser single-pass as ever.
+       *  Absent = outlines (old saves, byte-identical). */
+      fillMode?: 'outlines' | 'outline+fill';
+      /** fill pass scanline spacing, mm on the surface (Y/θ step); the
+       *  fill toggle's own knob — defaults from the tool's TIP width at
+       *  creation (engraveFillStepOver) */
+      fillStepOver?: number;
     })
   | (JobOpBase & {
       kind: 'profile';

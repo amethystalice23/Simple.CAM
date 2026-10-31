@@ -12,6 +12,7 @@ import {
   defaultFaceStepOver,
   defaultStepDown,
   defaultStepOver,
+  engraveFillStepOver,
   metricPitch,
   newJobOp,
   OP_KINDS,
@@ -1327,11 +1328,46 @@ function ParamFields(props: {
               )}
             </>
           )}
+          <label
+            className="field"
+            title="The outline pass always runs on every selected path; 'Outline and filled areas' additionally rasters the closed painted paths — scanlines along the machine's fast X, holes inside a filled loop stay untouched"
+          >
+            <span>Fill areas</span>
+            <select
+              value={op.fillMode ?? 'outlines'}
+              onChange={(e) =>
+                upd({ fillMode: e.target.value as 'outlines' | 'outline+fill' })
+              }
+            >
+              <option value="outlines">Outlines only</option>
+              {/* a 'Fill only' slot lands here if a use shows up
+                  (2026-10-31) — the generator would gate the outline
+                  passes off the same way the raster is gated now */}
+              <option value="outline+fill">Outline and filled areas</option>
+            </select>
+          </label>
+          {op.fillMode === 'outline+fill' && (
+            <NumberField
+              label="Fill step over (mm)"
+              value={op.fillStepOver ?? 1.5}
+              min={0.05}
+              step={0.1}
+              title="The fill raster's scanline spacing, mm on the surface — lines along the machine's fast X, stepping Y (flat) or around (wrapped). Defaults from the tool's tip width (re-derived on every tool change)"
+              onCommit={(v) => upd({ fillStepOver: v })}
+            />
+          )}
           <p className="hint">
             follows the selected artwork paths at depth — no tool offset, the centerline IS the
             path. The frame comes from the artwork itself: flat artwork cuts in its plane, wrapped
             artwork cuts around its own Ø (point that at the faced surface — the Model tab). Drop
             an SVG on the viewport to add artwork; a V-bit or small flat bit is usual
+          </p>
+          <p className="hint detail">
+            fill: the outlines always cut first; the fill raster then clears the selected closed
+            painted regions — scanlines along the machine's fast X (axial on a wrapped logo), a
+            hole inside a filled loop stays untouched (the ankh's counter), the same depth ladder
+            per scanline, laser as ever a single pass. Closed-but-unpainted paths (fill="none")
+            outline only
           </p>
         </>
       );
@@ -1395,8 +1431,13 @@ export function OpsPanel(props: Props) {
         case 'cylChamfer':
         case 'spiralCarve':
         case 'thread':
-        case 'engrave':
           next = { ...next, stepDown } as JobOp;
+          break;
+        case 'engrave':
+          // fillStepOver follows the new tool's TIP width like every step
+          // field follows its Ø — the fill spacing rides the engraved line
+          // width (tip Ø / kerf), not the shank-side diameter
+          next = { ...next, stepDown, fillStepOver: engraveFillStepOver(t) } as JobOp;
           break;
         default:
           break; // drill/chamfer/index carry no step fields

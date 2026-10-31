@@ -225,3 +225,61 @@ describe('pxPerMmAt (shared screen-space scale)', () => {
     ortho.zoom = 1;
   });
 });
+
+describe('buildFeatureOverlayData — wrapped outline densify (round 5)', () => {
+  // one artwork path as wrapped local points: a straight-sided "V" whose
+  // two long edges ride a R10 cylinder (the shape class that measured
+  // 0.23mm chord dip before densify — probes/measure-outline-dip.mjs)
+  const r = 10;
+  const onCyl = (thDeg: number, x: number) => {
+    const th = (thDeg * Math.PI) / 180;
+    return { x, y: r * Math.sin(th), z: r * Math.cos(th) };
+  };
+  const wrappedPath = {
+    kind: 'path' as const,
+    id: 'p:a:path:0',
+    points: [onCyl(-12, 0), onCyl(0, 3), onCyl(12, 6)],
+  };
+  const feats = {
+    planes: [],
+    circles: [],
+    edges: [],
+    paths: [wrappedPath],
+    faceToPlane: new Int32Array(0),
+    planeLoops: [],
+  };
+  const segCount = (d: ReturnType<typeof buildFeatureOverlayData>) =>
+    d.pathLines.geometry.getAttribute('position').count / 2;
+
+  it('absent wrap and flat-frame null are byte-identical — flat lines were already exact', () => {
+    const a = buildFeatureOverlayData(feats, identityTransform());
+    const b = buildFeatureOverlayData(feats, identityTransform(), null);
+    expect(Array.from(a.pathLines.geometry.getAttribute('position').array)).toEqual(
+      Array.from(b.pathLines.geometry.getAttribute('position').array),
+    );
+    expect(segCount(a)).toBe(2); // the raw segments, untouched
+  });
+
+  it('wrapped: the drawn polyline densifies to sub-1mm surface edges on the cylinder', () => {
+    const d = buildFeatureOverlayData(feats, identityTransform(), { diameter: 2 * r });
+    expect(segCount(d)).toBeGreaterThan(2);
+    const attr = d.pathLines.geometry.getAttribute('position');
+    let worst = 0;
+    for (let s = 0; s < attr.count; s += 2) {
+      const p = { x: attr.getX(s), y: attr.getY(s), z: attr.getZ(s) };
+      const q = { x: attr.getX(s + 1), y: attr.getY(s + 1), z: attr.getZ(s + 1) };
+      const arc = r * Math.abs(Math.atan2(p.y, p.z) - Math.atan2(q.y, q.z));
+      worst = Math.max(worst, Math.hypot(arc, p.x - q.x));
+      for (const v of [p, q]) expect(Math.hypot(v.y, v.z)).toBeCloseTo(r, 6);
+    }
+    expect(worst).toBeLessThanOrEqual(1.0 + 1e-9); // FILL_SUBDIVIDE_MAX_EDGE
+  });
+
+  it('the reported length stays on the UN-subdivided points (presentation vs measurement)', () => {
+    const raw = buildFeatureOverlayData(feats, identityTransform());
+    const dense = buildFeatureOverlayData(feats, identityTransform(), { diameter: 2 * r });
+    expect(dense.pathText[0]).toBe(raw.pathText[0]);
+    // the pick label midpoint rides the raw points too
+    expect(dense.pathMid[0].distanceTo(raw.pathMid[0])).toBeLessThan(1e-9);
+  });
+});

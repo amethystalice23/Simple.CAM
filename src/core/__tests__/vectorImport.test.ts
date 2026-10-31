@@ -174,3 +174,59 @@ describe('parseSvgPaths', () => {
     ]);
   });
 });
+describe('parseSvgPaths — fill state + closure (the engrave fill pass)', () => {
+  // Alice, 2026-10-31: "just because a path is closed does not
+  // guarantee its filled" — the parser records BOTH, per path.
+
+  it('default paint is FILLED (SVG initial fill is black), closure from Z', () => {
+    const art = parseSvgPaths('<svg><path d="M 0 0 L 4 0 L 4 4 Z"/></svg>');
+    expect(art.meta).toEqual([{ closed: true, filled: true }]);
+  });
+
+  it('fill="none" unpaints; the path stays closable', () => {
+    const art = parseSvgPaths(
+      '<svg><path fill="none" d="M 0 0 L 4 0 L 4 4 Z"/></svg>',
+    );
+    expect(art.meta).toEqual([{ closed: true, filled: false }]);
+  });
+
+  it('fill inherits through <g> and the child overrides it', () => {
+    const art = parseSvgPaths(
+      '<svg><g fill="none">' +
+        '<path d="M 0 0 L 4 0 L 4 4 Z"/>' +
+        '<path fill="#123456" d="M 1 1 L 2 1 L 2 2 Z"/>' +
+        '</g><path d="M 0 0 L 1 0 L 1 1 Z"/></svg>',
+    );
+    expect(art.meta).toEqual([
+      { closed: true, filled: false }, // inherited none
+      { closed: true, filled: true }, // own hex overrides
+      { closed: true, filled: true }, // the g closed: default returns
+    ]);
+  });
+
+  it('style fill / fill-opacity:0 unpaint like the attribute', () => {
+    const art = parseSvgPaths(
+      '<svg>' +
+        '<path style="fill:none" d="M 0 0 L 4 0 L 4 4 Z"/>' +
+        '<path fill-opacity="0" d="M 0 0 L 4 0 L 4 4 Z"/>' +
+        '<path style="fill-opacity:0" d="M 0 0 L 4 0 L 4 4 Z"/>' +
+        '</svg>',
+    );
+    expect(art.meta.map((m) => m.filled)).toEqual([false, false, false]);
+  });
+
+  it('an OPEN path is closed=false; coincident endpoints read closed', () => {
+    const art = parseSvgPaths(
+      '<svg><path d="M 0 0 L 4 0 L 4 4"/>' +
+        '<path d="M 0 0 L 4 0 L 4 4 L 0 0"/></svg>',
+    );
+    expect(art.meta.map((m) => m.closed)).toEqual([false, true]);
+  });
+
+  it('the svg root can declare the default paint', () => {
+    const art = parseSvgPaths(
+      '<svg fill="none"><path d="M 0 0 L 4 0 L 4 4 Z"/></svg>',
+    );
+    expect(art.meta).toEqual([{ closed: true, filled: false }]);
+  });
+});

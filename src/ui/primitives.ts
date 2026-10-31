@@ -191,6 +191,7 @@ export function artworkFromSvg(art: ImportedArtwork, stock: Stock): Primitive {
     kind: 'artwork',
     id: nextPrimitiveId(),
     paths: art.paths,
+    pathMeta: art.meta,
     width: art.width || 1,
     height: art.height || 1,
     presentation: rotary ? 'wrapped' : 'flat',
