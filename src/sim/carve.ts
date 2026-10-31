@@ -15,10 +15,13 @@
  *     voxels get ghost 2, the MOVE is counted once in collisions.
  *
  * Per pose:
- *  - spec = specs[pose.tool]; null spec (laser / no tool) → the pose is
- *    skipped and its MOVE counted once in laserSkipped (poses subdivide,
- *    so counting per distinct moveIndex keeps the stat move-shaped like
- *    the protocol's SimResult.laserSkipped).
+ *  - spec = specs[pose.tool]; null spec (no cutting model — an unknown /
+ *    0xffff tool) → the pose is skipped and its MOVE counted once in
+ *    laserSkipped (poses subdivide, so counting per distinct moveIndex
+ *    keeps the stat move-shaped like the protocol's SimResult.laserSkipped).
+ *    LASER poses never reach here: the worker routes them to the marking
+ *    core (src/sim/laser.ts — Alice's 2026-10-31 ruling) before the kernel
+ *    sees them, so a laser trace marks and counts in laserMarked.
  *  - local frame: the tool's local +Z (up the shank) maps to −axis; since
  *    every ToolSpec solid is rotationally symmetric, the inside test needs
  *    only z_local = −q·axis and rhoSq = |q|² − z_local² per voxel
@@ -68,6 +71,10 @@ export interface CarveStats {
   gouges: number;
   firstGougeMove: number | null;
   laserSkipped: number;
+  /** distinct moves whose laser beam marked the surface (the black trace —
+   *  Alice's 2026-10-31 ruling; laser poses route to src/sim/laser.ts in
+   *  the worker, so they no longer land in laserSkipped) */
+  laserMarked: number;
   /** voxels removed MORE than the op's step-down above the cut level (or
    *  by a rapid) — the yellow class */
   gougedVoxels: number;
@@ -83,6 +90,7 @@ export function emptyStats(): CarveStats {
     gouges: 0,
     firstGougeMove: null,
     laserSkipped: 0,
+    laserMarked: 0,
     gougedVoxels: 0,
     collisions: 0,
     firstCollisionMove: null,

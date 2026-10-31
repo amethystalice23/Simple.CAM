@@ -59,8 +59,12 @@ export interface SimResult {
   /** rapid poses that removed material — bad clearance somewhere */
   gougeCount: number;
   firstGougeMove: number | null;
-  /** moves skipped because their tool is the laser (v1: no burn model) */
+  /** moves skipped because their tool has no cutting spec (unknown / 0xffff
+   *  tool) — laser moves no longer land here: they MARK (laserMarked) */
   laserSkipped: number;
+  /** distinct moves whose laser beam marked the surface — the black trace
+   *  (display-only, Alice's 2026-10-31 ruling; replaces the v1 skip) */
+  laserMarked: number;
   carveSeconds: number;
   /** voxels removed beyond the op's step-down of the standing surface (or
    *  by a rapid) — the yellow class (Alice's 3-class spec) */

@@ -47,6 +47,9 @@ export interface GhostGeom {
  * surface) */
 const GHOST_YELLOW: [number, number, number, number] = [255, 200, 0, 26];
 const GHOST_RED: [number, number, number, number] = [255, 32, 32, 230];
+/** black = laser burn (still solid — Alice's 2026-10-31 ruling: the trace
+ *  shows WHERE the beam fired; near-opaque so it reads as charred surface) */
+const GHOST_BLACK: [number, number, number, number] = [15, 15, 15, 235];
 
 /**
  * Mesh the chunk's GHOST array (Alice's 3-class marking): every marked
@@ -70,11 +73,13 @@ export function ghostMeshChunk(grid: VoxelGrid, chunkId: number): GhostGeom {
     const g = ghostOf(i, j, k);
     if (g === 0) return false;
     if (g === 2) return true; // red: surface-exposed faces of solid contact
+    if (g === 3) return grid.filled(i, j, k); // burn lives on STANDING material — carved away with it
     return !grid.filled(i, j, k); // yellow: removed (void) — free-standing cube
   };
   const faceVisible = (i: number, j: number, k: number, di: number, dj: number, dk: number): boolean => {
-    if (ghostOf(i, j, k) !== 2) return true; // yellow cubes: every face
-    return !grid.filled(i + di, j + dj, k + dk); // red: only void-exposed
+    const g = ghostOf(i, j, k);
+    if (g !== 2 && g !== 3) return true; // yellow cubes: every face
+    return !grid.filled(i + di, j + dj, k + dk); // red/burn: only void-exposed
   };
 
   // pass 1 — count visible faces
@@ -111,7 +116,8 @@ export function ghostMeshChunk(grid: VoxelGrid, chunkId: number): GhostGeom {
         const g = ghostOf(i, j, k);
         if (g === 0) continue;
         if (g === 1 && grid.filled(i, j, k)) continue;
-        const col = g === 2 ? GHOST_RED : GHOST_YELLOW;
+        if (g === 3 && !grid.filled(i, j, k)) continue; // burn: standing material only (match draws())
+        const col = g === 2 ? GHOST_RED : g === 3 ? GHOST_BLACK : GHOST_YELLOW;
         const wx = grid.originX + i * pitch;
         const wy = grid.originY + j * pitch;
         const wz = grid.originZ + k * pitch;

@@ -8,8 +8,9 @@
  * the completed run's stats. Clear (bottom-left) wipes the overlay.
  * v1 is result-first (one run to completion); playback is v2 on the
  * same time-agnostic protocol. Warnings surface here: gouges (a rapid
- * that removed material = bad clearance) and laser moves (no burn model
- * in v1 — skipped).
+ * that removed material = bad clearance). Laser moves MARK (the black
+ * burn trace — Alice's 2026-10-31 ruling) and report as such; only moves
+ * whose tool has no cutting model at all are skipped.
  */
 
 import { useMemo, useState } from 'react';
@@ -139,10 +140,16 @@ export function SimulateDialog(props: Props) {
                     or shorten the stick-out
                   </p>
                 )}
+                {state.result.laserMarked > 0 && (
+                  <p className="sim-note">
+                    {state.result.laserMarked} laser move(s) marked the surface
+                    (the black trace) — display only, no burn model
+                  </p>
+                )}
                 {state.result.laserSkipped > 0 && (
                   <p className="sim-note">
-                    {state.result.laserSkipped} laser move(s) skipped — no burn
-                    model in v1
+                    {state.result.laserSkipped} move(s) skipped — their tool has
+                    no cutting model
                   </p>
                 )}
                 {state.result.gougeCount === 0 && state.result.gougeVoxels === 0 && state.result.collisionMoves === 0 && (
