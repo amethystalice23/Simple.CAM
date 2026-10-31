@@ -81,6 +81,7 @@ import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import type { Move, Tool } from '../core/types';
 import { MAX_ROTARY_RPM, SAFE_CLEARANCE } from './faceCylinder';
+import { indexedPointRotation } from './indexing';
 
 export interface ContactMapOptions {
   /** machine-space xyz triples, non-indexed, in the stock's MATERIAL
@@ -438,29 +439,23 @@ export function fluteClearanceCheck(o: FluteClearanceOptions): Uint8Array {
     //    piercing the other blade 0.02 away, and a z-aligned material
     //    segment read the tool inside its own blade at a 90° attitude —
     //    the propeller's facing flank read CLEAR while buried.)
-    const backCy = cy * cosA + (cz - o.axisZ) * sinA;
-    const backCz = -cy * sinA + (cz - o.axisZ) * cosA + o.axisZ;
-    // BOTH ENDPOINTS rotate: the material pre-image of the vertical
-    // machine column passes through the back-rotated center along the
-    // back-rotated +Z axis: machine +Z rotated by −A* gives material
-    // direction (0, +sinA, cosA). THE SIGN IS LOAD-BEARING (caught
-    // 2026-10-31 by the milestone-4 generation wiring, after the probe):
-    // the (0, −sinA, cosA) this line carried from day one was a sign
-    // slip that VANISHED at attitudes 0/180 (sin = 0 — every planar
-    // fixture in this suite) and mirrored the segment the WRONG WAY at
-    // every other attitude: the mirrored line dives THROUGH the mesh,
-    // and a bare convex cylinder's side read ALL-CLIPPED (728/728, at
-    // toolR·cos(facet) — the tangent point's own neighbor facets). The
-    // honest line lies PARALLEL to the touched facet's plane at exactly
-    // toolR (the flank-contact tangent — check it by rotating both by
-    // +A*: the column is the vertical line one toolR out along the
-    // rotated normal, tangent to the rotated convex section), so a
-    // convex tessellation clears by construction and only real
-    // neighbors clip.
-    const dirY = sinA;
-    const dirZ = cosA;
-    segStart.set(cx, backCy - flute * dirY, backCz - flute * dirZ);
-    segEnd.set(cx, backCy + flute * dirY, backCz + flute * dirZ);
+    // BOTH ENDPOINTS rotate — and the segment is CONSTRUCTED, not
+    // hand-derived (committee 2026-10-31): the material pre-image of
+    // the vertical machine column is BUILT by rotating its two machine
+    // endpoints through the pinned indexedPointRotation(−A*) — no
+    // direction sign exists to slip. The (0, −sinA, cosA) this block
+    // carried from milestone 2 was exactly such a slip: invisible at
+    // planar attitudes 0/180 (sin = 0 — every planar fixture in this
+    // suite) and a MIRROR at every other attitude, under which a bare
+    // convex cylinder read ALL-CLIPPED (728/728) and the "propeller
+    // honesty" pins shipped measuring the bug. The construction is
+    // pinned identical to the honest inline form (0, +sinA, cosA) to
+    // <1e-9 on 349/349 cells: the honest line lies PARALLEL to the
+    // touched facet's plane at exactly toolR, so a convex tessellation
+    // clears by construction and only real neighbors clip.
+    const rotBack = indexedPointRotation(-c.align, o.axisZ);
+    segStart.copy(rotBack({ x: cx, y: cy, z: cz - flute }));
+    segEnd.copy(rotBack({ x: cx, y: cy, z: cz + flute }));
     seg.start.copy(segStart);
     seg.end.copy(segEnd);
     // the tilted segment's AABB, padded by the swept cylinder radius

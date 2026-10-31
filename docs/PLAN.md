@@ -937,7 +937,26 @@ default tol 2× the θ-row pitch — pure connectivity over-merges, probed;
 emitSwarfPass: greedy neighbor-chained monotone walk, per-pass stall
 folds, G93 F-every-line with the rotary ceiling; holed bands fragment
 into honest retracts — a weaving band-sweep planner is parked);
-(4) coverage report + op wiring + honest time; (5) the ball window kernel.
+(4) coverage report + op wiring + honest time — DONE 2026-10-31 (the
+`swarfFinish` op kind end to end: gates, map, verdict, segmentation,
+per-patch emission, coverage summary + honest time). COMMITTEE
+2026-10-31 (5–0, probes in the session record): the milestone-2
+segment's material direction carried a sign slip — (0, −sinA*, cosA*)
+instead of (0, +sinA*, cosA*) — invisible at planar attitudes 0/180
+(every planar fixture) and a MIRROR at every other one; the old
+"propeller honesty" pins (blade B all-CLIPPED) measured that mirror,
+and their brute-force verification was circular (it sampled the same
+back-rotated segment, not an independent oracle — which would have
+flagged a bare convex cylinder reading ALL-CLIPPED as physically
+impossible). The column is now CONSTRUCTED (indexedPointRotation of
+its two machine endpoints — no hand sign exists); both propeller
+blades clear (tangent to their own bodies, ≥3.634mm from the twin).
+FILED, separate pre-existing map defect: θ=0 rays grazing exactly
+along facet-boundary edges tunnel to the far side and heal INWARD —
+corrupt p/n pairs whose stances genuinely foul (6/325 on the test
+cylinders, sign-independent, pinned as the row-0 artifact class; fix
+= ray nudge, its own pause);
+(5) the ball window kernel.
 
 ## Candidate future features (gap analysis, 2026-10-28)
 

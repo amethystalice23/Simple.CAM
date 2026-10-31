@@ -563,11 +563,24 @@ describe('fluteClearanceCheck — the tool-center sign (test 5)', () => {
 describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', () => {
   // TWO blades on one hub, both ruled along X: each blade is a flat
   // radial plate (thickness T, span x −3..3, radii R0..R1), the pair at
-  // 120° mid-plane separation. At a FACING flank's A* the opposite
-  // blade's body sits 1.5 mm from the contact — inside the flute span
-  // (±20) and inside toolR (Ø6) ⇒ CLIPPED; the AWAY faces' columns
-  // stand off into open air ⇒ CLEAR. (Probe-verified split before
-  // pinning: exactly the facing cells clip.)
+  // 120° mid-plane separation.
+  //
+  // THE 2026-10-31 COMMITTEE CORRECTION (5-0, probes in the session
+  // record): this fixture's original pins said plate B was entirely
+  // CLIPPED ("its columns sweep into A") — measured under the
+  // milestone-2 sign slip (0, −sinA*, cosA*), whose MIRRORED segment
+  // pierces blade B's OWN BODY (min distance 0.000 on all 12 B cells)
+  // and passes 1.172 from plate A. The honest column is tangent to B's
+  // own faces at exactly toolR (3.000, legal contact) and ≥3.634 mm
+  // from plate A at every B attitude (aligns 30/210/300 — NOT the
+  // "A* ≈ 0–50°" the old comment claimed). The old "brute-force
+  // verified 24/24" was CIRCULAR: it dense-sampled the same
+  // back-rotated segment the code built, not an independent
+  // machine-frame oracle (an oracle would have flagged the bare convex
+  // cylinder reading 325/325 CLIPPED as physically impossible). Both
+  // blades are swarfable; the fixture keeps its second job — the
+  // plates still never MERGE into one patch (attitude tolerance
+  // separates them, segmentation's own test).
   const T = 2; // plate thickness (perpendicular to the mid-plane)
   const R0 = 5; // inner radius (root)
   const R1 = 10; // outer tip
@@ -612,15 +625,14 @@ describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', 
     thetaStepOver: 3,
   });
 
-  // VERDICT SPLIT (brute-force verified 24/24 against dense-sampled
-  // segment-vs-triangle distances with the same exclusion rule): plate
-  // A (α=0) is entirely swarfable — every A contact's A* swings the
-  // tool column clear of B (A's tip face grazes its own body at exactly
-  // toolR: legal contact, the graze epsilon's job). Plate B (α=120) is
-  // entirely UNSWARFABLE — at B's contacts' attitudes (A* ≈ 0–50°) the
-  // vertical column sweeps INTO plate A's rotated slab (the column LINE
-  // passes through it, independent of toolR). That is the propeller
-  // honesty: one blade finishes, its twin does not.
+  // VERDICT (independently re-measured 2026-10-31, committee): both
+  // plates entirely swarfable — every contact's honest column is
+  // tangent to its own body at exactly toolR (legal contact, the graze
+  // epsilon's job) and ≥3.634 mm from the twin plate. The 120°
+  // ROTATION SYMMETRY makes anything else impossible: an isometry maps
+  // blade A onto blade B, so a correct check MUST give them identical
+  // verdicts (the old sign's A-clear/B-clipped split was the mirror
+  // artifact itself).
   const plateCells = (mid: number) =>
     map.cells
       .map((c, i) => ({ c, i }))
@@ -643,7 +655,11 @@ describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', 
     for (const { i } of a) expect(v[i]).toBe(FLUTE_CLEAR);
   });
 
-  it('blade B: every cell CLIPPED (its columns sweep into A)', () => {
+  it('blade B: every cell CLEAR — the twin does not clip it (the sign-slip correction)', () => {
+    // the committee re-derivation: B's honest columns are tangent to
+    // B's own body (3.000 = toolR, legal contact) and ≥3.634 from A.
+    // Under the old mirrored segment they read CLIPPED 12/12 by
+    // piercing B's OWN body — the artifact the old pin enshrined.
     const v = fluteClearanceCheck({
       positions,
       tool: TOOL(6, 20),
@@ -651,14 +667,24 @@ describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', 
       axisZ: 0,
       radius: 12,
     });
+    const a = plateCells(0);
     const b = plateCells(GAP_DEG);
     expect(b.length).toBeGreaterThan(0);
-    for (const { i } of b) expect(v[i]).toBe(FLUTE_CLIPPED);
+    // THE SYMMETRY PIN (member 5): a 120°-rotation-symmetric fixture
+    // must give both blades IDENTICAL verdicts — any future sign or
+    // mirror slips asymmetrically and fails here instantly, no
+    // geometry knowledge required.
+    expect(a.length).toBe(b.length);
+    for (let k = 0; k < b.length; k++) {
+      expect(v[b[k].i]).toBe(FLUTE_CLEAR);
+      expect(v[b[k].i]).toBe(v[a[k].i]); // equivariance
+    }
   });
 
-  it('the B verdict is tool-size independent (a column LINE through A)', () => {
-    // Ø2: if the clip were a radius effect it would lift; a column
-    // passing through the other blade clips at any diameter.
+  it('the B verdict is tool-size independent (CLEAR at Ø2 as at Ø6)', () => {
+    // the tangent contact scales with the tool: Ø2's column stands 1 mm
+    // out and clears 3.634−2 mm of A besides — CLEAR at any diameter,
+    // the same independence the old pin claimed for its phantom clip.
     const v = fluteClearanceCheck({
       positions,
       tool: TOOL(2, 20),
@@ -667,25 +693,35 @@ describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', 
       radius: 12,
     });
     const b = plateCells(GAP_DEG);
-    for (const { i } of b) expect(v[i]).toBe(FLUTE_CLIPPED);
+    for (const { i } of b) expect(v[i]).toBe(FLUTE_CLEAR);
   });
 });
 
 describe('fluteClearanceCheck — the curved cylinder (the segment-direction regression)', () => {
   // THE 2026-10-31 REGRESSION (caught by the milestone-4 generation
-  // wiring): the flute segment's material direction carried a sign
-  // slip — (0, −sinA*, cosA*) instead of (0, +sinA*, cosA*) — that
-  // vanished at attitudes 0/180 (sin = 0: every planar fixture in this
-  // suite) and MIRRORED the segment at every other attitude. The
-  // mirrored line dives THROUGH the mesh: this bare convex cylinder —
-  // the one geometry a vertical flute column clears BY CONSTRUCTION —
-  // read ALL-CLIPPED (728/728 on the wiring fixture, the closest
-  // "clip" at exactly toolR·cos(facet) = the tangent's own neighbor
-  // facets). The honest pre-image is the vertical machine line back-
-  // rotated: PARALLEL to the touched facet's plane at exactly toolR.
-  // A 32-gon: sampled normals are facet mids, vertex rows (row 0) hit
-  // shared edges — the tessellation conditions that make the tangent
-  // argument thinnest. Every cell must read CLEAR.
+  // wiring, adjudicated by committee 5-0): the flute segment's material
+  // direction carried a sign slip — (0, −sinA*, cosA*) instead of
+  // (0, +sinA*, cosA*) — that vanished at attitudes 0/180 (sin = 0:
+  // every planar fixture in this suite) and MIRRORED the segment at
+  // every other attitude. The mirrored line dives THROUGH the mesh:
+  // this bare convex cylinder — the one geometry a vertical flute
+  // column clears BY CONSTRUCTION — read ALL-CLIPPED (728/728 on the
+  // wiring fixture). The honest pre-image is the vertical machine line
+  // back-rotated: PARALLEL to the touched facet's plane at exactly
+  // toolR. Fixed by CONSTRUCTION (indexedPointRotation of the column's
+  // two machine endpoints — no hand sign to slip).
+  //
+  // THE ROW-0 RESIDUAL (committee member 4's finding, corroborated 2+3):
+  // the θ=0 ray runs exactly along a facet-boundary edge; the BVH
+  // tie-break can hand buildContactMap the FAR side's hit from inside,
+  // and the heal step then flips that interior hit's normal INWARD — a
+  // corrupt p/n pair (measured: contact at the bottom, normal 174° off
+  // radial, outward sanity −4.98) whose stance genuinely fouls the far
+  // wall. That is a SEPARATE buildContactMap edge-grazing defect,
+  // sign-independent (identical counts under both signs), FILED for its
+  // own fix (a ray nudge off exact facet boundaries) — these pins
+  // document the artifact class so it cannot hide again, and the
+  // honest-region guarantee (rows ≥ 1: zero clips) stays guarded.
   const positions = cylinder(5, 20, 32);
   const map = buildContactMap({
     positions,
@@ -695,8 +731,26 @@ describe('fluteClearanceCheck — the curved cylinder (the segment-direction reg
     axisZ: AXIS_Z,
     thetaStepOver: 3,
   });
+  const clippedCellsOf = (v: Uint8Array) => {
+    const out: number[] = [];
+    for (let i = 0; i < v.length; i++) if (v[i] === FLUTE_CLIPPED) out.push(i);
+    return out;
+  };
 
-  it('every cell of the convex 32-gon side reads CLEAR (the tangent)', () => {
+  it('contact sanity: every non-boundary-row normal points outward (the map, pre-verdict)', () => {
+    // MEMBER 4'S PIN: (p − axis)·n ≥ 0 for a body convex about the
+    // axis. The row-0 boundary-tie cells VIOLATE it (the filed
+    // artifact); every other row must hold — the honest region's map
+    // data is sound.
+    for (const c of map.cells) {
+      const radialDot = c.p.y * c.n.y + (c.p.z - AXIS_Z) * c.n.z;
+      const row = gridPosOf(map, map.cells.indexOf(c)).j;
+      if (row === 0) continue; // the boundary-tie row: artifact filed above
+      expect(radialDot).toBeGreaterThan(-1e-6);
+    }
+  });
+
+  it('the convex 32-gon side: ZERO clips outside the row-0 boundary-tie artifact', () => {
     expect(map.surfaceCells).toBe(13 * 25); // full grid, no air
     const v = fluteClearanceCheck({
       positions,
@@ -705,21 +759,21 @@ describe('fluteClearanceCheck — the curved cylinder (the segment-direction reg
       axisZ: AXIS_Z,
       radius: 12,
     });
-    let clipped = 0;
-    for (let i = 0; i < v.length; i++) {
-      if (v[i] === FLUTE_CLIPPED) clipped++;
+    const clipped = clippedCellsOf(v);
+    // THE HONEST COUNTS (committee-measured): 6 clips, every one row
+    // j=0 (the filed artifact); pre-fix (mirrored segment): 325/325.
+    expect(clipped.length).toBe(6);
+    for (const ci of clipped) expect(gridPosOf(map, ci).j).toBe(0);
+    // and the honest region is exactly clean
+    for (let ci = 0; ci < v.length; ci++) {
+      if (gridPosOf(map, ci).j === 0) continue;
+      expect(v[ci]).toBe(FLUTE_CLEAR);
     }
-    // the pin: ZERO clips — a convex side is the flute column's
-    // by-construction tangent (pre-fix: 100% clipped, 325/325)
-    expect(clipped).toBe(0);
   });
 
-  it('coarser tessellation too (an 8-gon): the tangent argument survives fat facets', () => {
-    // 45° facets: sampled normals land ±22.5° off the radial at vertex
-    // rows — the fattest normal ambiguity the grid can sample. The
-    // parallel-at-toolR line still clears the neighbor facets (the
-    // crossing of their planes lands outside the quads; the near-edge
-    // distance stays > toolR − 1µm — hand-derived, probed).
+  it('coarser tessellation too (an 8-gon): the tangent survives fat facets', () => {
+    // 45° facets: the fattest normal ambiguity the grid samples. Same
+    // shape: row-0 artifact only (measured 3), honest region clean.
     const pos8 = cylinder(5, 20, 8);
     const map8 = buildContactMap({
       positions: pos8,
@@ -736,11 +790,13 @@ describe('fluteClearanceCheck — the curved cylinder (the segment-direction reg
       axisZ: AXIS_Z,
       radius: 12,
     });
-    let clipped = 0;
-    for (let i = 0; i < v.length; i++) {
-      if (v[i] === FLUTE_CLIPPED) clipped++;
+    const clipped = clippedCellsOf(v);
+    expect(clipped.length).toBe(3);
+    for (const ci of clipped) expect(gridPosOf(map8, ci).j).toBe(0);
+    for (let ci = 0; ci < v.length; ci++) {
+      if (gridPosOf(map8, ci).j === 0) continue;
+      expect(v[ci]).toBe(FLUTE_CLEAR);
     }
-    expect(clipped).toBe(0);
   });
 });
 
@@ -1283,7 +1339,13 @@ describe('segmentContactPatches — the two-plate propeller (plate separation)',
     expect(seen.size).toBe(map.cells.length);
   });
 
-  it('the real milestone-2 verdict: plate A patches only, plate B counted unswarfable', () => {
+  it('the honest verdict: BOTH plates swarfable, nothing counted unswarfable', () => {
+    // corrected with the sign (committee 2026-10-31): the old pin said
+    // plate B was 12 unswarfable cells — the mirrored-segment artifact.
+    // Honest: both blades clear, all 24 cells patch, zero reported —
+    // and the plates STILL never merge (the attitude tolerance
+    // separates them, not the clearance): 5 patches, one per hit row
+    // plus the 12+13 root-cap pair.
     const verdict = fluteClearanceCheck({
       positions,
       tool: TOOL(6, 20),
@@ -1292,15 +1354,19 @@ describe('segmentContactPatches — the two-plate propeller (plate separation)',
       radius: 12,
     });
     const { patches, unswarfableCells } = segmentContactPatches({ map, verdict });
-    // plate A (rows 0, 12, 13) clears: two patches — the tip-cap strip
-    // (align 90) and the root-cap pair (align 270); plate B (rows 8, 9,
-    // 21) clips entirely: 12 cells counted, never emitted
-    expect(patches.map((p) => p.cells.length)).toEqual([4, 8]);
-    expect(unswarfableCells).toBe(12);
-    for (const c of patches[0].cells) expect(map.cells[c].align).toBeCloseTo(90, 6);
-    for (const c of patches[1].cells) expect(map.cells[c].align).toBeCloseTo(270, 6);
-    for (const c of patches.flatMap((p) => p.cells)) {
-      expect(plateOf(c)).toBe(0); // only plate A
+    expect(patches.map((p) => p.cells.length)).toEqual([4, 4, 4, 8, 4]);
+    expect(unswarfableCells).toBe(0);
+    // every plate's own attitudes present, no cross-plate patch
+    // (float32 plate normals — per-element closeTo, the sibling test's way)
+    const aligns = patches.map((p) => map.cells[p.cells[0]].align);
+    for (const [k, want] of [90, 210, 300, 270, 30].entries()) {
+      expect(Math.min(Math.abs(aligns[k] - want), 360 - Math.abs(aligns[k] - want))).toBeLessThan(
+        1e-4,
+      );
+    }
+    for (const p of patches) {
+      const plate = plateOf(p.cells[0]);
+      for (const c of p.cells) expect(plateOf(c)).toBe(plate);
     }
   });
 });

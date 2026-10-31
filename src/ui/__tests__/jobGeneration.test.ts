@@ -2590,10 +2590,13 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
         expect(m.words.a).toBeUndefined();
       }
     }
-    // machine A monotone nondecreasing across the whole op (only advances)
+    // machine A monotone nondecreasing across the CUTS (only advances).
+    // Rapids are exempt BY DESIGN: the wrapper's datum-discipline return
+    // (generateJobOp appends "return A to the borrowed datum") spins A
+    // back after the op — the cuts within the pass are the monotone part.
     let prev = -Infinity;
     for (const m of res.moves) {
-      if (m.words.a === undefined) continue;
+      if (m.rapid || m.words.a === undefined) continue;
       expect(m.words.a).toBeGreaterThanOrEqual(prev - 1e-9);
       prev = m.words.a;
     }
@@ -2607,13 +2610,12 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
     expect(res.minutes).toBeGreaterThan(0.12);
   });
 
-  it('reports the unreachable cells on a shadowed part — never silently dropped', () => {
-    // THE TWIN-PLATE CLIP CLASS (the kernel-pinned propeller honesty):
-    // two flat radial plates 120° apart — plate A's columns swing clear
-    // of B, plate B's sweep INTO A (the column line passes through A's
-    // rotated slab, tool-size-independent). Stock/gids match the kernel
-    // fixture (Ø24 effective radius → the same 25-row grid, so the
-    // verdicts reproduce): 12 cells clear, 12 clipped.
+  it('the twin plates both sweep — nothing unreachable, the note absent', () => {
+    // CORRECTED with the sign (committee 2026-10-31): this fixture was
+    // wired as the unreachable-report case on the OLD verdict (blade B
+    // "12 of 24 unreachable") — the mirrored-segment artifact. Honest:
+    // both blades clear, all 24 cells swept, no unreachable note. The
+    // unreachable path itself is pinned by the overhang fixture below.
     const T = 2;
     const R0 = 5;
     const R1 = 10;
@@ -2643,12 +2645,9 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     const feats = detectFeatures(geo);
-    // Ø24 stock (radius 12) with the same 14.4°-row grid as the kernel
-    // fixture — the plate cross-section is x-uniform, so the column
-    // positions and verdicts reproduce at any interior x sampling
     const plateStock: Extract<Stock, { kind: 'cylinder' }> = {
       kind: 'cylinder',
-      length: 10, // spans x −5…5: pitch 1.5 → interior columns −2…2.5
+      length: 10, // spans x −5…5
       xOrigin: 'mid',
       calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 12 },
       axisMode: '4-axis',
@@ -2666,18 +2665,79 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
     };
     const res = generateJobOp(swarfOp(), plateCtx);
     expect(res.error).toBeNull();
-    // THE HONESTY CLASS: the clipped twin counted and NAMED, never silent
-    expect(res.summary).toContain('12 of 24 cell(s) (50%) unreachable');
-    expect(res.summary).toMatch(/swept/);
-    // the swept set is plate A only: its two clear attitudes (90° tip-cap
-    // strip, 270° root-cap pair) — never plate B's (210/300/30)
+    expect(res.summary).toContain('24/24 cell(s) (100%) swept');
+    expect(res.summary).not.toMatch(/unreachable/);
+    // both blades swept: cuts at plate A's attitudes AND plate B's
     const cuts = res.moves.filter((m) => !m.rapid && m.words.a !== undefined);
     expect(cuts.length).toBeGreaterThan(0);
-    for (const m of cuts) {
-      const amod = ((m.words.a! % 360) + 360) % 360;
-      const d90 = Math.min(Math.abs(amod - 90), 360 - Math.abs(amod - 90));
-      const d270 = Math.min(Math.abs(amod - 270), 360 - Math.abs(amod - 270));
-      expect(Math.min(d90, d270)).toBeLessThan(1e-6);
-    }
+    const amods = new Set<number>();
+    for (const m of cuts) amods.add(Math.round(((m.words.a! % 360) + 360) % 360));
+    const near = (want: number) =>
+      [...amods].some((a) => Math.min(Math.abs(a - want), 360 - Math.abs(a - want)) < 1);
+    expect(near(90)).toBe(true); // plate A tip-cap
+    expect(near(300)).toBe(true); // plate B +t face
+  });
+
+  it('reports the unreachable cells on the overhang fixture — never silently dropped', () => {
+    // THE REAL UNREACHABLE CLASS (sign-independent — verified identical
+    // under both signs by the committee): a blade overhanging a base
+    // plate flush under its −t̂ face (d=0): at the −t̂ face's attitude
+    // (align 0) the tool column rides the base's face plane — inside
+    // toolR of it, a genuine clip (the kernel's milestone-2 test 4).
+    // The +t̂ face and the caps stay clear, the op emits their passes,
+    // and the summary NAMES the clipped class with its count.
+    const slab = (t0: number, t1: number, r0: number, r1: number): number[] => {
+      // α=0: local (t, r) → machine (y=t, z=r); blade x −3..3, N strips
+      const pos: number[] = [];
+      const pt = (r: number, s: number, x: number): [number, number, number] => [x, s, r];
+      const N = 24;
+      for (let k = 0; k < N; k++) {
+        const rA = r0 + ((r1 - r0) * k) / N;
+        const rB = r0 + ((r1 - r0) * (k + 1)) / N;
+        const A0 = pt(rA, t0, -3), A1 = pt(rA, t0, 3), B0 = pt(rB, t0, -3), B1 = pt(rB, t0, 3);
+        const C0 = pt(rA, t1, -3), C1 = pt(rA, t1, 3), D0 = pt(rB, t1, -3), D1 = pt(rB, t1, 3);
+        pos.push(...A0, ...B0, ...A1, ...A1, ...B0, ...B1);
+        pos.push(...C0, ...C1, ...D0, ...C1, ...D1, ...D0);
+        pos.push(...A0, ...C0, ...A1, ...A1, ...C0, ...C1);
+        pos.push(...B0, ...B1, ...D0, ...B1, ...D1, ...D0);
+        pos.push(...A0, ...A1, ...C0, ...C0, ...A1, ...C1);
+        pos.push(...B0, ...D0, ...B1, ...B1, ...D0, ...D1);
+      }
+      return pos;
+    };
+    // blade y −1..1 r 5..15 + base plate y −6..−4 r 5..16 (flush: its
+    // top face at −4 sits toolR under the blade's −t̂ plane at −1 − 3)
+    const positions = new Float32Array([...slab(-1, 1, 5, 15), ...slab(-6, -4, 5, 16)]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const feats = detectFeatures(geo);
+    const stock30: Extract<Stock, { kind: 'cylinder' }> = {
+      kind: 'cylinder',
+      length: 10, // spans x −5…5 — covers the slabs' −3..3
+      xOrigin: 'mid',
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 15 },
+      axisMode: '4-axis',
+      materialId: 'aluminum-6061',
+    };
+    const overhangCtx: GenContext = {
+      ...ctx,
+      stock: stock30,
+      geometry: geo,
+      features: feats,
+      sources: sourcesFor(geo, feats, identityTransform(), []),
+      tools,
+      datumAngle: 0,
+      startA: 0,
+    };
+    // the kernel test-4 grid: rows land ON the faces (stepOver = 2π·15/36)
+    const res = generateJobOp(swarfOp({ stepOver: (2 * Math.PI * 15) / 36 }), overhangCtx);
+    expect(res.error).toBeNull();
+    // THE HONESTY CLASS: the clipped −t̂ cells counted and NAMED — never
+    // a silent drop; the swept share lands under 100 (the −t̂ cells
+    // are excluded), and the clear faces still emit passes
+    expect(res.summary).toMatch(/unreachable by the flank/);
+    expect(res.summary).not.toContain('(100%) swept');
+    const cuts = res.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBeGreaterThan(0);
   });
 });
