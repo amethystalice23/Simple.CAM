@@ -470,10 +470,12 @@ describe('buildContactMap — parameter validation', () => {
  * ------------------------------------------------------------------ */
 
 import {
+  emitSwarfPass,
   fluteClearanceCheck,
   fluteToolCenter,
   FLUTE_CLEAR,
   FLUTE_CLIPPED,
+  segmentContactPatches,
 } from '../swarfFinish';
 
 const TOOL = (d: number, flute: number) => ({
@@ -831,5 +833,675 @@ describe('fluteClearanceCheck — test 4, blade overhanging a base plate', () =>
       expect(mt.length).toBeGreaterThan(0);
       for (const { i } of mt) expect(v[i]).toBe(want);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * MILESTONE 3 — patch segmentation + monotone-A pass emission
+ *
+ * Segmentation pins: PURE connectivity would over-merge (the
+ * propeller's plates glue into one 360°-attitude pass that drags the
+ * flank through the twin), so the merge is connectivity AND wrap-aware
+ * attitude agreement — pinned here by facet splits (the 8-gon), seam
+ * union (the smooth cylinder's 359°→0° align jump), the tolerance
+ * boundary, and the stall fold. Emission pins: the entry-safety
+ * convention (no rapid mixes Z with X/Y/A), the tool-center formula at
+ * each cell's own attitude, the G93 three-floor feed recomputed
+ * independently, and endA threading (forward-only, past 360).
+ * ------------------------------------------------------------------ */
+
+import { isSimultaneous } from '../../core/types';
+import { MAX_ROTARY_RPM } from '../faceCylinder';
+
+/** grid position of a cell, from the dense index (θ wraps in callers) */
+function gridPosOf(map: ReturnType<typeof buildContactMap>, ci: number) {
+  const idx = map.cellIndex.indexOf(ci);
+  expect(idx).toBeGreaterThanOrEqual(0);
+  const j = Math.floor(idx / map.nx);
+  return { i: idx - j * map.nx, j };
+}
+
+/** machine-frame contact point of cell ci at machine attitude deg */
+function contactAt(
+  map: ReturnType<typeof buildContactMap>,
+  ci: number,
+  deg: number,
+  axisZ: number,
+) {
+  const th = deg * DEG;
+  const c = Math.cos(th);
+  const s = Math.sin(th);
+  const p = map.cells[ci].p;
+  const zRel = p.z - axisZ;
+  return { x: p.x, y: p.y * c - zRel * s, z: p.y * s + zRel * c + axisZ };
+}
+
+/** wrap-aware align distance, degrees in [0, 180] (the merge metric) */
+function wrapDelta(a: number, b: number): number {
+  let d = Math.abs(a - b) % 360;
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+describe('segmentContactPatches — the 8-facet cylinder (attitude splits)', () => {
+  // Same fixture as the milestone-1 map: facet normals sit exactly at
+  // facet mids, so each facet's cells share one align and neighboring
+  // facets differ by exactly 45° — the attitude-split probe.
+  //
+  // ROW 0 IS MIXED (probed): it rides the facet 7/0 boundary edge, and
+  // the BVH tie-break splits its 13 columns between the two facets'
+  // aligns (67.5 / 112.5). That hole pattern dead-ends the greedy walk
+  // — a holed band fragments into several honest passes (a chord over
+  // the other attitude's surface cells would gouge; any single-pass
+  // order must weave around, which the greedy does not find). So these
+  // tests pin the INVARIANTS (partition, one-attitude-per-patch at the
+  // default tol, per-step adjacency/Δ) and the structurally-forced
+  // counts, never the accidental fragment counts.
+  const positions = cylinder(5, 20, 8);
+  const map = buildContactMap({
+    positions,
+    x0: -9,
+    x1: 9,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const allClear = () => new Uint8Array(map.cells.length).fill(FLUTE_CLEAR);
+  /** the walk's per-step contract, on every patch of a segmentation */
+  const expectWalkHolds = (patches: ReturnType<typeof segmentContactPatches>['patches']) => {
+    const seen = new Set<number>();
+    for (const p of patches) {
+      expect(p.cells.length).toBeGreaterThan(0);
+      for (let k = 1; k < p.cells.length; k++) {
+        const a = map.cells[p.cells[k]].align;
+        const b = map.cells[p.cells[k - 1]].align;
+        // forward-or-equal attitude, within tol (the walk's own gate)
+        const fwd = (((a - b) % 360) + 360) % 360;
+        expect(fwd).toBeLessThanOrEqual(2 * (360 / map.nTheta) + 1e-6);
+        // grid-adjacent step (θ wraps; the default tol carries it)
+        const g1 = gridPosOf(map, p.cells[k - 1]);
+        const g2 = gridPosOf(map, p.cells[k]);
+        const dj = Math.min(Math.abs(g2.j - g1.j), map.nTheta - Math.abs(g2.j - g1.j));
+        expect(Math.abs(g2.i - g1.i) + dj).toBe(1);
+      }
+      for (const c of p.cells) {
+        expect(seen.has(c)).toBe(false);
+        seen.add(c);
+      }
+    }
+    expect(seen.size).toBe(map.cells.length);
+  };
+
+  it('default tolerance: one facet attitude per patch — pure connectivity would merge', () => {
+    const { patches, unswarfableCells } = segmentContactPatches({
+      map,
+      verdict: allClear(),
+    });
+    expect(unswarfableCells).toBe(0);
+    expectWalkHolds(patches);
+    // no patch steps across a facet boundary: default tol 28.8 < 45
+    for (const p of patches) {
+      const a0 = map.cells[p.cells[0]].align;
+      for (const c of p.cells) {
+        expect(Math.abs(map.cells[c].align - a0)).toBeLessThan(1e-3);
+      }
+    }
+    // THE CONTRAST (the attitude term's whole point): pure connectivity
+    // (any attitude) glues the ring — some patch then steps across
+    // facet attitudes, the single pass that would drag the flank
+    // around the full 360°
+    const merged = segmentContactPatches({ map, verdict: allClear(), alignTolDeg: 359.9 });
+    let cross = false;
+    for (const p of merged.patches) {
+      for (let k = 1; k < p.cells.length; k++) {
+        if (wrapDelta(map.cells[p.cells[k]].align, map.cells[p.cells[k - 1]].align) > 1) {
+          cross = true;
+        }
+      }
+    }
+    expect(cross).toBe(true);
+  });
+
+  it('tolerance boundary: facet-adjacent ΔA*=45 splits at tol 40, merges at tol 50', () => {
+    // NOT exactly 45: float32 facet normals put the true deltas at
+    // 45±ε (probed) — robust bounds sit either side of the real facet
+    // spacing. Below: no patch ever changes attitude (facet constants;
+    // any nonzero Δ IS a crossing). Above: some patch does.
+    let crossBelow = false;
+    for (const p of segmentContactPatches({ map, verdict: allClear(), alignTolDeg: 40 }).patches) {
+      for (let k = 1; k < p.cells.length; k++) {
+        if (wrapDelta(map.cells[p.cells[k]].align, map.cells[p.cells[k - 1]].align) > 1) {
+          crossBelow = true;
+        }
+      }
+    }
+    expect(crossBelow).toBe(false);
+    let crossAbove = false;
+    for (const p of segmentContactPatches({ map, verdict: allClear(), alignTolDeg: 50 }).patches) {
+      for (let k = 1; k < p.cells.length; k++) {
+        if (wrapDelta(map.cells[p.cells[k]].align, map.cells[p.cells[k - 1]].align) > 1) {
+          crossAbove = true;
+        }
+      }
+    }
+    expect(crossAbove).toBe(true);
+  });
+
+  it('strict tolerance still chains same-attitude neighbors (Δ0 x-steps)', () => {
+    // tol 5 < 45: facets never merge, but same-attitude rows still
+    // chain — at least one full row (13 cells) sits in one patch
+    const { patches } = segmentContactPatches({
+      map,
+      verdict: allClear(),
+      alignTolDeg: 5,
+    });
+    expectWalkHolds(patches);
+    expect(patches.some((p) => p.cells.length >= 13)).toBe(true);
+  });
+
+  it('CLIPPED cells are excluded from patches and counted', () => {
+    // clear only θ rows 4..6 — one facet's rows (align 157.5), so ONE
+    // patch; the verdict is honest synthetic: segmentation is a pure
+    // function of map+verdict
+    const verdict = new Uint8Array(map.cells.length).fill(FLUTE_CLIPPED);
+    for (const j of [4, 5, 6]) {
+      for (let i = 0; i < map.nx; i++) {
+        const s = map.cellIndex[j * map.nx + i];
+        if (s !== CONTACT_AIR) verdict[s] = FLUTE_CLEAR;
+      }
+    }
+    const { patches, unswarfableCells } = segmentContactPatches({ map, verdict });
+    expect(patches.length).toBe(1);
+    expect(patches[0].cells.length).toBe(13 * 3);
+    expect(unswarfableCells).toBe(map.cells.length - 13 * 3);
+    for (const c of patches[0].cells) {
+      const j = gridPosOf(map, c).j;
+      expect(j >= 4 && j <= 6).toBe(true);
+    }
+  });
+});
+
+describe('segmentContactPatches — the smooth cylinder (seam + walk + fold)', () => {
+  // 256 facets: normals ≈ radial at the row angle, so align runs
+  // θ+90 smoothly and CROSSES the 359°→0° seam at row 18→19 — the
+  // wrap-awareness fixture. Cells: 13×25, all hit.
+  const positions = cylinder(5, 20, 256);
+  const map = buildContactMap({
+    positions,
+    x0: -9,
+    x1: 9,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const allClear = () => new Uint8Array(map.cells.length).fill(FLUTE_CLEAR);
+  const bandVerdict = (rows: number[]) => {
+    const v = new Uint8Array(map.cells.length).fill(FLUTE_CLIPPED);
+    for (const j of rows) {
+      for (let i = 0; i < map.nx; i++) {
+        const s = map.cellIndex[j * map.nx + i];
+        if (s !== CONTACT_AIR) v[s] = FLUTE_CLEAR;
+      }
+    }
+    return v;
+  };
+
+  it('ONE patch across the seam (a strict Δ would split it in two)', () => {
+    const { patches, unswarfableCells } = segmentContactPatches({
+      map,
+      verdict: allClear(),
+    });
+    expect(patches.length).toBe(1);
+    expect(unswarfableCells).toBe(0);
+    expect(patches[0].cells.length).toBe(map.cells.length);
+    // seam sanity: some adjacent pair spans 359.x → 0.x
+    let seam = false;
+    for (let j = 0; j < map.nTheta; j++) {
+      const a = map.cells[map.cellIndex[j * map.nx]].align;
+      const b = map.cells[map.cellIndex[((j + 1) % map.nTheta) * map.nx]].align;
+      if (Math.abs(a - b) > 180) seam = true;
+    }
+    expect(seam).toBe(true);
+  });
+
+  it('the walk: every cell once, grid-adjacent steps, monotone, ≤ tol per step', () => {
+    const { patches } = segmentContactPatches({ map, verdict: allClear() });
+    const cells = patches[0].cells;
+    expect(new Set(cells).size).toBe(cells.length);
+    const tol = 2 * (360 / map.nTheta); // the default
+    for (let k = 1; k < cells.length; k++) {
+      const a = map.cells[cells[k]].align;
+      const b = map.cells[cells[k - 1]].align;
+      const fwd = (((a - b) % 360) + 360) % 360;
+      expect(fwd).toBeLessThanOrEqual(tol + 1e-6);
+      const g1 = gridPosOf(map, cells[k - 1]);
+      const g2 = gridPosOf(map, cells[k]);
+      const dj = Math.min(Math.abs(g2.j - g1.j), map.nTheta - Math.abs(g2.j - g1.j));
+      expect(Math.abs(g2.i - g1.i) + dj).toBe(1);
+    }
+    // the walk starts at the patch's lowest RAW attitude (it winds past
+    // 360 from there — raw forward distances grow past 180 on wraps)
+    const startAlign = map.cells[cells[0]].align;
+    for (const c of cells) {
+      expect(map.cells[c].align).toBeGreaterThanOrEqual(startAlign - 1e-9);
+    }
+  });
+
+  it('two disjoint clear bands = two patches, ordered by first cell', () => {
+    const { patches, unswarfableCells } = segmentContactPatches({
+      map,
+      verdict: bandVerdict([0, 1, 2, 3, 4, 12, 13, 14, 15, 16]),
+    });
+    expect(patches.length).toBe(2);
+    expect(patches[0].cells.length).toBe(13 * 5);
+    expect(patches[1].cells.length).toBe(13 * 5);
+    expect(unswarfableCells).toBe(map.cells.length - 13 * 10);
+    for (const c of patches[0].cells) expect(gridPosOf(map, c).j).toBeLessThan(5);
+    for (const c of patches[1].cells) {
+      const j = gridPosOf(map, c).j;
+      expect(j >= 12 && j <= 16).toBe(true);
+    }
+  });
+
+  it('THE STALL FOLD: a clear band crossing the seam splits into two passes', () => {
+    // rows 18..24 clear: aligns run 349.x (row 18) then wrap 3.x..75.x
+    // (rows 19..24). The walk starts at the LOWEST attitude (row 19),
+    // sweeps forward through the seam to row 24, stalls (row 18 sits
+    // 345° "behind"), and re-approaches row 18 as its own pass. One
+    // connected component, TWO patches — the honest fold.
+    const { patches } = segmentContactPatches({ map, verdict: bandVerdict([18, 19, 20, 21, 22, 23, 24]) });
+    expect(patches.length).toBe(2);
+    // sorted by first cell index: row 18's pass starts at cell 18·13,
+    // rows 19-24's at 19·13 — the fold sorts FIRST
+    expect(patches[0].cells.length).toBe(13);
+    expect(patches[1].cells.length).toBe(13 * 6);
+    for (const c of patches[0].cells) expect(gridPosOf(map, c).j).toBe(18);
+    for (const c of patches[1].cells) expect(gridPosOf(map, c).j).toBeGreaterThanOrEqual(19);
+  });
+});
+
+describe('segmentContactPatches — the two-plate propeller (plate separation)', () => {
+  // Milestone-2's plate fixture: two flat radial slabs at 120° mid-plane
+  // separation. The 4-column × 25-row grid samples SIX θ rows (probed —
+  // hand-derivation of first-hit rows is not honest): row 0 hits plate
+  // A's tip cap (align 90), row 8 plate B's tip cap (210), row 9 plate
+  // B's +t face (300), rows 12+13 BOTH hit plate A's root cap (270 — the
+  // below-axis rays at 172.8°/187.2° cross the z=5 root plane inside the
+  // thickness), row 21 plate B's root cap (30). The plates differ by up
+  // to 120° in attitude and must NEVER merge.
+  const T = 2;
+  const R0 = 5;
+  const R1 = 10;
+  function plate(alphaDeg: number): number[] {
+    const a = alphaDeg * DEG;
+    const pos: number[] = [];
+    const pt = (r: number, s: number, x: number): [number, number, number] => [
+      x,
+      r * Math.sin(a) + s * Math.cos(a),
+      r * Math.cos(a) - s * Math.sin(a),
+    ];
+    const h = T / 2;
+    const N = 24;
+    for (let k = 0; k < N; k++) {
+      const rA = R0 + ((R1 - R0) * k) / N;
+      const rB = R0 + ((R1 - R0) * (k + 1)) / N;
+      const A0 = pt(rA, -h, -3), A1 = pt(rA, -h, 3), B0 = pt(rB, -h, -3), B1 = pt(rB, -h, 3);
+      const C0 = pt(rA, h, -3), C1 = pt(rA, h, 3), D0 = pt(rB, h, -3), D1 = pt(rB, h, 3);
+      pos.push(...A0, ...B0, ...A1, ...A1, ...B0, ...B1);
+      pos.push(...C0, ...C1, ...D0, ...C1, ...D1, ...D0);
+      pos.push(...A0, ...C0, ...A1, ...A1, ...C0, ...C1);
+      pos.push(...B0, ...B1, ...D0, ...B1, ...D1, ...D0);
+    }
+    return pos;
+  }
+  const positions = new Float32Array([...plate(0), ...plate(120)]);
+  const map = buildContactMap({
+    positions,
+    x0: -2.9,
+    x1: 2.9,
+    radius: 12,
+    axisZ: 0,
+    thetaStepOver: 3,
+  });
+  const midAngle = (ci: number) => {
+    const p = map.cells[ci].p;
+    return ((Math.atan2(p.y, p.z) * 180) / Math.PI % 360 + 360) % 360;
+  };
+  /** the plate a hit belongs to: 0 (α=0) or 1 (α=120) — by mid-angle wedge */
+  const plateOf = (ci: number): number => {
+    const d0 = Math.abs(midAngle(ci)) % 360;
+    const r0 = Math.min(d0, 360 - d0);
+    return r0 < 60 ? 0 : 1;
+  };
+
+  it('fixture sanity: 6 hit rows, the aligns probed above', () => {
+    expect(map.surfaceCells).toBe(24); // 6 rows × 4 columns
+    const rows = new Set(map.cells.map((_, i) => gridPosOf(map, i).j));
+    expect([...rows]).toEqual([0, 8, 9, 12, 13, 21]);
+  });
+
+  it('plates never merge: 5 patches, each confined to ONE plate', () => {
+    // rows 12+13 merge (same align 270, grid-adjacent); every other hit
+    // row is attitude-isolated (nearest pair 8↔9 differs by 90°)
+    const { patches, unswarfableCells } = segmentContactPatches({
+      map,
+      verdict: new Uint8Array(map.cells.length).fill(FLUTE_CLEAR),
+    });
+    expect(unswarfableCells).toBe(0);
+    expect(patches.map((p) => p.cells.length)).toEqual([4, 4, 4, 8, 4]);
+    // patch attitudes in first-cell order (float32 plate normals — closeTo)
+    const aligns = patches.map((p) => map.cells[p.cells[0]].align);
+    expect(aligns.length).toBe(5);
+    for (const [k, want] of [90, 210, 300, 270, 30].entries()) {
+      expect(Math.min(Math.abs(aligns[k] - want), 360 - Math.abs(aligns[k] - want))).toBeLessThan(
+        1e-4,
+      );
+    }
+    // disjoint union = every cell
+    const seen = new Set<number>();
+    for (const p of patches) {
+      const plate = plateOf(p.cells[0]);
+      for (const c of p.cells) {
+        expect(seen.has(c)).toBe(false);
+        seen.add(c);
+        expect(plateOf(c)).toBe(plate); // never spans plates
+      }
+    }
+    expect(seen.size).toBe(map.cells.length);
+  });
+
+  it('the real milestone-2 verdict: plate A patches only, plate B counted unswarfable', () => {
+    const verdict = fluteClearanceCheck({
+      positions,
+      tool: TOOL(6, 20),
+      map,
+      axisZ: 0,
+      radius: 12,
+    });
+    const { patches, unswarfableCells } = segmentContactPatches({ map, verdict });
+    // plate A (rows 0, 12, 13) clears: two patches — the tip-cap strip
+    // (align 90) and the root-cap pair (align 270); plate B (rows 8, 9,
+    // 21) clips entirely: 12 cells counted, never emitted
+    expect(patches.map((p) => p.cells.length)).toEqual([4, 8]);
+    expect(unswarfableCells).toBe(12);
+    for (const c of patches[0].cells) expect(map.cells[c].align).toBeCloseTo(90, 6);
+    for (const c of patches[1].cells) expect(map.cells[c].align).toBeCloseTo(270, 6);
+    for (const c of patches.flatMap((p) => p.cells)) {
+      expect(plateOf(c)).toBe(0); // only plate A
+    }
+  });
+});
+
+describe('emitSwarfPass — the wall strip (entry, centers, feeds, threading)', () => {
+  // Milestone-2's wall fixture: the box's +Y face is a vertical plane at
+  // a constant align (180) — one strip patch, analytic centers.
+  const positions = attr(new THREE.BoxGeometry(12, 6, 12).translate(0, -5, AXIS_Z));
+  const map = buildContactMap({
+    positions,
+    x0: -5.5,
+    x1: 5.5,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const wallIdx = map.cells
+    .map((c, i) => (c.n.y > 0.99 ? i : -1))
+    .filter((i) => i >= 0);
+  const verdict = new Uint8Array(map.cells.length).fill(FLUTE_CLIPPED);
+  for (const i of wallIdx) verdict[i] = FLUTE_CLEAR;
+  const { patches } = segmentContactPatches({ map, verdict });
+  const FEED = 600;
+  const PLUNGE = 300;
+  const emit = (startA?: number) =>
+    emitSwarfPass({
+      map,
+      patch: patches[0],
+      tool: TOOL(4, 20),
+      axisZ: AXIS_Z,
+      radius: 12,
+      feed: FEED,
+      plungeFeed: PLUNGE,
+      startA,
+    });
+
+  it('fixture sanity: one wall patch, uniform align 180', () => {
+    expect(wallIdx.length).toBeGreaterThan(4);
+    expect(patches.length).toBe(1);
+    expect(patches[0].cells.length).toBe(wallIdx.length);
+    for (const c of patches[0].cells) {
+      expect(map.cells[c].align).toBeCloseTo(180, 6);
+    }
+  });
+
+  it('entry safety: A rapid → XY rapid → pure-Z plunge; no rapid mixes Z with X/Y/A', () => {
+    const r = emit();
+    const [aRapid, xy, plunge] = r.moves;
+    const retract = r.moves[r.moves.length - 1];
+    // A forward rapid (pure a, at the safe plane)
+    expect(aRapid.rapid).toBe(true);
+    expect(aRapid.words.a).toBeCloseTo(180, 9);
+    expect(aRapid.words.x).toBeUndefined();
+    expect(aRapid.words.y).toBeUndefined();
+    expect(aRapid.words.z).toBeUndefined();
+    // XY over (pure x/y rapid, z absent)
+    expect(xy.rapid).toBe(true);
+    expect(xy.words.x).toBeDefined();
+    expect(xy.words.y).toBeDefined();
+    expect(xy.words.z).toBeUndefined();
+    expect(xy.words.a).toBeUndefined();
+    // pure-Z plunge (a FEED move, G94 — no a word)
+    expect(plunge.rapid).toBeFalsy();
+    expect(plunge.words.z).toBeDefined();
+    expect(plunge.words.a).toBeUndefined();
+    expect(plunge.words.x).toBeUndefined();
+    expect(plunge.words.y).toBeUndefined();
+    // retract: pure-Z rapid
+    expect(retract.rapid).toBe(true);
+    expect(retract.words.z).toBeDefined();
+    expect(retract.words.x).toBeUndefined();
+    // the pinned rule, on EVERY move
+    for (const m of r.moves) {
+      if (m.rapid && m.words.z !== undefined) {
+        expect(m.words.x).toBeUndefined();
+        expect(m.words.y).toBeUndefined();
+        expect(m.words.a).toBeUndefined();
+      }
+    }
+  });
+
+  it('cut moves: XYZA words, G93-simultaneous, one per remaining cell', () => {
+    const r = emit();
+    const cuts = r.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBe(patches[0].cells.length - 1);
+    for (const m of cuts) {
+      expect(m.words.x).toBeDefined();
+      expect(m.words.y).toBeDefined();
+      expect(m.words.z).toBeDefined();
+      expect(m.words.a).toBeDefined();
+      expect(isSimultaneous(m)).toBe(true);
+      expect(m.feed).toBeGreaterThan(0);
+    }
+  });
+
+  it('the tool center per move = fluteToolCenter at the cell\'s own attitude', () => {
+    const r = emit();
+    const cells = patches[0].cells;
+    // plunge targets the FIRST cell's center z; XY rapid its x/y
+    const c0 = fluteToolCenter(
+      map.cells[cells[0]].p,
+      map.cells[cells[0]].n,
+      map.cells[cells[0]].align,
+      2,
+      AXIS_Z,
+    );
+    expect(r.moves[1].words.x).toBeCloseTo(c0.x, 9);
+    expect(r.moves[1].words.y).toBeCloseTo(c0.y, 9);
+    expect(r.moves[2].words.z).toBeCloseTo(c0.z, 9);
+    // each cut move = its cell's center at its attitude
+    for (let k = 1; k < cells.length; k++) {
+      const cell = map.cells[cells[k]];
+      const c = fluteToolCenter(cell.p, cell.n, cell.align, 2, AXIS_Z);
+      const m = r.moves[2 + k];
+      expect(m.words.x).toBeCloseTo(c.x, 9);
+      expect(m.words.y).toBeCloseTo(c.y, 9);
+      expect(m.words.z).toBeCloseTo(c.z, 9);
+      // the a word lands the part at the cell's attitude (mod 360)
+      const amod = (((m.words.a! % 360) + 360) % 360);
+      expect(Math.min(Math.abs(amod - cell.align), 360 - Math.abs(amod - cell.align))).toBeLessThan(1e-6);
+    }
+  });
+
+  it('G93 feed = 1/max(contactPath, centerPath)/FEED with the rotary floor', () => {
+    const r = emit();
+    const cells = patches[0].cells;
+    let aNow: number = 180; // after the entry advance
+    for (let k = 1; k < cells.length; k++) {
+      const prev = cells[k - 1];
+      const cur = cells[k];
+      const fwd = (((map.cells[cur].align - map.cells[prev].align) % 360) + 360) % 360;
+      aNow += fwd;
+      const cp = contactAt(map, cur, aNow, AXIS_Z);
+      const pp = contactAt(map, prev, aNow - fwd, AXIS_Z);
+      const contactPath = Math.hypot(cp.x - pp.x, cp.y - pp.y, cp.z - pp.z);
+      const cc = fluteToolCenter(map.cells[cur].p, map.cells[cur].n, map.cells[cur].align, 2, AXIS_Z);
+      const pc = fluteToolCenter(map.cells[prev].p, map.cells[prev].n, map.cells[prev].align, 2, AXIS_Z);
+      const centerPath = Math.hypot(cc.x - pc.x, cc.y - pc.y, cc.z - pc.z);
+      const passMinutes = Math.max(contactPath / FEED, centerPath / FEED, (fwd / 360) / MAX_ROTARY_RPM);
+      const m = r.moves[2 + k];
+      expect(m.feed).toBeCloseTo(1 / passMinutes, 9);
+    }
+  });
+
+  it('estimated minutes = entry advance + plunge + Σ passMinutes; endA threads', () => {
+    const r = emit();
+    expect(r.endA).toBeCloseTo(180, 9);
+    const aRapidMinutes = (180 / 360) / MAX_ROTARY_RPM;
+    const c0 = fluteToolCenter(
+      map.cells[patches[0].cells[0]].p,
+      map.cells[patches[0].cells[0]].n,
+      map.cells[patches[0].cells[0]].align,
+      2,
+      AXIS_Z,
+    );
+    const safeZ = AXIS_Z + 12 + 5;
+    const plungeMinutes = (safeZ - c0.z) / PLUNGE;
+    // Σ passMinutes from the moves' own feeds (1/feed each)
+    const cuts = r.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    let sum = 0;
+    for (const m of cuts) sum += 1 / m.feed;
+    expect(r.estimatedMinutes).toBeCloseTo(aRapidMinutes + plungeMinutes + sum, 9);
+
+    // threading: startA 200 → forward 340 (never backward) → 540, past 360
+    const r2 = emit(200);
+    expect(r2.moves[0].words.a).toBeCloseTo(540, 9);
+    expect(r2.endA).toBeCloseTo(540, 9);
+  });
+});
+
+describe('emitSwarfPass — the full wrap (monotone past 360)', () => {
+  const positions = cylinder(5, 20, 256);
+  const map = buildContactMap({
+    positions,
+    x0: -9,
+    x1: 9,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const { patches } = segmentContactPatches({
+    map,
+    verdict: new Uint8Array(map.cells.length).fill(FLUTE_CLEAR),
+  });
+
+  it('one patch, one continuous pass — a move per cell, wound past 360', () => {
+    const r = emitSwarfPass({
+      map,
+      patch: patches[0],
+      tool: TOOL(4, 20),
+      axisZ: AXIS_Z,
+      radius: 12,
+      feed: 600,
+      startA: 300, // thread from a previous pass: winds past 360 here
+    });
+    expect(patches.length).toBe(1);
+    // entry(3) + 324 cuts + retract(1)
+    expect(r.moves.length).toBe(3 + (patches[0].cells.length - 1) + 1);
+    const cuts = r.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBe(patches[0].cells.length - 1);
+    // machine A monotone nondecreasing across EVERY move
+    let prev = -Infinity;
+    for (const m of r.moves) {
+      if (m.words.a === undefined) continue;
+      expect(m.words.a).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = m.words.a;
+    }
+    // wound well past 360 (300 + 63.6 entry + ~345.6 sweep)
+    expect(r.endA).toBeGreaterThan(660);
+    // endA ≡ the last walk cell's attitude (mod 360), exactly
+    const lastCell = map.cells[patches[0].cells[patches[0].cells.length - 1]];
+    const amod = (((r.endA % 360) + 360) % 360);
+    expect(Math.min(Math.abs(amod - lastCell.align), 360 - Math.abs(amod - lastCell.align))).toBeLessThan(1e-6);
+    // every cut move is a G93 simultaneous XYZA
+    for (const m of cuts) expect(isSimultaneous(m)).toBe(true);
+    // honest time: the rotary floor alone bounds Σ passMinutes from below
+    const rotarySum = (r.endA - 300) / 360 / MAX_ROTARY_RPM;
+    expect(r.estimatedMinutes).toBeGreaterThan(rotarySum - 1e-9);
+  });
+});
+
+describe('emitSwarfPass — validation', () => {
+  const positions = cylinder(3, 6, 32);
+  const map = buildContactMap({
+    positions,
+    x0: -12,
+    x1: 12,
+    radius: 12,
+    axisZ: 0,
+    thetaStepOver: 3,
+  });
+  const verdict = new Uint8Array(map.cells.length).fill(FLUTE_CLEAR);
+  const { patches } = segmentContactPatches({ map, verdict });
+
+  it('empty patch emits nothing and threads startA', () => {
+    const r = emitSwarfPass({
+      map,
+      patch: { cells: [] },
+      tool: TOOL(4, 20),
+      axisZ: 0,
+      radius: 12,
+      feed: 600,
+      startA: 123,
+    });
+    expect(r.moves).toEqual([]);
+    expect(r.endA).toBe(123);
+    expect(r.estimatedMinutes).toBe(0);
+  });
+
+  it('bad feeds / tool / radius throw', () => {
+    const base = {
+      map,
+      patch: patches[0],
+      tool: TOOL(4, 20),
+      axisZ: 0,
+      radius: 12,
+      feed: 600,
+    };
+    expect(() => emitSwarfPass({ ...base, feed: 0 })).toThrow(/feeds/);
+    expect(() => emitSwarfPass({ ...base, plungeFeed: -1 })).toThrow(/feeds/);
+    expect(() => emitSwarfPass({ ...base, tool: TOOL(0, 20) })).toThrow(/diameter/);
+    expect(() => emitSwarfPass({ ...base, radius: 0 })).toThrow(/radius/);
+  });
+
+  it('verdict/map mismatch and bad tolerance throw (segmentation)', () => {
+    const good = new Uint8Array(map.cells.length).fill(FLUTE_CLEAR);
+    expect(() =>
+      segmentContactPatches({ map, verdict: new Uint8Array(map.cells.length + 1) }),
+    ).toThrow(/mismatch/);
+    expect(() => segmentContactPatches({ map, verdict: good, alignTolDeg: 0 })).toThrow(
+      /positive/,
+    );
+    expect(() => segmentContactPatches({ map, verdict: good, alignTolDeg: -5 })).toThrow(
+      /positive/,
+    );
   });
 });

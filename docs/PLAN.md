@@ -931,8 +931,13 @@ MILESTONES: (1) the contact map (src/cam/swarfFinish.ts,
 buildContactMap: outward point + healed face normal + A\* + rake per
 cell, analytic-fixture pinned); (2) the flute column-clearance check
 per contact (a BVH column test at A\* — the gouge/no-gouge verdict);
-(3) patch segmentation + monotone-A pass emission; (4) coverage
-report + op wiring + honest time; (5) the ball window kernel.
+(3) patch segmentation + monotone-A pass emission — DONE 2026-10-31
+(segmentContactPatches: connectivity AND wrap-aware-attitude merge,
+default tol 2× the θ-row pitch — pure connectivity over-merges, probed;
+emitSwarfPass: greedy neighbor-chained monotone walk, per-pass stall
+folds, G93 F-every-line with the rotary ceiling; holed bands fragment
+into honest retracts — a weaving band-sweep planner is parked);
+(4) coverage report + op wiring + honest time; (5) the ball window kernel.
 
 ## Candidate future features (gap analysis, 2026-10-28)
 

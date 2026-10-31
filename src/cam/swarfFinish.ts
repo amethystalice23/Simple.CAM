@@ -79,7 +79,8 @@
 
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import type { Tool } from '../core/types';
+import type { Move, Tool } from '../core/types';
+import { MAX_ROTARY_RPM, SAFE_CLEARANCE } from './faceCylinder';
 
 export interface ContactMapOptions {
   /** machine-space xyz triples, non-indexed, in the stock's MATERIAL
@@ -503,4 +504,406 @@ export function fluteClearanceCheck(o: FluteClearanceOptions): Uint8Array {
 
   geo.dispose();
   return verdict;
+}
+
+/* ------------------------------------------------------------------ *
+ * MILESTONE 3 — PATCH SEGMENTATION + MONOTONE-A PASS EMISSION
+ *
+ * THE PLANNER (PLAN.md): contact cells group into PATCHES — "connected
+ * cell sets sweepable by one continuous monotone-A pass" — and each
+ * patch emits ONE long simultaneous XYZA sweep (G93, F on every line,
+ * rotary-ceiling clamped — "the spiral-family emission machinery is
+ * the writer"; rotaryCarve's spiralWrap finishing pass is the precedent,
+ * including the 2026-10-27 chord lesson: every grid cell emitted).
+ *
+ * CONNECTIVITY (probed, the milestone-3 survey): PURE 4-neighbor
+ * connectivity over-merges — on a two-blade propeller the whole map
+ * glues into ONE patch whose A* spans the full 360°, and a single pass
+ * would drag the flank through the opposite blade. Segmentation is
+ * therefore connectivity AND ATTITUDE: grid neighbors merge only when
+ * their ALIGN angles agree WRAP-AWARELY (A* is mod 360; a full-wrap
+ * core must not split at the 359°→0° seam — that split probed as a
+ * pointless retract on a surface that machines as one continuous
+ * rotation). The tolerance is a CHORD-HONESTY bound, not a magic angle:
+ * two cells merged into one patch are swept CONSECUTIVELY, so it bounds
+ * the flank's A* slide between adjacent emitted contacts.
+ *
+ * MONOTONE-A: a patch is emitted as a greedy NEIGHBOR-CHAINED WALK in
+ * non-decreasing machine attitude — start at the patch's lowest-A*
+ * cell, then repeatedly step to the unvisited grid-adjacent (4-neighbor,
+ * θ wrapping) cell with the smallest FORWARD A* advance (mod 360 — the
+ * walk accumulates past 360 on full wraps, the continuous-rotation
+ * rule; the post's G92.4 A0 S0 shrink keeps the counter small). Monotone
+ * BY CONSTRUCTION: the walk never steps to a lower attitude. Chord-safe
+ * by the same construction: every step is grid-adjacent (the pitch
+ * bounds its chord) AND forward-close (the segmentation tolerance
+ * bounds its A* change) — a sort-by-A* walk without neighbor chaining
+ * was rejected: it is monotone but chords spatially distant equal-A*
+ * cells through unchecked space. A walk that STALLS (no unvisited
+ * neighbor within tol FORWARD — the patch folds back in attitude) ends
+ * the pass there; the folded cells become their own patch (their own
+ * retract + re-approach). Honest, never silent.
+ *
+ * FRAGMENTATION QUALITY (probed, pinned by invariants not counts): the
+ * greedy chain sweeps clean constant-attitude bands in ONE serpentine
+ * pass (the +i/-i/+j step preference IS boustrophedon on a rectangle),
+ * strip-like flanks likewise; but a HOLED band (cells of another
+ * attitude interleaved — the 8-gon's boundary row) dead-ends the chain
+ * and the band fragments into several honest passes. That is partly
+ * FORCED — a chord over the hole's surface cells at this patch's
+ * attitude is a flank gouge, so any single-pass order must weave, and
+ * partly the greedy's limit (a weaving order exists on the probed
+ * fixture; the greedy does not find it). The fragments cost retracts,
+ * never correctness: every pass keeps the per-step contract. A weaving
+ * band-sweep planner is a follow-up if the retracts ever matter.
+ *
+ * EMISSION (per patch): entry = pure-A rapid forward (charged at the
+ * rotary ceiling) → pure-XY rapid over → pure-Z plunge (the pass
+ * CONTRACT: entry at the safe plane, z = axisZ + radius + clearance,
+ * above everything; the caller threads endA → startA between passes so
+ * machine A only ever advances); then one G93 XYZA move per remaining
+ * cell at its own attitude; exit = pure-Z retract to the safe plane. NO
+ * rapid ever combines Z with X/Y/A (the rotaryCarve pinned convention),
+ * and the A positioning rapid is charged at the rotary ceiling (a full
+ * 360° re-approach is ≥ 9s of real time — the spec's honest-time floor;
+ * rotaryCarve skips charging its tiny θ steps, this does not). The Y
+ * WORD APPEARS on every cut move: flank contact rides
+ * the tool at its own height and side, so the center's y follows the
+ * contact around the stock (the cylinder ops emit no Y because their Y
+ * parks on the centerline; this one moves in all four axes — the point
+ * of the 4D finish).
+ *
+ * FEED (G93 inverse-time, the spiralWrap shape): per cut move,
+ *   passMinutes = max(contactPath / feed, centerPath / feed,
+ *                     ΔA° / 360 / MAX_ROTARY_RPM)
+ *   F = 1 / passMinutes  — on EVERY G1 line (the firmware halts without)
+ * contactPath = the surface point's own travel (the chip load);
+ * centerPath = the tool-axis travel (the commanded geometry — flank
+ * contact near the axis swings the center faster than the surface, so
+ * both floors matter); the rotary ceiling floors the rest. F is clamped
+ * ≥ the 2-decimal minimum by the post (F0 stall guard).
+ *
+ * WHAT THIS DOES NOT OWN (milestones 4–5): the coverage report (CLIPPED
+ * and unreachable cells are counted here — unswarfableCells — but the
+ * reporting class is milestone 4's); the ball window kernel; dwell-on-
+ * curvature rate shaping (A's rate following geometry is a follow-up —
+ * the plain ceiling-clamped rate ships first); shank-vs-model (the
+ * sim's honesty, not the map's).
+ *
+ * Pure: map + verdict in, patch list / moves out. Union-find is O(cells);
+ * the walk restarts scan the remaining set per stall (worst O(cells²) on
+ * a pathologically folded patch — fine at grid scales, probed maxCells
+ * 1965 on the 2-blade propeller).
+ */
+
+/** one patch: CLEAR cells one continuous monotone-A pass sweeps,
+ *  in WALK ORDER (non-decreasing machine attitude) */
+export interface ContactPatch {
+  cells: number[];
+}
+
+export interface SegmentPatchesResult {
+  /** patches in deterministic order: by first cell's index */
+  patches: ContactPatch[];
+  /** CLEAR- verdict cells no patch covers (stall-folded cells are in
+   *  patches; this counts the rest) */
+  unswarfableCells: number;
+}
+
+export interface SegmentPatchesOptions {
+  map: ContactMapResult;
+  /** the milestone-2 verdict array (FLUTE_CLEAR / FLUTE_CLIPPED per cell) */
+  verdict: Uint8Array;
+  /**
+   * Wrap-aware attitude tolerance for the 4-neighbor merge, degrees:
+   * adjacent CLEAR cells join one patch iff |ΔA*| mod 360 ≤ this.
+   * Chord-honesty bound (see the docstring). Default 2× the θ-row
+   * angular pitch — the attitude change one grid row can demand on a
+   * radially-swept surface.
+   */
+  alignTolDeg?: number;
+}
+
+/**
+ * Segment the contact map into monotone-A-sweepable patches (milestone 3):
+ * union-find over CLEAR cells (4-neighbor, θ wraps; X does not — the grid
+ * is a band), wrap-aware |ΔA*| ≤ tol, then the greedy monotone walk per
+ * component (stall-folded components yield multiple patches, honestly).
+ */
+export function segmentContactPatches(o: SegmentPatchesOptions): SegmentPatchesResult {
+  const { cells, cellIndex, nx, nTheta } = o.map;
+  const n = cells.length;
+  if (o.verdict.length !== n) {
+    throw new Error(`verdict/map mismatch: ${o.verdict.length} verdicts for ${n} cells`);
+  }
+  const arcPitchDeg = 360 / nTheta;
+  const tol = o.alignTolDeg ?? 2 * arcPitchDeg;
+  if (!(tol > 0)) throw new Error('alignTolDeg must be positive');
+
+  /** grid coords per cell, resolved once from the dense row-major index */
+  const gridIdx = new Int32Array(n).fill(-1);
+  for (let idx = 0; idx < cellIndex.length; idx++) {
+    const s = cellIndex[idx];
+    if (s !== CONTACT_AIR) gridIdx[s] = idx; // idx = j·nx + i
+  }
+  const gridOf = (ci: number): { i: number; j: number } => {
+    const idx = gridIdx[ci];
+    if (idx < 0) throw new Error(`cell ${ci} missing from the dense index`);
+    const j = Math.floor(idx / nx);
+    return { i: idx - j * nx, j };
+  };
+
+  /** cell index at grid (i, θ-row j) — θ wraps (the ring), X clamps (the
+   *  band); −1 = air/absent */
+  const cellAt = (i: number, j: number): number => {
+    if (i < 0 || i >= nx) return -1;
+    const jj = ((j % nTheta) + nTheta) % nTheta;
+    const s = cellIndex[jj * nx + i];
+    return s === CONTACT_AIR ? -1 : s;
+  };
+
+  // union-find over cell indices (path-halving find, no rank)
+  const parent = new Int32Array(n).map((_, i) => i);
+  const find = (i: number): number => {
+    let r = i;
+    while (parent[r] !== r) r = parent[r];
+    while (parent[i] !== r) {
+      const next = parent[i];
+      parent[i] = r;
+      i = next;
+    }
+    return r;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+
+  let unswarfable = 0;
+  for (let ci = 0; ci < n; ci++) {
+    if (o.verdict[ci] !== FLUTE_CLEAR) {
+      unswarfable++;
+      continue;
+    }
+    const g = gridOf(ci);
+    for (const [di, dj] of NEIGH4) {
+      const sn = cellAt(g.i + di, g.j + dj);
+      if (sn < 0 || o.verdict[sn] !== FLUTE_CLEAR) continue;
+      if (wrapDeltaDeg(cells[ci].align, cells[sn].align) > tol) continue;
+      union(ci, sn);
+    }
+  }
+
+  // members by root (ascending cell index), then the walk per component
+  const members = new Map<number, number[]>();
+  for (let ci = 0; ci < n; ci++) {
+    if (o.verdict[ci] !== FLUTE_CLEAR) continue;
+    const r = find(ci);
+    const list = members.get(r);
+    if (list) list.push(ci);
+    else members.set(r, [ci]);
+  }
+  const patches: ContactPatch[] = [];
+  for (const list of members.values()) {
+    for (const pass of walkComponent(list, cells, cellAt, gridOf, tol)) {
+      patches.push({ cells: pass });
+    }
+  }
+  patches.sort((a, b) => a.cells[0] - b.cells[0]);
+  return { patches, unswarfableCells: unswarfable };
+}
+
+/** the 4-neighborhood: (Δi, Δj) in fixed scan order (walk determinism) */
+const NEIGH4: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/** wrap-aware attitude distance, degrees in [0, 180] */
+function wrapDeltaDeg(a: number, b: number): number {
+  let d = Math.abs(a - b) % 360;
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+/**
+ * The greedy monotone walk over one connected component (see the
+ * milestone-3 docstring): repeatedly open a pass at the lowest-A*
+ * unvisited cell, sweep forward from it while unvisited grid-neighbors
+ * sit within tol AHEAD, and let the stall (no forward neighbor) close
+ * the pass — the leftovers re-walk as their own passes. Returns ONE
+ * LIST PER PASS (a stall fold is a pass boundary: PLAN's patch is
+ * "sweepable by ONE continuous monotone-A pass" — the fold's re-approach
+ * is a patch boundary, never a flat cell sequence the emitter would
+ * chord straight across at cut height). Passes are returned in pass
+ * order; cells within a pass are grid-adjacent steps in non-decreasing
+ * unwrapped attitude.
+ */
+function walkComponent(
+  component: number[],
+  cells: ContactCell[],
+  cellAt: (i: number, j: number) => number,
+  gridOf: (ci: number) => { i: number; j: number },
+  tol: number,
+): number[][] {
+  const inPatch = new Set(component);
+  const visited = new Set<number>();
+  const passes: number[][] = [];
+  while (visited.size < component.length) {
+    // the pass start: lowest A* among the unvisited (ties: lowest index —
+    // deterministic; `component` arrives in ascending index order)
+    let start = -1;
+    for (const ci of component) {
+      if (visited.has(ci)) continue;
+      if (start < 0 || cells[ci].align < cells[start].align - 1e-12) start = ci;
+    }
+    if (start < 0) break;
+    const order: number[] = [start];
+    visited.add(start);
+    let cur = start;
+    for (;;) {
+      const g = gridOf(cur);
+      let best = -1;
+      let bestFwd = Infinity;
+      for (const [di, dj] of NEIGH4) {
+        const s = cellAt(g.i + di, g.j + dj);
+        if (s < 0 || visited.has(s) || !inPatch.has(s)) continue;
+        // FORWARD advance to the neighbor's attitude, mod 360, in [0,360)
+        const fwd = ((cells[s].align - cells[cur].align) % 360 + 360) % 360;
+        if (fwd > tol + 1e-9) continue; // behind or too far: never drag back
+        if (fwd < bestFwd - 1e-12) {
+          bestFwd = fwd;
+          best = s;
+        }
+      }
+      if (best < 0) break; // stalled: the pass ends, leftovers re-walk
+      visited.add(best);
+      order.push(best);
+      cur = best;
+    }
+    passes.push(order);
+  }
+  return passes;
+}
+
+/* ------------------------- the pass emitter ------------------------- */
+
+export interface EmitSwarfPassOptions {
+  map: ContactMapResult;
+  /** one patch of segmentContactPatches (cells in walk order) */
+  patch: ContactPatch;
+  tool: Tool;
+  /** stock axis height, machine Z, mm (the rotation datum) */
+  axisZ: number;
+  /** stock radius, mm — sets the safe travel plane above the crown */
+  radius: number;
+  /** contour feed, mm/min (the contact and center path floors) */
+  feed: number;
+  /** plunge feed, mm/min (the pure-Z entry descent); default = feed */
+  plungeFeed?: number;
+  /** clearance above the crown for the travel plane; default SAFE_CLEARANCE */
+  safeClearance?: number;
+  /**
+   * Machine A this pass enters at, degrees (the caller threads the
+   * previous pass's endA here; default 0 = the stock's A=0 material
+   * frame). The pass only ever advances A.
+   */
+  startA?: number;
+}
+
+export interface EmitSwarfPassResult {
+  moves: Move[];
+  /** cutting + plunge + A-positioning minutes (XY/Z rapids uncharged) */
+  estimatedMinutes: number;
+  /** machine A at pass exit — thread into the next pass's startA */
+  endA: number;
+}
+
+/**
+ * Emit ONE patch as a continuous monotone-A XYZA finishing pass
+ * (milestone 3). Entry contract: the tool sits at the SAFE PLANE
+ * (z = axisZ + radius + safeClearance) — the pass retracts back to it
+ * on exit, so consecutive passes thread directly. Per cut move G93
+ * inverse-time with F on every line (the post's rule), feeds per the
+ * milestone-3 docstring; A only advances.
+ */
+export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
+  const toolR = o.tool.diameter / 2;
+  if (!(toolR > 0)) throw new Error('bad tool: diameter must be positive');
+  if (!(o.radius > 0)) throw new Error('bad stock radius: must be positive');
+  const feed = o.feed;
+  const plungeFeed = o.plungeFeed ?? o.feed;
+  if (!(feed > 0) || !(plungeFeed > 0)) throw new Error('feeds must be positive');
+  const safeZ = o.axisZ + o.radius + (o.safeClearance ?? SAFE_CLEARANCE);
+
+  const { cells } = o.map;
+  const patch = o.patch.cells;
+  const moves: Move[] = [];
+  if (patch.length === 0) return { moves, estimatedMinutes: 0, endA: o.startA ?? 0 };
+
+  let a = o.startA ?? 0;
+  let minutes = 0;
+
+  /** the tool center at cell ci's own attitude (fluteToolCenter's
+   *  formula — mod-360, so the accumulated A and align agree exactly) */
+  const centerOf = (ci: number) => fluteToolCenter(cells[ci].p, cells[ci].n, cells[ci].align, toolR, o.axisZ);
+  /** the surface contact at cell ci, rotated to machine attitude `deg` */
+  const contactAt = (ci: number, deg: number) => {
+    const th = (deg * Math.PI) / 180;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+    const zRel = cells[ci].p.z - o.axisZ;
+    return {
+      x: cells[ci].p.x,
+      y: cells[ci].p.y * c - zRel * s,
+      z: cells[ci].p.y * s + zRel * c + o.axisZ,
+    };
+  };
+
+  // ---- entry: A forward (rapid, charged at the ceiling) → XY over →
+  // plunge. All at the safe plane until the plunge; no rapid mixes Z
+  // with X/Y/A (the pinned convention). ----
+  const first = patch[0];
+  const fwd0 = ((cells[first].align - (((a % 360) + 360) % 360)) % 360 + 360) % 360;
+  if (fwd0 > 1e-9) {
+    a += fwd0;
+    moves.push({ words: { a }, feed: 0, rapid: true });
+    minutes += (fwd0 / 360) / MAX_ROTARY_RPM;
+  }
+  const c0 = centerOf(first);
+  moves.push({ words: { x: c0.x, y: c0.y }, feed: 0, rapid: true });
+  moves.push({ words: { z: c0.z }, feed: plungeFeed }); // pure-Z plunge
+  minutes += Math.max(0, safeZ - c0.z) / plungeFeed;
+
+  // ---- the sweep: one G93 XYZA move per remaining cell ----
+  let prevCi = first;
+  let prevC = c0;
+  let prevP = contactAt(first, a);
+  for (let k = 1; k < patch.length; k++) {
+    const ci = patch[k];
+    const fwd = ((cells[ci].align - cells[prevCi].align) % 360 + 360) % 360;
+    a += fwd;
+    const c = centerOf(ci);
+    const p = contactAt(ci, a);
+    const contactPath = Math.hypot(p.x - prevP.x, p.y - prevP.y, p.z - prevP.z);
+    const centerPath = Math.hypot(c.x - prevC.x, c.y - prevC.y, c.z - prevC.z);
+    const passMinutes = Math.max(
+      contactPath / feed,
+      centerPath / feed,
+      (fwd / 360) / MAX_ROTARY_RPM,
+    );
+    moves.push({ words: { x: c.x, y: c.y, z: c.z, a }, feed: 1 / passMinutes });
+    minutes += passMinutes;
+    prevCi = ci;
+    prevC = c;
+    prevP = p;
+  }
+
+  // ---- exit: retract to the safe plane (pure Z) ----
+  moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+
+  return { moves, estimatedMinutes: minutes, endA: a };
 }
