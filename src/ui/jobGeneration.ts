@@ -2641,15 +2641,16 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const flat = flatPaths.length > 0;
         const paths = flat ? flatPaths : wrappedPaths;
         if (paths.length === 0) return fail(SEL);
-        // THE FILL PASS (Alice 2026-10-31): the outline pass above ALWAYS
-        // runs on every selected path; checked, the closed+filled ones
-        // also raster — scanlines along the machine's fast X (axial on
-        // the wrapped frame), even-odd regions so interior loops
-        // subtract (the ankh's hole), the SAME depth ladder per
-        // scanline. Scanlines are ordinary paths to the generator — its
-        // ladder, laser power stamping, and A accumulation apply as-is.
+        // THE FILL MODES (Alice 2026-10-31, three-way the same day):
+        // 'outlines' traces the selected paths only; 'fill+outline'
+        // rasters FIRST with the outlines tracing ON TOP (the crisp pass
+        // rides last); 'fill' rasters ONLY — the halftone dots' 20k tiny
+        // rings want no tracing. Scanlines are ordinary paths to the
+        // generator — its ladder, laser power stamping, and A
+        // accumulation apply as-is.
         let fillLines = 0;
-        if (op.fillMode === 'outline+fill') {
+        let spans: { x: number; y: number }[][] = [];
+        if (op.fillMode === 'fill+outline' || op.fillMode === 'fill') {
           const loops = (flat ? flatLoops : wrappedLoops).filter((l) => l.length >= 3);
           if (loops.length > 0) {
             // the fill spacing and the boundary inset read the SAME width
@@ -2657,7 +2658,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // ruling engraveFillStepOver encodes; the full shank Ø here
             // kept Alice's V-bit ~1.5mm off every artwork boundary
             const stepOver = op.fillStepOver ?? engraveFillStepOver(tool);
-            const spans = engraveFillSpans({
+            spans = engraveFillSpans({
               loops,
               stepOver,
               // the beam clears by kerf alone; a bit clears by its TIP
@@ -2667,14 +2668,21 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               inset: tool.type === 'laser' ? 0 : (tool.tipDiameter ?? tool.diameter) / 2,
               stepAxis: flat ? 'y' : 'x',
             });
-            paths.push(...spans);
             fillLines = spans.length;
           }
         }
+        if (op.fillMode === 'fill' && fillLines === 0) {
+          return fail(
+            'fill only: no closed painted paths in the selection — pick outlines or fill then outline',
+          );
+        }
+        // fill FIRST, the outline rides on top (her three-way order)
+        const cutPaths =
+          op.fillMode === 'fill' ? spans : fillLines > 0 ? [...spans, ...paths] : paths;
         const res = engrave({
           id: op.id,
           toolId: tool.id,
-          paths,
+          paths: cutPaths,
           depth: op.depth,
           // finishing-only collapses the depth ladder to one full-depth pass
           // (depthLadder: stepDown ≥ depth)
@@ -2715,7 +2723,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           minutes: res.estimatedMinutes,
           error: null,
           summary:
-            `${paths.length - fillLines} path(s)${fillLines > 0 ? ` + ${fillLines} fill line(s)` : ''}, ` +
+            `${cutPaths.length - fillLines} path(s)${fillLines > 0 ? ` + ${fillLines} fill line(s)` : ''}, ` +
             `${op.depth}mm deep${op.finishingOnly ? ', finishing pass only' : ''}${limited}, ` +
             `~${res.estimatedMinutes.toFixed(1)} min`,
         };

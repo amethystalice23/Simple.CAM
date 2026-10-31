@@ -1330,23 +1330,24 @@ function ParamFields(props: {
           )}
           <label
             className="field"
-            title="The outline pass always runs on every selected path; 'Outline and filled areas' additionally rasters the closed painted paths — scanlines along the machine's fast X, holes inside a filled loop stay untouched"
+            title="'Outlines only' traces the selected paths; 'Fill then outline' rasters the closed painted paths FIRST with the outlines traced on top; 'Fill only' rasters alone (the halftone dots) — scanlines along the machine's fast X, holes inside a filled loop stay untouched"
           >
             <span>Fill areas</span>
             <select
               value={op.fillMode ?? 'outlines'}
               onChange={(e) =>
-                upd({ fillMode: e.target.value as 'outlines' | 'outline+fill' })
+                upd({ fillMode: e.target.value as 'outlines' | 'fill+outline' | 'fill' })
               }
             >
               <option value="outlines">Outlines only</option>
-              {/* a 'Fill only' slot lands here if a use shows up
-                  (2026-10-31) — the generator would gate the outline
-                  passes off the same way the raster is gated now */}
-              <option value="outline+fill">Outline and filled areas</option>
+              <option value="fill+outline">Fill then outline</option>
+              {/* Alice 2026-10-31: "i knew there was a reason we would want
+                  the fill-only option for engraving, this would be it" —
+                  the halftone dots; the raster runs FIRST, the outline last */}
+              <option value="fill">Fill only</option>
             </select>
           </label>
-          {op.fillMode === 'outline+fill' && (
+          {(op.fillMode ?? 'outlines') !== 'outlines' && (
             <NumberField
               label="Fill step over (mm)"
               value={op.fillStepOver ?? 1.5}
@@ -1363,11 +1364,11 @@ function ParamFields(props: {
             an SVG on the viewport to add artwork; a V-bit or small flat bit is usual
           </p>
           <p className="hint detail">
-            fill: the outlines always cut first; the fill raster then clears the selected closed
-            painted regions — scanlines along the machine's fast X (axial on a wrapped logo), a
-            hole inside a filled loop stays untouched (the ankh's counter), the same depth ladder
-            per scanline, laser as ever a single pass. Closed-but-unpainted paths (fill="none")
-            outline only
+            fill: the raster clears the selected closed painted regions — scanlines along
+            the machine's fast X (axial on a wrapped logo), a hole inside a filled loop stays
+            untouched (the ankh's counter), the same depth ladder per scanline, laser as ever a
+            single pass. 'fill then outline' runs the raster FIRST with the outlines traced on
+            top; 'fill only' skips them. Closed-but-unpainted paths (fill="none") outline only
           </p>
         </>
       );

@@ -295,12 +295,14 @@ export function App() {
     return out;
   }, [activeFeatureIds, sources]);
 
-  /** the FILL SHADE gate (2026-10-31, round 2): the op being edited is in
-   * 'outline+fill' mode — the artwork's closed+filled regions pick in the
-   * viewport (shade follows the current selection). Global selections
-   * never shade (there is no op whose fill mode could drive it). */
+  /** the FILL SHADE gate (2026-10-31, round 2): the op being edited is in a
+   * FILL mode ('fill+outline' or 'fill') — the artwork's closed+filled
+   * regions pick in the viewport (shade follows the current selection).
+   * Global selections never shade (there is no op whose fill mode could
+   * drive it). */
   const editingOp = editingOpId !== null ? ops.find((o) => o.id === editingOpId) : undefined;
-  const fillShade = editingOp?.kind === 'engrave' && editingOp.fillMode === 'outline+fill';
+  const fillShade =
+    editingOp?.kind === 'engrave' && (editingOp.fillMode ?? 'outlines') !== 'outlines';
 
   /** machine-space position of a feature by id (A=0 frame), for depth
    * prefills and index-angle computation */

@@ -1042,14 +1042,16 @@ export type JobOp =
       /** FINISHING PASS ONLY (Alice, 2026-10-26): skip the depth ladder —
        *  one full-depth pass along the paths. */
       finishingOnly?: boolean;
-      /** FILL AREAS (Alice, 2026-10-31): the outline pass ALWAYS runs on
-       *  every selected path; 'outline+fill' additionally RASTERS the
-       *  selected closed+filled paths — scanlines along the machine's
-       *  fast X (axial on the wrapped frame; the bed-slinger idiom),
-       *  even-odd regions so interior loops subtract (the ankh's hole),
-       *  the same depth ladder per scanline, laser single-pass as ever.
+      /** FILL AREAS (Alice, 2026-10-31, three-way the same day): 'outlines'
+       *  traces the selected paths only; 'fill+outline' RASTERS the
+       *  selected closed+filled paths FIRST — scanlines along the machine's
+       *  fast X (axial on the wrapped frame; the bed-slinger idiom), even-odd
+       *  regions so interior loops subtract (the ankh's hole), the same
+       *  depth ladder per scanline, laser single-pass as ever — then traces
+       *  the outlines on top; 'fill' rasters with NO outline pass (the
+       *  halftone dots — twenty thousand tiny rings want no tracing).
        *  Absent = outlines (old saves, byte-identical). */
-      fillMode?: 'outlines' | 'outline+fill';
+      fillMode?: 'outlines' | 'fill+outline' | 'fill';
       /** fill pass scanline spacing, mm on the surface (Y/θ step); the
        *  fill toggle's own knob — defaults from the tool's TIP width at
        *  creation (engraveFillStepOver) */
