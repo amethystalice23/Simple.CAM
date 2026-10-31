@@ -79,6 +79,7 @@
 
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
+import type { Tool } from '../core/types';
 
 export interface ContactMapOptions {
   /** machine-space xyz triples, non-indexed, in the stock's MATERIAL
@@ -245,4 +246,261 @@ export function buildContactMap(o: ContactMapOptions): ContactMapResult {
 
   geo.dispose();
   return { cells, cellIndex, nx, nTheta, pitchX, gx0, surfaceCells: cells.length };
+}
+
+/* ------------------------------------------------------------------ *
+ * MILESTONE 2 — the FLUTE COLUMN-CLEARANCE CHECK
+ *
+ * WHY: at flank contact the tool stands vertical, its flute's
+ * cylindrical side just touching the cell's surface point — contact
+ * itself is legal by construction. The question is whether the tool's
+ * BODY (the flute column above and below the contact) clears the REST
+ * of the model at that attitude. A cell whose flute column clips other
+ * geometry at its A* is NOT swarf-touchable; this check marks it so
+ * (the map's honesty class, PLAN milestone 2).
+ *
+ * THE TOOL-CENTER FORMULA (derived once, pinned by test 5). Work in
+ * the machine frame with the stock indexed at A*: indexedPointRotation
+ * carries a material point p to
+ *   y' = p.y·cosA − (p.z−axisZ)·sinA
+ *   z' = p.y·sinA + (p.z−axisZ)·cosA + axisZ
+ * and a direction d likewise (axisZ drops out). By the alignment
+ * derivation above, the cell's normal rotated by A* lands EXACTLY on
+ * machine −Y with zero z: n' = (n.x, −√(n.y²+n.z²), 0). The tool is a
+ * VERTICAL cylinder; its flank touches the contact point, so its axis
+ * sits one toolR OUTWARD along that rotated normal (the outward side is
+ * where the tool physically stands — the material is behind the tangent
+ * plane, the tool in front of it):
+ *   center = rotate(p, A*) + toolR · n'
+ *   center = (p'.x, p'.y − toolR·√(n.y²+n.z²), p'.z)
+ * (n'.z is exactly 0, so the center's z equals the contact's rotated
+ * z — the contact rides the flank at its own height.) Pinned by test:
+ * the contact sits exactly toolR from the axis (horizontal distance),
+ * the axis on the +normal side, and the center z equals the rotated
+ * contact z.
+ *
+ * THE SPAN (conservative first cut): a VERTICAL machine cylinder of the
+ * flute Ø spanning contactZ ± fluteLength, centered on the tool axis.
+ * Vertical is exact (the spindle never tilts); the ±fluteLength z-span
+ * is deliberately DOUBLE-COUNTING — a real tool's flute runs from its
+ * tip UP, so the true column is [contactZ, contactZ + fluteLength] for
+ * a contact at the tip, but the contact can ride anywhere along the
+ * flute (higher contacts = deeper reach below), and without tracking
+ * where on the flute each cell touches, [contactZ − fluteLength,
+ * contactZ + fluteLength] is the honest conservative envelope. Cost:
+ * cells near a base are clipped slightly early (a contact less than
+ * fluteLength above a floor with clearance only BELOW it reads CLIPPED
+ * — flagged, human looks, milestone 3 owns the un-flagging if it ever
+ * matters). Clipped to the tool's physical bounds: the flute never
+ * reaches above its tip plane, and the shank above the flute is not
+ * modeled here (shank-vs-model is the sim's collision honesty, not the
+ * map's).
+ *
+ * THE COLLISION TEST: the whole query runs in the MATERIAL frame — the
+ * BVH holds the A=0 mesh once, and the machine-frame tool column (center
+ * AND both span endpoints) is rotated BACK by −A* into it (ONE transform
+ * of a segment, not 300k triangles); the material pre-image of the
+ * vertical machine column is a segment tilted by −A* about X. A triangle
+ * collides iff its distance to that segment is < toolR. Excluded from
+ * the verdict: the CONTACTED NEIGHBORHOOD — triangles within
+ * CLEARANCE_EXCLUSION_RADIUS (TRUE point-to-triangle distance, not
+ * vertex distance: side facets tessellate as long skinny triangles
+ * whose vertices sit far from the contact while the triangle itself
+ * passes through it) of the material contact point must not count — the
+ * touched face itself hugs the flank by construction; its own fan is
+ * legal contact, not collision. Radius = a QUARTER of the finer grid
+ * pitch (x pitch vs θ-arc), floored at 50 µm above float noise: small
+ * enough that a real second feature a couple of mm away still counts
+ * (probed — a full-pitch exclusion swallowed a 2 mm blade gap), large
+ * enough to cover the contact's own fan, which point-to-triangle
+ * distance puts at ~0. Collision itself carries a 1 µm graze epsilon
+ * (distance < toolR − 1e-3): exact-tangent geometry is legal contact,
+ * not a clip. O(cells × BVH query): measured 23 ms for 912 cells on a
+ * 1.2k-triangle propeller; 12.8 s for 38k cells on a 153k-triangle
+ * sphere (a full fine-grid wrap — planner-class, not interactive).
+ *
+ * VERDICT: CLEAR / CLIPPED per cell, verdict[i] ↔ map.cells[i]. Pure.
+ */
+
+/** flute column verdict per cell */
+export const FLUTE_CLEAR = 0;
+export const FLUTE_CLIPPED = 1;
+
+export interface FluteClearanceOptions {
+  /** the SAME material-frame mesh the map was built from */
+  positions: ArrayLike<number>;
+  /** full tool — diameter (flute Ø) and fluteLength are used; a tool
+   *  without fluteLength is rejected (no honest span without it) */
+  tool: Tool;
+  /** the map to verdict — attitudes and contacts are read per cell */
+  map: ContactMapResult;
+  /** stock axis height, machine Z, mm — the A* rotation's axis */
+  axisZ: number;
+  /** stock radius, mm — sizes the contact-neighborhood exclusion */
+  radius: number;
+}
+
+/**
+ * The tool-center machine position for flank contact at a cell's A*
+ * (the milestone-2 formula, exported and pinned by its own test):
+ * rotate the contact point to A* (indexedPointRotation), then step one
+ * toolR OUTWARD along the rotated normal n' = (n.x, −√(n.y²+n.z²), 0):
+ *   center = rotate(p, A*) + toolR·n'
+ * Returns (cx, cy, cz); cz equals the rotated contact's z (n'.z ≡ 0).
+ */
+export function fluteToolCenter(
+  p: { x: number; y: number; z: number },
+  n: { x: number; y: number; z: number },
+  alignDeg: number,
+  toolR: number,
+  axisZ: number,
+): { x: number; y: number; z: number } {
+  const th = (alignDeg * Math.PI) / 180;
+  const cosA = Math.cos(th);
+  const sinA = Math.sin(th);
+  const zRel = p.z - axisZ;
+  const px = p.x;
+  const py = p.y * cosA - zRel * sinA;
+  const pz = p.y * sinA + zRel * cosA + axisZ;
+  const nr = Math.hypot(n.y, n.z);
+  return { x: px + toolR * n.x, y: py - toolR * nr, z: pz };
+}
+
+/**
+ * Verdict every cell of the map for flute column clearance at its A*.
+ * Returns one byte per map cell (FLUTE_CLEAR / FLUTE_CLIPPED).
+ */
+export function fluteClearanceCheck(o: FluteClearanceOptions): Uint8Array {
+  const toolR = o.tool.diameter / 2;
+  const flute = o.tool.fluteLength;
+  if (!(toolR > 0)) throw new Error('bad tool: diameter must be positive');
+  if (flute === undefined || !(flute > 0)) {
+    throw new Error('bad tool: fluteLength must be positive');
+  }
+  if (!(o.radius > 0)) throw new Error('bad stock radius: must be positive');
+
+  // the contacted-neighborhood exclusion: a QUARTER of the finer grid
+  // pitch, floored above float noise (see the docstring — a full pitch
+  // swallowed real second features 2 mm away, probed in the propeller
+  // fixture; with point-to-triangle distance only the contact's own fan
+  // sits at ~0, and a quarter pitch covers it with room to spare)
+  const arcPitch = (2 * Math.PI * o.radius) / o.map.nTheta;
+  const exclusionR = Math.max(0.05, 0.25 * Math.min(o.map.pitchX, arcPitch));
+
+  // the mesh BVH, built ONCE (the tool cylinder moves, the model stays)
+  const geo = new THREE.BufferGeometry();
+  const pos = Float32Array.from(o.positions);
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const bvh = new MeshBVH(geo, { targetLeafSize: 1 });
+
+  // scratch (reused per cell — no per-cell allocation)
+  const rot = new THREE.Vector3();
+  const segStart = new THREE.Vector3();
+  const segEnd = new THREE.Vector3();
+  const seg = new THREE.Line3();
+  const closest = new THREE.Vector3();
+  const p3 = new THREE.Vector3();
+  const boxScratch = new THREE.Box3();
+
+  const verdict = new Uint8Array(o.map.cells.length).fill(FLUTE_CLEAR);
+
+  for (let ci = 0; ci < o.map.cells.length; ci++) {
+    const c = o.map.cells[ci];
+    // 1. rotate the contact point to A* (indexedPointRotation, inlined)
+    const th = (c.align * Math.PI) / 180;
+    const cosA = Math.cos(th);
+    const sinA = Math.sin(th);
+    const zRel = c.p.z - o.axisZ;
+    rot.set(c.p.x, c.p.y * cosA - zRel * sinA, c.p.y * sinA + zRel * cosA + o.axisZ);
+    // the rotated normal's horizontal length (√(n.y²+n.z²)); n'.z ≡ 0
+    const nr = Math.hypot(c.n.y, c.n.z);
+    if (nr < 1e-9) {
+      // pure-X normal: the unreachable class — no meaningful A*, no
+      // meaningful column; mark CLIPPED (the honesty verdict)
+      verdict[ci] = FLUTE_CLIPPED;
+      continue;
+    }
+    // 2. tool center: one toolR OUTWARD along the rotated normal —
+    //    center = rot + toolR·n', n' = (n.x, −nr, 0)
+    const cx = rot.x + toolR * c.n.x;
+    const cy = rot.y - toolR * nr;
+    const cz = rot.z;
+    // 3. the vertical flute segment on the axis, contactZ ± fluteLength.
+    //    THE QUERY RUNS IN THE MATERIAL FRAME: the BVH holds A=0
+    //    material triangles, so the machine-frame column (its center
+    //    AND both endpoints) is rotated BACK by −A* — an isometry, so
+    //    all distances are exact; the segment is generally TILTED in
+    //    the material frame and the exclusion reference point is the
+    //    material contact c.p.
+    //    (Probed the hard way, twice: comparing machine segments
+    //    against material triangles read 3.0000 for a column actually
+    //    piercing the other blade 0.02 away, and a z-aligned material
+    //    segment read the tool inside its own blade at a 90° attitude —
+    //    the propeller's facing flank read CLEAR while buried.)
+    const backCy = cy * cosA + (cz - o.axisZ) * sinA;
+    const backCz = -cy * sinA + (cz - o.axisZ) * cosA + o.axisZ;
+    // BOTH ENDPOINTS rotate: the material pre-image of the vertical
+    // machine column passes through the back-rotated center along the
+    // back-rotated +Z axis: machine +Z rotated by −A* gives material
+    // direction (0, −sinA, cosA)
+    const dirY = -sinA;
+    const dirZ = cosA;
+    segStart.set(cx, backCy - flute * dirY, backCz - flute * dirZ);
+    segEnd.set(cx, backCy + flute * dirY, backCz + flute * dirZ);
+    seg.start.copy(segStart);
+    seg.end.copy(segEnd);
+    // the tilted segment's AABB, padded by the swept cylinder radius
+    const bb = boxScratch;
+    bb.min.x = cx - toolR;
+    bb.max.x = cx + toolR;
+    bb.min.y = Math.min(segStart.y, segEnd.y) - toolR;
+    bb.max.y = Math.max(segStart.y, segEnd.y) + toolR;
+    bb.min.z = Math.min(segStart.z, segEnd.z) - toolR;
+    bb.max.z = Math.max(segStart.z, segEnd.z) + toolR;
+
+    // 4. BVH shapecast: the tool cylinder (radius toolR about the
+    //    segment) vs every triangle whose box the column's box reaches.
+    //    A triangle COLLIDES iff its true segment-distance < toolR AND
+    //    it lies outside the contacted neighborhood (beyond the
+    //    exclusion radius of the material contact — the touched face's
+    //    own fan is legal contact, not collision).
+    let hit = false;
+    bvh.shapecast({
+      intersectsBounds: (box) => {
+        if (hit) return false; // early-out once clipped
+        if (box.max.x < bb.min.x || box.min.x > bb.max.x) return false;
+        if (box.max.y < bb.min.y || box.min.y > bb.max.y) return false;
+        if (box.max.z < bb.min.z || box.min.z > bb.max.z) return false;
+        return true;
+      },
+      intersectsTriangle: (t) => {
+        // the contacted neighborhood exclusion first (cheap): a triangle
+        // whose TRUE distance to the contact is within the exclusion is
+        // part of the touched face's own fan. Point-to-triangle, not
+        // vertex distance — facets tessellate as long skinny triangles
+        // (a 20 mm quad split in two) whose vertices sit far away while
+        // the triangle still passes through the contact (probed: the
+        // vertex test clipped 227/325 cells of a bare convex cylinder).
+        if (t.distanceToPoint(p3.set(c.p.x, c.p.y, c.p.z)) < exclusionR) {
+          return false;
+        }
+        const d = t.closestPointToSegment(seg, closest);
+        // 1 µm graze epsilon: exact-tangent triangles (distance ==
+        // toolR) are legal contact, not collision — float32 must not
+        // flip them
+        if (d < toolR - 1e-3) {
+          hit = true;
+          return true;
+        }
+        return false;
+      },
+    });
+    if (hit) {
+      verdict[ci] = FLUTE_CLIPPED;
+      continue;
+    }
+  }
+
+  geo.dispose();
+  return verdict;
 }

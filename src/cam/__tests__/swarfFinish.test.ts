@@ -464,3 +464,372 @@ describe('buildContactMap — parameter validation', () => {
     expect(() => buildContactMap({ ...base, thetaStepOver: -1 })).toThrow(/thetaStepOver/);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * MILESTONE 2 — the flute column-clearance check
+ * ------------------------------------------------------------------ */
+
+import {
+  fluteClearanceCheck,
+  fluteToolCenter,
+  FLUTE_CLEAR,
+  FLUTE_CLIPPED,
+} from '../swarfFinish';
+
+const TOOL = (d: number, flute: number) => ({
+  id: 't',
+  name: 't',
+  type: 'flat' as const,
+  diameter: d,
+  spindleRpm: 1000,
+  fluteLength: flute,
+});
+
+describe('fluteClearanceCheck — the tool-center sign (test 5)', () => {
+  // THE SIGN FIXTURE is a VERTICAL WALL (a box's side face), not a
+  // cylinder: a vertical ruling keeps the flute column PARALLEL to the
+  // touched face at a constant toolR — the one convex case that is
+  // genuinely clear at every height. A convex cylinder is pathological
+  // by geometry (a vertical tangent line to a circle re-approaches the
+  // circle within any long span — probed: the sqrt(R²−dz²) sagitta), so
+  // "convex ⇒ clear" is false and the wall is the honest pin.
+  // box: x −6..6, y −8..−2, z AXIS_Z−6..AXIS_Z+6 (the +Y face is the wall)
+  const R = 12;
+  const positions = attr(new THREE.BoxGeometry(12, 6, 12).translate(0, -5, AXIS_Z));
+  const map = buildContactMap({
+    positions,
+    x0: -5.5,
+    x1: 5.5,
+    radius: R,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  // wall cells: normal +y (material theta = 90°), rake 0, hit at y = −2
+  const wallIdx = map.cells
+    .map((c, i) => (c.n.y > 0.99 ? i : -1))
+    .filter((i) => i >= 0);
+
+  it('has wall cells (fixture sanity)', () => {
+    expect(wallIdx.length).toBeGreaterThan(10);
+    for (const i of wallIdx) {
+      const c = map.cells[i];
+      expect(c.rake).toBeCloseTo(0, 9);
+      expect(c.align).toBeCloseTo(180, 5); // atan2(1,0)+90
+    }
+  });
+
+  it('contact exactly toolR from the axis, axis on the +normal side', () => {
+    const toolR = 2;
+    for (const c of map.cells) {
+      if (Math.hypot(c.n.y, c.n.z) < 1e-9) continue; // pure-X: align meaningless
+      const cen = fluteToolCenter(c.p, c.n, c.align, toolR, AXIS_Z);
+      const rot = indexedPointRotation(c.align, AXIS_Z)(c.p);
+      // the rotated normal is exactly machine −Y horizontally
+      const th = c.align * DEG;
+      const ny = c.n.y * Math.cos(th) - c.n.z * Math.sin(th);
+      const nz = c.n.y * Math.sin(th) + c.n.z * Math.cos(th);
+      expect(ny).toBeCloseTo(-Math.hypot(c.n.y, c.n.z), 9);
+      expect(nz).toBeCloseTo(0, 9);
+      // horizontal distance from the axis to the contact = exactly toolR
+      expect(Math.hypot(cen.x - rot.x, cen.y - rot.y)).toBeCloseTo(toolR, 9);
+      // the axis sits on the OUTWARD (+rotated-normal) side
+      expect(cen.x - rot.x).toBeCloseTo(toolR * c.n.x, 9);
+      expect(cen.y - rot.y).toBeCloseTo(-toolR, 9);
+      // center z equals the rotated contact z (n'.z ≡ 0)
+      expect(cen.z).toBeCloseTo(rot.z, 9);
+    }
+  });
+
+  it('a vertical wall is CLEAR for every wall cell (the sign, end-to-end)', () => {
+    // tool Ø3 (R 1.5) against the wall: a 0.5 gap everywhere along the
+    // column — any CLIP here means the center landed on the wrong side
+    // (the inward sign buried the axis in the wall: probed)
+    const v = fluteClearanceCheck({
+      positions,
+      tool: TOOL(3, 8),
+      map,
+      axisZ: AXIS_Z,
+      radius: R,
+    });
+    expect(wallIdx.length).toBeGreaterThan(0);
+    for (const i of wallIdx) {
+      expect(v[i]).toBe(FLUTE_CLEAR);
+    }
+  });
+});
+
+describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', () => {
+  // TWO blades on one hub, both ruled along X: each blade is a flat
+  // radial plate (thickness T, span x −3..3, radii R0..R1), the pair at
+  // 120° mid-plane separation. At a FACING flank's A* the opposite
+  // blade's body sits 1.5 mm from the contact — inside the flute span
+  // (±20) and inside toolR (Ø6) ⇒ CLIPPED; the AWAY faces' columns
+  // stand off into open air ⇒ CLEAR. (Probe-verified split before
+  // pinning: exactly the facing cells clip.)
+  const T = 2; // plate thickness (perpendicular to the mid-plane)
+  const R0 = 5; // inner radius (root)
+  const R1 = 10; // outer tip
+
+  // One blade = a flat radial slab: a planar plate of thickness T whose
+  // mid-plane contains the X axis at material angle α (the plane spanned
+  // by x̂ and n̂α, n̂α = (0, sinα, cosα)); its two FACES are the planes
+  // offset ±T/2 along n̂α, with outward normals ∓... ±n̂α. Strips in
+  // radius, x from −3 to 3, faces + root/tip caps, consistent winding
+  // (verified by the map's healed normals in the sanity test).
+  function plate(alphaDeg: number): number[] {
+    const a = alphaDeg * DEG;
+    const pos: number[] = [];
+    const pt = (r: number, s: number, x: number): [number, number, number] => [
+      x,
+      r * Math.sin(a) + s * Math.cos(a),
+      r * Math.cos(a) - s * Math.sin(a),
+    ];
+    const h = T / 2;
+    const N = 24;
+    for (let k = 0; k < N; k++) {
+      const rA = R0 + ((R1 - R0) * k) / N;
+      const rB = R0 + ((R1 - R0) * (k + 1)) / N;
+      const A0 = pt(rA, -h, -3), A1 = pt(rA, -h, 3), B0 = pt(rB, -h, -3), B1 = pt(rB, -h, 3);
+      const C0 = pt(rA, h, -3), C1 = pt(rA, h, 3), D0 = pt(rB, h, -3), D1 = pt(rB, h, 3);
+      pos.push(...A0, ...B0, ...A1, ...A1, ...B0, ...B1); // face s=−h, outward −n̂α
+      pos.push(...C0, ...C1, ...D0, ...C1, ...D1, ...D0); // face s=+h, outward +n̂α
+      pos.push(...A0, ...C0, ...A1, ...A1, ...C0, ...C1); // root cap r=R0
+      pos.push(...B0, ...B1, ...D0, ...B1, ...D1, ...D0); // tip cap r=R1
+    }
+    return pos;
+  }
+
+  const GAP_DEG = 120; // between mid-planes: 60° of clear air per side
+  const positions = new Float32Array([...plate(0), ...plate(GAP_DEG)]);
+  const map = buildContactMap({
+    positions,
+    x0: -2.9,
+    x1: 2.9,
+    radius: 12,
+    axisZ: 0,
+    thetaStepOver: 3,
+  });
+
+  // VERDICT SPLIT (brute-force verified 24/24 against dense-sampled
+  // segment-vs-triangle distances with the same exclusion rule): plate
+  // A (α=0) is entirely swarfable — every A contact's A* swings the
+  // tool column clear of B (A's tip face grazes its own body at exactly
+  // toolR: legal contact, the graze epsilon's job). Plate B (α=120) is
+  // entirely UNSWARFABLE — at B's contacts' attitudes (A* ≈ 0–50°) the
+  // vertical column sweeps INTO plate A's rotated slab (the column LINE
+  // passes through it, independent of toolR). That is the propeller
+  // honesty: one blade finishes, its twin does not.
+  const plateCells = (mid: number) =>
+    map.cells
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => {
+        const md = ((((Math.atan2(c.p.y, c.p.z) * 180) / Math.PI) % 360) + 360) % 360;
+        const rel = Math.abs(((md - mid + 540) % 360) - 180);
+        return rel < 60;
+      });
+
+  it('blade A: every cell CLEAR (its columns swing clear of B)', () => {
+    const v = fluteClearanceCheck({
+      positions,
+      tool: TOOL(6, 20),
+      map,
+      axisZ: 0,
+      radius: 12,
+    });
+    const a = plateCells(0);
+    expect(a.length).toBeGreaterThan(0);
+    for (const { i } of a) expect(v[i]).toBe(FLUTE_CLEAR);
+  });
+
+  it('blade B: every cell CLIPPED (its columns sweep into A)', () => {
+    const v = fluteClearanceCheck({
+      positions,
+      tool: TOOL(6, 20),
+      map,
+      axisZ: 0,
+      radius: 12,
+    });
+    const b = plateCells(GAP_DEG);
+    expect(b.length).toBeGreaterThan(0);
+    for (const { i } of b) expect(v[i]).toBe(FLUTE_CLIPPED);
+  });
+
+  it('the B verdict is tool-size independent (a column LINE through A)', () => {
+    // Ø2: if the clip were a radius effect it would lift; a column
+    // passing through the other blade clips at any diameter.
+    const v = fluteClearanceCheck({
+      positions,
+      tool: TOOL(2, 20),
+      map,
+      axisZ: 0,
+      radius: 12,
+    });
+    const b = plateCells(GAP_DEG);
+    for (const { i } of b) expect(v[i]).toBe(FLUTE_CLIPPED);
+  });
+});
+
+describe('fluteClearanceCheck — test 3, blade thinner than the tool', () => {
+  // ONE blade only (no second blade): t∈[−1,1], r∈[5,10]. What is
+  // physically true for both faces of a blade THINNER than the tool?
+  // The tool's column stands toolR OUTSIDE the touched face; the
+  // blade's OPPOSITE face lies T behind the touched one — the distance
+  // from the column to the opposite face is toolR + T, which EXCEEDS
+  // toolR for any T > 0: the opposite face of the SAME blade can never
+  // clip its own face contact. (The milestone-1 worry "thin blade ⇒
+  // both faces unswarfable" is FALSE for the face pair; only root/tip
+  // edges and NEIGHBORING geometry clip.) Pin exactly that.
+  const R0 = 5;
+  const R1 = 10;
+  function slab(alphaDeg: number, t0: number, t1: number, r0: number, r1: number): number[] {
+    const a = alphaDeg * DEG;
+    const pos: number[] = [];
+    const pt = (r: number, s: number, x: number): [number, number, number] => [
+      x,
+      r * Math.sin(a) + s * Math.cos(a),
+      r * Math.cos(a) - s * Math.sin(a),
+    ];
+    const N = 24;
+    for (let k = 0; k < N; k++) {
+      const rA = r0 + ((r1 - r0) * k) / N;
+      const rB = r0 + ((r1 - r0) * (k + 1)) / N;
+      const A0 = pt(rA, t0, -3), A1 = pt(rA, t0, 3), B0 = pt(rB, t0, -3), B1 = pt(rB, t0, 3);
+      const C0 = pt(rA, t1, -3), C1 = pt(rA, t1, 3), D0 = pt(rB, t1, -3), D1 = pt(rB, t1, 3);
+      pos.push(...A0, ...B0, ...A1, ...A1, ...B0, ...B1);
+      pos.push(...C0, ...C1, ...D0, ...C1, ...D1, ...D0);
+      pos.push(...A0, ...C0, ...A1, ...A1, ...C0, ...C1);
+      pos.push(...B0, ...B1, ...D0, ...B1, ...D1, ...D0);
+      pos.push(...A0, ...A1, ...C0, ...C0, ...A1, ...C1);
+      pos.push(...B0, ...D0, ...B1, ...B1, ...D0, ...D1);
+    }
+    return pos;
+  }
+  // stock R 15 grid 36 rows so θ rows at ±10° land ON the faces
+  const STEP = (2 * Math.PI * 15) / 36;
+  const positions = new Float32Array(slab(0, -1, 1, R0, R1));
+  const map = buildContactMap({
+    positions,
+    x0: -2.9,
+    x1: 2.9,
+    radius: 15,
+    axisZ: 0,
+    thetaStepOver: STEP,
+  });
+
+  it('both faces CLEAR with a tool much fatter than the blade', () => {
+    // Ø12 (R6) against a 2 mm blade: 3× fatter — the opposite face is
+    // 8 mm from the column (toolR + T): still never clips. Face cells
+    // sampled at r_local = 5.67 (rows ±10°, pinned in fixture math).
+    const v = fluteClearanceCheck({
+      positions,
+      tool: TOOL(12, 20),
+      map,
+      axisZ: 0,
+      radius: 15,
+    });
+    for (let i = 0; i < map.cells.length; i++) {
+      const t = map.cells[i].p.y; // α=0: local t = machine y
+      if (Math.abs(Math.abs(t) - 1) < 1e-3) {
+        expect(v[i]).toBe(FLUTE_CLEAR);
+      }
+    }
+  });
+});
+
+describe('fluteClearanceCheck — test 4, blade overhanging a base plate', () => {
+  // The blade's −t̂ face at its A* (align 0 — the −t̂ normal is machine
+  // −Y, so NO rotation): the tool column stands at y = −(1 + toolR)·?
+  // center y = contact y − toolR = −1 − 3 = −4, i.e. ON the plane of a
+  // base whose +t̂ face lies at t = −4−d: the column rides the base's
+  // face plane at distance d. CLIP iff d < toolR (the flute's z-span
+  // covers the base's z-band for the flute values used — pinned via d).
+  // +t̂ face contacts: their column at the base is ≥ 3 + d away AND its
+  // z-span never reaches (analytic: column z ∈ [−13.7, 2.3] vs base
+  // z ≥ 5) → CLEAR.
+  const N = 24;
+  function slab(alphaDeg: number, t0: number, t1: number, r0: number, r1: number): number[] {
+    const a = alphaDeg * DEG;
+    const pos: number[] = [];
+    const pt = (r: number, s: number, x: number): [number, number, number] => [
+      x,
+      r * Math.sin(a) + s * Math.cos(a),
+      r * Math.cos(a) - s * Math.sin(a),
+    ];
+    for (let k = 0; k < N; k++) {
+      const rA = r0 + ((r1 - r0) * k) / N;
+      const rB = r0 + ((r1 - r0) * (k + 1)) / N;
+      const A0 = pt(rA, t0, -3), A1 = pt(rA, t0, 3), B0 = pt(rB, t0, -3), B1 = pt(rB, t0, 3);
+      const C0 = pt(rA, t1, -3), C1 = pt(rA, t1, 3), D0 = pt(rB, t1, -3), D1 = pt(rB, t1, 3);
+      pos.push(...A0, ...B0, ...A1, ...A1, ...B0, ...B1);
+      pos.push(...C0, ...C1, ...D0, ...C1, ...D1, ...D0);
+      pos.push(...A0, ...C0, ...A1, ...A1, ...C0, ...C1);
+      pos.push(...B0, ...B1, ...D0, ...B1, ...D1, ...D0);
+      pos.push(...A0, ...A1, ...C0, ...C0, ...A1, ...C1);
+      pos.push(...B0, ...D0, ...B1, ...B1, ...D0, ...D1);
+    }
+    return pos;
+  }
+  const STEP = (2 * Math.PI * 15) / 36; // 36 rows, one every 10°: rows ±10 hit the faces
+  const faceCellsOf = (m: ReturnType<typeof buildContactMap>, alignDeg: number) =>
+    m.cells
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => Math.abs(Math.abs(c.p.y) - 1) < 1e-3 && c.align === alignDeg);
+
+  it('base flush under the column (d=0): −t̂ face CLIPPED, +t̂ face CLEAR', () => {
+    const positions = new Float32Array([
+      ...slab(0, -1, 1, 5, 15),
+      ...slab(0, -6, -4, 5, 16),
+    ]);
+    const map = buildContactMap({
+      positions,
+      x0: -2.9,
+      x1: 2.9,
+      radius: 15,
+      axisZ: 0,
+      thetaStepOver: STEP,
+    });
+    const v = fluteClearanceCheck({
+      positions,
+      tool: TOOL(6, 8),
+      map,
+      axisZ: 0,
+      radius: 15,
+    });
+    const mt = faceCellsOf(map, 0); // −t̂ face: align 0
+    const pt = faceCellsOf(map, 180); // +t̂ face: align 180
+    expect(mt.length).toBeGreaterThan(0);
+    expect(pt.length).toBeGreaterThan(0);
+    for (const { i } of mt) expect(v[i]).toBe(FLUTE_CLIPPED);
+    for (const { i } of pt) expect(v[i]).toBe(FLUTE_CLEAR);
+  });
+
+  it('THE BOUNDARY: base offset d vs toolR — d<toolR clips, d>toolR clears', () => {
+    for (const [d, want] of [
+      [2.9, FLUTE_CLIPPED],
+      [3.1, FLUTE_CLEAR],
+    ] as const) {
+      const positions = new Float32Array([
+        ...slab(0, -1, 1, 5, 15),
+        ...slab(0, -6 - d, -4 - d, 5, 16),
+      ]);
+      const map = buildContactMap({
+        positions,
+        x0: -2.9,
+        x1: 2.9,
+        radius: 15,
+        axisZ: 0,
+        thetaStepOver: STEP,
+      });
+      const v = fluteClearanceCheck({
+        positions,
+        tool: TOOL(6, 8),
+        map,
+        axisZ: 0,
+        radius: 15,
+      });
+      const mt = faceCellsOf(map, 0);
+      expect(mt.length).toBeGreaterThan(0);
+      for (const { i } of mt) expect(v[i]).toBe(want);
+    }
+  });
+});
