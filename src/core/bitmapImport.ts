@@ -39,6 +39,25 @@ export function bitmapFromImageData(img: ImageDataLike): GrayBitmap {
   return { width: img.width, height: img.height, data: out };
 }
 
+/**
+ * Rotate a grey bitmap 90° CLOCKWISE (Alice, 2026-10-31: "a button on the
+ * image import dialogue that rotates the image by 90° so people can
+ * reorientate before committing"). Pure pixel remap — dims swap, row 0 of
+ * the result is the source's LEFT column. Four applications round-trip.
+ */
+export function rotateGray90(gray: GrayBitmap): GrayBitmap {
+  const { width: w, height: h, data } = gray;
+  const out = new Uint8Array(w * h);
+  const nw = h;
+  for (let sy = 0; sy < h; sy++) {
+    for (let sx = 0; sx < w; sx++) {
+      // CW: source (sx, sy) lands at (nw-1-sy, sx)
+      out[sx * nw + (h - 1 - sy)] = data[sy * w + sx];
+    }
+  }
+  return { width: nw, height: w, data: out };
+}
+
 /** minimal 2d-context surface both canvas flavors expose */
 type Ctx2D = {
   drawImage(source: CanvasImageSource, dx: number, dy: number): void;

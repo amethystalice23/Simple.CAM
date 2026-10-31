@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { bitmapFromImageData, decodeBitmapFile } from '../bitmapImport';
+import { bitmapFromImageData, decodeBitmapFile, rotateGray90 } from '../bitmapImport';
 import type { GrayBitmap } from '../bitmapImport';
 import { heightmapBoxGeometry, heightmapCylinderGeometry } from '../heightmap';
 import { halftoneArtwork } from '../halftone';
@@ -102,6 +102,37 @@ describe('bitmapFromImageData', () => {
 describe('decodeBitmapFile', () => {
   it('exists as the thin browser wrapper (node env cannot run it)', () => {
     expect(typeof decodeBitmapFile).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------- rotateGray90
+
+describe('rotateGray90', () => {
+  it('rotates 90° clockwise: dims swap, top row becomes the right column', () => {
+    // A B   →   E C A
+    // C D   →   F D B
+    // E F
+    const gray = fromRows([
+      [1, 2],
+      [3, 4],
+      [5, 6],
+    ]);
+    const rot = rotateGray90(gray);
+    expect(rot.width).toBe(3);
+    expect(rot.height).toBe(2);
+    expect(Array.from(rot.data)).toEqual([5, 3, 1, 6, 4, 2]);
+  });
+
+  it('four rotations round-trip to the source', () => {
+    const gray = fromRows([
+      [10, 20, 30],
+      [40, 50, 60],
+    ]);
+    let cur = gray;
+    for (let k = 0; k < 4; k++) cur = rotateGray90(cur);
+    expect(cur.width).toBe(gray.width);
+    expect(cur.height).toBe(gray.height);
+    expect(Array.from(cur.data)).toEqual(Array.from(gray.data));
   });
 });
 

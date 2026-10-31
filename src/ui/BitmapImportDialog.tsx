@@ -12,6 +12,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BufferGeometry } from 'three';
+import { rotateGray90 } from '../core/bitmapImport';
 import type { GrayBitmap } from '../core/bitmapImport';
 import { heightmapBoxGeometry, heightmapCylinderGeometry } from '../core/heightmap';
 import { halftoneArtwork } from '../core/halftone';
@@ -153,7 +154,13 @@ function GrayPreview(props: {
 }
 
 export function BitmapImportDialog(props: Props) {
-  const { gray, stock } = props;
+  const { stock } = props;
+  // the ORIENTATION knob (Alice, 2026-10-31: "a button on the image import
+  // dialogue that rotates the image by 90° so people can reorientate before
+  // committing") — the turn is baked into the grey the moment it's clicked,
+  // so every downstream read (preview, heightmap lattice, halftone screen,
+  // Confirm) sees the turned image with zero per-tab wiring
+  const [gray, setGray] = useState(props.gray);
   const [tab, setTab] = useState<Tab>('heightmap');
   const bounds = useMemo(() => depthBounds(stock), [stock]);
   const [depth, setDepth] = useState(() => bounds.def);
@@ -244,6 +251,9 @@ export function BitmapImportDialog(props: Props) {
             Artwork / Halftone
           </button>
         </div>
+        <button type="button" className="secondary" onClick={() => setGray(rotateGray90(gray))}>
+          ↻ Rotate 90°
+        </button>
         <GrayPreview gray={gray} src={src} />
         {tab === 'heightmap' && (
           <>
