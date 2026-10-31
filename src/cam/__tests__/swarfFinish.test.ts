@@ -470,6 +470,9 @@ describe('buildContactMap — parameter validation', () => {
  * ------------------------------------------------------------------ */
 
 import {
+  ballAttitudeDeg,
+  ballClearanceCheck,
+  ballToolCenter,
   emitSwarfPass,
   fluteClearanceCheck,
   fluteToolCenter,
@@ -694,6 +697,31 @@ describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', 
     });
     const b = plateCells(GAP_DEG);
     for (const { i } of b) expect(v[i]).toBe(FLUTE_CLEAR);
+  });
+
+  it('the BALL kernel clears both plates too, verdicts equivariant (milestone 5, same fixture)', () => {
+    // The ball window at each face cell: normal up, capsule (sphere +
+    // shaft) tangent to the plate's own face plane, twin 120° away —
+    // probed 2026-10-31 (probes/knightverdict.ts ballkernel): 24/24
+    // CLEAR, 12/12 paired equivariance agree. The symmetry pin is the
+    // same isometry argument as the flank's: a 120° rotation maps plate
+    // A onto plate B, so both verdicts must be identical.
+    const v = ballClearanceCheck({
+      positions,
+      tool: { ...TOOL(2, 20), type: 'ball' as const },
+      map,
+      axisZ: 0,
+      radius: 12,
+    });
+    const a = plateCells(0);
+    const b = plateCells(GAP_DEG);
+    expect(a.length).toBe(b.length);
+    expect(a.length).toBeGreaterThan(0);
+    for (let k = 0; k < b.length; k++) {
+      expect(v[a[k].i]).toBe(FLUTE_CLEAR);
+      expect(v[b[k].i]).toBe(FLUTE_CLEAR);
+      expect(v[b[k].i]).toBe(v[a[k].i]); // equivariance
+    }
   });
 });
 
@@ -1656,5 +1684,298 @@ describe('emitSwarfPass — validation', () => {
     expect(() => segmentContactPatches({ map, verdict: good, alignTolDeg: -5 })).toThrow(
       /positive/,
     );
+  });
+});
+
+/* ===================================================================
+ * MILESTONE 5 — THE BALL WINDOW KERNEL (the general-coverage pass)
+ *
+ * Every count below was PROBED before it was pinned (2026-10-31,
+ * probes/knightverdict.ts ballkernel stage) — the m4 lesson twice over:
+ * the FIRST pin hand-generalized a Ø1.5-f4 probe to Ø2/Ø6-f20 and failed
+ * (3 red). Probed honest: rows ≥ 1 clear at EVERY probed Ø and flute
+ * (the convex-tangent construction); the row-0 boundary-tie cells (the
+ * filed artifact class) fit the Ø1.5 sphere but foul Ø2/Ø6 at f20 —
+ * 6 clips, all j=0, the same artifact cells the flute column clips.
+ * The floor-gate test moved to the CONE (ρ = 0.989 uniform): a prism's
+ * normals are exactly radial (ρ = 1), so no sub-1 floor gates anything
+ * there. Her knight at her quoted grid (s=0.6): the ball recovers
+ * 81,253/82,440 (98.6%) vs the flank's 21,481 — the real answer to
+ * "i will try again with a ball endmill".
+ * =================================================================== */
+
+describe('ballAttitudeDeg / ballToolCenter — the window center (milestone 5)', () => {
+  it('ball attitude = atan2(n.y,n.z) = align − 90°, wrapped [0,360)', () => {
+    expect(ballAttitudeDeg({ x: 0, y: 1, z: 0 })).toBeCloseTo(90, 9);
+    expect(ballAttitudeDeg({ x: 0, y: 0, z: 1 })).toBeCloseTo(0, 9);
+    expect(ballAttitudeDeg({ x: 0, y: 1, z: 1 })).toBeCloseTo(45, 9);
+    expect(ballAttitudeDeg({ x: 0, y: -1, z: 0 })).toBeCloseTo(270, 9);
+    // the relation to the flank align, wrap-safely: φ ≡ align − 90
+    for (const n of [
+      { x: 0.2, y: 1, z: 0.3 },
+      { x: -0.4, y: -0.8, z: 0.5 },
+      { x: 0, y: -0.1, z: -0.9 },
+    ]) {
+      const rel = (((ballAttitudeDeg(n) - (normalAlignDeg(n) - 90)) % 360) + 360) % 360;
+      expect(Math.min(rel, 360 - rel)).toBeCloseTo(0, 9);
+    }
+  });
+
+  it('the center sits DIRECTLY ABOVE the rotated contact, toolR along the rotated normal — which points UP at φ', () => {
+    // unit normals (the map's contract)
+    const nn = (v: { x: number; y: number; z: number }) => {
+      const l = Math.hypot(v.x, v.y, v.z);
+      return { x: v.x / l, y: v.y / l, z: v.z / l };
+    };
+    for (const [p, nRaw] of [
+      [{ x: 2, y: 3, z: 12 }, { x: 0.6, y: 0.8, z: -0.2 }],
+      [{ x: -4, y: -1, z: 8 }, { x: 0, y: -1, z: 1 }],
+      [{ x: 0, y: 5, z: 11 }, { x: 0.3, y: 0.4, z: 0.9 }],
+    ] as const) {
+      const n = nn(nRaw);
+      const r = 2.5;
+      const C = ballToolCenter(p, n, r, AXIS_Z);
+      // rotate p to φ with the module's own convention
+      const th = (ballAttitudeDeg(n) * Math.PI) / 180;
+      const zRel = p.z - AXIS_Z;
+      const ry = p.y * Math.cos(th) - zRel * Math.sin(th);
+      const rz = p.y * Math.sin(th) + zRel * Math.cos(th) + AXIS_Z;
+      expect(C.x).toBeCloseTo(p.x + r * n.x, 9); // axial offset along n.x
+      expect(C.y).toBeCloseTo(ry, 9); // NO side offset — directly above
+      expect(C.z).toBeCloseTo(rz + r * Math.hypot(n.y, n.z), 9);
+      // the ROTATED normal at φ points machine UP: y' = 0, z' = +ρ
+      const ny = n.y * Math.cos(th) - n.z * Math.sin(th);
+      const nz = n.y * Math.sin(th) + n.z * Math.cos(th);
+      expect(ny).toBeCloseTo(0, 9);
+      expect(nz).toBeCloseTo(Math.hypot(n.y, n.z), 9);
+    }
+  });
+});
+
+describe('ballClearanceCheck — the bare convex cylinder (tangent graze, milestone 5)', () => {
+  const positions = cylinder(5, 20, 32);
+  const map = buildContactMap({
+    positions,
+    x0: -9,
+    x1: 9,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const BALL = (d: number, flute: number) => ({ ...TOOL(d, flute), type: 'ball' as const });
+  const base = () => ({ positions, map, axisZ: AXIS_Z, radius: 12 });
+
+  it('the small ball clears EVERY cell (Ø1.5, any flute) — the row-0 stances fit the sphere', () => {
+    // PROBED 2026-10-31 (probes/knightverdict.ts ballkernel): Ø1.5 reads
+    // 325/325 CLEAR at BOTH f4 and f20 — the corrupt row-0 normals that
+    // clip the flute column still fit the small sphere locally (the
+    // envelope contrast: same fixture, same artifact cells, smaller
+    // envelope clears them).
+    expect(map.surfaceCells).toBe(13 * 25); // full grid, no air (the flute pin)
+    for (const flute of [4, 20]) {
+      const v = ballClearanceCheck({ ...base(), tool: BALL(1.5, flute) });
+      expect(v.length).toBe(map.surfaceCells);
+      for (let ci = 0; ci < v.length; ci++) expect(v[ci]).toBe(FLUTE_CLEAR);
+    }
+  });
+
+  it('rows ≥ 1 clear at EVERY Ø and flute (the convex-tangent construction); row-0 is the artifact class', () => {
+    // CONSTRUCTION (the honest-region guarantee, probed at Ø1.5/Ø2/Ø6 ×
+    // f4/f20): a ball tangent to a convex body at an honest cell clears —
+    // every body point sits on the far side of the tangent plane, the
+    // sphere touches only at the contact. The ROW-0 boundary-tie cells
+    // (the filed buildContactMap artifact: normals healed inward) foul
+    // the ball once the sphere outgrows the local room — probed: Ø2/Ø6
+    // at f20 clip 6, all row j=0, the SAME artifact cells the flute
+    // column clips. Rows ≥ 1 stay CLEAR at every probed size.
+    for (const d of [1.5, 2, 6]) {
+      for (const flute of [4, 20]) {
+        const v = ballClearanceCheck({ ...base(), tool: BALL(d, flute) });
+        for (let ci = 0; ci < v.length; ci++) {
+          if (gridPosOf(map, ci).j === 0) continue; // the artifact row
+          expect(v[ci]).toBe(FLUTE_CLEAR);
+        }
+      }
+    }
+    // and the artifact is ROW-0 ONLY at Ø2 f20 (probed 6 — pinned so the
+    // honest-region guarantee above can never quietly absorb a spread)
+    const v2 = ballClearanceCheck({ ...base(), tool: BALL(2, 20) });
+    let clipped = 0;
+    for (let ci = 0; ci < v2.length; ci++) {
+      if (v2[ci] === FLUTE_CLIPPED) {
+        clipped++;
+        expect(gridPosOf(map, ci).j).toBe(0);
+      }
+    }
+    expect(clipped).toBe(6);
+  });
+
+  it('the glancing floor empties windows on the CONE (ρ < 1) — and gates nothing on the prism', () => {
+    // The floor premise needs ρ < 1 normals: a PRISM's side normals are
+    // EXACTLY radial (probed ρ = 1.000000 on the 32-gon), so NO floor
+    // below 1 gates anything there. The CONE tilts its sides into the
+    // axis (probed ρ = 0.989041 uniform): a 0.999 floor sits ABOVE every
+    // ρ — every window empties, 0 CLEAR; the 0.3 default gates none.
+    const coneG = new THREE.CylinderGeometry(2, 5, 20, 32);
+    coneG.rotateZ(Math.PI / 2);
+    coneG.translate(0, 0, AXIS_Z);
+    const conePos = attr(coneG);
+    const coneMap = buildContactMap({
+      positions: conePos,
+      x0: -9,
+      x1: 9,
+      radius: 12,
+      axisZ: AXIS_Z,
+      thetaStepOver: 3,
+    });
+    // every cone side normal is tilted: ρ < 1 everywhere
+    for (const c of coneMap.cells) {
+      expect(Math.hypot(c.n.y, c.n.z)).toBeLessThan(0.999);
+      expect(Math.hypot(c.n.y, c.n.z)).toBeGreaterThan(0.98);
+    }
+    // 0.999 > every ρ: ALL windows empty (the knob's honest limit)
+    const all = ballClearanceCheck({
+      positions: conePos,
+      map: coneMap,
+      axisZ: AXIS_Z,
+      radius: 12,
+      tool: BALL(2, 20),
+      glancingFloor: 0.999,
+    });
+    for (let ci = 0; ci < all.length; ci++) expect(all[ci]).toBe(FLUTE_CLIPPED);
+    // the 0.3 default on the cone: rows ≥ 1 CLEAR (row-0 artifact only,
+    // probed 5 clips all j=0 — the cone carries the same θ=0 artifact)
+    const none = ballClearanceCheck({
+      positions: conePos,
+      map: coneMap,
+      axisZ: AXIS_Z,
+      radius: 12,
+      tool: BALL(2, 20),
+      glancingFloor: 0.3,
+    });
+    for (let ci = 0; ci < none.length; ci++) {
+      if (gridPosOf(coneMap, ci).j === 0) continue;
+      expect(none[ci]).toBe(FLUTE_CLEAR);
+    }
+    // and on the PRISM the 0.3 default changes nothing (ρ = 1 everywhere)
+    const prism = ballClearanceCheck({ ...base(), tool: BALL(2, 20), glancingFloor: 0.3 });
+    for (let ci = 0; ci < prism.length; ci++) {
+      if (gridPosOf(map, ci).j === 0) continue;
+      expect(prism[ci]).toBe(FLUTE_CLEAR);
+    }
+  });
+
+  it('floor and tool validation throw honestly', () => {
+    expect(() => ballClearanceCheck({ ...base(), tool: BALL(2, 20), glancingFloor: 0 })).toThrow(
+      /glancing floor/,
+    );
+    expect(() => ballClearanceCheck({ ...base(), tool: BALL(2, 20), glancingFloor: 1 })).toThrow(
+      /glancing floor/,
+    );
+    expect(() => ballClearanceCheck({ ...base(), tool: BALL(0, 20) })).toThrow(/diameter/);
+    expect(() =>
+      ballClearanceCheck({ ...base(), tool: { ...BALL(2, 20), fluteLength: undefined } }),
+    ).toThrow(/fluteLength/);
+  });
+});
+
+describe('emitSwarfPass attitude ball — the wall strip at the window center (milestone 5)', () => {
+  // The flank emission test's wall fixture: the box's +Y face cells all
+  // share align 180, so their BALL attitudes all sit at 90 — one patch,
+  // centers via ballToolCenter DIRECTLY ABOVE the rotated contacts,
+  // plunge to the ball-center plane, every cut at a ≡ 90 (mod 360). The
+  // walk is the SAME walk: a constant attitude shift preserves every
+  // difference the greedy chain decides on.
+  const positions = attr(new THREE.BoxGeometry(12, 6, 12).translate(0, -5, AXIS_Z));
+  const map = buildContactMap({
+    positions,
+    x0: -5.5,
+    x1: 5.5,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const wallIdx = map.cells
+    .map((c, i) => (c.n.y > 0.99 ? i : -1))
+    .filter((i) => i >= 0);
+  const verdict = new Uint8Array(map.cells.length).fill(FLUTE_CLIPPED);
+  for (const i of wallIdx) verdict[i] = FLUTE_CLEAR;
+  const { patches } = segmentContactPatches({ map, verdict });
+  const FEED = 600;
+  const PLUNGE = 300;
+  const r = emitSwarfPass({
+    map,
+    patch: patches[0],
+    tool: { ...TOOL(4, 20), type: 'ball' as const },
+    axisZ: AXIS_Z,
+    radius: 12,
+    feed: FEED,
+    plungeFeed: PLUNGE,
+    attitude: 'ball',
+  });
+
+  it('fixture sanity: one wall patch, uniform align 180 (so ball attitudes 90)', () => {
+    expect(wallIdx.length).toBeGreaterThan(4);
+    expect(patches.length).toBe(1);
+    for (const c of patches[0].cells) {
+      expect(map.cells[c].align).toBeCloseTo(180, 6);
+    }
+  });
+
+  it('entry: A rapid to 90 → XY rapid → pure-Z plunge to the ball-center plane', () => {
+    const [aRapid, xy, plunge] = r.moves;
+    expect(aRapid.rapid).toBe(true);
+    expect(aRapid.words.a).toBeCloseTo(90, 6); // NOT 180 — the ball family
+    expect(aRapid.words.x).toBeUndefined();
+    expect(aRapid.words.y).toBeUndefined();
+    expect(aRapid.words.z).toBeUndefined();
+    expect(xy.rapid).toBe(true);
+    expect(xy.words.z).toBeUndefined();
+    expect(xy.words.a).toBeUndefined();
+    expect(plunge.rapid).toBeUndefined();
+    expect(plunge.words.x).toBeUndefined();
+    expect(plunge.words.y).toBeUndefined();
+    expect(plunge.words.a).toBeUndefined();
+    // the plunge target = the first cell's ball-center height
+    const c0 = map.cells[patches[0].cells[0]];
+    const C0 = ballToolCenter(c0.p, c0.n, 2, AXIS_Z);
+    expect(plunge.words.z).toBeCloseTo(C0.z, 6);
+  });
+
+  it('cuts ride at the ball attitude (align − 90) with ball centers, monotone A', () => {
+    const cuts = r.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBe(patches[0].cells.length - 1);
+    let prevA = -Infinity;
+    for (let k = 0; k < cuts.length; k++) {
+      const m = cuts[k];
+      const a = m.words.a as number;
+      expect(a).toBeGreaterThanOrEqual(prevA - 1e-9);
+      prevA = a;
+      expect((((a % 360) + 360) % 360)).toBeCloseTo(90, 6); // the ball family, not 180
+      // the cut's center = the cell's ballToolCenter (at its own attitude)
+      const cell = map.cells[patches[0].cells[k + 1]];
+      const C = ballToolCenter(cell.p, cell.n, 2, AXIS_Z);
+      expect(m.words.x).toBeCloseTo(C.x, 6);
+      expect(m.words.y).toBeCloseTo(C.y, 6);
+      expect(m.words.z).toBeCloseTo(C.z, 6);
+      // G93 feed: 1/max(contactPath, centerPath)/FEED minutes — the rotary
+      // term is 0 here (constant attitude), so the feed is exactly the
+      // inverse path time
+      const prevCell = map.cells[patches[0].cells[k]];
+      const th = (90 * Math.PI) / 180;
+      const zr = (v: { y: number; z: number }) => v.y * Math.cos(th) - (v.z - AXIS_Z) * Math.sin(th);
+      const zz = (v: { y: number; z: number }) => v.y * Math.sin(th) + (v.z - AXIS_Z) * Math.cos(th) + AXIS_Z;
+      const pth = Math.hypot(
+        prevCell.p.x - cell.p.x,
+        zr(prevCell.p) - zr(cell.p),
+        zz(prevCell.p) - zz(cell.p),
+      );
+      const cth = Math.hypot(
+        ballToolCenter(prevCell.p, prevCell.n, 2, AXIS_Z).x - C.x,
+        ballToolCenter(prevCell.p, prevCell.n, 2, AXIS_Z).y - C.y,
+        ballToolCenter(prevCell.p, prevCell.n, 2, AXIS_Z).z - C.z,
+      );
+      expect(m.feed).toBeCloseTo(1 / Math.max(pth / FEED, cth / FEED), 6);
+    }
   });
 });

@@ -956,7 +956,28 @@ along facet-boundary edges tunnel to the far side and heal INWARD —
 corrupt p/n pairs whose stances genuinely foul (6/325 on the test
 cylinders, sign-independent, pinned as the row-0 artifact class; fix
 = ray nudge, its own pause);
-(5) the ball window kernel.
+(5) the ball window kernel — DONE 2026-10-31 (ballClearanceCheck /
+ballAttitudeDeg / ballToolCenter + emitSwarfPass's `attitude` pick:
+the window CENTERED on the normal-UP attitude φ = atan2(n.y,n.z) =
+align − 90°, capsule = sphere + shaft CONSTRUCTED through
+indexedPointRotation(−φ) on both machine endpoints — no hand sign; the
+glancing-floor knob (default n_z 0.3) empties windows whose normals ride
+flatter than it; CENTER-ONLY verdicts, per-cell window search PARKED.
+Shares the map, segmentation, and monotone-A writer verbatim — the walk
+is attitude-difference-driven, and the ball's constant −90° shift
+preserves every difference. Field test first: her knight at her quoted
+s=0.6 grid — the ball recovers 81,253/82,440 (98.6%) vs the flank's
+21,481 (26%), flute length a non-factor, row-0 artifact clean on her
+mesh; the sphere-at-contact ceiling was probed BEFORE the kernel
+existed (98.3% Ø3.175 / 99.1% Ø1.5) and the kernel landed on 98.6%.
+Test lesson, twice over: the first pin hand-generalized a Ø1.5-f4
+probe to Ø2/Ø6-f20 (3 red); re-probed — rows ≥ 1 clear at every Ø ×
+flute (the convex-tangent construction), row-0 artifact cells foul
+Ø2/Ø6 at f20 (6 clips, all j=0 — the flute's own artifact cells), and
+the floor-gate test needed the CONE (ρ = 0.989) because a prism's
+normals are exactly radial — no sub-1 floor gates anything there).
+Wiring: one op kind, kernel by tool (flat/corn → flank, ball →
+window), glancingFloor knob on the op + panel, V-flank gate honest.
 
 ## Candidate future features (gap analysis, 2026-10-28)
 

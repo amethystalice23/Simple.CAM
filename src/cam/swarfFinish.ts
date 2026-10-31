@@ -821,6 +821,18 @@ export interface EmitSwarfPassOptions {
    * frame). The pass only ever advances A.
    */
   startA?: number;
+  /**
+   * Contact attitude family — the kernel-by-tool pick (PLAN.md: "one
+   * op kind, kernel picked by the op's tool"): 'flank' (flat/corn, the
+   * milestone-3 default — normal HORIZONTAL against the flute side at
+   * each cell's align) or 'ball' (milestone 5 — normal UP at
+   * align − 90°, the ball window's center, centers via ballToolCenter).
+   * The walk is family-agnostic by construction: every decision it
+   * makes is an attitude DIFFERENCE, and the ball's constant −90°
+   * shift preserves all of them — only the emitted A values, tool
+   * centers, and plunge height differ.
+   */
+  attitude?: 'flank' | 'ball';
 }
 
 export interface EmitSwarfPassResult {
@@ -834,11 +846,11 @@ export interface EmitSwarfPassResult {
 
 /**
  * Emit ONE patch as a continuous monotone-A XYZA finishing pass
- * (milestone 3). Entry contract: the tool sits at the SAFE PLANE
- * (z = axisZ + radius + safeClearance) — the pass retracts back to it
- * on exit, so consecutive passes thread directly. Per cut move G93
- * inverse-time with F on every line (the post's rule), feeds per the
- * milestone-3 docstring; A only advances.
+ * (milestone 3; the ball family, milestone 5). Entry contract: the tool
+ * sits at the SAFE PLANE (z = axisZ + radius + safeClearance) — the
+ * pass retracts back to it on exit, so consecutive passes thread
+ * directly. Per cut move G93 inverse-time with F on every line (the
+ * post's rule), feeds per the milestone-3 docstring; A only advances.
  */
 export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   const toolR = o.tool.diameter / 2;
@@ -856,10 +868,21 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
 
   let a = o.startA ?? 0;
   let minutes = 0;
+  const ball = o.attitude === 'ball';
 
-  /** the tool center at cell ci's own attitude (fluteToolCenter's
-   *  formula — mod-360, so the accumulated A and align agree exactly) */
-  const centerOf = (ci: number) => fluteToolCenter(cells[ci].p, cells[ci].n, cells[ci].align, toolR, o.axisZ);
+  /** the cell's contact attitude: flank = align (normal horizontal);
+   *  ball = align − 90° (normal UP, the window center). Constant shift,
+   *  so every walk DIFFERENCE below is family-agnostic. */
+  const attitudeOf = (ci: number) =>
+    ball ? ((((cells[ci].align - 90) % 360) + 360) % 360) : cells[ci].align;
+
+  /** the tool center at cell ci's own attitude — fluteToolCenter's
+   *  formula (flank) or ballToolCenter's (ball, derived from n, so the
+   *  accumulated A and the attitude agree exactly in both families) */
+  const centerOf = (ci: number) =>
+    ball
+      ? ballToolCenter(cells[ci].p, cells[ci].n, toolR, o.axisZ)
+      : fluteToolCenter(cells[ci].p, cells[ci].n, cells[ci].align, toolR, o.axisZ);
   /** the surface contact at cell ci, rotated to machine attitude `deg` */
   const contactAt = (ci: number, deg: number) => {
     const th = (deg * Math.PI) / 180;
@@ -877,7 +900,7 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   // plunge. All at the safe plane until the plunge; no rapid mixes Z
   // with X/Y/A (the pinned convention). ----
   const first = patch[0];
-  const fwd0 = ((cells[first].align - (((a % 360) + 360) % 360)) % 360 + 360) % 360;
+  const fwd0 = ((attitudeOf(first) - (((a % 360) + 360) % 360)) % 360 + 360) % 360;
   if (fwd0 > 1e-9) {
     a += fwd0;
     moves.push({ words: { a }, feed: 0, rapid: true }); // rapid — uncharged (overhead owns it)
@@ -893,7 +916,7 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   let prevP = contactAt(first, a);
   for (let k = 1; k < patch.length; k++) {
     const ci = patch[k];
-    const fwd = ((cells[ci].align - cells[prevCi].align) % 360 + 360) % 360;
+    const fwd = ((attitudeOf(ci) - attitudeOf(prevCi)) % 360 + 360) % 360;
     a += fwd;
     const c = centerOf(ci);
     const p = contactAt(ci, a);
@@ -915,4 +938,214 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
 
   return { moves, estimatedMinutes: minutes, endA: a };
+}
+
+/* ------------------------------------------------------------------ *
+ * MILESTONE 5 — THE BALL WINDOW KERNEL (the general-coverage pass)
+ *
+ * PLAN.md: "BALL (hemisphere): a WINDOW around A\* down to a glancing
+ * floor (user knob, default n_z ≈ 0.3) — the general-coverage pass
+ * that cleans what the side cannot hug." One op kind, kernel picked by
+ * the tool (the build order Alice confirmed) — the ball shares the map,
+ * the patch segmentation, and the sweep writer; only the CONTACT
+ * ENVELOPE changes:
+ *
+ * THE BALL ATTITUDE. The flank wants the cell's normal HORIZONTAL at
+ * A\* = φ+90° (milestone 2); the ball's window is CENTERED on the
+ * normal-UP attitude φ = atan2(n.y,n.z) = align − 90° (module docstring:
+ * d.z' = ρcos(A−φ), maximal at A = φ) — the ball's lower pole presented
+ * to the contact, tool axis directly above it. The WINDOW is the band
+ * of attitudes keeping machine n'.z above the GLANCING FLOOR (default
+ * 0.3): |A−φ| ≤ acos(floor/ρ), "down to a glancing floor". A cell with
+ * ρ < floor (nearly-AXIAL normal) has no honest window at all — the
+ * ball cannot present — and is CLIPPED, the reported unreachable class
+ * (the flank's pure-X class, same honesty).
+ *
+ * CENTER-ONLY, WINDOW PARKED. The kernel verdicts each cell at its
+ * window CENTER φ alone; a per-cell attitude search along the window
+ * (clearance recovery) is the parked follow-up — her knight's field
+ * test probed the sphere alone fitting 98% of the standing cells, so
+ * the center carries nearly everything and the search can wait for a
+ * real part that needs it.
+ *
+ * THE TOOL BODY. The flank's flute is a COLUMN; the ball's tool is a
+ * CAPSULE — sphere r at the center C = rotate(p,φ) + r·n' (n' =
+ * (n.x, 0, ρ), normal UP at φ), shaft cylinder r from C up through
+ * fluteLength. CONSTRUCTED, never hand-derived (the committee lesson):
+ * both endpoints are machine points rotated back through the pinned
+ * indexedPointRotation(−φ) — the same isometry the flute check uses —
+ * so the material-frame BVH measures true distances. Contacted-
+ * neighborhood exclusion and graze epsilon identical to milestone 2.
+ *
+ * EMISSION reuses milestone 3 verbatim (see EmitSwarfPassOptions.
+ * attitude): the walk's every decision is an attitude DIFFERENCE, and
+ * the ball's constant −90° shift preserves all of them.
+ * ------------------------------------------------------------------ */
+
+/** the glancing floor default (PLAN.md: user knob, default n_z ≈ 0.3) */
+export const BALL_DEFAULT_FLOOR = 0.3;
+
+/**
+ * The ball's contact attitude φ: the normal-UP angle atan2(n.y,n.z),
+ * = align − 90° (the module docstring's d.z' = ρcos(A−φ) maximal at
+ * A = φ — the ball's pole presented, tool axis above). One formula,
+ * one place (the normalAlignDeg precedent): the clearance check and
+ * the sweep writer both derive it through here.
+ */
+export function ballAttitudeDeg(n: { x: number; y: number; z: number }): number {
+  return ((((normalAlignDeg(n) - 90) % 360) + 360) % 360);
+}
+
+/**
+ * The ball tool-center machine position at a cell's own attitude φ
+ * (the milestone-5 formula, exported and pinned by its own test):
+ * rotate the contact point to φ (the same rotation fluteToolCenter
+ * uses), then one toolR along the rotated normal — normal-UP at φ, so
+ * n' = (n.x, 0, ρ) and the center sits DIRECTLY ABOVE the contact:
+ *   center = rotate(p, φ) + toolR·(n.x, 0, ρ)
+ * Self-contained (no attitude argument to misuse): φ derives from n,
+ * unlike fluteToolCenter which takes the flank attitude as given.
+ */
+export function ballToolCenter(
+  p: { x: number; y: number; z: number },
+  n: { x: number; y: number; z: number },
+  toolR: number,
+  axisZ: number,
+): { x: number; y: number; z: number } {
+  const th = (ballAttitudeDeg(n) * Math.PI) / 180;
+  const cosA = Math.cos(th);
+  const sinA = Math.sin(th);
+  const zRel = p.z - axisZ;
+  const nr = Math.hypot(n.y, n.z);
+  return {
+    x: p.x + toolR * n.x,
+    y: p.y * cosA - zRel * sinA,
+    z: p.y * sinA + zRel * cosA + axisZ + toolR * nr,
+  };
+}
+
+export interface BallClearanceOptions {
+  /** the SAME material-frame mesh the map was built from */
+  positions: ArrayLike<number>;
+  /** ball tool — diameter (ball Ø) and fluteLength (the shaft span
+   *  above the ball, the capsule's extent) are used; a tool without
+   *  fluteLength is rejected (no honest span without it) */
+  tool: Tool;
+  /** the map to verdict — attitudes and contacts are read per cell */
+  map: ContactMapResult;
+  /** stock axis height, machine Z, mm — the rotation's axis */
+  axisZ: number;
+  /** stock radius, mm — sizes the contact-neighborhood exclusion */
+  radius: number;
+  /**
+   * The machine normal-z floor of the ball's window, (0,1) — the
+   * "glancing floor" user knob (default BALL_DEFAULT_FLOOR = 0.3):
+   * attitudes below it put the contact too near the ball's equator
+   * (shaft junction), and normals with ρ < floor have no window at all.
+   */
+  glancingFloor?: number;
+}
+
+/**
+ * Verdict every cell of the map for BALL clearance at its window center
+ * φ. Returns one byte per map cell — the same FLUTE_CLEAR / FLUTE_
+ * CLIPPED contract segmentContactPatches consumes. Cells with ρ <
+ * floor (nearly-axial normals: no honest window) are CLIPPED on sight;
+ * the rest run the same capsule-vs-mesh shapecast as the flute check.
+ */
+export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
+  const toolR = o.tool.diameter / 2;
+  const flute = o.tool.fluteLength;
+  if (!(toolR > 0)) throw new Error('bad tool: diameter must be positive');
+  if (flute === undefined || !(flute > 0)) {
+    throw new Error('bad tool: fluteLength must be positive');
+  }
+  if (!(o.radius > 0)) throw new Error('bad stock radius: must be positive');
+  const floor = o.glancingFloor ?? BALL_DEFAULT_FLOOR;
+  if (!(floor > 0) || !(floor < 1)) {
+    throw new Error('bad glancing floor: 0 < floor < 1');
+  }
+
+  // the contacted-neighborhood exclusion (identical to the flute check)
+  const arcPitch = (2 * Math.PI * o.radius) / o.map.nTheta;
+  const exclusionR = Math.max(0.05, 0.25 * Math.min(o.map.pitchX, arcPitch));
+
+  // the mesh BVH, built ONCE (the tool capsule moves, the model stays)
+  const geo = new THREE.BufferGeometry();
+  const pos = Float32Array.from(o.positions);
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const bvh = new MeshBVH(geo, { targetLeafSize: 1 });
+
+  const segStart = new THREE.Vector3();
+  const segEnd = new THREE.Vector3();
+  const seg = new THREE.Line3();
+  const closest = new THREE.Vector3();
+  const p3 = new THREE.Vector3();
+  const bb = new THREE.Box3();
+
+  const verdict = new Uint8Array(o.map.cells.length).fill(FLUTE_CLEAR);
+
+  for (let ci = 0; ci < o.map.cells.length; ci++) {
+    const c = o.map.cells[ci];
+    const nr = Math.hypot(c.n.y, c.n.z);
+    // no honest window: the normal is too axial for the ball to present
+    // (the flank's pure-X class, same honesty — the coverage report owns it)
+    if (nr < floor) {
+      verdict[ci] = FLUTE_CLIPPED;
+      continue;
+    }
+    // the capsule: sphere r at the ball center C, shaft cylinder r from
+    // C up through fluteLength. BOTH machine endpoints rotate back
+    // through the pinned indexedPointRotation(−φ) — constructed, the
+    // committee lesson (the x the rotation preserves is C.x exact).
+    const C = ballToolCenter(c.p, c.n, toolR, o.axisZ);
+    const rotBack = indexedPointRotation(-ballAttitudeDeg(c.n), o.axisZ);
+    segStart.copy(rotBack({ x: C.x, y: C.y, z: C.z }));
+    segEnd.copy(rotBack({ x: C.x, y: C.y, z: C.z + flute }));
+    seg.start.copy(segStart);
+    seg.end.copy(segEnd);
+    // the material-frame AABB of the capsule, padded by the swept radius
+    bb.min.x = C.x - toolR;
+    bb.max.x = C.x + toolR;
+    bb.min.y = Math.min(segStart.y, segEnd.y) - toolR;
+    bb.max.y = Math.max(segStart.y, segEnd.y) + toolR;
+    bb.min.z = Math.min(segStart.z, segEnd.z) - toolR;
+    bb.max.z = Math.max(segStart.z, segEnd.z) + toolR;
+
+    // 4. BVH shapecast: the capsule (radius toolR about the segment) vs
+    //    every triangle whose box the capsule's box reaches. A triangle
+    //    COLLIDES iff its true segment-distance < toolR AND it lies
+    //    outside the contacted neighborhood — the flute check's contract.
+    let hit = false;
+    bvh.shapecast({
+      intersectsBounds: (box) => {
+        if (hit) return false; // early-out once clipped
+        if (box.max.x < bb.min.x || box.min.x > bb.max.x) return false;
+        if (box.max.y < bb.min.y || box.min.y > bb.min.y) return false;
+        if (box.max.z < bb.min.z || box.min.z > bb.max.z) return false;
+        return true;
+      },
+      intersectsTriangle: (t) => {
+        if (hit) return true;
+        // the contacted neighborhood exclusion first (cheap): the
+        // touched face's own fan is legal contact, not collision
+        if (t.distanceToPoint(p3.set(c.p.x, c.p.y, c.p.z)) < exclusionR) {
+          return false;
+        }
+        const d = t.closestPointToSegment(seg, closest);
+        // 1 µm graze epsilon: exact-tangent triangles are legal contact
+        if (d < toolR - 1e-3) {
+          hit = true;
+          return true;
+        }
+        return false;
+      },
+    });
+    if (hit) {
+      verdict[ci] = FLUTE_CLIPPED;
+    }
+  }
+
+  geo.dispose();
+  return verdict;
 }

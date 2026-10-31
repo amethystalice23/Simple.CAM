@@ -1289,29 +1289,39 @@ export type JobOp =
       kind: 'swarfFinish';
       /**
        * THE TRUE 4D FINISH (PLAN.md "The true 4D finishing pass", Alice's
-       * SWARF ruling from the Makera propeller video): the tool's flank
-       * hugs the model surface with ALL FOUR AXES moving — per surface
-       * cell, the part rotates to the attitude that brings that cell's
-       * normal against the flute's side, and the pass sweeps monotone-A
+       * SWARF ruling from the Makera propeller video): the tool hugs the
+       * model surface with ALL FOUR AXES moving — per surface cell, the
+       * part rotates to the attitude that brings that cell's normal
+       * against the tool's cutting face, and the pass sweeps monotone-A
        * through whole contact patches at G93 inverse time. NOT fixed
        * angles: the contact attitude follows the surface normal
-       * everywhere it bends (A\* = atan2(n.y,n.z)+90°, the flute flank).
-       * The whole loaded model on the rotation axis is the target, like
-       * the rotary contour — no selection. Cylinder stock, 4-axis mode,
-       * and a FLANK tool: flat or corn endmill (the ball window kernel
-       * and V-flank come later — the op picks its kernel by the tool and
-       * fails honestly on the unbuilt ones).
+       * everywhere it bends. KERNEL BY TOOL (PLAN.md's build order): a
+       * flat or corn endmill runs the FLANK kernel (the normal
+       * horizontal against the flute's side, A\* = atan2(n.y,n.z)+90°);
+       * a ball endmill runs the BALL WINDOW kernel (the normal up, the
+       * ball's glancing window — the general-coverage pass that cleans
+       * what the side cannot hug); anything else fails honestly (the
+       * V-flank kernel is last in the build order).
        *
+       * The whole loaded model on the rotation axis is the target, like
+       * the rotary contour — no selection. Cylinder stock, 4-axis mode.
        * The pass assumes bulk clearing ran ahead (a 4D contour or rotary
        * rough at allowance) — it sweeps the surface where it is, and the
        * honest coverage report names every cell no pass reaches (the
-       * twin-blade clip class, pure-X unreachable normals) instead of
-       * silently dropping them.
+       * twin-blade clip class, unreachable normals) instead of silently
+       * dropping them.
        */
       /** contact-map grid density, mm — the θ rows' ARC step at the stock
        *  radius (X pitch = half, the rotaryCarve grid contract, so the map
        *  matches the rough's standing grid cell-for-cell) */
       stepOver: number;
+      /** BALL KERNEL ONLY: the machine normal-z floor of the ball's
+       *  glancing window (0,1) — attitudes below it put the contact too
+       *  near the ball's equator, and normals with ρ < floor have no
+       *  window at all (the reported unreachable class). Default
+       *  BALL_DEFAULT_FLOOR = 0.3; absent = default (old saves
+       *  byte-identical, the spin precedent). Ignored by flank tools. */
+      glancingFloor?: number;
     });
 
 /**

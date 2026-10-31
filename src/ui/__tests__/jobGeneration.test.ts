@@ -2554,6 +2554,22 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
         stock: { ...cylStock, axisMode: '3-axis' as const },
       }).error,
     ).toMatch(/4-axis mode/);
+    // MILESTONE 5 (2026-10-31): the ball tool no longer fails — it runs the
+    // BALL WINDOW kernel (the glancing general-coverage pass). The gate's
+    // honest failure is now only the unbuilt V-flank family.
+    const vbit: Tool = {
+      id: 'v1',
+      name: 'vbit',
+      type: 'vbit',
+      diameter: 6,
+      spindleRpm: 18000,
+    };
+    expect(
+      generateJobOp(swarfOp({ toolId: 'v1' }), { ...cylCtx, tools: [...tools, vbit] }).error,
+    ).toMatch(/V-flank kernel is last in the build order/);
+  });
+
+  it('the ball tool runs the BALL kernel end to end (milestone 5): window attitudes, ball patches, monotone A', () => {
     const ball: Tool = {
       id: 'b1',
       name: 'ball',
@@ -2562,9 +2578,28 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
       spindleRpm: 18000,
       fluteLength: 20,
     };
-    expect(
-      generateJobOp(swarfOp({ toolId: 'b1' }), { ...cylCtx, tools: [...tools, ball] }).error,
-    ).toMatch(/ball-window kernel/);
+    const res = generateJobOp(swarfOp({ toolId: 'b1' }), {
+      ...cylCtx,
+      tools: [...tools, ball],
+    });
+    expect(res.error).toBeNull();
+    expect(res.summary).toMatch(/ball patch/); // the envelope word, not 'flank'
+    expect(res.summary).toMatch(/swept/);
+    const cuts = res.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBeGreaterThan(100); // the same full grid, one move per cell
+    let prevA = -Infinity;
+    for (const m of cuts) {
+      expect(m.words.x).toBeDefined();
+      expect(m.words.y).toBeDefined();
+      expect(m.words.z).toBeDefined();
+      expect((m as Move).feed).toBeGreaterThan(0); // G93: F on every line
+      const a = m.words.a as number;
+      expect(a).toBeGreaterThanOrEqual(prevA - 1e-9); // monotone over CUTS only
+      prevA = a;
+    }
+    // the BALL-vs-FLANK family distinction is pinned in swarfFinish.test.ts
+    // (the wall strip rides at a ≡ 90, not the flank's 180); this test pins
+    // the wiring: the envelope word reaches the summary honestly.
   });
 
   it('sweeps the cylinder as one full-wrap G93 pass: monotone A, F every line, safe rapids', () => {

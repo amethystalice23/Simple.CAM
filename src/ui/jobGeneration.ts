@@ -25,6 +25,7 @@ import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
 import { rotaryCarve, type StandingGrid } from '../cam/rotaryCarve';
 import {
+  ballClearanceCheck,
   buildContactMap,
   emitSwarfPass,
   fluteClearanceCheck,
@@ -2009,15 +2010,16 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
       }
       case 'swarfFinish': {
         // THE TRUE 4D FINISH (PLAN.md "The true 4D finishing pass", her
-        // SWARF ruling): the tool's flank hugs the model surface with ALL
-        // FOUR AXES moving — per surface cell the part rotates to the
-        // attitude that brings that cell's normal against the flute's
-        // side (A\* = atan2(n.y,n.z)+90°), whole contact patches swept as
-        // one continuous monotone-A G93 pass. Kernel by the tool: the
-        // flute flank (flat/corn) is built; ball/V fail honestly (the
-        // window kernel is milestone 5). Assumes a rough ran ahead — the
-        // surface is the target, no depth boxes; the coverage report
-        // names every cell no pass reaches, never silently dropped.
+        // SWARF ruling): the tool hugs the model surface with ALL FOUR
+        // AXES moving — per surface cell the part rotates to the attitude
+        // that brings that cell's normal against the tool's cutting face,
+        // whole contact patches swept as one continuous monotone-A G93
+        // pass. KERNEL BY TOOL (PLAN's build order): flat/corn = the
+        // flute flank (normal horizontal, A\* = atan2(n.y,n.z)+90°);
+        // ball = the glancing window (normal up, milestone 5); anything
+        // else fails honestly (V-flank is last). Assumes a rough ran
+        // ahead — the surface is the target, no depth boxes; the coverage
+        // report names every cell no pass reaches, never silently dropped.
         if (!ctx.geometry) return fail('needs a loaded model — the finish hugs it');
         if (ctx.stock.kind !== 'cylinder') {
           return fail('the 4D finish needs cylinder stock (Stock tab)');
@@ -2025,11 +2027,16 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (ctx.stock.axisMode !== '4-axis') {
           return fail('the 4D finish needs 4-axis mode (Stock tab)');
         }
-        if (tool.type !== 'flat' && tool.type !== 'corn') {
+        if (tool.type !== 'flat' && tool.type !== 'corn' && tool.type !== 'ball') {
           return fail(
-            `the SWARF flank kernel fits flat and corn endmills — a ${tool.type} tool wants the ball-window kernel (not built yet)`,
+            `the V-flank kernel is last in the build order — a ${tool.type} tool cannot run the 4D finish yet`,
           );
         }
+        // kernel by tool (PLAN.md's build order): flat/corn = the flank,
+        // ball = the glancing window (milestone 5) — one map, one
+        // segmentation, one writer; only the contact envelope differs
+        const isBall = tool.type === 'ball';
+        const envelope = isBall ? 'ball' : 'flank';
         const cal = rotaryCalibrationOf(ctx.stock);
         const [sx0, sx1] = stockSpan(ctx.stock, 'x');
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
@@ -2061,13 +2068,22 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (map.surfaceCells === 0) {
           return fail('no surface in the stock span — nothing to finish');
         }
-        const verdict = fluteClearanceCheck({
-          positions,
-          tool,
-          map,
-          axisZ: cal.axisZ,
-          radius: cal.effectiveRadius,
-        });
+        const verdict = isBall
+          ? ballClearanceCheck({
+              positions,
+              tool,
+              map,
+              axisZ: cal.axisZ,
+              radius: cal.effectiveRadius,
+              glancingFloor: op.glancingFloor,
+            })
+          : fluteClearanceCheck({
+              positions,
+              tool,
+              map,
+              axisZ: cal.axisZ,
+              radius: cal.effectiveRadius,
+            });
         const { patches, unswarfableCells } = segmentContactPatches({ map, verdict });
         const moves: Move[] = [];
         let minutes = 0;
@@ -2084,6 +2100,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             plungeFeed,
             safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
             startA: a,
+            attitude: isBall ? 'ball' : 'flank',
           });
           moves.push(...r.moves);
           minutes += r.estimatedMinutes;
@@ -2092,7 +2109,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         }
         if (moves.length === 0) {
           return fail(
-            `all ${unswarfableCells} surface cell(s) are unreachable at the flute's contact attitude${unswarfableCells === map.surfaceCells ? ' — nothing to sweep' : ''}`,
+            `all ${unswarfableCells} surface cell(s) are unreachable at the ${envelope}'s contact attitude${unswarfableCells === map.surfaceCells ? ' — nothing to sweep' : ''}`,
           );
         }
         // the honesty class (PLAN: reported, never silent): CLIPPED cells
@@ -2103,7 +2120,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (unswarfableCells > 0) {
           const pct = (100 * unswarfableCells) / map.surfaceCells;
           notes.push(
-            `${unswarfableCells} of ${map.surfaceCells} cell(s) (${pct.toFixed(0)}%) unreachable by the flank — left standing, finish them another way`,
+            `${unswarfableCells} of ${map.surfaceCells} cell(s) (${pct.toFixed(0)}%) unreachable by the ${envelope} — left standing, finish them another way`,
           );
         }
         // model rising past the stock radius was never roughed to shape —
@@ -2124,7 +2141,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           minutes,
           error: null,
           summary:
-            `${patches.length} flank patch(es), ${swept}/${map.surfaceCells} cell(s) (${pctSwept.toFixed(0)}%) swept, ~${minutes.toFixed(1)} min` +
+            `${patches.length} ${envelope} patch(es), ${swept}/${map.surfaceCells} cell(s) (${pctSwept.toFixed(0)}%) swept, ~${minutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
       }
