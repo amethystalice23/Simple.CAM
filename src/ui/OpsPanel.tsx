@@ -849,6 +849,33 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'swarfFinish':
+      return (
+        <>
+          <NumberField
+            label="Step over (mm)"
+            value={op.stepOver}
+            min={0.1}
+            step={0.1}
+            title="The contact grid's density: θ rows this much ARC apart at the stock radius, X cells at half that (the rotary grid contract — the finish matches the rough's grid cell-for-cell)"
+            onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)}
+          />
+          <p className="hint">
+            the true 4D finish: the flute's flank hugs the surface with ALL FOUR AXES moving — every
+            surface cell rotates to its own contact attitude (the normal against the flute's side),
+            whole patches swept as one long monotone-A pass at G93 inverse time. Not fixed angles:
+            the attitude follows the surface everywhere it bends. Needs a flat or corn endmill (the
+            flank kernel); assumes a rough ran ahead — run a 4D contour or rotary contour at
+            allowance first. The summary reports every cell the flank cannot reach (twin-blade
+            clips, unreachable normals) — left standing, never silently skipped
+          </p>
+          <p className="hint detail">
+            honest time: a full-wrap patch is rotary-ceiling clamped (≥9s per revolution) — the long
+            slow sweeps are the cut, not a bug. Multiple patches retract and re-approach between
+            them; A only ever advances
+          </p>
+        </>
+      );
     case 'spiralCarve':
       return (
         <>
@@ -1333,6 +1360,7 @@ export function OpsPanel(props: Props) {
           next = { ...next, stepDown, stepOver } as JobOp;
           break;
         case 'rasterContour':
+        case 'swarfFinish':
           next = { ...next, stepOver } as JobOp;
           break;
         case 'threadMill': {

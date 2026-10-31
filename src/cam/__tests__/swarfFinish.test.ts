@@ -671,6 +671,79 @@ describe('fluteClearanceCheck — the propeller (two parallel blades, test 2)', 
   });
 });
 
+describe('fluteClearanceCheck — the curved cylinder (the segment-direction regression)', () => {
+  // THE 2026-10-31 REGRESSION (caught by the milestone-4 generation
+  // wiring): the flute segment's material direction carried a sign
+  // slip — (0, −sinA*, cosA*) instead of (0, +sinA*, cosA*) — that
+  // vanished at attitudes 0/180 (sin = 0: every planar fixture in this
+  // suite) and MIRRORED the segment at every other attitude. The
+  // mirrored line dives THROUGH the mesh: this bare convex cylinder —
+  // the one geometry a vertical flute column clears BY CONSTRUCTION —
+  // read ALL-CLIPPED (728/728 on the wiring fixture, the closest
+  // "clip" at exactly toolR·cos(facet) = the tangent's own neighbor
+  // facets). The honest pre-image is the vertical machine line back-
+  // rotated: PARALLEL to the touched facet's plane at exactly toolR.
+  // A 32-gon: sampled normals are facet mids, vertex rows (row 0) hit
+  // shared edges — the tessellation conditions that make the tangent
+  // argument thinnest. Every cell must read CLEAR.
+  const positions = cylinder(5, 20, 32);
+  const map = buildContactMap({
+    positions,
+    x0: -9,
+    x1: 9,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+
+  it('every cell of the convex 32-gon side reads CLEAR (the tangent)', () => {
+    expect(map.surfaceCells).toBe(13 * 25); // full grid, no air
+    const v = fluteClearanceCheck({
+      positions,
+      tool: TOOL(6, 20),
+      map,
+      axisZ: AXIS_Z,
+      radius: 12,
+    });
+    let clipped = 0;
+    for (let i = 0; i < v.length; i++) {
+      if (v[i] === FLUTE_CLIPPED) clipped++;
+    }
+    // the pin: ZERO clips — a convex side is the flute column's
+    // by-construction tangent (pre-fix: 100% clipped, 325/325)
+    expect(clipped).toBe(0);
+  });
+
+  it('coarser tessellation too (an 8-gon): the tangent argument survives fat facets', () => {
+    // 45° facets: sampled normals land ±22.5° off the radial at vertex
+    // rows — the fattest normal ambiguity the grid can sample. The
+    // parallel-at-toolR line still clears the neighbor facets (the
+    // crossing of their planes lands outside the quads; the near-edge
+    // distance stays > toolR − 1µm — hand-derived, probed).
+    const pos8 = cylinder(5, 20, 8);
+    const map8 = buildContactMap({
+      positions: pos8,
+      x0: -9,
+      x1: 9,
+      radius: 12,
+      axisZ: AXIS_Z,
+      thetaStepOver: 3,
+    });
+    const v = fluteClearanceCheck({
+      positions: pos8,
+      tool: TOOL(6, 20),
+      map: map8,
+      axisZ: AXIS_Z,
+      radius: 12,
+    });
+    let clipped = 0;
+    for (let i = 0; i < v.length; i++) {
+      if (v[i] === FLUTE_CLIPPED) clipped++;
+    }
+    expect(clipped).toBe(0);
+  });
+});
+
 describe('fluteClearanceCheck — test 3, blade thinner than the tool', () => {
   // ONE blade only (no second blade): t∈[−1,1], r∈[5,10]. What is
   // physically true for both faces of a blade THINNER than the tool?
@@ -1372,10 +1445,13 @@ describe('emitSwarfPass — the wall strip (entry, centers, feeds, threading)', 
     }
   });
 
-  it('estimated minutes = entry advance + plunge + Σ passMinutes; endA threads', () => {
+  it('estimated minutes = plunge + Σ passMinutes (rapids uncharged); endA threads', () => {
+    // the family convention: the generator charges cutting + plunge only —
+    // rapid travel (the entry A advance included) belongs to the caller's
+    // overhead accounting, so nothing here charges it (no double-count at
+    // two rates)
     const r = emit();
     expect(r.endA).toBeCloseTo(180, 9);
-    const aRapidMinutes = (180 / 360) / MAX_ROTARY_RPM;
     const c0 = fluteToolCenter(
       map.cells[patches[0].cells[0]].p,
       map.cells[patches[0].cells[0]].n,
@@ -1389,7 +1465,7 @@ describe('emitSwarfPass — the wall strip (entry, centers, feeds, threading)', 
     const cuts = r.moves.filter((m) => !m.rapid && m.words.a !== undefined);
     let sum = 0;
     for (const m of cuts) sum += 1 / m.feed;
-    expect(r.estimatedMinutes).toBeCloseTo(aRapidMinutes + plungeMinutes + sum, 9);
+    expect(r.estimatedMinutes).toBeCloseTo(plungeMinutes + sum, 9);
 
     // threading: startA 200 → forward 340 (never backward) → 540, past 360
     const r2 = emit(200);
@@ -1443,8 +1519,19 @@ describe('emitSwarfPass — the full wrap (monotone past 360)', () => {
     expect(Math.min(Math.abs(amod - lastCell.align), 360 - Math.abs(amod - lastCell.align))).toBeLessThan(1e-6);
     // every cut move is a G93 simultaneous XYZA
     for (const m of cuts) expect(isSimultaneous(m)).toBe(true);
-    // honest time: the rotary floor alone bounds Σ passMinutes from below
-    const rotarySum = (r.endA - 300) / 360 / MAX_ROTARY_RPM;
+    // honest time: the CUT moves' own rotary floors bound Σ passMinutes
+    // from below (recomputed from the moves' A words, entry advance
+    // excluded — it is a rapid, uncharged here)
+    let aPrev: number | undefined;
+    let rotarySum = 0;
+    for (const m of cuts) {
+      const a = m.words.a!;
+      if (aPrev !== undefined) {
+        rotarySum += ((a - aPrev) % 360 + 360) % 360 / 360 / MAX_ROTARY_RPM;
+      }
+      aPrev = a;
+    }
+    expect(rotarySum).toBeGreaterThan(0.12); // ~345° at 6.6 RPM ≈ 0.15 min of real rotation, not noise
     expect(r.estimatedMinutes).toBeGreaterThan(rotarySum - 1e-9);
   });
 });

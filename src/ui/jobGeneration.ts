@@ -24,6 +24,12 @@ import { restMaterialReport } from '../cam/restMaterial';
 import { waterlineRough } from '../cam/waterline';
 import { rasterContour } from '../cam/relief';
 import { rotaryCarve, type StandingGrid } from '../cam/rotaryCarve';
+import {
+  buildContactMap,
+  emitSwarfPass,
+  fluteClearanceCheck,
+  segmentContactPatches,
+} from '../cam/swarfFinish';
 import { difference, offsetInward, offsetOutward } from '../cam/clipper';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import { indexedPointRotation } from '../cam/indexing';
@@ -136,6 +142,7 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'contour4d', label: '4D contour (multi-orientation rough)', rotaryOnly: true },
   { kind: 'rasterContour', label: 'Raster contour (3D finish)' },
   { kind: 'rotaryCarve', label: 'Rotary contour (4-axis)', rotaryOnly: true },
+  { kind: 'swarfFinish', label: '4D finish (SWARF flank)', rotaryOnly: true },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'cylChamfer', label: 'Cylinder chamfer (4-axis)', rotaryOnly: true },
@@ -374,6 +381,16 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepOver: defaultStepOver(tool),
         strategy: 'horizontal',
         finishingOnly: false,
+      };
+    case 'swarfFinish':
+      // the TRUE 4D finish (PLAN.md): flank contact, all four axes moving.
+      // One knob — the contact grid density; the attitude tolerance and
+      // patch policy derive inside the kernel. Assumes a rough ran ahead:
+      // no depth boxes, the surface is the target.
+      return {
+        ...base,
+        kind,
+        stepOver: defaultStepOver(tool),
       };
     case 'drill':
       return { ...base, kind, depth: 5, peckDepth: 2 };
@@ -1987,6 +2004,127 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             strategyNote +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
             `, ~${res.estimatedMinutes.toFixed(1)} min` +
+            (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
+        };
+      }
+      case 'swarfFinish': {
+        // THE TRUE 4D FINISH (PLAN.md "The true 4D finishing pass", her
+        // SWARF ruling): the tool's flank hugs the model surface with ALL
+        // FOUR AXES moving — per surface cell the part rotates to the
+        // attitude that brings that cell's normal against the flute's
+        // side (A\* = atan2(n.y,n.z)+90°), whole contact patches swept as
+        // one continuous monotone-A G93 pass. Kernel by the tool: the
+        // flute flank (flat/corn) is built; ball/V fail honestly (the
+        // window kernel is milestone 5). Assumes a rough ran ahead — the
+        // surface is the target, no depth boxes; the coverage report
+        // names every cell no pass reaches, never silently dropped.
+        if (!ctx.geometry) return fail('needs a loaded model — the finish hugs it');
+        if (ctx.stock.kind !== 'cylinder') {
+          return fail('the 4D finish needs cylinder stock (Stock tab)');
+        }
+        if (ctx.stock.axisMode !== '4-axis') {
+          return fail('the 4D finish needs 4-axis mode (Stock tab)');
+        }
+        if (tool.type !== 'flat' && tool.type !== 'corn') {
+          return fail(
+            `the SWARF flank kernel fits flat and corn endmills — a ${tool.type} tool wants the ball-window kernel (not built yet)`,
+          );
+        }
+        const cal = rotaryCalibrationOf(ctx.stock);
+        const [sx0, sx1] = stockSpan(ctx.stock, 'x');
+        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
+        const positions = rotate
+          ? (() => {
+              const out = new Float32Array(positions0.length);
+              for (let i = 0; i < positions0.length; i += 3) {
+                const v = rotate({
+                  x: positions0[i],
+                  y: positions0[i + 1],
+                  z: positions0[i + 2],
+                });
+                out[i] = v.x;
+                out[i + 1] = v.y;
+                out[i + 2] = v.z;
+              }
+              return out;
+            })()
+          : positions0;
+        const map = buildContactMap({
+          positions,
+          x0: sx0,
+          x1: sx1,
+          radius: cal.effectiveRadius,
+          axisZ: cal.axisZ,
+          thetaStepOver: op.stepOver,
+        });
+        if (map.surfaceCells === 0) {
+          return fail('no surface in the stock span — nothing to finish');
+        }
+        const verdict = fluteClearanceCheck({
+          positions,
+          tool,
+          map,
+          axisZ: cal.axisZ,
+          radius: cal.effectiveRadius,
+        });
+        const { patches, unswarfableCells } = segmentContactPatches({ map, verdict });
+        const moves: Move[] = [];
+        let minutes = 0;
+        let a = ctx.startA;
+        let swept = 0;
+        for (const patch of patches) {
+          const r = emitSwarfPass({
+            map,
+            patch,
+            tool,
+            axisZ: cal.axisZ,
+            radius: cal.effectiveRadius,
+            feed,
+            plungeFeed,
+            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            startA: a,
+          });
+          moves.push(...r.moves);
+          minutes += r.estimatedMinutes;
+          a = r.endA;
+          swept += patch.cells.length;
+        }
+        if (moves.length === 0) {
+          return fail(
+            `all ${unswarfableCells} surface cell(s) are unreachable at the flute's contact attitude${unswarfableCells === map.surfaceCells ? ' — nothing to sweep' : ''}`,
+          );
+        }
+        // the honesty class (PLAN: reported, never silent): CLIPPED cells
+        // (the flute column sweeps other geometry at that attitude — the
+        // twin-blade class) and pure-X unreachable normals, all counted
+        // in unswarfableCells. Percentages against the whole map.
+        const notes: string[] = [];
+        if (unswarfableCells > 0) {
+          const pct = (100 * unswarfableCells) / map.surfaceCells;
+          notes.push(
+            `${unswarfableCells} of ${map.surfaceCells} cell(s) (${pct.toFixed(0)}%) unreachable by the flank — left standing, finish them another way`,
+          );
+        }
+        // model rising past the stock radius was never roughed to shape —
+        // the finish hugs what is there, but the excess is a mystery to it
+        let maxRadial = 0;
+        for (let i = 0; i < positions.length; i += 3) {
+          const r = Math.hypot(positions[i + 1], positions[i + 2] - cal.axisZ);
+          if (r > maxRadial) maxRadial = r;
+        }
+        if (maxRadial > cal.effectiveRadius + 1e-6) {
+          notes.push(
+            `the model extends ${(maxRadial - cal.effectiveRadius).toFixed(1)}mm above the stock radius — that part cannot be finished`,
+          );
+        }
+        const pctSwept = (100 * swept) / map.surfaceCells;
+        return {
+          moves,
+          minutes,
+          error: null,
+          summary:
+            `${patches.length} flank patch(es), ${swept}/${map.surfaceCells} cell(s) (${pctSwept.toFixed(0)}%) swept, ~${minutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
       }

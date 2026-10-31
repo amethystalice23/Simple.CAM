@@ -443,8 +443,21 @@ export function fluteClearanceCheck(o: FluteClearanceOptions): Uint8Array {
     // BOTH ENDPOINTS rotate: the material pre-image of the vertical
     // machine column passes through the back-rotated center along the
     // back-rotated +Z axis: machine +Z rotated by −A* gives material
-    // direction (0, −sinA, cosA)
-    const dirY = -sinA;
+    // direction (0, +sinA, cosA). THE SIGN IS LOAD-BEARING (caught
+    // 2026-10-31 by the milestone-4 generation wiring, after the probe):
+    // the (0, −sinA, cosA) this line carried from day one was a sign
+    // slip that VANISHED at attitudes 0/180 (sin = 0 — every planar
+    // fixture in this suite) and mirrored the segment the WRONG WAY at
+    // every other attitude: the mirrored line dives THROUGH the mesh,
+    // and a bare convex cylinder's side read ALL-CLIPPED (728/728, at
+    // toolR·cos(facet) — the tangent point's own neighbor facets). The
+    // honest line lies PARALLEL to the touched facet's plane at exactly
+    // toolR (the flank-contact tangent — check it by rotating both by
+    // +A*: the column is the vertical line one toolR out along the
+    // rotated normal, tangent to the rotated convex section), so a
+    // convex tessellation clears by construction and only real
+    // neighbors clip.
+    const dirY = sinA;
     const dirZ = cosA;
     segStart.set(cx, backCy - flute * dirY, backCz - flute * dirZ);
     segEnd.set(cx, backCy + flute * dirY, backCz + flute * dirZ);
@@ -557,17 +570,18 @@ export function fluteClearanceCheck(o: FluteClearanceOptions): Uint8Array {
  * never correctness: every pass keeps the per-step contract. A weaving
  * band-sweep planner is a follow-up if the retracts ever matter.
  *
- * EMISSION (per patch): entry = pure-A rapid forward (charged at the
- * rotary ceiling) → pure-XY rapid over → pure-Z plunge (the pass
- * CONTRACT: entry at the safe plane, z = axisZ + radius + clearance,
- * above everything; the caller threads endA → startA between passes so
- * machine A only ever advances); then one G93 XYZA move per remaining
- * cell at its own attitude; exit = pure-Z retract to the safe plane. NO
- * rapid ever combines Z with X/Y/A (the rotaryCarve pinned convention),
- * and the A positioning rapid is charged at the rotary ceiling (a full
- * 360° re-approach is ≥ 9s of real time — the spec's honest-time floor;
- * rotaryCarve skips charging its tiny θ steps, this does not). The Y
- * WORD APPEARS on every cut move: flank contact rides
+ * EMISSION (per patch): entry = pure-A rapid forward → pure-XY rapid
+ * over → pure-Z plunge (the pass CONTRACT: entry at the safe plane, z =
+ * axisZ + radius + clearance, above everything; the caller threads
+ * endA → startA between passes so machine A only ever advances); then
+ * one G93 XYZA move per remaining cell at its own attitude; exit =
+ * pure-Z retract to the safe plane. NO rapid ever combines Z with
+ * X/Y/A (the rotaryCarve pinned convention). RAPIDS ARE NOT CHARGED
+ * here — the family convention (rotaryCarve): the generator charges
+ * cutting moves only, the caller's overhead accounting owns rapid travel
+ * and spindle ramps (charging the entry advance here would double-count
+ * it at two different rates). The Y WORD APPEARS on every cut move:
+ * flank contact rides
  * the tool at its own height and side, so the center's y follows the
  * contact around the stock (the cylinder ops emit no Y because their Y
  * parks on the centerline; this one moves in all four axes — the point
@@ -816,7 +830,8 @@ export interface EmitSwarfPassOptions {
 
 export interface EmitSwarfPassResult {
   moves: Move[];
-  /** cutting + plunge + A-positioning minutes (XY/Z rapids uncharged) */
+  /** cutting + plunge minutes (rapids uncharged — the caller's overhead
+   *  accounting owns rapid travel and spindle ramps, the family convention) */
   estimatedMinutes: number;
   /** machine A at pass exit — thread into the next pass's startA */
   endA: number;
@@ -870,8 +885,7 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   const fwd0 = ((cells[first].align - (((a % 360) + 360) % 360)) % 360 + 360) % 360;
   if (fwd0 > 1e-9) {
     a += fwd0;
-    moves.push({ words: { a }, feed: 0, rapid: true });
-    minutes += (fwd0 / 360) / MAX_ROTARY_RPM;
+    moves.push({ words: { a }, feed: 0, rapid: true }); // rapid — uncharged (overhead owns it)
   }
   const c0 = centerOf(first);
   moves.push({ words: { x: c0.x, y: c0.y }, feed: 0, rapid: true });

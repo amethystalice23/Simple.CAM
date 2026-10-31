@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { identityTransform, rotaryCalibrationOf } from '../../core/types';
 import { ROTARY_FEED_DEG_MIN } from '../../cam/faceCylinder';
 import type { AxisWords, JobOp, Move, Stock, Tool } from '../../core/types';
+import { isSimultaneous } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import { opEdgeSource, sourcesFor } from '../featureSources';
 import { normalizeJobOps } from '../jobFile';
@@ -2494,5 +2495,189 @@ describe('thread mill generation (3-axis, the 2026-10-28 op)', () => {
   it('refuses a zero-length thread', () => {
     const bad = generateJobOp({ ...threadMillOp, endDepth: threadMillOp.startDepth }, threadCtx);
     expect(bad.error).toMatch(/length must be positive/);
+  });
+});
+
+describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
+  // a Ø20 cylinder lying along X on the rotary axis (cylStock: axis z0,
+  // effectiveRadius 25, span −40…40): radial normals, one full-wrap
+  // flank patch — the happy-path fixture.
+  const cylModel = new THREE.CylinderGeometry(10, 10, 20).rotateZ(Math.PI / 2).toNonIndexed();
+  const cylFeatures = detectFeatures(cylModel);
+  const cylCtx: GenContext = {
+    ...ctx,
+    stock: cylStock,
+    geometry: cylModel,
+    features: cylFeatures,
+    sources: sourcesFor(cylModel, cylFeatures, identityTransform(), []),
+    datumAngle: 0,
+    startA: 0,
+  };
+  // the clearance kernel needs an honest flute span — the fluted Ø6
+  const fluteTool: Tool = {
+    id: 'tf',
+    name: '6mm flat fluted',
+    type: 'flat',
+    diameter: 6,
+    spindleRpm: 18000,
+    fluteLength: 20,
+  };
+  const tools = [...ctx.tools, fluteTool];
+  const swarfOp = (over: Partial<Extract<JobOp, { kind: 'swarfFinish' }>> = {}) =>
+    ({
+      id: 'sf',
+      toolId: 'tf',
+      featureIds: [],
+      kind: 'swarfFinish',
+      stepOver: 3,
+      ...over,
+    }) as Extract<JobOp, { kind: 'swarfFinish' }>;
+
+  it('newJobOp derives the grid step from the tool Ø', () => {
+    const op = newJobOp('swarfFinish', fluteTool, cylStock.materialId, cylStock);
+    expect(op.kind).toBe('swarfFinish');
+    if (op.kind !== 'swarfFinish') return;
+    expect(op.stepOver).toBeCloseTo(3, 5); // 0.5·Ø6, the family default
+  });
+
+  it('gates honestly: model, cylinder stock, 4-axis, a flank tool', () => {
+    expect(generateJobOp(swarfOp(), { ...cylCtx, tools, geometry: null }).error).toMatch(
+      /needs a loaded model/,
+    );
+    expect(generateJobOp(swarfOp(), { ...cylCtx, tools, stock: boxStock4 }).error).toMatch(
+      /cylinder stock/,
+    );
+    expect(
+      generateJobOp(swarfOp(), {
+        ...cylCtx,
+        tools,
+        stock: { ...cylStock, axisMode: '3-axis' as const },
+      }).error,
+    ).toMatch(/4-axis mode/);
+    const ball: Tool = {
+      id: 'b1',
+      name: 'ball',
+      type: 'ball',
+      diameter: 6,
+      spindleRpm: 18000,
+      fluteLength: 20,
+    };
+    expect(
+      generateJobOp(swarfOp({ toolId: 'b1' }), { ...cylCtx, tools: [...tools, ball] }).error,
+    ).toMatch(/ball-window kernel/);
+  });
+
+  it('sweeps the cylinder as one full-wrap G93 pass: monotone A, F every line, safe rapids', () => {
+    const res = generateJobOp(swarfOp(), { ...cylCtx, tools });
+    expect(res.error).toBeNull();
+    expect(res.summary).toMatch(/flank patch/);
+    expect(res.summary).toMatch(/swept/);
+    const cuts = res.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBeGreaterThan(100); // a real grid, one move per cell
+    for (const m of cuts) {
+      // all four axes on every cut, G93-simultaneous, F on every line
+      expect(m.words.x).toBeDefined();
+      expect(m.words.y).toBeDefined();
+      expect(m.words.z).toBeDefined();
+      expect(isSimultaneous(m)).toBe(true);
+      expect(m.feed).toBeGreaterThan(0);
+    }
+    // the pinned entry-safety convention: no rapid ever mixes Z with X/Y/A
+    for (const m of res.moves) {
+      if (m.rapid && m.words.z !== undefined) {
+        expect(m.words.x).toBeUndefined();
+        expect(m.words.y).toBeUndefined();
+        expect(m.words.a).toBeUndefined();
+      }
+    }
+    // machine A monotone nondecreasing across the whole op (only advances)
+    let prev = -Infinity;
+    for (const m of res.moves) {
+      if (m.words.a === undefined) continue;
+      expect(m.words.a).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = m.words.a;
+    }
+    // the contact rides the flank: cut moves hover one toolR OUTSIDE the
+    // Ø20 surface — |machine (y,z) offset from the axis| ≈ 10 + 3
+    const offAxis = cuts.map((m) => Math.hypot(m.words.y!, m.words.z!));
+    expect(Math.max(...offAxis)).toBeGreaterThan(12.5);
+    expect(Math.min(...offAxis)).toBeLessThan(13.5); // a smooth cylinder: constant ~13
+    // honest time: the rotary floor alone (≥ one near-full revolution,
+    // ~345° at the 6.6 RPM ceiling ≈ 0.15 min before the accel overhead)
+    expect(res.minutes).toBeGreaterThan(0.12);
+  });
+
+  it('reports the unreachable cells on a shadowed part — never silently dropped', () => {
+    // THE TWIN-PLATE CLIP CLASS (the kernel-pinned propeller honesty):
+    // two flat radial plates 120° apart — plate A's columns swing clear
+    // of B, plate B's sweep INTO A (the column line passes through A's
+    // rotated slab, tool-size-independent). Stock/gids match the kernel
+    // fixture (Ø24 effective radius → the same 25-row grid, so the
+    // verdicts reproduce): 12 cells clear, 12 clipped.
+    const T = 2;
+    const R0 = 5;
+    const R1 = 10;
+    const plate = (alphaDeg: number): number[] => {
+      const a = (alphaDeg * Math.PI) / 180;
+      const pos: number[] = [];
+      const pt = (r: number, s: number, x: number): [number, number, number] => [
+        x,
+        r * Math.sin(a) + s * Math.cos(a),
+        r * Math.cos(a) - s * Math.sin(a),
+      ];
+      const h = T / 2;
+      const N = 24;
+      for (let k = 0; k < N; k++) {
+        const rA = R0 + ((R1 - R0) * k) / N;
+        const rB = R0 + ((R1 - R0) * (k + 1)) / N;
+        const A0 = pt(rA, -h, -3), A1 = pt(rA, -h, 3), B0 = pt(rB, -h, -3), B1 = pt(rB, -h, 3);
+        const C0 = pt(rA, h, -3), C1 = pt(rA, h, 3), D0 = pt(rB, h, -3), D1 = pt(rB, h, 3);
+        pos.push(...A0, ...B0, ...A1, ...A1, ...B0, ...B1);
+        pos.push(...C0, ...C1, ...D0, ...C1, ...D1, ...D0);
+        pos.push(...A0, ...C0, ...A1, ...A1, ...C0, ...C1);
+        pos.push(...B0, ...B1, ...D0, ...B1, ...D1, ...D0);
+      }
+      return pos;
+    };
+    const positions = new Float32Array([...plate(0), ...plate(120)]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const feats = detectFeatures(geo);
+    // Ø24 stock (radius 12) with the same 14.4°-row grid as the kernel
+    // fixture — the plate cross-section is x-uniform, so the column
+    // positions and verdicts reproduce at any interior x sampling
+    const plateStock: Extract<Stock, { kind: 'cylinder' }> = {
+      kind: 'cylinder',
+      length: 10, // spans x −5…5: pitch 1.5 → interior columns −2…2.5
+      xOrigin: 'mid',
+      calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 12 },
+      axisMode: '4-axis',
+      materialId: 'aluminum-6061',
+    };
+    const plateCtx: GenContext = {
+      ...ctx,
+      stock: plateStock,
+      geometry: geo,
+      features: feats,
+      sources: sourcesFor(geo, feats, identityTransform(), []),
+      tools,
+      datumAngle: 0,
+      startA: 0,
+    };
+    const res = generateJobOp(swarfOp(), plateCtx);
+    expect(res.error).toBeNull();
+    // THE HONESTY CLASS: the clipped twin counted and NAMED, never silent
+    expect(res.summary).toContain('12 of 24 cell(s) (50%) unreachable');
+    expect(res.summary).toMatch(/swept/);
+    // the swept set is plate A only: its two clear attitudes (90° tip-cap
+    // strip, 270° root-cap pair) — never plate B's (210/300/30)
+    const cuts = res.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBeGreaterThan(0);
+    for (const m of cuts) {
+      const amod = ((m.words.a! % 360) + 360) % 360;
+      const d90 = Math.min(Math.abs(amod - 90), 360 - Math.abs(amod - 90));
+      const d270 = Math.min(Math.abs(amod - 270), 360 - Math.abs(amod - 270));
+      expect(Math.min(d90, d270)).toBeLessThan(1e-6);
+    }
   });
 });
