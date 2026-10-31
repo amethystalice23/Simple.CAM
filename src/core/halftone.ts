@@ -13,10 +13,12 @@
  * solid region prints SOLID, no corner stipple gaps.
  *
  * Output feeds the existing engrave-fill / laser pipeline unchanged:
- * one closed 24-gon per dot, meta { closed: true, filled: true },
- * paths in mm in the face frame x ∈ [0, faceWidth], y ∈ [0, faceHeight]
- * with image row 0 (TOP) at y = faceHeight (the heightmap v-down-flip
- * convention).
+ * one closed 24-gon per dot — 24 segments PLUS the closing point, the
+ * explicit-Z convention the SVG pipeline uses (endpoints coincident, or
+ * the fill pass sees an open polyline and yields no region) — meta
+ * { closed: true, filled: true }, paths in mm in the face frame
+ * x ∈ [0, faceWidth], y ∈ [0, faceHeight] with image row 0 (TOP) at
+ * y = faceHeight (the heightmap v-down-flip convention).
  */
 
 import type { Vec2 } from './types';
@@ -129,6 +131,10 @@ export function halftoneArtwork(gray: GrayBitmap, p: HalftoneParams): ImportedAr
       const a = (2 * Math.PI * k) / 24;
       ring.push({ x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) });
     }
+    // CLOSE the ring by repeating the start (Alice, 2026-10-31: "the
+    // circles are not closed, there is a gap") — 24 segments leave the
+    // endpoints 15° apart, an open polyline the fill pass can't regionize
+    ring.push({ ...ring[0] });
     paths.push(ring);
     meta.push({ closed: true, filled: true });
   }

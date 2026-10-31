@@ -26,6 +26,7 @@ import {
   PATH_COLOR,
   PLANE_SELECT,
   SELECT_COLOR,
+  GLOBAL_SELECT_COLOR,
   SLICE_COLOR,
   type FeatureOverlayData,
   type MeasurePick,
@@ -77,8 +78,13 @@ interface SourceOverlay {
 /** A feature pick annotated with the source it came from. */
 type SourcedPick = MeasurePick & { sourceId: string };
 
-/** Measurement picks for the selected features (selection = measurement). */
-function picksFromSelection(sel: ResolvedSelection[], overlays: SourceOverlay[]): MeasurePick[] {
+/** Measurement picks for the selected features (selection = measurement).
+ * `color` paints the flavor: op blue, global green. */
+function picksFromSelection(
+  sel: ResolvedSelection[],
+  overlays: SourceOverlay[],
+  color: number,
+): MeasurePick[] {
   const out: MeasurePick[] = [];
   for (const s of sel) {
     const entry = overlays.find((o) => o.source.id === s.sourceId);
@@ -92,7 +98,7 @@ function picksFromSelection(sel: ResolvedSelection[], overlays: SourceOverlay[])
         kind: 'circle',
         index: s.index,
         center: entry.data.circleCenter[s.index].clone(),
-        color: SELECT_COLOR,
+        color,
         text: entry.data.circleText[s.index],
       });
       continue;
@@ -106,7 +112,7 @@ function picksFromSelection(sel: ResolvedSelection[], overlays: SourceOverlay[])
       kind: 'edge',
       index: s.index,
       center: entry.data.edgeMid[s.index].clone(),
-      color: SELECT_COLOR,
+      color,
       text: entry.data.edgeText[s.index],
     });
   }
@@ -128,6 +134,11 @@ interface Props {
    * not operation targets (reserved for the later line-follow engrave) */
   edgePickingEnabled: boolean;
   opSelection: ResolvedSelection[];
+  /** which flavor `opSelection` holds: true = an OP's feature picks (the
+   *  blue SELECT_COLOR), false = the GLOBAL selection (green) — the two
+   *  must never paint alike (Alice, 2026-10-31: "ops is blue, make the
+   *  other one green or something") */
+  selectionIsOp: boolean;
   /** the op being edited is in 'outline+fill' mode: the artwork's
    * closed+filled regions are pickable (selected or not — a region click
    * must be able to make the FIRST selection) and the SELECTED ones
@@ -226,6 +237,7 @@ export function Viewport({
   measureMode,
   edgePickingEnabled,
   opSelection,
+  selectionIsOp,
   fillShade,
   primitives,
   previewMoves,
@@ -287,6 +299,10 @@ export function Viewport({
   onBoxSelectRef.current = onBoxSelect;
   const opSelectionRef = useRef(opSelection);
   opSelectionRef.current = opSelection;
+  /** the selection's paint: op picks blue, global green (the prop above) */
+  const selColor = selectionIsOp ? SELECT_COLOR : GLOBAL_SELECT_COLOR;
+  const selColorRef = useRef(selColor);
+  selColorRef.current = selColor;
   const hoverPlaneRef = useRef<THREE.Mesh | null>(null);
   const [label, setLabel] = useState<{ text: string; x: number; y: number } | null>(null);
   /** labels for the selected features, one per pick */
@@ -672,7 +688,7 @@ export function Viewport({
         index: fIdx,
         sourceId: ud.sourceId,
         center: best.point.clone(),
-        color: SELECT_COLOR,
+        color: selColorRef.current,
         text: 'artwork fill region',
       };
     };
@@ -1021,7 +1037,7 @@ export function Viewport({
         div.style.left = `${((p.x + 1) / 2) * el.clientWidth + 12}px`;
         div.style.top = `${((1 - p.y) / 2) * el.clientHeight - 14}px`;
       };
-      const picks = picksFromSelection(opSelectionRef.current, overlaysRef.current);
+      const picks = picksFromSelection(opSelectionRef.current, overlaysRef.current, selColorRef.current);
       picks.forEach((p, i) => {
         const div = selLabelsRef.current[i];
         if (div) div.textContent = p.text;
@@ -1553,8 +1569,8 @@ export function Viewport({
     group.add(hoverPlane);
     hoverPlaneRef.current = hoverPlane;
 
-    // selection highlights (light blue, distinct from the hover tints) and
-    // the center-to-center connector when exactly two features are selected
+    // selection highlights (op blue / global green, distinct from the hover
+    // tints) and the center-to-center connector when exactly two are selected
     const selObjects: THREE.Object3D[] = [];
     for (const sel of opSelection) {
       const entry = entries.find((o) => o.source.id === sel.sourceId);
@@ -1565,7 +1581,7 @@ export function Viewport({
           entry.source.features,
           entry.source.transform,
           sel.index,
-          SELECT_COLOR,
+          selColor,
         );
         if (mesh) {
           mesh.renderOrder = 7;
@@ -1576,7 +1592,7 @@ export function Viewport({
       } else {
         const line = new THREE.LineSegments(
           hoverLineGeometry(entry.data, sel.kind, sel.index),
-          new THREE.LineBasicMaterial({ color: SELECT_COLOR, transparent: true, depthTest: false }),
+          new THREE.LineBasicMaterial({ color: selColor, transparent: true, depthTest: false }),
         );
         line.renderOrder = 6;
         group.add(line);
@@ -1625,7 +1641,7 @@ export function Viewport({
           const shade = new THREE.Mesh(
             mkGeo(tris.shade.flat()),
             new THREE.MeshBasicMaterial({
-              color: SELECT_COLOR,
+              color: selColor,
               transparent: true,
               opacity: 0.2,
               depthWrite: false,
@@ -1666,7 +1682,7 @@ export function Viewport({
     }
     fillShadeMeshesRef.current = shadeMeshes;
 
-    const picks = picksFromSelection(opSelection, entries);
+    const picks = picksFromSelection(opSelection, entries, selColor);
     if (picks.length === 2) {
       const conn = connectorLine(picks[0], picks[1]);
       group.add(conn);
@@ -1702,7 +1718,7 @@ export function Viewport({
       hoverLineRef.current = null;
       fillShadeMeshesRef.current = [];
     };
-  }, [sources, stock, displayLayers.features, opSelection, selectedObjectId, fillShade]);
+  }, [sources, stock, displayLayers.features, opSelection, selColor, selectedObjectId, fillShade]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR.
   // THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): while a playback

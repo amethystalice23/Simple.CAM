@@ -300,6 +300,10 @@ export const PATH_HOVER = 0xffdd88;
 export const PLANE_SELECT = 0xf0c050;
 /** operation-selection highlight (distinct from measure picks) */
 export const SELECT_COLOR = 0x7fdfff;
+/** the GLOBAL selection (no op being edited) — GREEN, so an op's picks and
+ *  the global one never read alike (Alice, 2026-10-31: a landed-in-global
+ *  selection painted the same blue as the op's and hid the difference) */
+export const GLOBAL_SELECT_COLOR = 0x7fff9f;
 /** slice-pocket cut plane + contour overlay (edge-tracing §5) */
 export const SLICE_COLOR = 0xcc66dd;
 

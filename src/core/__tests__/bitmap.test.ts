@@ -306,7 +306,10 @@ describe('halftoneArtwork', () => {
       expect(d.r).toBeCloseTo(1 / Math.SQRT2, 6); // the lattice-corner bound
     }
     for (let k = 0; k < art.paths.length; k++) {
-      expect(art.paths[k].length).toBe(24); // 24 segments, no repeated start
+      // 24 segments PLUS the closing point — endpoints coincident (the
+      // explicit-Z convention), or the fill pass sees an open polyline
+      expect(art.paths[k].length).toBe(25);
+      expect(art.paths[k][24]).toEqual(art.paths[k][0]);
       expect(art.meta[k]).toEqual({ closed: true, filled: true });
     }
     // centers on the rotated (here axis-aligned) lattice, one cell apart

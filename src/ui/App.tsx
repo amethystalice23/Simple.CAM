@@ -538,9 +538,13 @@ export function App() {
   };
 
   /** The bitmap dialogue's Confirm: a heightmap lands in the MODEL slot —
-   *  the full loadStl swap semantics (the old sim's chunks must not ride
-   *  the new relief, and the app's model-swap precedent clears stale
-   *  selections); halftone artwork follows the addArtworkFromFile pattern. */
+   *  loadStl's swap semantics NARROWED (Alice, 2026-10-31): the relief
+   *  replaces the MODEL only, so model-source ids (bare) die with the old
+   *  model, but primitive (`p:`) and job-published (`o:`) ids SURVIVE and
+   *  the op being edited stays armed — her engrave held live artwork paths
+   *  that a full loadStl-style clear wiped to grey "no features". The sim
+   *  still dies with the old model it carved. Halftone artwork follows the
+   *  addArtworkFromFile pattern. */
   const confirmBitmapImport = (result: BitmapImportResult) => {
     setBitmapImport(null);
     if (result.kind === 'heightmap') {
@@ -548,10 +552,10 @@ export function App() {
       setModelName(result.name);
       setModelBytes(null); // the old STL must not ride job save under the new name
       setTransform(identityTransform()); // a stale scale/rotation would skew the relief
-      setSelection([]); // ids belong to the old model
-      setOps((prev) => prev.map((o) => ({ ...o, featureIds: [] })));
+      const survives = (id: string) => id.startsWith('p:') || id.startsWith('o:');
+      setSelection((prev) => prev.filter(survives));
+      setOps((prev) => prev.map((o) => ({ ...o, featureIds: o.featureIds.filter(survives) })));
       setGenerated({});
-      setEditingOpId(null);
       setSelectedObjectId('model');
       setPreviewMoves(null);
       carveSim.dispose(); // the sim carved the old model's moves
@@ -1496,6 +1500,7 @@ export function App() {
             measureMode={measureMode}
             edgePickingEnabled={editingOpId === null}
             opSelection={resolvedSelection}
+            selectionIsOp={editingOpId !== null}
             fillShade={fillShade}
             primitives={primitives}
             previewMoves={previewMoves}
