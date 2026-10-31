@@ -849,6 +849,47 @@ function ParamFields(props: {
           </p>
         </>
       );
+    case 'swarfFinish': {
+      const isBall = props.tool?.type === 'ball';
+      return (
+        <>
+          <NumberField
+            label="Step over (mm)"
+            value={op.stepOver}
+            min={0.1}
+            step={0.1}
+            title="The contact grid's density: θ rows this much ARC apart at the stock radius, X cells at half that (the rotary grid contract — the finish matches the rough's grid cell-for-cell)"
+            onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)}
+          />
+          {isBall && (
+            <NumberField
+              label="Glancing floor (n·z)"
+              value={op.glancingFloor ?? 0.3}
+              min={0.05}
+              step={0.05}
+              title="The ball's window floor: machine normal-z attitudes below it put the contact too near the ball's equator (shaft junction); normals flatter than the floor have no window at all (reported unreachable). Default 0.3"
+              onCommit={(v) => upd({ glancingFloor: v } as Partial<JobOp>)}
+            />
+          )}
+          <p className="hint">
+            the true 4D finish: the tool hugs the surface with ALL FOUR AXES moving — every surface
+            cell rotates to its own contact attitude, whole patches swept as one long monotone-A
+            pass at G93 inverse time. Not fixed angles: the attitude follows the surface everywhere
+            it bends. Kernel by tool: a flat or corn endmill presents the FLANK (the normal against
+            the flute's side); a ball endmill presents the glancing WINDOW (the normal up, the
+            general-coverage pass that cleans what the side cannot hug). Assumes a rough ran ahead —
+            run a 4D contour or rotary contour at allowance first. The summary reports every cell
+            the envelope cannot reach (twin-blade clips, unreachable normals) — left standing,
+            never silently skipped
+          </p>
+          <p className="hint detail">
+            honest time: a full-wrap patch is rotary-ceiling clamped (≥9s per revolution) — the long
+            slow sweeps are the cut, not a bug. Multiple patches retract and re-approach between
+            them; A only ever advances
+          </p>
+        </>
+      );
+    }
     case 'spiralCarve':
       return (
         <>
@@ -1333,6 +1374,7 @@ export function OpsPanel(props: Props) {
           next = { ...next, stepDown, stepOver } as JobOp;
           break;
         case 'rasterContour':
+        case 'swarfFinish':
           next = { ...next, stepOver } as JobOp;
           break;
         case 'threadMill': {

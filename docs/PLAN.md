@@ -876,6 +876,158 @@ methods give the highest-accuracy finish — the ball-kernel raster ops —
 and note that section-based ladders (waterline family) cut ball tools
 as full-diameter discs.
 
+## The true 4D finishing pass — normal-following contact envelopes (Alice's SWARF ruling, 2026-10-30)
+
+Origin: a Makera video (a Fusion toolpath) — an endmill/corn bit
+tracing a propeller blade's crest with the SIDE of the tool, long slow
+simultaneous X-Y-Z-A sweeps. Alice's ruling: the final pass must NOT
+pick fixed rotational angles — the tool's cutting face must match the
+object's face, all four axes moving to hold that match.
+
+THE FRAME: the spindle never tilts, so the tool's attitude is fixed
+and the PART supplies every contact angle — per surface point,
+rotation A sweeps its normal through every non-X-parallel attitude
+exactly once per revolution. "Face matches face" is therefore a
+per-cell ALIGNMENT angle — for flank contact at the tool's −Y side
+(the pinned deliverable, swarfFinish.ts): **A\* = atan2(n.y, n.z) +
+90°** normalized [0,360), verified end-to-end through
+indexedPointRotation (the +Y attitude is A\*+180°). Each tool shape
+defines a CONTACT ENVELOPE around that alignment:
+
+- FLAT/CORN SIDE (SWARF/flank — the video's cut): contact iff the
+  normal is exactly horizontal at A\*; the flute's span must cover the
+  contact height (fluteLength honesty — taller flanks need stepped
+  passes or reporting); on cross-section-convex parts the tool's
+  lower column clears automatically, concave flanks need the
+  column-clearance check (milestone 2).
+- FLAT BOTTOM (disc): normal ∥ tool axis — the raster-in-rotated-frame
+  case; separate kernel, later.
+- BALL (hemisphere): a WINDOW around A\* down to a glancing floor
+  (user knob, default n_z ≈ 0.3) — the general-coverage pass that
+  cleans what the side cannot hug.
+- V-FLANK: normal at the fixed half-angle — last.
+
+THE PLANNER: contact map per (x,θ) cell (surface point + outward
+normal + A\* + axial rake) → contact PATCHES = connected cell sets
+sweepable by one continuous monotone-A pass → per patch ONE long
+simultaneous XYZA sweep (G93, F on every line, rotary-ceiling clamped
+— the spiral-family emission machinery is the writer), A's RATE
+following the geometry (dwell on hard-to-align curvature, fast on
+easy wraps). Retract + re-approach between patches. Cells no envelope
+reaches are REPORTED (the rough's honesty class), never silent.
+
+Honest limits: pure-X normals are invisible to the radial sample (the
+implicit unreachable class, same as the rough's map); near-X normals
+are razor engagement — flagged by the axial-rake metric and admitted
+only when the milestone-2 clearance check passes; concave narrower
+than the tool; rotary-ceiling timing (surface an honest estimate — a
+full-wrap sweep is ≥9s minimum; propeller-class parts are genuinely
+slow, the video's "long slow sweeps" is exactly this).
+
+BUILD ORDER (Alice confirmed): SWARF flat-side first, ball glancing
+second, V-flank last. One op kind, kernel picked by the op's tool.
+
+MILESTONES: (1) the contact map (src/cam/swarfFinish.ts,
+buildContactMap: outward point + healed face normal + A\* + rake per
+cell, analytic-fixture pinned); (2) the flute column-clearance check
+per contact (a BVH column test at A\* — the gouge/no-gouge verdict);
+(3) patch segmentation + monotone-A pass emission — DONE 2026-10-31
+(segmentContactPatches: connectivity AND wrap-aware-attitude merge,
+default tol 2× the θ-row pitch — pure connectivity over-merges, probed;
+emitSwarfPass: greedy neighbor-chained monotone walk, per-pass stall
+folds, G93 F-every-line with the rotary ceiling; holed bands fragment
+into honest retracts — a weaving band-sweep planner is parked);
+(4) coverage report + op wiring + honest time — DONE 2026-10-31 (the
+`swarfFinish` op kind end to end: gates, map, verdict, segmentation,
+per-patch emission, coverage summary + honest time). COMMITTEE
+2026-10-31 (5–0, probes in the session record): the milestone-2
+segment's material direction carried a sign slip — (0, −sinA*, cosA*)
+instead of (0, +sinA*, cosA*) — invisible at planar attitudes 0/180
+(every planar fixture) and a MIRROR at every other one; the old
+"propeller honesty" pins (blade B all-CLIPPED) measured that mirror,
+and their brute-force verification was circular (it sampled the same
+back-rotated segment, not an independent oracle — which would have
+flagged a bare convex cylinder reading ALL-CLIPPED as physically
+impossible). The column is now CONSTRUCTED (indexedPointRotation of
+its two machine endpoints — no hand sign exists); both propeller
+blades clear (tangent to their own bodies, ≥3.634mm from the twin).
+FILED, separate pre-existing map defect: θ=0 rays grazing exactly
+along facet-boundary edges tunnel to the far side and heal INWARD —
+corrupt p/n pairs whose stances genuinely foul (6/325 on the test
+cylinders, sign-independent, pinned as the row-0 artifact class; fix
+= ray nudge, its own pause);
+(5) the ball window kernel — DONE 2026-10-31 (ballClearanceCheck /
+ballAttitudeDeg / ballToolCenter + emitSwarfPass's `attitude` pick:
+the window CENTERED on the normal-UP attitude φ = atan2(n.y,n.z) =
+align − 90°, capsule = sphere + shaft CONSTRUCTED through
+indexedPointRotation(−φ) on both machine endpoints — no hand sign; the
+glancing-floor knob (default n_z 0.3) empties windows whose normals ride
+flatter than it; CENTER-ONLY verdicts, per-cell window search PARKED.
+Shares the map, segmentation, and monotone-A writer verbatim — the walk
+is attitude-difference-driven, and the ball's constant −90° shift
+preserves every difference. Field test first: her knight at her quoted
+s=0.6 grid — the ball recovers 81,253/82,440 (98.6%) vs the flank's
+21,481 (26%), flute length a non-factor, row-0 artifact clean on her
+mesh; the sphere-at-contact ceiling was probed BEFORE the kernel
+existed (98.3% Ø3.175 / 99.1% Ø1.5) and the kernel landed on 98.6%.
+Test lesson, twice over: the first pin hand-generalized a Ø1.5-f4
+probe to Ø2/Ø6-f20 (3 red); re-probed — rows ≥ 1 clear at every Ø ×
+flute (the convex-tangent construction), row-0 artifact cells foul
+Ø2/Ø6 at f20 (6 clips, all j=0 — the flute's own artifact cells), and
+the floor-gate test needed the CONE (ρ = 0.989) because a prism's
+normals are exactly radial — no sub-1 floor gates anything there).
+Wiring: one op kind, kernel by tool (flat/corn → flank, ball →
+window), glancingFloor knob on the op + panel, V-flank gate honest.
+THE SAME DAY, HER FIELD TEST GROUND THE PART (Ø2.5 f15 ball: "it
+gouges and reds on the neck the nose and the through cut at the base";
+sim: 156 rapid-gouge + 307 shank-contact moves) — committee (member 2,
+minimal diff, verified in main): the shipped kernel carried a
+ONE-CHARACTER bounds slip in the shapecast cull (box.min.y vs
+bb.MAX.y) that skipped every BVH node dipping into the capsule's
+y-band — 1,404 of her 17,534 cells read falsely CLEAR and the sweep
+ran through solid material (the gouge class) — plus the shank was
+modeled at the BALL's Ø: tight cells cleared the model while her
+Ø3.175 shank ground (the 307). FIX: the cull typo + a TWO-BAND
+capsule (ball toolR swept C..C+toolR; shaft shaftR =
+max(toolR, shaftDiameter ?? diameter)/2 over C+toolR..C+flute) — a
+single wide radius probed and REJECTED (clips 17,511/17,534, every
+concave cell the ball fits). Honest re-price: her knight at her
+quoted grid reads 77,832/82,440 (94.4%) under the fixed kernel — the
+typo had hidden 3,421 genuinely blocked cells (the 98.6% above was
+the typo's own number); the fat shank is verdict-silent on convex
+walls (probed zero flips on the fixture) and bites only concave
+geometry (72 cells on her mesh).
+HER POST-FIX RUN CONFIRMS END TO END: "3857 ball patch(es), 15672/17534
+(89%) swept, ~355.9 min · 1862 unreachable" — the 1862 is EXACTLY the
+fixed kernel's verdict on her s=1.3 grid; shank reds 307→6 (first at
+198301, the deep base channel); yellow 617→64; visually fine.
+FILED FOR THE REVISIT (Alice, 2026-10-31, "note everything and move on"):
+(1) THE PATCH PLANNER FRAGMENTS on smooth objects — 3,857 patches ≈
+4 cells/patch on her knight, "passes jumping back and forth, not the
+kind of long continuous curve tracing i was expecting... with a ball
+nose we would be tracing long CONTOURS from end to end (this object is
+almost entirely continuous smooth curves)". The revisit: a
+CONTOUR-FOLLOWING planner for ball tools (trace the surface's own
+curves end-to-end — iso-X rings / spiral wraps / feature contours —
+instead of tiny attitude-fragments), subsuming the PARKED band-sweep
+weaver. (2) THE TIP-VS-CENTER Z QUESTION, UNRESOLVED: the adversary
+measured the ball emission writing ball-CENTER z while the app
+contract (rotaryCarve.ts:983) and sim pose the TIP (a Ø2.5 ball would
+float ~1.25mm and cut nothing on the machine) — but her tip-frame sim
+shows the finish CUTTING and "visually fine", which contradicts the
+float. EITHER her sim poses center-referenced for ball tools (then
+machine ≠ sim — dangerous) or the finding is off. RESOLVE against the
+MakeraStudio ball-nose corpus + docs/makera-dialect.md (and her
+machine, ground truth) BEFORE the next ball cut; until then the
+emission stands as committed. (3) CONTOUR4D's RAPID-PLUNGE GOUGES —
+her 53 sim gouges (first at move 147627, unchanged by the ball fix)
+are that op's entry convention descending through standing material —
+its OWN pause. (4) THE SHANK CORRIDOR, RESIDUAL 6 — contacts vs
+STANDING stock (the kernel verdicts the model only); verdict-vs-report
+is a mechanism choice at the revisit. (5) The 64 yellow = no rough at
+final size, the documented workflow class. NEXT FOCUS (her word):
+the basic, immediately useful LASER ENGRAVING modes.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
