@@ -135,24 +135,48 @@ export interface GenContext {
   prevRpm?: number;
 }
 
+/**
+ * The op palette, in ADD-ORDER (the op row's kind select reads this
+ * top to bottom). The 2026-10-31 tidy (Alice's rulings): FLAT ops first
+ * (run in 3-axis AND 4-axis — no badge, the rotary prefixes below are
+ * what mark the axis class), then the ROTARY ops — one consistent
+ * family word, "Rotary" (never "cylinder"/"ring"/"4-axis" — those all
+ * meant the same thing), EXCEPT the two advanced surface-followers,
+ * which keep their "4D" badge deliberately (Alice: they are mostly just
+ * another class of rotary op but they do try to be more advanced).
+ * "Contour" is a deliberate family word — every Contour op follows the
+ * model's surface (Waterline/Raster/Rotary/4D), vs the geometric ops
+ * (Pocket/Profile/Drill) and artwork (Engrave). NO "rough"/"finish" in
+ * names — rough vs finish is the USER's call per op (the finishingOnly
+ * checkbox), except 4D Polish, the one op incapable of roughing.
+ * "Rotary groove", not "Rotary Engrave" (Engrave already does artwork)
+ * and not "Rotary pocket" (it traces grooves, it does not clear areas).
+ * ROTARY ORDER (Alice, 2026-10-31): setup → size → features → surface
+ * following, the 4D pair last: Index, Rotary face, Rotary chamfer,
+ * Rotary groove, Rotary thread, Rotary contour, then 4D Contour and
+ * 4D Polish. The kind select draws a disabled separator line above
+ * Index (OpsPanel) — the palette reads as two labeled sections.
+ */
 export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolean }[] = [
+  // ---- flat ops (3-axis and 4-axis) ----
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
-  { kind: 'slicePocket', label: 'Slice pocket' },
-  { kind: 'waterline', label: 'Waterline contour' },
-  { kind: 'contour4d', label: '4D contour (multi-orientation rough)', rotaryOnly: true },
-  { kind: 'rasterContour', label: 'Raster contour (3D finish)' },
-  { kind: 'rotaryCarve', label: 'Rotary contour (4-axis)', rotaryOnly: true },
-  { kind: 'swarfFinish', label: '4D finish (SWARF flank)', rotaryOnly: true },
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
-  { kind: 'cylChamfer', label: 'Cylinder chamfer (4-axis)', rotaryOnly: true },
-  { kind: 'index', label: 'Index (4-axis)', rotaryOnly: true },
-  { kind: 'faceCylinder', label: 'Face cylinder (4-axis)', rotaryOnly: true },
-  { kind: 'spiralCarve', label: 'Spiral carve (4-axis)', rotaryOnly: true },
-  { kind: 'engrave', label: 'Engrave (artwork paths)' },
-  { kind: 'thread', label: 'Thread (4-axis)', rotaryOnly: true },
-  { kind: 'threadMill', label: 'Thread mill (3-axis)' },
+  { kind: 'engrave', label: 'Engrave' },
+  { kind: 'slicePocket', label: 'Slice pocket' },
+  { kind: 'waterline', label: 'Waterline Contour' },
+  { kind: 'rasterContour', label: 'Raster Contour' },
+  { kind: 'threadMill', label: 'Thread mill' },
+  // ---- rotary ops (4-axis only) ----
+  { kind: 'index', label: 'Index', rotaryOnly: true },
+  { kind: 'faceCylinder', label: 'Rotary face', rotaryOnly: true },
+  { kind: 'cylChamfer', label: 'Rotary chamfer', rotaryOnly: true },
+  { kind: 'spiralCarve', label: 'Rotary groove', rotaryOnly: true },
+  { kind: 'thread', label: 'Rotary thread', rotaryOnly: true },
+  { kind: 'rotaryCarve', label: 'Rotary contour', rotaryOnly: true },
+  { kind: 'contour4d', label: '4D Contour', rotaryOnly: true },
+  { kind: 'swarfFinish', label: '4D Polish', rotaryOnly: true },
 ];
 
 /**
