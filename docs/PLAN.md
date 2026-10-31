@@ -997,6 +997,36 @@ typo had hidden 3,421 genuinely blocked cells (the 98.6% above was
 the typo's own number); the fat shank is verdict-silent on convex
 walls (probed zero flips on the fixture) and bites only concave
 geometry (72 cells on her mesh).
+HER POST-FIX RUN CONFIRMS END TO END: "3857 ball patch(es), 15672/17534
+(89%) swept, ~355.9 min · 1862 unreachable" — the 1862 is EXACTLY the
+fixed kernel's verdict on her s=1.3 grid; shank reds 307→6 (first at
+198301, the deep base channel); yellow 617→64; visually fine.
+FILED FOR THE REVISIT (Alice, 2026-10-31, "note everything and move on"):
+(1) THE PATCH PLANNER FRAGMENTS on smooth objects — 3,857 patches ≈
+4 cells/patch on her knight, "passes jumping back and forth, not the
+kind of long continuous curve tracing i was expecting... with a ball
+nose we would be tracing long CONTOURS from end to end (this object is
+almost entirely continuous smooth curves)". The revisit: a
+CONTOUR-FOLLOWING planner for ball tools (trace the surface's own
+curves end-to-end — iso-X rings / spiral wraps / feature contours —
+instead of tiny attitude-fragments), subsuming the PARKED band-sweep
+weaver. (2) THE TIP-VS-CENTER Z QUESTION, UNRESOLVED: the adversary
+measured the ball emission writing ball-CENTER z while the app
+contract (rotaryCarve.ts:983) and sim pose the TIP (a Ø2.5 ball would
+float ~1.25mm and cut nothing on the machine) — but her tip-frame sim
+shows the finish CUTTING and "visually fine", which contradicts the
+float. EITHER her sim poses center-referenced for ball tools (then
+machine ≠ sim — dangerous) or the finding is off. RESOLVE against the
+MakeraStudio ball-nose corpus + docs/makera-dialect.md (and her
+machine, ground truth) BEFORE the next ball cut; until then the
+emission stands as committed. (3) CONTOUR4D's RAPID-PLUNGE GOUGES —
+her 53 sim gouges (first at move 147627, unchanged by the ball fix)
+are that op's entry convention descending through standing material —
+its OWN pause. (4) THE SHANK CORRIDOR, RESIDUAL 6 — contacts vs
+STANDING stock (the kernel verdicts the model only); verdict-vs-report
+is a mechanism choice at the revisit. (5) The 64 yellow = no rough at
+final size, the documented workflow class. NEXT FOCUS (her word):
+the basic, immediately useful LASER ENGRAVING modes.
 
 ## Candidate future features (gap analysis, 2026-10-28)
 
