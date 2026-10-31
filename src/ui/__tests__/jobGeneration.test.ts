@@ -1822,10 +1822,10 @@ describe('engrave generation: fill mode (round 2)', () => {
     }
   });
 
-  it('outline+fill rasters between the boundaries — the inset is the TIP radius, not the shank', () => {
+  it('fill+outline rasters between the boundaries — the inset is the TIP radius, not the shank', () => {
     // the round-2 bug: inset = shank Ø/2 = 1.5875 kept the raster ~1.5mm
     // off every boundary; the tip-width rule (round 1) says 0.05
-    const res = generateJobOp(op({ fillMode: 'outline+fill', fillStepOver: 1 }), ctx);
+    const res = generateJobOp(op({ fillMode: 'fill+outline', fillStepOver: 1 }), ctx);
     expect(res.error).toBeNull();
     const ys = scanYs(res);
     expect(ys.length).toBeGreaterThan(0);
@@ -1836,8 +1836,48 @@ describe('engrave generation: fill mode (round 2)', () => {
     expect(res.summary).toContain('1 path(s) + 11 fill line(s)');
   });
 
+  it('fill+outline cuts the raster FIRST, the outline rides on top (Alice 2026-10-31)', () => {
+    const res = generateJobOp(op({ fillMode: 'fill+outline', fillStepOver: 1 }), ctx);
+    expect(res.error).toBeNull();
+    // the first cutting move sits on a scanline (−4.95), never the
+    // perimeter (±5); the LAST cut ends on the outline's edge
+    const cuts = res.moves.filter((m) => !m.rapid && m.words.y !== undefined);
+    expect(cuts[0].words.y!).toBeCloseTo(-4.95, 6);
+    const last = cuts[cuts.length - 1];
+    expect(Math.abs(last.words.y!)).toBeCloseTo(5, 6);
+  });
+
+  it('fill only rasters with NO outline pass', () => {
+    const res = generateJobOp(op({ fillMode: 'fill', fillStepOver: 1 }), ctx);
+    expect(res.error).toBeNull();
+    expect(res.summary).toContain('0 path(s) + 11 fill line(s)');
+    // every cut sits strictly inside the rect — the perimeter never cuts
+    for (const m of res.moves) {
+      if (m.rapid || m.words.y === undefined) continue;
+      expect(Math.abs(m.words.y)).toBeLessThan(4.999);
+    }
+  });
+
+  it('fill only with nothing paintable fails honestly', () => {
+    const open: Primitive = {
+      ...art,
+      id: 'prim-open',
+      pathMeta: [{ closed: false, filled: false }],
+    };
+    const ctx2: GenContext = {
+      ...ctx,
+      primitives: [open],
+      sources: sourcesFor(null, null, identityTransform(), [open]),
+    };
+    const res = generateJobOp(
+      op({ fillMode: 'fill', featureIds: ['p:prim-open:path:0'] }),
+      ctx2,
+    );
+    expect(res.error).toMatch(/fill only/);
+  });
+
   it('a missing fillStepOver defaults from the SAME tip width the inset reads', () => {
-    const res = generateJobOp(op({ fillMode: 'outline+fill' }), ctx);
+    const res = generateJobOp(op({ fillMode: 'fill+outline' }), ctx);
     expect(res.error).toBeNull();
     // tip 0.1 → 0.1 stride over a 9.9mm band ≈ 100 lines (the old
     // 0.5·shankØ default would give ~7)

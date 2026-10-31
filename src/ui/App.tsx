@@ -26,6 +26,7 @@ import type {
   Tool,
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
+import { decodeBitmapFile, type GrayBitmap } from '../core/bitmapImport';
 import { planeExtents, transformFn } from './featureOverlays';
 import { opEdgeSource, resolveFeature, sourcesFor, splitSelection } from './featureSources';
 import { threadTargetsFromSelection } from './opTargets';
@@ -62,6 +63,7 @@ import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
 import { CalibrationDialog } from './CalibrationDialog';
 import { SimulateDialog } from './SimulateDialog';
+import { BitmapImportDialog, type BitmapImportResult } from './BitmapImportDialog';
 import { simStepDownFor } from '../sim/stepDown';
 import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
@@ -96,6 +98,10 @@ const TOOL_STORAGE_KEY = 'simple.cam.tool-library.v5';
  */
 const DETECTION_TRIANGLE_CAP = 100_000;
 const DETECTION_DECIMATE_TARGET = 50_000;
+
+/** Raster images route to the bitmap-import dialogue (a relief model or
+ * halftone artwork) — before the STL fallback, by extension or MIME. */
+const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif)$/i;
 
 function loadToolLibrary(): Tool[] {
   try {
@@ -195,6 +201,11 @@ export function App() {
   /** the last tool selected in any op — default for new operations */
   const [lastToolId, setLastToolId] = useState<string | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
+  /** the bitmap-import dialogue's open state: the decoded image awaiting
+   *  its Heightmap / Artwork choice */
+  const [bitmapImport, setBitmapImport] = useState<{ name: string; gray: GrayBitmap } | null>(
+    null,
+  );
 
   // Feature detection runs on a DECIMATED copy above the triangle cap: a
   // fine relief mesh (scans, coin art) has no pickable planes, and full-res
@@ -284,12 +295,14 @@ export function App() {
     return out;
   }, [activeFeatureIds, sources]);
 
-  /** the FILL SHADE gate (2026-10-31, round 2): the op being edited is in
-   * 'outline+fill' mode — the artwork's closed+filled regions pick in the
-   * viewport (shade follows the current selection). Global selections
-   * never shade (there is no op whose fill mode could drive it). */
+  /** the FILL SHADE gate (2026-10-31, round 2): the op being edited is in a
+   * FILL mode ('fill+outline' or 'fill') — the artwork's closed+filled
+   * regions pick in the viewport (shade follows the current selection).
+   * Global selections never shade (there is no op whose fill mode could
+   * drive it). */
   const editingOp = editingOpId !== null ? ops.find((o) => o.id === editingOpId) : undefined;
-  const fillShade = editingOp?.kind === 'engrave' && editingOp.fillMode === 'outline+fill';
+  const fillShade =
+    editingOp?.kind === 'engrave' && (editingOp.fillMode ?? 'outlines') !== 'outlines';
 
   /** machine-space position of a feature by id (A=0 frame), for depth
    * prefills and index-angle computation */
@@ -484,6 +497,31 @@ export function App() {
     setSelection([]);
   };
 
+  /** Shift+drag box select (Viewport): UNION the ids in — a rubber band
+   *  never deselects. Mirrors toggleSelect's routing (op selection while
+   *  editing, else the global one). No prefill logic on bulk select: the
+   *  depth-prefill on the first path click is a single-click nicety, not
+   *  something to run once per 500 dots. */
+  const boxSelect = (ids: string[]) => {
+    if (ids.length === 0) return;
+    if (editingOpId) {
+      setOps((prev) =>
+        prev.map((o) => {
+          if (o.id !== editingOpId) return o;
+          const have = new Set(o.featureIds);
+          const add = ids.filter((x) => !have.has(x));
+          return add.length === 0 ? o : { ...o, featureIds: [...o.featureIds, ...add] } as JobOp;
+        }),
+      );
+      return;
+    }
+    setSelection((prev) => {
+      const have = new Set(prev);
+      const add = ids.filter((x) => !have.has(x));
+      return add.length === 0 ? prev : [...prev, ...add];
+    });
+  };
+
   /** Drop-an-SVG: parse the line work and create the artwork primitive,
    * stock-prefilled (docs/PLAN.md "Engrave + artwork import"). Text and
    * shapes are the editor's job — Inkscape "object to path" first. */
@@ -497,6 +535,37 @@ export function App() {
       return;
     }
     const p = artworkFromSvg(art, stock);
+    setPrimitives((prev) => [...prev, p]);
+    setSelectedObjectId(p.id);
+  };
+
+  /** The bitmap dialogue's Confirm: a heightmap lands in the MODEL slot —
+   *  loadStl's swap semantics NARROWED (Alice, 2026-10-31): the relief
+   *  replaces the MODEL only, so model-source ids (bare) die with the old
+   *  model, but primitive (`p:`) and job-published (`o:`) ids SURVIVE and
+   *  the op being edited stays armed — her engrave held live artwork paths
+   *  that a full loadStl-style clear wiped to grey "no features". The sim
+   *  still dies with the old model it carved. Halftone artwork follows the
+   *  addArtworkFromFile pattern. */
+  const confirmBitmapImport = (result: BitmapImportResult) => {
+    setBitmapImport(null);
+    if (result.kind === 'heightmap') {
+      setGeometry(result.geometry);
+      setModelName(result.name);
+      setModelBytes(null); // the old STL must not ride job save under the new name
+      setTransform(identityTransform()); // a stale scale/rotation would skew the relief
+      const survives = (id: string) => id.startsWith('p:') || id.startsWith('o:');
+      setSelection((prev) => prev.filter(survives));
+      setOps((prev) => prev.map((o) => ({ ...o, featureIds: o.featureIds.filter(survives) })));
+      setGenerated({});
+      setSelectedObjectId('model');
+      setPreviewMoves(null);
+      carveSim.dispose(); // the sim carved the old model's moves
+      setShowSim(false);
+      setTab('model');
+      return;
+    }
+    const p = artworkFromSvg(result.art, stock);
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
   };
@@ -1249,6 +1318,15 @@ export function App() {
       void addArtworkFromFile(f);
       return;
     }
+    if (IMAGE_EXT.test(f.name) || f.type.startsWith('image/')) {
+      try {
+        const gray = await decodeBitmapFile(f);
+        setBitmapImport({ name: f.name, gray });
+      } catch (e) {
+        window.alert(`could not read the image: ${String(e)}`);
+      }
+      return;
+    }
     if (/\.json$/i.test(f.name) || (await f.slice(0, 4096).text()).includes(JOB_FORMAT)) {
       void openJob(f);
       return;
@@ -1424,6 +1502,7 @@ export function App() {
             measureMode={measureMode}
             edgePickingEnabled={editingOpId === null}
             opSelection={resolvedSelection}
+            selectionIsOp={editingOpId !== null}
             fillShade={fillShade}
             primitives={primitives}
             previewMoves={previewMoves}
@@ -1469,6 +1548,7 @@ export function App() {
             }}
             onToggleSelect={toggleSelect}
             onClearSelection={clearSelection}
+            onBoxSelect={boxSelect}
           />
           {/* the sim transport: only while the Simulation tick is on AND a
             * completed/running simulation exists (a fresh sim has chunks —
@@ -1479,7 +1559,7 @@ export function App() {
           <div className="drop-hint">
             {geometry
               ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-              : 'drop an STL, an SVG (artwork), or a saved job here'}
+              : 'drop an STL, an SVG, a PNG/JPEG, or a saved job here'}
           </div>
         </div>
         <aside>
@@ -1624,6 +1704,15 @@ export function App() {
           initialToolId={lastToolId}
           onClose={() => setShowCalibration(false)}
           onGenerate={generateCalibration}
+        />
+      )}
+      {bitmapImport && (
+        <BitmapImportDialog
+          name={bitmapImport.name}
+          gray={bitmapImport.gray}
+          stock={stock}
+          onConfirm={confirmBitmapImport}
+          onCancel={() => setBitmapImport(null)}
         />
       )}
       {showSimulate && (

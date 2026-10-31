@@ -67,6 +67,23 @@ header {
 main { display: flex; flex: 1; min-height: 0; }
 .viewport { position: relative; flex: 1; min-width: 0; }
 .viewport-canvas { position: absolute; inset: 0; }
+/* shift-drag rubber-band box select — the app's selection blue, dashed */
+.box-select-band {
+  position: absolute;
+  border: 1px dashed #7fdfff;
+  background: rgba(127, 223, 255, 0.12);
+  pointer-events: none;
+  z-index: 4;
+  display: none;
+}
+/* bitmap import dialogue: the source greyscale + halftone dot preview */
+.bitmap-preview {
+  display: block;
+  border: 1px solid #31373e;
+  border-radius: 4px;
+  margin: 8px 0;
+  max-width: 100%;
+}
 .drop-hint {
   position: absolute;
   bottom: 12px;

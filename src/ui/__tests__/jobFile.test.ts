@@ -461,15 +461,25 @@ describe('normalizeJobOps: engrave fillMode', () => {
   // this shape: fill: true, fillStepOver 0.1, both ankh paths selected
   const base = { id: 'jobop-9', toolId: 't1', featureIds: ['p:prim-1:path:0'] };
 
-  it('migrates the boolean era: fill: true → fillMode outline+fill, key dropped', () => {
+  it('migrates the boolean era: fill: true → fillMode fill+outline, key dropped', () => {
     const out = normalizeJobOps([
       { ...base, kind: 'engrave', depth: 0.2, stepDown: 1, finishingOnly: false, fill: true, fillStepOver: 0.1 },
     ] as unknown as JobOp[]);
     expect(out[0]).toEqual({
       ...base, kind: 'engrave', depth: 0.2, stepDown: 1, finishingOnly: false,
-      fillMode: 'outline+fill', fillStepOver: 0.1,
+      fillMode: 'fill+outline', fillStepOver: 0.1,
     });
     expect((out[0] as { fill?: unknown }).fill).toBeUndefined();
+  });
+
+  it('renames the two-way day: fillMode outline+fill → fill+outline (fill-first order)', () => {
+    const out = normalizeJobOps([
+      { ...base, kind: 'engrave', depth: 0.2, stepDown: 1, fillMode: 'outline+fill', fillStepOver: 0.1 },
+    ] as unknown as JobOp[]);
+    expect(out[0]).toEqual({
+      ...base, kind: 'engrave', depth: 0.2, stepDown: 1,
+      fillMode: 'fill+outline', fillStepOver: 0.1,
+    });
   });
 
   it('fill: false migrates to absent fillMode (byte-identical outlines behavior)', () => {
@@ -484,7 +494,7 @@ describe('normalizeJobOps: engrave fillMode', () => {
   it('a current-format op passes through untouched', () => {
     const op: JobOp = {
       ...base, kind: 'engrave', depth: 0.2, stepDown: 1,
-      fillMode: 'outline+fill', fillStepOver: 0.1,
+      fillMode: 'fill+outline', fillStepOver: 0.1,
     };
     expect(normalizeJobOps([op])).toEqual([op]);
   });
