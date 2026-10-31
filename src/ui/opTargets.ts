@@ -492,7 +492,7 @@ export function chamferTargetsFromSelection(
   // as pocketing so the message explains itself. One geometry CAN never
   // face up under indexing, and deserves its own message: a circle whose
   // axis is PARALLEL to the rotation axis (a rod end, a step edge) just
-  // spins in place at every datum angle — that's the cylinder chamfer
+  // spins in place at every datum angle — that's the Rotary chamfer
   // op's job, not a datum problem.
   if (selection.length > 0) {
     for (const c of features.circles) {
@@ -502,7 +502,7 @@ export function chamferTargetsFromSelection(
         throw new Error(
           'a circle around the stock axis can never be chamfered in the cutting frame — ' +
             'its axis is the rotation axis, so indexing spins it in place. Use the ' +
-            'Cylinder chamfer op for rod ends and step edges',
+            'Rotary chamfer op for rod ends and step edges',
         );
       }
     }

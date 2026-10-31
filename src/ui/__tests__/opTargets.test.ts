@@ -595,12 +595,12 @@ describe('cylChamferTargetsFromSelection', () => {
     ).toBeNull();
   });
 
-  it('the flat chamfer gate points a stock-axis circle at the cylinder chamfer op', () => {
+  it('the flat chamfer gate points a stock-axis circle at the Rotary chamfer op', () => {
     // a circle around the rotation axis can never face up under indexing —
     // the error must say so instead of suggesting a datum fix
     expect(() =>
       chamferTargetsFromSelection(feats(xCircle('a', 0, 40)), ['a'], identityTransform()),
-    ).toThrowError(/Cylinder chamfer/);
+    ).toThrowError(/Rotary chamfer/);
   });
 });
 

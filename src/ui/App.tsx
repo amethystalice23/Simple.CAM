@@ -239,7 +239,7 @@ export function App() {
    * primitive (its features detected in local space, ids namespaced
    * `p:<primId>:` so they never collide with model ids), plus the job's
    * own edge circles (`o:` ids — face-op step edges + stock end rims,
-   * 4-axis only) for the cylinder chamfer op to anchor on */
+   * 4-axis only) for the Rotary chamfer op to anchor on */
   const sources = useMemo(() => {
     // the model source pairs features with the geometry they were detected
     // on — the decimated copy above the cap, else the full mesh
@@ -952,7 +952,7 @@ export function App() {
     });
   };
 
-  /** thread op: insert a Face cylinder toolpath right before it, prefilled
+  /** thread op: insert a Rotary face toolpath right before it, prefilled
    * to face the crest Ø (nominal − 2·tolerance) over the thread's X range —
    * its own tool, feeds, and step-over, fully editable as a normal op */
   const insertFacingOp = (op: JobOp) => {

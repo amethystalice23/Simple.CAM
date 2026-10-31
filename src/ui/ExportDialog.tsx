@@ -35,7 +35,7 @@ interface Props {
   /** recalculate every op (the ops page's Recalculate All) — fresh results
    *  arrive through the generated prop, rows and totals update in place */
   onRecalculateAll: () => void;
-  /** in-flight generation status ("Generating Waterline contour…"), null
+  /** in-flight generation status ("Generating Waterline Contour…"), null
    *  when idle — recalculation is disabled while a pass runs */
   generating?: string | null;
   onClose: () => void;

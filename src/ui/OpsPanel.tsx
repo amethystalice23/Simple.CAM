@@ -31,7 +31,7 @@ interface Props {
   editingOpId: string | null;
   expandedOpId: string | null;
   hasModel: boolean;
-  /** machine capability — gates the rotary ops (index, face cylinder) */
+  /** machine capability — gates the rotary ops (index, rotary face) */
   axisMode: AxisMode;
   /** the stock object — new ops derive their defaults from it */
   stock: Stock;
@@ -49,7 +49,7 @@ interface Props {
    * op's ⇩ is lit, the panel banners it, the next viewport click applies */
   picking: { opId: string; kind: FeaturePickKind } | null;
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
-  /** thread: insert a prefilled Face cylinder op right before it */
+  /** thread: insert a prefilled Rotary face op right before it */
   onInsertFacingOp: (op: JobOp) => void;
   /** thread mill: insert the prefilled prep op right before it (external =
    * a profile turning the boss, internal = a pocket opening the bore) */
@@ -62,7 +62,7 @@ interface Props {
   onSelectFeatures: (id: string | null) => void;
   onRecalcOne: (id: string) => void;
   onRecalcAll: () => void;
-  /** in-flight generation status ("Generating Waterline contour…"), null
+  /** in-flight generation status ("Generating Waterline Contour…"), null
    *  when idle — recalculation is disabled while a pass runs */
   generating?: string | null;
   /** discard all calculated toolpaths (the Clear button — ops keep their
@@ -432,7 +432,7 @@ function ParamFields(props: {
   /** one-shot feature picks (edge-tracing §5) — see DepthFields */
   picking: { opId: string; kind: FeaturePickKind } | null;
   onFeaturePick: (op: JobOp, kind: FeaturePickKind) => void;
-  /** thread: insert a prefilled Face cylinder op right before it */
+  /** thread: insert a prefilled Rotary face op right before it */
   onInsertFacingOp: (op: JobOp) => void;
   /** thread mill: insert the prefilled prep op right before it */
   onInsertPrepOp: (op: JobOp) => void;
@@ -1047,7 +1047,7 @@ function ParamFields(props: {
               className="secondary"
               disabled={props.axisMode !== '4-axis'}
               onClick={() => props.onInsertFacingOp(op)}
-              title="Insert a Face cylinder toolpath right before this thread, prefilled to face the crest Ø — its own tool, feeds, and step-over"
+              title="Insert a Rotary face toolpath right before this thread, prefilled to face the crest Ø — its own tool, feeds, and step-over"
             >
               Add facing toolpath
             </button>
@@ -1452,7 +1452,16 @@ export function OpsPanel(props: Props) {
                     if (next) props.onChangeOp({ ...next, id: op.id, featureIds: op.featureIds });
                   }}
                 >
-                  {OP_KINDS.map((k) => (
+                  {OP_KINDS.map((k, i) => [
+                    // a disabled separator line above the first rotary op
+                    // (Alice, 2026-10-31): the palette reads as the FLAT
+                    // section, then the labeled 4-axis section. Native
+                    // disabled-option styling grays it; it cannot be picked.
+                    OP_KINDS[i - 1] && k.rotaryOnly && !OP_KINDS[i - 1].rotaryOnly ? (
+                      <option key={`sep:${k.kind}`} disabled value="">
+                        — 4-axis only —
+                      </option>
+                    ) : null,
                     <option
                       key={k.kind}
                       value={k.kind}
@@ -1460,8 +1469,8 @@ export function OpsPanel(props: Props) {
                       disabled={k.rotaryOnly && props.axisMode !== '4-axis'}
                     >
                       {k.label}
-                    </option>
-                  ))}
+                    </option>,
+                  ])}
                 </select>
                 <span className="op-snippet" title={selectionSnippet(op, props.featureLabels)}>
                   {selectionSnippet(op, props.featureLabels)}
