@@ -22,6 +22,7 @@ import {
   planePick,
   pxPerMmAt,
   sampleVisibleAt,
+  transformFn,
   PATH_COLOR,
   PLANE_SELECT,
   SELECT_COLOR,
@@ -30,6 +31,7 @@ import {
   type MeasurePick,
   type NearestFeature,
 } from './featureOverlays';
+import { artworkFillTris } from './artworkFillRegions';
 
 const D2R = Math.PI / 180;
 
@@ -126,6 +128,11 @@ interface Props {
    * not operation targets (reserved for the later line-follow engrave) */
   edgePickingEnabled: boolean;
   opSelection: ResolvedSelection[];
+  /** the op being edited is in 'outline+fill' mode: the artwork's
+   * closed+filled regions are pickable (selected or not — a region click
+   * must be able to make the FIRST selection) and the SELECTED ones
+   * shade (display-only, a translucent infill of the selection blue) */
+  fillShade: boolean;
   primitives: Primitive[];
   /** generated moves to draw (PLAN.md "Toolpath preview") */
   previewMoves: Move[] | null;
@@ -215,6 +222,7 @@ export function Viewport({
   measureMode,
   edgePickingEnabled,
   opSelection,
+  fillShade,
   primitives,
   previewMoves,
   playbackMove,
@@ -252,6 +260,9 @@ export function Viewport({
   const sliceGroupRef = useRef<THREE.Group | null>(null);
   /** per-source overlay data — null-entry = no sources (nothing selectable) */
   const overlaysRef = useRef<SourceOverlay[]>([]);
+  /** the region-pick meshes (the op being edited, 'outline+fill'): the
+   * click picker raycasts these and resolves a region to its OWNER path */
+  const fillShadeMeshesRef = useRef<THREE.Mesh[]>([]);
   /** primitive meshes (non-indexed, source-aligned) for plane raycast picks */
   const primMeshesRef = useRef<THREE.Mesh[]>([]);
   const sourcesRef = useRef(sources);
@@ -320,13 +331,21 @@ export function Viewport({
     ortho.position.copy(persp.position);
     let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera =
       projectionRef.current === 'ortho' ? ortho : persp;
+    // __camera tracks the ACTIVE projection for the smoke drivers (they
+    // project world → screen through its matrices); swapProjection keeps
+    // it honest on a projection toggle
+    (window as unknown as { __camera?: THREE.Camera }).__camera = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // __renderer + __controls: the shade-smoke drivers re-render in-task
+    // for pixel readback and move the camera to test grazing views
+    (window as unknown as { __renderer?: THREE.WebGLRenderer }).__renderer = renderer;
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.setClearColor(0x10141a); // navcube tile backdrop (main scene has its own bg)
     el.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    (window as unknown as { __controls?: OrbitControls }).__controls = controls;
     rendererRef.current = renderer;
     cameraRef.current = camera;
     controlsRef.current = controls;
@@ -365,6 +384,7 @@ export function Viewport({
       }
       controls.object = camera;
       cameraRef.current = camera;
+      (window as unknown as { __camera?: THREE.Camera }).__camera = camera;
       controls.update();
     };
     swapProjectionRef.current = swapProjection;
@@ -518,6 +538,50 @@ export function Viewport({
       return null;
     };
 
+    /** A click inside a fill region resolves to that region's OWNING
+     * path — the region is one pickable surface whose pick lands in the
+     * same selection flow as a line click, never a feature of its own
+     * (Alice, 2026-10-31: "we currently cant click on a region thats
+     * filled"). Round 2: the pick mesh covers UNSELECTED regions too, so
+     * the first click can be a region click, and nested loops' fans
+     * overlap coplanarly — the DEEPEST owner wins the tie (a click in
+     * the ankh's counter toggles the counter, not the outline around
+     * it). A line snap still wins (checked first above). */
+    const fillRegionPickAt = (mx: number, my: number, w: number, h: number): SourcedPick | null => {
+      const meshes = fillShadeMeshesRef.current;
+      if (meshes.length === 0 || !pickAllows('path')) return null;
+      raycaster.setFromCamera(new THREE.Vector2((mx / w) * 2 - 1, -(my / h) * 2 + 1), camera);
+      const hits = raycaster.intersectObjects(meshes, false);
+      if (hits.length === 0) return null;
+      // hits come distance-sorted; the coplanar fan stack sits within eps
+      const min = hits[0].distance;
+      let best: THREE.Intersection | null = null;
+      let bestDepth = -Infinity;
+      for (const hit of hits) {
+        if (hit.distance > min + 1e-4) break;
+        const ud = hit.object.userData as { ownerDepths?: number[] };
+        const d = ud.ownerDepths?.[hit.faceIndex ?? -1] ?? -1;
+        if (d > bestDepth) {
+          bestDepth = d;
+          best = hit;
+        }
+      }
+      const ud = best?.object.userData as { sourceId?: string; featureIndices?: number[] } | undefined;
+      const fIdx = ud?.featureIndices?.[best?.faceIndex ?? -1] ?? -1;
+      if (!best || !ud?.sourceId || fIdx < 0) return null;
+      const source = sourcesRef.current.find((s) => s.id === ud.sourceId);
+      const path = source?.features.paths[fIdx];
+      if (!path) return null;
+      return {
+        kind: 'path',
+        index: fIdx,
+        sourceId: ud.sourceId,
+        center: best.point.clone(),
+        color: SELECT_COLOR,
+        text: 'artwork fill region',
+      };
+    };
+
     /** click target: the nearest VISIBLE feature across ALL sources, else
      * the plane under the face (model or primitive mesh) */
     const measurePickAt = (mx: number, my: number, w: number, h: number): SourcedPick | null => {
@@ -529,8 +593,10 @@ export function Viewport({
             sourceId: visible.entry.source.id,
           };
         }
-        // everything that snapped is hidden behind the surface — the
-        // plane under the cursor wins below
+        // everything that snapped is hidden behind the surface — a fill
+        // region under the cursor wins next, the plane after that
+        const region = fillRegionPickAt(mx, my, w, h);
+        if (region) return region;
       }
       // plane fallback: raycast the model mesh and the primitive meshes,
       // resolving the hit face through the OWNING source's faceToPlane —
@@ -1332,7 +1398,16 @@ export function Viewport({
 
     const entries: SourceOverlay[] = sources.map((source) => ({
       source,
-      data: buildFeatureOverlayData(source.features, source.transform),
+      // wrapped artwork frames densify the outline polylines (round 5:
+      // the fill shade's fineness rule, now on the lines too); flat and
+      // mesh sources pass null — their lines are already exact
+      data: buildFeatureOverlayData(
+        source.features,
+        source.transform,
+        source.artworkFrame?.kind === 'wrapped'
+          ? { diameter: source.artworkFrame.diameter }
+          : null,
+      ),
     }));
     for (const entry of entries) {
       const { data } = entry;
@@ -1407,6 +1482,89 @@ export function Viewport({
         selObjects.push(line);
       }
     }
+    // THE FILL SHADE + REGION PICK (Alice, 2026-10-31; round 2): in
+    // 'outline+fill' mode EVERY artwork source builds two meshes over its
+    // closed+filled paths. The pick mesh covers ALL of them — selected or
+    // not — invisible but raycastable, so a region click can make the
+    // FIRST selection ("i am unable to click within the ankh to select
+    // it"); each triangle carries its loop's feature index + nesting
+    // depth, the tie-break when nested fans stack (the counter beats the
+    // outline around it). The shade mesh renders only the SELECTED
+    // region — the clipper-polygonized triangles — in the selection
+    // blue @ 0.2, no depth write, on the frame's surface lift (flat 0.05
+    // along +Z, wrapped 0.05 radial — round 4: subdivision made the
+    // wrapped shade tessellate FINER than the stock, so the lift no
+    // longer needs the round-3 0.2 crutch) + polygon offset so it never
+    // z-fights model/stock.
+    const shadeMeshes: THREE.Mesh[] = [];
+    if (fillShade) {
+      for (const entry of entries) {
+        if (!entry.source.artworkFrame) continue; // artwork only
+        const frame = entry.source.artworkFrame;
+        const selected = new Set(
+          opSelection
+            .filter((s) => s.kind === 'path' && s.sourceId === entry.source.id)
+            .map((s) => s.index),
+        );
+        const tris = artworkFillTris(
+          entry.source.features.paths,
+          selected,
+          frame.kind === 'wrapped' ? 'wrapped' : 'flat',
+          frame.kind === 'wrapped' ? frame.diameter : 0,
+        );
+        if (tris.pick.length === 0) continue;
+        const xf = transformFn(entry.source.transform); // the pathLines placement, verbatim
+        const pos = tris.verts.map((v) => xf(v));
+        const mkGeo = (idx: number[]) => {
+          const g = new THREE.BufferGeometry().setFromPoints(pos);
+          g.setIndex(idx);
+          return g;
+        };
+        if (tris.shade.length > 0) {
+          const shade = new THREE.Mesh(
+            mkGeo(tris.shade.flat()),
+            new THREE.MeshBasicMaterial({
+              color: SELECT_COLOR,
+              transparent: true,
+              opacity: 0.2,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+              polygonOffset: true,
+              polygonOffsetFactor: -1,
+              // units -1 (round 4 measurement, probes/sweep-fill-shade.mjs):
+              // with the subdivided mesh the 0.05 lift wins 100% face-on
+              // even at -1 — the round-3 -8 was compensating the coarse
+              // mesh's 0.45mm chord dips, not the depth fight itself
+              polygonOffsetUnits: -1,
+            }),
+          );
+          shade.renderOrder = 6; // beside the selection highlights
+          shade.userData.sourceId = entry.source.id; // the smokes' handle
+          group.add(shade);
+          selObjects.push(shade);
+        }
+        // invisible-but-pickable: opacity 0 + colorWrite off so nothing
+        // ever renders, depthWrite off so nothing occludes — raycast only
+        const pick = new THREE.Mesh(
+          mkGeo(tris.pick.flatMap((t) => t.v)),
+          new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            colorWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        pick.userData.sourceId = entry.source.id;
+        pick.userData.featureIndices = tris.pick.map((t) => t.owner);
+        pick.userData.ownerDepths = tris.pick.map((t) => t.depth);
+        group.add(pick);
+        selObjects.push(pick);
+        shadeMeshes.push(pick);
+      }
+    }
+    fillShadeMeshesRef.current = shadeMeshes;
+
     const picks = picksFromSelection(opSelection, entries);
     if (picks.length === 2) {
       const conn = connectorLine(picks[0], picks[1]);
@@ -1441,8 +1599,9 @@ export function Viewport({
       }
       overlaysRef.current = [];
       hoverLineRef.current = null;
+      fillShadeMeshesRef.current = [];
     };
-  }, [sources, stock, displayLayers.features, opSelection, selectedObjectId]);
+  }, [sources, stock, displayLayers.features, opSelection, selectedObjectId, fillShade]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR.
   // THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): while a playback

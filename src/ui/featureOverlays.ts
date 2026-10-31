@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import type { CircleFeature, ModelTransform, Vec3 } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
+import { densifyWrappedPath } from './artworkFillRegions';
 
 /** In-plane extent of a plane group's member-triangle footprint. */
 export interface PlaneExtent {
@@ -378,10 +379,19 @@ function ringPoints(c: CircleFeature, xf: (v: Vec3) => THREE.Vector3, n: number)
   return pts;
 }
 
-/** Line objects for all features, in machine space. */
+/** Line objects for all features, in machine space. `wrapped` — artwork
+ * sources only — densifies the path polylines against that cylinder
+ * before the transform: the wrapped bend is baked into the local points,
+ * so a long document segment renders as one straight chord across a
+ * curving arc (round 5, Alice: worst raw edge 5.5mm surface / 24.7° arc,
+ * dipping 0.23mm below her Ø20 — the fill shade's round-4 defect, on the
+ * lines). Lengths and midpoints stay computed on the UN-subdivided points
+ * (the drawn polyline is presentation; the reported geometry is the
+ * feature). Flat frames pass null — coplanar lines are already exact. */
 export function buildFeatureOverlayData(
   features: DetectedFeatures,
   transform: ModelTransform,
+  wrapped?: { diameter: number } | null,
 ): FeatureOverlayData {
   const xf = transformFn(transform);
 
@@ -447,10 +457,19 @@ export function buildFeatureOverlayData(
     const pts = p.points.map((q) => xf(q));
     let len = 0;
     for (let i = 0; i < pts.length - 1; i++) {
-      pathPos.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
       len += pts[i].distanceTo(pts[i + 1]);
     }
-    pathSamples.push(pts);
+    // the DRAWN polyline densifies (wrapped only — flat lines are exact);
+    // the samples follow it so hover highlights and snapping read the
+    // same curve the eye sees, while len/mid above stay on the raw points
+    const draw =
+      wrapped && wrapped.diameter > 0
+        ? densifyWrappedPath(p.points, wrapped.diameter).map((q) => xf(q))
+        : pts;
+    for (let i = 0; i < draw.length - 1; i++) {
+      pathPos.push(draw[i].x, draw[i].y, draw[i].z, draw[i + 1].x, draw[i + 1].y, draw[i + 1].z);
+    }
+    pathSamples.push(draw);
     pathMid.push(pts[Math.floor(pts.length / 2)].clone());
     pathText.push(`artwork · L ${len.toFixed(2)} mm`);
   }

@@ -101,9 +101,34 @@ function parseTransform(text: string): Mat {
 export interface ImportedArtwork {
   /** flattened polylines, user units */
   paths: Vec2[][];
+  /** per-path topology + paint, parallel to `paths`: `closed` = the
+   *  subpath carried an explicit Z (or its flattened endpoints coincide
+   *  within the chord tolerance); `filled` = the SVG fill STATE that
+   *  reached it (own attr/style > inherited <g> > default = painted).
+   *  The engrave FILL pass reads these — "just because a path is closed
+   *  does not guarantee its filled" (Alice, 2026-10-31). */
+  meta: { closed: boolean; filled: boolean }[];
   /** document size in user units (viewBox preferred, else width/height) */
   width: number;
   height: number;
+}
+
+/**
+ * The SVG fill STATE declared on a tag, or null when it declares none
+ * (→ inherit). `fill="none"` and `fill-opacity: 0` unpaint; anything
+ * else (named colors, hex, url patterns — approximated as painted)
+ * paints. Defaults live at the CALLER: SVG's initial fill is black.
+ */
+function declaredFill(rest: string): boolean | null {
+  const fill = attr(rest, 'fill');
+  const style = attr(rest, 'style');
+  const styleFill = style?.match(/(?:^|;)\s*fill\s*:\s*([^;]+)/)?.[1]?.trim();
+  const styleOpacity = style?.match(/(?:^|;)\s*fill-opacity\s*:\s*([^;]+)/)?.[1]?.trim();
+  const opacity = attr(rest, 'fill-opacity') ?? styleOpacity;
+  const value = fill ?? styleFill;
+  if (opacity !== null && opacity !== undefined && parseFloat(opacity) === 0) return false;
+  if (value === undefined) return null;
+  return value.trim().toLowerCase() !== 'none';
 }
 
 /**
@@ -113,20 +138,16 @@ export interface ImportedArtwork {
  */
 export function parseSvgPaths(svgText: string, chordTol = 0.05): ImportedArtwork {
   const paths: Vec2[][] = [];
+  const meta: { closed: boolean; filled: boolean }[] = [];
   const stack: Mat[] = [];
+  const fillStack: boolean[] = [];
   let combined = IDENTITY;
+  // SVG's initial fill is BLACK — every path paints unless something
+  // says otherwise (the fill STATE, not the parsed geometry, decides)
+  let fillNow = true;
   let defsDepth = 0;
   let width = 0;
   let height = 0;
-
-  const emit = (d: string | null, own: string | null) => {
-    if (!d) return;
-    const m = own ? matMul(combined, parseTransform(own)) : combined;
-    for (const poly of parsePathData(d, chordTol)) {
-      const mapped = poly.map((p) => apply(m, p));
-      if (mapped.length >= 2) paths.push(mapped);
-    }
-  };
 
   for (const tag of svgText.matchAll(/<\s*(\/?)\s*([a-zA-Z]+)([^>]*)>/g)) {
     const closing = tag[1] === '/';
@@ -152,6 +173,7 @@ export function parseSvgPaths(svgText: string, chordTol = 0.05): ImportedArtwork
       }
       if (width === 0) width = numberOrZero(attr(rest, 'width'));
       if (height === 0) height = numberOrZero(attr(rest, 'height'));
+      fillNow = declaredFill(rest) ?? true;
       continue;
     }
     if (name === 'g') {
@@ -159,18 +181,33 @@ export function parseSvgPaths(svgText: string, chordTol = 0.05): ImportedArtwork
       if (closing) {
         const m = stack.pop();
         if (m) combined = m;
+        fillNow = fillStack.length > 0 ? (fillStack.pop() as boolean) : true;
       } else {
         stack.push(combined);
+        fillStack.push(fillNow);
         const t = attr(rest, 'transform');
         if (t) combined = matMul(combined, parseTransform(t));
+        fillNow = declaredFill(rest) ?? fillNow;
       }
       continue;
     }
     if (name === 'path' && !closing) {
-      emit(attr(rest, 'd'), attr(rest, 'transform'));
+      const own = attr(rest, 'transform');
+      const d = attr(rest, 'd');
+      if (!d) continue;
+      const painted = declaredFill(rest) ?? fillNow;
+      const m = own ? matMul(combined, parseTransform(own)) : combined;
+      const { polys, closed } = parsePathDataMeta(d, chordTol);
+      polys.forEach((poly, i) => {
+        const mapped = poly.map((p) => apply(m, p));
+        if (mapped.length >= 2) {
+          paths.push(mapped);
+          meta.push({ closed: closed[i], filled: painted });
+        }
+      });
     }
   }
-  return { paths, width, height };
+  return { paths, meta, width, height };
 }
 
 function numberOrZero(text: string | null): number {
@@ -186,6 +223,19 @@ function numberOrZero(text: string | null): number {
  * (SVG's implicit repeat), and after an M the repeats become LineTos.
  */
 export function parsePathData(d: string, chordTol = 0.05): Vec2[][] {
+  return parsePathDataMeta(d, chordTol).polys;
+}
+
+/**
+ * parsePathData + per-subpath CLOSURE (the fill pass's topology): a
+ * subpath is closed iff it carried an explicit Z, or its flattened
+ * endpoints coincide within the chord tolerance (an authored loop).
+ * `closed` parallels `polys`.
+ */
+export function parsePathDataMeta(
+  d: string,
+  chordTol = 0.05,
+): { polys: Vec2[][]; closed: boolean[] } {
   const items: (string | number)[] = [];
   for (const m of d.matchAll(/([MLHVCSQTAZmlhvcsqtaz])|([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)/g)) {
     items.push(m[1] ?? parseFloat(m[2]!));
@@ -198,7 +248,9 @@ export function parsePathData(d: string, chordTol = 0.05): Vec2[][] {
   };
 
   const polys: Vec2[][] = [];
+  const closed: boolean[] = [];
   let cur: Vec2[] = [];
+  let curClosed = false;
   let cx = 0;
   let cy = 0; // current point
   let sx = 0;
@@ -216,8 +268,12 @@ export function parsePathData(d: string, chordTol = 0.05): Vec2[][] {
     if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1e-9) cur.push(p);
   };
   const startSub = (x: number, y: number) => {
-    if (cur.length >= 2) polys.push(cur);
+    if (cur.length >= 2) {
+      polys.push(cur);
+      closed.push(curClosed || subpathCoincident(cur, chordTol));
+    }
     cur = [{ x, y }];
+    curClosed = false;
     sx = x;
     sy = y;
     reflX = reflY = qX = qY = null;
@@ -350,6 +406,7 @@ export function parsePathData(d: string, chordTol = 0.05): Vec2[][] {
           push({ x: sx, y: sy });
           cx = sx;
           cy = sy;
+          curClosed = true;
         }
         reflX = reflY = qX = qY = null;
         break;
@@ -358,8 +415,17 @@ export function parsePathData(d: string, chordTol = 0.05): Vec2[][] {
         break; // unknown command: skip
     }
   }
-  if (cur.length >= 2) polys.push(cur);
-  return polys;
+  if (cur.length >= 2) {
+    polys.push(cur);
+    closed.push(curClosed || subpathCoincident(cur, chordTol));
+  }
+  return { polys, closed };
+}
+
+/** a subpath whose flattened endpoints meet within the chord tolerance
+ *  is a loop by construction, Z or no Z */
+function subpathCoincident(cur: Vec2[], tol: number): boolean {
+  return Math.hypot(cur[0].x - cur[cur.length - 1].x, cur[0].y - cur[cur.length - 1].y) <= tol;
 }
 
 /** flatten a cubic Bézier by de Casteljau splitting until the control

@@ -205,6 +205,9 @@ function artworkFeatures(p: Extract<Primitive, { kind: 'artwork' }>): DetectedFe
       kind: 'path',
       id: `p:${p.id}:path:${i}`,
       points,
+      ...(p.pathMeta?.[i]?.closed === undefined && p.pathMeta?.[i]?.filled === undefined
+        ? {}
+        : { closed: p.pathMeta?.[i]?.closed, filled: p.pathMeta?.[i]?.filled }),
     })),
     faceToPlane: new Int32Array(0),
     planeLoops: [],

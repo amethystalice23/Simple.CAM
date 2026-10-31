@@ -284,6 +284,13 @@ export function App() {
     return out;
   }, [activeFeatureIds, sources]);
 
+  /** the FILL SHADE gate (2026-10-31, round 2): the op being edited is in
+   * 'outline+fill' mode — the artwork's closed+filled regions pick in the
+   * viewport (shade follows the current selection). Global selections
+   * never shade (there is no op whose fill mode could drive it). */
+  const editingOp = editingOpId !== null ? ops.find((o) => o.id === editingOpId) : undefined;
+  const fillShade = editingOp?.kind === 'engrave' && editingOp.fillMode === 'outline+fill';
+
   /** machine-space position of a feature by id (A=0 frame), for depth
    * prefills and index-angle computation */
   const featureMachinePoint = (id: string): Vector3 | null => {
@@ -1417,6 +1424,7 @@ export function App() {
             measureMode={measureMode}
             edgePickingEnabled={editingOpId === null}
             opSelection={resolvedSelection}
+            fillShade={fillShade}
             primitives={primitives}
             previewMoves={previewMoves}
             playbackMove={

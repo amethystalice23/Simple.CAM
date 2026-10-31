@@ -213,6 +213,18 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
       } as JobOp;
       return normalized;
     }
+    // engrave saves from the boolean-fill day (2026-10-31): `fill: true`
+    // → the select's 'outline+fill'; the key itself is dropped either way
+    // — absent fillMode reads as 'outlines', byte-identical behavior
+    if (op.kind === 'engrave') {
+      const rawFill = (op as { fill?: unknown }).fill;
+      if (rawFill !== undefined) {
+        const { fill: _fillEra, ...rest } = op as typeof op & { fill?: unknown };
+        return (
+          rawFill === true ? { ...rest, fillMode: 'outline+fill' as const } : rest
+        ) as JobOp;
+      }
+    }
     if (op.kind !== 'faceCylinder') return op;
     const raw = (op as { pattern?: unknown }).pattern;
     const pattern: FacePattern =

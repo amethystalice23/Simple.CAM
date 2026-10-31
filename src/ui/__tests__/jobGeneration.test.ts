@@ -1762,6 +1762,89 @@ describe('engrave generation', () => {
   });
 });
 
+describe('engrave generation: fill mode (round 2)', () => {
+  // a closed+filled doc-space rectangle, flat on the box crown
+  const art: Primitive = {
+    kind: 'artwork',
+    id: 'prim-fill',
+    paths: [[{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 0, y: 10 }]],
+    pathMeta: [{ closed: true, filled: true }],
+    width: 20,
+    height: 10,
+    presentation: 'flat',
+    wrapDiameter: 16,
+    wrapAngle: 90,
+    transform: { ...identityTransform(), position: { x: 0, y: 0, z: 10 } },
+  };
+  // Alice's own cutter: 30° V-bit, Ø3.175 shank, 0.1 tip
+  const vbit: Tool = {
+    id: 'v1', name: 'engraver 30deg 0.1 tip', type: 'vbit',
+    diameter: 3.175, vAngle: 30, tipDiameter: 0.1, spindleRpm: 18000,
+  };
+  const ctx: GenContext = {
+    stock: boxStock,
+    geometry: null,
+    features: null,
+    transform: identityTransform(),
+    tools: [vbit],
+    primitives: [art],
+    sources: sourcesFor(null, null, identityTransform(), [art]),
+    datumAngle: 0,
+    startA: 0,
+  };
+  const op = (extra: Partial<Extract<JobOp, { kind: 'engrave' }>> = {}): JobOp => ({
+    kind: 'engrave',
+    id: 'e1',
+    toolId: 'v1',
+    featureIds: ['p:prim-fill:path:0'],
+    depth: 0.2,
+    stepDown: 1,
+    ...extra,
+  });
+  /** the fill scanlines: cut-move end y values strictly inside the rect
+   * (the perimeter only ever ends at y = ±5, doc v 0/10 → machine ±5) */
+  const scanYs = (res: ReturnType<typeof generateJobOp>): number[] => {
+    const ys = new Set<number>();
+    for (const m of res.moves) {
+      if (m.rapid || m.words.y === undefined) continue;
+      const y = m.words.y;
+      if (Math.abs(y) < 4.999) ys.add(Math.round(y * 1e6) / 1e6);
+    }
+    return [...ys].sort((a, b) => a - b);
+  };
+
+  it('outlines mode (the default) emits no raster', () => {
+    for (const o of [op(), op({ fillMode: 'outlines', fillStepOver: 1 })]) {
+      const res = generateJobOp(o, ctx);
+      expect(res.error).toBeNull();
+      expect(res.summary).not.toContain('fill line');
+      expect(scanYs(res)).toEqual([]);
+    }
+  });
+
+  it('outline+fill rasters between the boundaries — the inset is the TIP radius, not the shank', () => {
+    // the round-2 bug: inset = shank Ø/2 = 1.5875 kept the raster ~1.5mm
+    // off every boundary; the tip-width rule (round 1) says 0.05
+    const res = generateJobOp(op({ fillMode: 'outline+fill', fillStepOver: 1 }), ctx);
+    expect(res.error).toBeNull();
+    const ys = scanYs(res);
+    expect(ys.length).toBeGreaterThan(0);
+    // band −4.95…4.95 at 1mm stride, far bound appended → 11 lines
+    expect(ys).toHaveLength(11);
+    expect(ys[0]).toBeCloseTo(-4.95, 6);
+    expect(ys[ys.length - 1]).toBeCloseTo(4.95, 6);
+    expect(res.summary).toContain('1 path(s) + 11 fill line(s)');
+  });
+
+  it('a missing fillStepOver defaults from the SAME tip width the inset reads', () => {
+    const res = generateJobOp(op({ fillMode: 'outline+fill' }), ctx);
+    expect(res.error).toBeNull();
+    // tip 0.1 → 0.1 stride over a 9.9mm band ≈ 100 lines (the old
+    // 0.5·shankØ default would give ~7)
+    expect(scanYs(res).length).toBeGreaterThan(90);
+  });
+});
+
 describe('engrave generation: laser tool', () => {
   const laserTool: Tool = {
     id: 'tL',
