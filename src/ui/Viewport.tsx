@@ -202,6 +202,10 @@ interface Props {
   onToggleLayer: (layer: 'stock' | 'model' | 'features' | 'paths' | 'simulation', v: boolean) => void;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
+  /** Shift+drag rubber-band box select (Alice, 2026-10-31: "must ensure
+   *  there is a way to bulk select paths"): every path feature with a
+   *  point inside the screen rect — the caller unions them in. */
+  onBoxSelect: (ids: string[]) => void;
 }
 
 /**
@@ -237,6 +241,7 @@ export function Viewport({
   onToggleLayer,
   onToggleSelect,
   onClearSelection,
+  onBoxSelect,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modelRef = useRef<THREE.Mesh | null>(null);
@@ -278,6 +283,8 @@ export function Viewport({
   onToggleSelectRef.current = onToggleSelect;
   const onClearSelectionRef = useRef(onClearSelection);
   onClearSelectionRef.current = onClearSelection;
+  const onBoxSelectRef = useRef(onBoxSelect);
+  onBoxSelectRef.current = onBoxSelect;
   const opSelectionRef = useRef(opSelection);
   opSelectionRef.current = opSelection;
   const hoverPlaneRef = useRef<THREE.Mesh | null>(null);
@@ -435,6 +442,94 @@ export function Viewport({
         rect.height,
       );
     };
+
+    // ---- Shift+drag rubber-band box select (bulk path selection) ----
+    // Shift had no binding in the pointer handlers before this (plain
+    // drag still rotates). The listeners sit CAPTURE-phase on the host
+    // (the canvas's parent): at-target listeners fire in registration
+    // order regardless of capture, but a parent capture runs before the
+    // canvas's OrbitControls handlers — parking `controls.enabled` here
+    // means their pointerdown gates off and no rotation state starts.
+    const bandDiv = document.createElement('div');
+    bandDiv.className = 'box-select-band';
+    el.appendChild(bandDiv);
+    let band: { x0: number; y0: number; x1: number; y1: number } | null = null;
+    const drawBand = () => {
+      if (!band) return;
+      bandDiv.style.left = `${Math.min(band.x0, band.x1)}px`;
+      bandDiv.style.top = `${Math.min(band.y0, band.y1)}px`;
+      bandDiv.style.width = `${Math.abs(band.x1 - band.x0)}px`;
+      bandDiv.style.height = `${Math.abs(band.y1 - band.y0)}px`;
+    };
+    const endBand = () => {
+      band = null;
+      bandDiv.style.display = 'none';
+      controls.enabled = true;
+    };
+    const onBandDown = (e: PointerEvent) => {
+      if (e.button !== 0 || !e.shiftKey || e.target !== renderer.domElement || hit(e)) return;
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      band = { x0: x, y0: y, x1: x, y1: y };
+      controls.enabled = false;
+      drawBand();
+      bandDiv.style.display = 'block';
+    };
+    const onBandMove = (e: PointerEvent) => {
+      if (!band) return;
+      const rect = el.getBoundingClientRect();
+      band.x1 = e.clientX - rect.left;
+      band.y1 = e.clientY - rect.top;
+      drawBand();
+    };
+    const onBandUp = () => {
+      if (!band) return;
+      if (Math.hypot(band.x1 - band.x0, band.y1 - band.y0) > 4) {
+        // Screen-space lasso: every path feature of the MODEL and the
+        // ARTWORK sources with ANY point inside the rect (3px slack)
+        // selects. No occlusion test — a wrapped dot on the far side of
+        // the cylinder still selects; and never circles/planes/edges,
+        // those are single-click targets, not bulk-pick candidates.
+        const w = Math.max(el.clientWidth, 1);
+        const h = Math.max(el.clientHeight, 1);
+        const rx0 = Math.min(band.x0, band.x1) - 3;
+        const rx1 = Math.max(band.x0, band.x1) + 3;
+        const ry0 = Math.min(band.y0, band.y1) - 3;
+        const ry1 = Math.max(band.y0, band.y1) + 3;
+        const ids: string[] = [];
+        const v = new THREE.Vector3();
+        for (const source of sourcesRef.current) {
+          if (source.id !== 'model' && source.artworkFrame === undefined) continue;
+          const xf = transformFn(source.transform);
+          for (const path of source.features.paths) {
+            for (const p of path.points) {
+              const q = xf(p);
+              v.set(q.x, q.y, q.z).project(camera);
+              if (v.z > 1) continue; // behind the camera
+              const sx = ((v.x + 1) / 2) * w;
+              const sy = ((1 - v.y) / 2) * h;
+              if (sx >= rx0 && sx <= rx1 && sy >= ry0 && sy <= ry1) {
+                ids.push(path.id);
+                break;
+              }
+            }
+          }
+        }
+        onBoxSelectRef.current(ids);
+      }
+      // a sub-4px shift-click falls through to the canvas's normal click
+      // handling below — shift-click keeps toggling a single feature
+      endBand();
+    };
+    const onBandCancel = () => {
+      if (band) endBand(); // pointerup off-canvas would strand the gesture
+    };
+    el.addEventListener('pointerdown', onBandDown, true);
+    el.addEventListener('pointermove', onBandMove, true);
+    el.addEventListener('pointerup', onBandUp, true);
+    el.addEventListener('pointerleave', onBandCancel, true);
+
     const onPointerUp = (e: PointerEvent) => {
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) return; // was a drag
       if (e.button === 2) {
@@ -626,6 +721,7 @@ export function Viewport({
       return null;
     };
     const onPointerMove = (e: PointerEvent) => {
+      if (band) return; // a box-select drag hides nothing, hovers nothing
       const rect = renderer.domElement.getBoundingClientRect();
       const overNav = hit(e);
       renderer.domElement.style.cursor = overNav ? 'pointer' : '';
@@ -952,6 +1048,11 @@ export function Viewport({
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      el.removeEventListener('pointerdown', onBandDown, true);
+      el.removeEventListener('pointermove', onBandMove, true);
+      el.removeEventListener('pointerup', onBandUp, true);
+      el.removeEventListener('pointerleave', onBandCancel, true);
+      bandDiv.remove();
       navCube.dispose();
       featureGroupRef.current = null;
       datumGroupRef.current = null;
