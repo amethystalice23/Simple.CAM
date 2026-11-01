@@ -40,7 +40,7 @@ import {
   seedPrimitiveIds,
 } from './primitives';
 import { parseDxf } from '../core/dxfImport';
-import { encodeBinaryStl, stepMeshesToSoup } from '../core/stepImport';
+import { encodeBinaryStl, stepMeshesToSoup, STEP_TESSELLATION } from '../core/stepImport';
 import { parseSvgPaths } from '../core/vectorImport';
 import {
   datumAngleBefore,
@@ -1255,7 +1255,13 @@ export function App() {
         'occt-import-js/dist/occt-import-js.wasm?url'
       );
       const occt = await occtimportjs({ locateFile: () => wasmUrl });
-      const result = occt.ReadStepFile(new Uint8Array(await file.arrayBuffer()), null);
+      // STEP_TESSELLATION (stepImport.ts) pins the quality knob: OCCT's
+      // default faceted small cylinders visibly (76 seg/rev on a Ø12.8
+      // wall); ang 0.1 gives 275 seg/rev ≈ 0.0004 mm out-of-round.
+      const result = occt.ReadStepFile(
+        new Uint8Array(await file.arrayBuffer()),
+        STEP_TESSELLATION,
+      );
       const soup = stepMeshesToSoup(result);
       if (soup.triangles === 0) throw new Error('the file parsed but contains no solid geometry');
       const geo = new BufferGeometry();

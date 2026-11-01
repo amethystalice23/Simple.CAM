@@ -4,7 +4,8 @@
  * own mm/inch/metre cube trio must yield IDENTICAL soups), non-indexed
  * soup format, assembly concatenation (18-mesh fixture), the binary-STL
  * job-save round-trip through the REAL STLLoader (what a saved job
- * re-parses), and the honest failure paths.
+ * re-parses), the honest failure paths, and the STEP_TESSELLATION
+ * quality knob (curved fixtures refine, flat faces untouched).
  *
  * Fixtures read from the occt-import-js package at test time (its
  * test/testfiles) — the package is a hard dependency of this feature,
@@ -15,7 +16,12 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { encodeBinaryStl, stepMeshesToSoup, type OcctStepResult } from '../stepImport';
+import {
+  encodeBinaryStl,
+  stepMeshesToSoup,
+  STEP_TESSELLATION,
+  type OcctStepResult,
+} from '../stepImport';
 
 const require = createRequire(import.meta.url);
 const occtimportjs = require('occt-import-js') as (moduleArg?: {
@@ -67,6 +73,23 @@ describe('stepMeshesToSoup', () => {
     const soup = stepMeshesToSoup(readStep('rounded-cube/rounded-cube.step'));
     expect(soup.triangles).toBeGreaterThan(12);
     expect(soup.positions.length).toBe(soup.triangles * 9);
+  });
+
+  it('STEP_TESSELLATION refines curvature past the OCCT default, flat faces untouched', () => {
+    // the quality knob (Alice 2026-11-01: default faceting visibly coarse
+    // on small cylinders): on a curved fixture the pinned params yield
+    // STRICTLY more triangles than the same file at OCCT's default, while
+    // an all-flat cube stays EXACTLY 12 — the knob refines curvature only.
+    const bytes = fixture('rounded-cube/rounded-cube.step');
+    const curvedDefault = stepMeshesToSoup(occt.ReadStepFile(bytes, null)).triangles;
+    const curvedFine = stepMeshesToSoup(
+      occt.ReadStepFile(bytes, STEP_TESSELLATION),
+    ).triangles;
+    expect(curvedFine).toBeGreaterThan(curvedDefault);
+    const flatFine = stepMeshesToSoup(
+      occt.ReadStepFile(fixture('cube-units/cube-mm.step'), STEP_TESSELLATION),
+    );
+    expect(flatFine.triangles).toBe(12);
   });
 
   it('concatenates an 18-mesh assembly into one soup (single model slot)', () => {

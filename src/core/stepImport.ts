@@ -16,6 +16,17 @@
  * per-solid selection is future work, not a v1 omission.
  */
 
+/** Tessellation quality for ReadStepFile — the ONE knob that controls
+ *  circularity (2026-11-01, Alice: "still too coarse on cylinders when
+ *  the model is this small… 256 might be acceptable"). angularDeflection
+ *  sets segments/rev on cylinder walls; linearDeflection is a bbox-RATIO
+ *  (scales with model size — small parts facet worst and it barely
+ *  helps). Measured on the Ø12.8 turned piston (probe: the real-file
+ *  out-of-round sweep): default(null) = 76 seg/rev ≈ 0.0055 mm
+ *  out-of-round; ang 0.1 = 275 seg/rev ≈ 0.0004 mm. Flat faces are
+ *  untouched (the 10 mm cube stays 12 triangles at any setting). */
+export const STEP_TESSELLATION = { angularDeflection: 0.1 } as const;
+
 export interface OcctMeshResult {
   name?: string;
   attributes: {
