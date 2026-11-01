@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { BufferGeometry } from 'three';
-import { Vector3 } from 'three';
+import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
@@ -41,6 +40,7 @@ import {
   seedPrimitiveIds,
 } from './primitives';
 import { parseDxf } from '../core/dxfImport';
+import { encodeBinaryStl, stepMeshesToSoup } from '../core/stepImport';
 import { parseSvgPaths } from '../core/vectorImport';
 import {
   datumAngleBefore,
@@ -1238,6 +1238,46 @@ export function App() {
     }
   };
 
+  /** Drop a STEP: OCCT (lazy wasm — 7.6 MB, loads only when a STEP is
+   *  actually dropped) tessellates the B-rep — OCCT converts to mm
+   *  itself (probe-verified) — and the soup lands in the model slot
+   *  with the same FULL swap as an STL: clean slate, ops' feature ids
+   *  die with the old model (Alice 2026-11-01: "better to go clean
+   *  slate"). The job file saves the TESSELLATION as binary STL, so a
+   *  saved job is self-contained and cuts exactly the mesh that was
+   *  previewed. Assemblies merge to one model (single slot). */
+  const loadStep = async (file: File) => {
+    try {
+      const { default: occtimportjs } = await import('occt-import-js');
+      const { default: wasmUrl } = await import(
+        'occt-import-js/dist/occt-import-js.wasm?url'
+      );
+      const occt = await occtimportjs({ locateFile: () => wasmUrl });
+      const result = occt.ReadStepFile(new Uint8Array(await file.arrayBuffer()), null);
+      const soup = stepMeshesToSoup(result);
+      if (soup.triangles === 0) throw new Error('the file parsed but contains no solid geometry');
+      const geo = new BufferGeometry();
+      geo.setAttribute('position', new BufferAttribute(soup.positions, 3));
+      geo.setAttribute('normal', new BufferAttribute(soup.normals, 3));
+      setModelBytes(encodeBinaryStl(soup)); // the job round-trip re-parses this with STLLoader
+      setGeometry(geo);
+      setModelName(file.name);
+      setTransform(identityTransform()); // each model starts at its own origin
+      setSelection([]); // ids belong to the old model
+      setOps((prev) => prev.map((o) => ({ ...o, featureIds: [] })));
+      setGenerated({});
+      setEditingOpId(null);
+      setSelectedObjectId('model');
+      setPreviewMoves(null);
+      carveSim.dispose(); // the sim carved the old model's moves
+      setShowSim(false);
+      setTab('model');
+      setError(null);
+    } catch (e) {
+      setError(`could not import STEP: ${String(e)}`);
+    }
+  };
+
   /** Save the whole working state as one self-contained .cam.json file. */
   const saveJob = () => {
     try {
@@ -1250,7 +1290,9 @@ export function App() {
         modelName,
         modelBytes,
       });
-      const base = modelBytes ? modelName.replace(/\.stl$/i, '') : 'job';
+      const base = modelBytes
+        ? modelName.replace(/\.(stl|step|stp)$/i, '')
+        : 'job';
       downloadJobFile(file, base || 'job');
       lastSavedRef.current = jobFingerprint(file);
       setDirty(false);
@@ -1325,6 +1367,10 @@ export function App() {
   const routeDroppedFile = async (f: File): Promise<void> => {
     if (/\.(svg|dxf)$/i.test(f.name)) {
       void addArtworkFromFile(f);
+      return;
+    }
+    if (/\.(step|stp)$/i.test(f.name)) {
+      void loadStep(f);
       return;
     }
     if (IMAGE_EXT.test(f.name) || f.type.startsWith('image/')) {
@@ -1568,7 +1614,7 @@ export function App() {
           <div className="drop-hint">
             {geometry
               ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-              : 'drop an STL, an SVG or DXF, a PNG/JPEG, or a saved job here'}
+              : 'drop an STL or STEP, an SVG or DXF, a PNG/JPEG, or a saved job here'}
           </div>
         </div>
         <aside>
