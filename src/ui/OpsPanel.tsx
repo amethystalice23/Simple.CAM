@@ -9,6 +9,7 @@ import type { AxisMode, JobOp, OpRates, Primitive, Stock, Tool } from '../core/t
 import { round2 } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import {
+  advisedOpRates,
   defaultFaceStepOver,
   defaultStepDown,
   defaultStepOver,
@@ -24,6 +25,7 @@ import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
 import { isMultiTooth } from '../cam/threadMill';
 import { getMaterial } from '../core/materials';
+import { cutAdvice } from '../core/cutAdvisor';
 
 interface Props {
   ops: JobOp[];
@@ -249,6 +251,21 @@ function RatesPopup(props: {
   // the stock material, or the built-in fallback table
   const preset = toolPresetFor(tool, props.materialId);
   const materialName = getMaterial(props.materialId).name;
+  // CHIP LOAD advice (PLAN.md gap #12): the one number that predicts
+  // rubbing/melt vs snapped bits, against the corpus + coupon bands.
+  // The op's step-down rides along when the kind carries one (the DOC
+  // half of the engagement story).
+  const opStepDown = 'stepDown' in op && typeof op.stepDown === 'number' ? op.stepDown : undefined;
+  const advice = cutAdvice(tool, getMaterial(props.materialId), {
+    feed: rates.feed ?? defaults.feed,
+    spindleRpm: tool.type === 'laser' ? rates.spindleRpm : (rates.spindleRpm ?? defaults.spindleRpm),
+  }, opStepDown);
+  const chipCls =
+    advice.verdict === 'ok'
+      ? 'hint'
+      : advice.verdict === 'unknown'
+        ? 'hint'
+        : 'hint warn';
   return (
     <div className="op-rates">
       <p className="hint">
@@ -298,7 +315,41 @@ function RatesPopup(props: {
         step={1}
         onCommit={(v) => setRate({ clearance: v })}
       />
+      {/* chip-load advice UNDER the boxes (Alice, 2026-11-01): the verdict
+       * reads against the numbers the user just saw edited, not before them.
+       * The apply button joins the button row below it. Lasers get an
+       * explanatory line rather than an unexplained absence — the rpm slot
+       * is beam power there, so no chip load exists to advise on. */}
+      {advice.verdict === 'unknown' && tool.type === 'laser' && (
+        <p className="hint">no chip-load advice for a laser — its “rpm” slot is beam power %</p>
+      )}
+      {advice.verdict !== 'unknown' && (
+        <p className={chipCls} title={advice.note}>
+          {advice.verdict === 'ok' ? '✓ ' : '⚠ '}
+          {advice.note}
+        </p>
+      )}
+      {advice.docNote && <p className={chipCls}>⚠ {advice.docNote}</p>}
       <div className="buttons">
+        {(advice.verdict === 'low' || advice.verdict === 'high') &&
+          advice.recommendedFeed !== null &&
+          (rates.feed ?? defaults.feed) !== advice.recommendedFeed && (
+            <button
+              type="button"
+              className="secondary"
+              title={`Feed for a ${advice.targetChipLoad ?? ''} mm/tooth chip load at the current spindle speed`}
+              onClick={() =>
+                setRate({
+                  feed: advice.recommendedFeed!,
+                  ...(tool.type !== 'laser' && advice.recommendedFeed
+                    ? { plungeFeed: Math.round((rates.plungeFeed ?? defaults.plungeFeed) * (advice.recommendedFeed / (rates.feed ?? defaults.feed))) }
+                    : {}),
+                })
+              }
+            >
+              Apply recommended feed ({advice.recommendedFeed} mm/min)
+            </button>
+          )}
         <button
           type="button"
           className="secondary"
@@ -1387,6 +1438,18 @@ export function OpsPanel(props: Props) {
     if (t) {
       const stepDown = defaultStepDown(t, props.materialId);
       const stepOver = defaultStepOver(t);
+      // chip-load gating on a tool change (same rule as newJobOp): the new
+      // cutter's own default rates may sit outside the healthy band (a
+      // preset-less tool), so prefill the ⚡ feed the way a fresh op would.
+      // A HEALTHY default leaves any existing override alone — the user's
+      // explicit ⚡ values never get silently rewritten under them.
+      const advised = advisedOpRates(op.kind, t, props.materialId);
+      const priorFeed = op.rates?.feed;
+      const nextRates =
+        advised && (priorFeed === undefined || advised.feed !== priorFeed)
+          ? { ...op.rates, ...advised }
+          : op.rates;
+      if (advised) next = { ...next, rates: nextRates } as JobOp;
       // per-kind fields (types.ts is the source of truth): every kind with
       // a stepDown gets the new cutter's default, and every stepOver-bearing
       // kind re-derives it — a stale Ø-derived stepOver from the OLD tool is

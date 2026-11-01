@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Tool } from '../core/types';
 import { exportToolsCsv, mergeImportedTools, parseFusionToolCsv } from '../core/toolImport';
 import { getMaterial, MATERIALS } from '../core/materials';
+import { chipLoad } from '../core/cutAdvisor';
 import { toolPresetFor } from './jobGeneration';
 import { NumberField, TextField } from './fields';
 import { Toasts, useToasts } from './Toasts';
@@ -71,6 +72,17 @@ function PresetTablePopup(props: { tool: Tool; materialId: string; onClose: () =
     ['Plunge (mm/min)', (p) => p.plungeFeed?.toString()],
     ['Ramp (mm/min)', (p) => p.rampFeed?.toString()],
     ['Depth of cut (mm)', (p) => p.stepDown?.toString()],
+    // CHIP LOAD (PLAN.md gap #12): the per-tooth figure each column's
+    // feed+rpm+flutes actually produce — the number that separates
+    // "shears cleanly" from "rubs and melts". '—' where a column lacks
+    // the feed or the rpm to compute one.
+    [
+      'Chip load (mm/tooth)',
+      (p) =>
+        p.feed && p.spindleRpm
+          ? chipLoad(p.feed, p.spindleRpm, tool.flutes ?? 2).toFixed(4)
+          : undefined,
+    ],
   ];
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

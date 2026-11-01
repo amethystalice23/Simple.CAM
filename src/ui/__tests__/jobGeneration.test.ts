@@ -10,6 +10,7 @@ import { normalizeJobOps } from '../jobFile';
 import type { Primitive } from '../../core/types';
 import {
   datumAngleBefore,
+  advisedOpRates,
   defaultFaceStepOver,
   metricPitch,
   defaultStepDown,
@@ -947,6 +948,40 @@ describe('generateJobOp: primitive feature sources', () => {
       { ...ctx, geometry: null, features: null, sources: boxSources },
     );
     expect(res.error).toContain('select holes');
+  });
+});
+
+describe('chip-load gating (advisedOpRates, PLAN.md gap #12)', () => {
+  it('stamps NOTHING when the resolved default rates are healthy', () => {
+    // a Makera Aluminum preset row: 1500 mm/min @ 18000 × 2 flutes =
+    // 0.0417 mm/tooth — the corpus band itself, nothing to gate
+    const presetTool: Tool = {
+      ...smallTool,
+      presets: [{ material: 'Aluminum', spindleRpm: 18000, feed: 1500, plungeFeed: 500, stepDown: 0.5, rampFeed: 800 }],
+    };
+    expect(advisedOpRates('pocket', presetTool, boxStock.materialId)).toBeUndefined();
+    const op = newJobOp('pocket', presetTool, boxStock.materialId, boxStock);
+    expect(op.rates).toBeUndefined();
+  });
+
+  it('prefills the feed when the default sits outside the band (the S18000-on-Delrin class)', () => {
+    // preset-less 2mm 2-flute flat on aluminum: the fallback table says
+    // 420 mm/min @ the tool's 18000 → 0.0104 mm/tooth, below the 0.02
+    // band floor — the fresh op's ⚡ feed is prefilled to the DIRECTIONAL
+    // target (75% up the band, Alice 2026-11-01): 0.05 × 18000 × 2 = 1800
+    const advised = advisedOpRates('pocket', smallTool, boxStock.materialId);
+    expect(advised).toBeDefined();
+    expect(advised!.feed).toBe(1800);
+    const op = newJobOp('pocket', smallTool, boxStock.materialId, boxStock);
+    expect(op.rates?.feed).toBe(1800);
+    // generation consuming rates.feed is pinned by the overrides tests below
+  });
+
+  it('lasers carry no chip load — the rpm slot is beam power', () => {
+    const laser: Tool = {
+      id: 'tL2', name: 'Laser Module', type: 'laser', diameter: 0.1, spindleRpm: 20,
+    };
+    expect(advisedOpRates('engrave', laser, boxStock.materialId)).toBeUndefined();
   });
 });
 

@@ -38,6 +38,7 @@ import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
+import { cutAdvice } from '../core/cutAdvisor';
 import type {
   ChamferLoop,
   CylChamferEdge,
@@ -229,6 +230,11 @@ export function seedJobOpIds(ops: JobOp[]): void {
 export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, stock: Stock): JobOp {
   const base = { id: `jobop-${++opCount}`, toolId: tool.id, featureIds: [] };
   const stepDown = defaultStepDown(tool, materialId);
+  // chip-load gating (PLAN.md gap #12): prefill the ⚡ feed ONLY when the
+  // resolved default sits outside the healthy band (see advisedOpRates)
+  const rates = advisedOpRates(kind, tool, materialId);
+  const withRates = <T extends JobOp>(op: T): T =>
+    rates ? ({ ...op, rates } as T) : op;
   switch (kind) {
     case 'faceCylinder': {
       // face defaults follow the stock in 4-axis mode — any shape: a box
@@ -237,7 +243,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       // (the panel warns).
       const rotary = stock.axisMode === '4-axis';
       const [xStart, xEnd] = rotary ? stockSpan(stock, 'x') : [0, 100];
-      return {
+      return withRates({
         ...base,
         kind,
         targetDiameter: rotary
@@ -254,12 +260,12 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         pattern: 'spiral',
         /** off = the sharp rotary pocket (edge rings square both ends) */
         cutBeyondStock: false,
-      };
+      });
     }
     case 'spiralCarve': {
       const rotary = stock.axisMode === '4-axis';
       const [xStart, xEnd] = rotary ? stockSpan(stock, 'x') : [0, 80];
-      return {
+      return withRates({
         ...base,
         kind,
         surfaceDiameter: rotary ? rotaryCalibrationOf(stock).effectiveRadius * 2 : 50,
@@ -272,13 +278,13 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepDown: Math.max(stepDown, 0.5),
         finishingOnly: false,
         rotation: 'cw',
-      };
+      });
     }
     case 'thread': {
       const rotary = stock.axisMode === '4-axis';
       const [xStart, xEnd] = rotary ? stockSpan(stock, 'x') : [0, 40];
       const nominal = rotary ? Math.max(1, rotaryCalibrationOf(stock).effectiveRadius * 2 - 1) : 20;
-      return {
+      return withRates({
         ...base,
         kind,
         nominalDiameter: nominal,
@@ -291,10 +297,10 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         finishingOnly: false,
         rotation: 'cw',
         surfaceDiameter: null, // ladder from the stock surface
-      };
+      });
     }
     case 'pocket':
-      return {
+      return withRates({
         ...base,
         kind,
         selectionIs: 'floor',
@@ -307,9 +313,9 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         floorFeatureId: null,
         flatten: false, // islands preserved unless asked
         cutBeyondStock: false,
-      };
+      });
     case 'slicePocket':
-      return {
+      return withRates({
         ...base,
         kind,
         regionMode: 'outside',
@@ -323,13 +329,13 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         floorFeatureId: null,
         clearToStock: false, // outline ring only unless asked
         tabs: null, // bridges only when cutting a part out
-      };
+      });
     case 'waterline':
       // a ROUGH op by charter (PLAN.md Phase A): default stock left for the
       // finishing op that follows — 0 cut-to-size is a deliberate choice.
       // margin null = derive the tool Ø + allowance at generation (job files
       // stay tool-agnostic, like facing's step-over)
-      return {
+      return withRates({
         ...base,
         kind,
         allowance: 0.2,
@@ -350,13 +356,13 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         // old behavior) — no default invented.
         maxDepth: tool.fluteLength ?? null,
         finishingOnly: false, // full clearing per level; the toggle scrubs surfaces only
-      };
+      });
     case 'contour4d':
       // the 4D contour (P3): the planner owns the orientations; the
       // per-orientation rough fields mirror the waterline defaults (the
       // emission stage generates waterline roughs at the chosen angles),
       // orientStep is her 30° ladder knob
-      return {
+      return withRates({
         ...base,
         kind,
         allowance: 0.2,
@@ -372,7 +378,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         clearToStock: true,
         maxDepth: tool.fluteLength ?? null, // the flute default, same ruling
         finishingOnly: false,
-      };
+      });
     case 'rasterContour':
       // the paired SURFACE pass (PLAN.md Phase B): default allowance 0 —
       // a waterline contour with allowance ahead of it already left stock,
@@ -383,7 +389,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       // DEFAULT (the old stepDown-0 convention) — the roughing ladder is
       // the explicit choice now; stepDown carries the preset for when the
       // box is unchecked.
-      return {
+      return withRates({
         ...base,
         kind,
         allowance: 0,
@@ -393,13 +399,13 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepDown,
         clearToStock: false, // the model's column only; the toggle clears to the stock edge
         cutBeyondStock: false, // row centers stay inside the declared stock
-      };
+      });
     case 'rotaryCarve':
       // Phase C (PLAN.md): one op roughs AND finishes (Makera's ladder —
       // full wrap per depth level until nothing is left, then the surface
       // pass). Rough-vs-finish is the finishingOnly toggle + allowance;
       // the panel zeroes the allowance on tick (the raster precedent).
-      return {
+      return withRates({
         ...base,
         kind,
         allowance: 0.2,
@@ -407,30 +413,30 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepOver: defaultStepOver(tool),
         strategy: 'horizontal',
         finishingOnly: false,
-      };
+      });
     case 'swarfFinish':
       // the TRUE 4D finish (PLAN.md): flank contact, all four axes moving.
       // One knob — the contact grid density; the attitude tolerance and
       // patch policy derive inside the kernel. Assumes a rough ran ahead:
       // no depth boxes, the surface is the target.
-      return {
+      return withRates({
         ...base,
         kind,
         stepOver: defaultStepOver(tool),
-      };
+      });
     case 'drill':
-      return { ...base, kind, depth: 5, peckDepth: 2 };
+      return withRates({ ...base, kind, depth: 5, peckDepth: 2 });
     case 'chamfer':
-      return { ...base, kind, mode: 'add', side: 'auto', direction: 'down', depth: 0.5 };
+      return withRates({ ...base, kind, mode: 'add', side: 'auto', direction: 'down', depth: 0.5 });
     case 'cylChamfer':
       // depth 0 = anchor on the selected circle (cut up-and-out) — the
       // rod-end cases set a depth from the rim instead
-      return { ...base, kind, depth: 0, stepDown, finishingOnly: false, rotation: 'cw' };
+      return withRates({ ...base, kind, depth: 0, stepDown, finishingOnly: false, rotation: 'cw' });
     case 'engrave':
       // fillStepOver prefills from the tool's TIP width (the engraved
       // line: a V-bit's tipDiameter, a laser's kerf Ø) so the fill mode
       // has a sane spacing the moment it's switched on
-      return {
+      return withRates({
         ...base,
         kind,
         depth: 0.5,
@@ -438,14 +444,14 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         finishingOnly: false,
         fillMode: 'outlines',
         fillStepOver: engraveFillStepOver(tool),
-      };
+      });
     case 'threadMill': {
       // no stock/Ø defaults to read yet — the selection prefills the
       // thread (Ø/pitch/length from the rim or wall facet); M6-coarse
       // is a sane editable starting point for a hand-set op. Pitch
       // locks to the tool the moment one is picked (changeTool).
       const nominal = 6;
-      return {
+      return withRates({
         ...base,
         kind,
         internal: true,
@@ -457,12 +463,12 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         stepOver: 0, // one full-form pass; > 0 ladders for tough materials
         startDepth: 0,
         endDepth: 5,
-      };
+      });
     }
     case 'index':
-      return { ...base, kind, angle: 90 };
+      return withRates({ ...base, kind, angle: 90 });
     case 'profile':
-      return {
+      return withRates({
         ...base,
         kind,
         selectionIs: 'floor',
@@ -476,7 +482,7 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         floorFeatureId: null,
         clearToStock: false, // outline ring only unless asked
         tabs: null, // bridges only when cutting a part out
-      };
+      });
   }
 }
 
@@ -722,6 +728,34 @@ export function presetRates(
  */
 export function defaultStepOver(tool: Tool): number {
   return Math.max(0.1, Math.round(tool.diameter * 0.5 * 10) / 10);
+}
+
+/**
+ * CHIP LOAD GATING for op creation (PLAN.md gap #12 — "auto-suggest on
+ * tool select, smarter presets"): when the resolved default rates sit
+ * OUTSIDE the healthy chip-load band for this material × tool (the
+ * class that once ran a Delrin job at the metal row's S18000), the new
+ * op's ⚡ boxes are PREFILLED with the healthy recommendation — the
+ * user sees the numbers and the ⚡ popup still explains them; the
+ * verdict line shows why. Healthy defaults stamp nothing: the amber ⚡
+ * (an override marker) stays reserved for real user intent. Returns
+ * undefined for laser tools (the rpm slot is beam power) and for every
+ * healthy case.
+ */
+export function advisedOpRates(
+  kind: JobOp['kind'],
+  tool: Tool,
+  materialId: string,
+): OpRates | undefined {
+  if (tool.type === 'laser') return undefined;
+  const material = getMaterial(materialId);
+  const defaults = presetRates(kind, tool, materialId);
+  const advice = cutAdvice(tool, material, {
+    feed: defaults.feed,
+    spindleRpm: defaults.spindleRpm,
+  });
+  if (advice.verdict === 'ok' || advice.recommendedFeed === null) return undefined;
+  return { feed: advice.recommendedFeed };
 }
 
 /**
