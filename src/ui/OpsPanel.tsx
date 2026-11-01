@@ -272,33 +272,6 @@ function RatesPopup(props: {
         defaults for {materialName}
         {preset ? ` — tool’s Makera “${preset.material}” preset` : ' — simple.cam fallback table'}
       </p>
-      {advice.verdict !== 'unknown' && (
-        <p className={chipCls} title={advice.note}>
-          {advice.verdict === 'ok' ? '✓ ' : '⚠ '}
-          {advice.note}
-        </p>
-      )}
-      {advice.docNote && <p className={chipCls}>⚠ {advice.docNote}</p>}
-      {advice.recommendedFeed !== null &&
-        (rates.feed ?? defaults.feed) !== advice.recommendedFeed && (
-          <div className="buttons">
-            <button
-              type="button"
-              className="secondary"
-              title={`Feed for a ${advice.band ? advice.band.best : ''} mm/tooth chip load at the current spindle speed`}
-              onClick={() =>
-                setRate({
-                  feed: advice.recommendedFeed!,
-                  ...(tool.type !== 'laser' && advice.recommendedFeed
-                    ? { plungeFeed: Math.round((rates.plungeFeed ?? defaults.plungeFeed) * (advice.recommendedFeed / (rates.feed ?? defaults.feed))) }
-                    : {}),
-                })
-              }
-            >
-              Apply recommended feed ({advice.recommendedFeed} mm/min)
-            </button>
-          </div>
-        )}
       <p className="hint">
         edit only what this one op needs; an edited box overrides the
         default until reset
@@ -342,7 +315,35 @@ function RatesPopup(props: {
         step={1}
         onCommit={(v) => setRate({ clearance: v })}
       />
+      {/* chip-load advice UNDER the boxes (Alice, 2026-11-01): the verdict
+       * reads against the numbers the user just saw edited, not before them.
+       * The apply button joins the button row below it. */}
+      {advice.verdict !== 'unknown' && (
+        <p className={chipCls} title={advice.note}>
+          {advice.verdict === 'ok' ? '✓ ' : '⚠ '}
+          {advice.note}
+        </p>
+      )}
+      {advice.docNote && <p className={chipCls}>⚠ {advice.docNote}</p>}
       <div className="buttons">
+        {advice.recommendedFeed !== null &&
+          (rates.feed ?? defaults.feed) !== advice.recommendedFeed && (
+            <button
+              type="button"
+              className="secondary"
+              title={`Feed for a ${advice.band ? advice.band.best : ''} mm/tooth chip load at the current spindle speed`}
+              onClick={() =>
+                setRate({
+                  feed: advice.recommendedFeed!,
+                  ...(tool.type !== 'laser' && advice.recommendedFeed
+                    ? { plungeFeed: Math.round((rates.plungeFeed ?? defaults.plungeFeed) * (advice.recommendedFeed / (rates.feed ?? defaults.feed))) }
+                    : {}),
+                })
+              }
+            >
+              Apply recommended feed ({advice.recommendedFeed} mm/min)
+            </button>
+          )}
         <button
           type="button"
           className="secondary"
