@@ -47,7 +47,7 @@ function depthBounds(stock: Stock): { min: number; max: number; def: number } {
 }
 
 /** Halftone face (mm): 4-axis wraps the image around the stock (full
- * circumference × axial span — the artworkFromSvg wrap convention);
+ * circumference × axial span — the artworkFromImport wrap convention);
  * flat stock uses its XY footprint. */
 function halftoneFace(stock: Stock): { faceWidth: number; faceHeight: number } {
   if (stock.axisMode === '4-axis') {

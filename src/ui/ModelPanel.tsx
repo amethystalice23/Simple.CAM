@@ -75,6 +75,7 @@ export function ModelPanel(props: Props) {
     ? null
     : (primitives.find((p) => p.id === selectedObjectId) ?? null);
   const hasActive = isModel || selectedPrimitive !== null;
+  const isArtwork = selectedPrimitive?.kind === 'artwork';
   const [uniform, setUniform] = useState(false);
 
   // the active placement applies to whichever object is selected
@@ -127,6 +128,13 @@ export function ModelPanel(props: Props) {
     const n = (((active.rotationDeg[axis] + delta) % 360) + 360) % 360;
     setRotation(axis, n > 180 ? n - 360 : n);
   };
+  // FLAT artwork W/H both drive this one uniform scale (no shear, ever);
+  // scale 1 = the imported size, so revert is just 1/1/1
+  const commitArtworkScale = (s: number) => {
+    if (!(s > 0)) return;
+    setActive({ ...active, scale: { x: s, y: s, z: s } });
+  };
+  const revertArtworkScale = () => setActive({ ...active, scale: { x: 1, y: 1, z: 1 } });
 
   return (
     <>
@@ -186,10 +194,16 @@ export function ModelPanel(props: Props) {
 
       <section>
         <h2>Size (mm)</h2>
-        <label className="check">
-          <input type="checkbox" checked={uniform} onChange={(e) => setUniform(e.target.checked)} />
-          <span>Scale all dimensions together</span>
-        </label>
+        {/* the uniform checkbox governs the model/cylinder/box resize
+         *  fields — artwork sizing is uniform BY DESIGN (the wrapped
+         *  invariant "the logo never shears", kept for flat W/H), so for
+         *  artwork it is decoration: hidden. */}
+        {!isArtwork && (
+          <label className="check">
+            <input type="checkbox" checked={uniform} onChange={(e) => setUniform(e.target.checked)} />
+            <span>Scale all dimensions together</span>
+          </label>
+        )}
         {isModel ? (
           <>
             {AXES.map((a) => (
@@ -349,7 +363,32 @@ export function ModelPanel(props: Props) {
                   the seam check wants the artwork clear of ±180°
                 </p>
               </>
-            ) : null}
+            ) : (
+              <>
+                {/* FLAT artwork sizing: W and H in mm, both driving the ONE
+                 *  uniform scale (wrapped's "the logo never shears" invariant,
+                 *  kept here — W/H are two views of the same scale, editable
+                 *  from either side like the wrapped Ø/wrap° pair). At
+                 *  scale 1 the artwork sits at its true CAD size (DXF
+                 *  imports in mm; SVG user units read 1 mm/unit). */}
+                <SizeField
+                  label="W"
+                  value={selectedPrimitive.width * active.scale.x}
+                  onCommit={(v) => commitArtworkScale(v / Math.max(selectedPrimitive.width, 1e-9))}
+                  onRevert={revertArtworkScale}
+                />
+                <SizeField
+                  label="H"
+                  value={selectedPrimitive.height * active.scale.y}
+                  onCommit={(v) => commitArtworkScale(v / Math.max(selectedPrimitive.height, 1e-9))}
+                  onRevert={revertArtworkScale}
+                />
+                <p className="hint">
+                  scale ×{active.scale.x.toFixed(2)} — W/H drive the same
+                  uniform scale; ↺ reverts to the imported size
+                </p>
+              </>
+            )}
           </>
         ) : selectedPrimitive ? (
           AXES.map((a) => (
