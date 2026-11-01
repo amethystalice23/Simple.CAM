@@ -36,7 +36,9 @@ Web app: TypeScript + React + three.js + WASM kernels, Vite build, vitest
 tests. Optionally wrapped in Tauri for a desktop build later.
 
 ```
-Import (STL three.js loader; STEP via occt-import-js later)
+Import (STL three.js loader; STEP via occt-import-js, LANDED 2026-11-01
+— lazy 7.6 MB wasm, OCCT converts units to mm itself, model slot with
+full clean-slate swap, job saves the tessellation as binary STL)
    → Mesh library (three.js render, decimation for viewport)
    → Placement (ModelTransform: position/rotate vs stock, snap-to-stock)
    → Feature detection + primitives (edge/loop/hole picker and user-added
@@ -1064,8 +1066,10 @@ reference these numbers):
    straight down; cheapest tool-life and finish win in CAM.
    ALICE: cheap. (Already noted as a future refinement.)
 5. **STEP import (occt-import-js)** — face-driven ops and the format
-   every professional model arrives in. ALICE: cheap. (Already
-   planned "later".)
+   every professional model arrives in. ALICE: cheap. LANDED 2026-11-01:
+   `src/core/stepImport.ts` (non-indexed soup + binary-STL job save,
+   probe-verified mm unit conversion), browser-smoked; occt stays a
+   separate swappable LGPL module per the license policy.
 6. **Two-sided / flip machining** — through-features and full-3D
    parts via flip + re-registration; very popular on desktop CNCs.
    ALICE: not in her plans as a setup system, but achievable as a
