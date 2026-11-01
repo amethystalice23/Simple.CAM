@@ -151,6 +151,7 @@ export function App() {
    * selects the ops that go into the .nc separately) */
   const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [stepBusy, setStepBusy] = useState(false);
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
   const [tab, setTab] = useState<Tab>('stock');
@@ -1247,6 +1248,7 @@ export function App() {
    *  saved job is self-contained and cuts exactly the mesh that was
    *  previewed. Assemblies merge to one model (single slot). */
   const loadStep = async (file: File) => {
+    setStepBusy(true);
     try {
       const { default: occtimportjs } = await import('occt-import-js');
       const { default: wasmUrl } = await import(
@@ -1275,6 +1277,8 @@ export function App() {
       setError(null);
     } catch (e) {
       setError(`could not import STEP: ${String(e)}`);
+    } finally {
+      setStepBusy(false);
     }
   };
 
@@ -1612,9 +1616,11 @@ export function App() {
             <TransportBar transport={transport} />
           )}
           <div className="drop-hint">
-            {geometry
-              ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-              : 'drop an STL or STEP, an SVG or DXF, a PNG/JPEG, or a saved job here'}
+            {stepBusy
+              ? 'importing STEP… (tessellating — can take a few seconds)'
+              : geometry
+                ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
+                : 'drop an STL or STEP, an SVG or DXF, a PNG/JPEG, or a saved job here'}
           </div>
         </div>
         <aside>
