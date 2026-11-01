@@ -168,8 +168,16 @@ export interface CutAdvice {
   chipLoad: number;
   band: ChipBand | null;
   verdict: ChipVerdict;
-  /** the feed that hits the band's `best` chip load at the current rpm */
+  /** the feed that moves the chip load to `targetChipLoad`, mm/min —
+   * DIRECTIONAL (Alice, 2026-11-01): a too-low feed is raised to the
+   * UPPER end of the band (75% up — Makera's own plastic rows sit at
+   * the band top, and mid-band needlessly halves the job speed), a
+   * too-high feed is lowered to the lower-middle (40% up — back the
+   * engagement off with margin). Null when the verdict is healthy or
+   * unknown: nothing to change. */
   recommendedFeed: number | null;
+  /** the chip-load target `recommendedFeed` aims at, mm/tooth */
+  targetChipLoad: number | null;
   /** the family's best DOC as an absolute mm value for this cutter */
   recommendedStepDown: number | null;
   docVerdict: DocVerdict;
@@ -210,6 +218,7 @@ export function cutAdvice(
       band,
       verdict: 'unknown',
       recommendedFeed: null,
+      targetChipLoad: null,
       recommendedStepDown,
       docVerdict: docVerdict?.verdict ?? 'unknown',
       docNote: docVerdict?.note ?? '',
@@ -224,6 +233,7 @@ export function cutAdvice(
       band,
       verdict: 'unknown',
       recommendedFeed: null,
+      targetChipLoad: null,
       recommendedStepDown,
       docVerdict: docVerdict?.verdict ?? 'unknown',
       docNote: docVerdict?.note ?? '',
@@ -249,11 +259,24 @@ export function cutAdvice(
       `chip load ${cl.toFixed(4)} mm/tooth — healthy for ${family} ` +
       `(band ${band.min}–${band.max} mm/tooth)`;
   }
+  // DIRECTIONAL target (Alice, 2026-11-01): raising a too-low feed aims
+  // 75% up the band — Makera's own rows sit at the band top (plastic
+  // rows 0.083–0.1 on a 0.03–0.1 band), so mid-band needlessly halves
+  // the job; lowering a too-high feed backs off to 40% up, leaving
+  // margin under the ceiling it just broke. A healthy verdict targets
+  // nothing (the button is hidden) — null, not the band's `best`.
+  const target =
+    verdict === 'low'
+      ? band.min + (band.max - band.min) * 0.75
+      : verdict === 'high'
+        ? band.min + (band.max - band.min) * 0.4
+        : null;
   return {
     chipLoad: cl,
     band,
     verdict,
-    recommendedFeed: Math.round(band.best * rpm * flutes),
+    recommendedFeed: target !== null ? Math.round(target * rpm * flutes) : null,
+    targetChipLoad: target,
     recommendedStepDown,
     docVerdict: docVerdict?.verdict ?? 'unknown',
     docNote: docVerdict?.note ?? '',

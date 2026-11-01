@@ -337,7 +337,7 @@ function RatesPopup(props: {
             <button
               type="button"
               className="secondary"
-              title={`Feed for a ${advice.band ? advice.band.best : ''} mm/tooth chip load at the current spindle speed`}
+              title={`Feed for a ${advice.targetChipLoad ?? ''} mm/tooth chip load at the current spindle speed`}
               onClick={() =>
                 setRate({
                   feed: advice.recommendedFeed!,

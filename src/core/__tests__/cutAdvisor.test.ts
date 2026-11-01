@@ -60,10 +60,20 @@ describe('cutAdvice', () => {
     expect(a.verdict).toBe('high');
     expect(a.recommendedFeed).toBeLessThan(2500);
   });
-  it('matches the Makera aluminum preset exactly (0.04 × 18000 × 2 = 1440)', () => {
+  it('raises a too-low feed toward the UPPER band end (0.05 × 18000 × 2 = 1800)', () => {
+    // our fallback table's 420 is low vs the corpus band; the fix aims
+    // 75% up the band (Makera's own rows sit at the top — mid-band
+    // would needlessly halve the job speed; Alice, 2026-11-01)
     const a = cutAdvice(flat6, getMaterial('aluminum-6061'), { feed: 420, spindleRpm: 18000 });
-    expect(a.verdict).toBe('low'); // our fallback table's 420 is low vs the corpus band
-    expect(a.recommendedFeed).toBe(1440);
+    expect(a.verdict).toBe('low');
+    expect(a.recommendedFeed).toBe(1800);
+    expect(a.targetChipLoad).toBeCloseTo(0.05, 5);
+  });
+  it('healthy verdict targets nothing — no button, no nudge', () => {
+    const a = cutAdvice(spiralO, getMaterial('delrin'), { feed: 1000, spindleRpm: 10000 });
+    expect(a.verdict).toBe('ok');
+    expect(a.recommendedFeed).toBeNull();
+    expect(a.targetChipLoad).toBeNull();
   });
   it('laser tools carry no chip load (the rpm slot is beam power)', () => {
     const a = cutAdvice(laser, getMaterial('delrin'), { feed: 100, spindleRpm: 20 });

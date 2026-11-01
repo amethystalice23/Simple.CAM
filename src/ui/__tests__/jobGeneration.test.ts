@@ -967,13 +967,13 @@ describe('chip-load gating (advisedOpRates, PLAN.md gap #12)', () => {
   it('prefills the feed when the default sits outside the band (the S18000-on-Delrin class)', () => {
     // preset-less 2mm 2-flute flat on aluminum: the fallback table says
     // 420 mm/min @ the tool's 18000 → 0.0104 mm/tooth, below the 0.02
-    // band floor — the fresh op's ⚡ feed is prefilled to the corpus
-    // target: 0.04 × 18000 × 2 = 1440 mm/min
+    // band floor — the fresh op's ⚡ feed is prefilled to the DIRECTIONAL
+    // target (75% up the band, Alice 2026-11-01): 0.05 × 18000 × 2 = 1800
     const advised = advisedOpRates('pocket', smallTool, boxStock.materialId);
     expect(advised).toBeDefined();
-    expect(advised!.feed).toBe(1440);
+    expect(advised!.feed).toBe(1800);
     const op = newJobOp('pocket', smallTool, boxStock.materialId, boxStock);
-    expect(op.rates?.feed).toBe(1440);
+    expect(op.rates?.feed).toBe(1800);
     // generation consuming rates.feed is pinned by the overrides tests below
   });
 
