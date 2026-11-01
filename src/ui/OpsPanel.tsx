@@ -317,7 +317,12 @@ function RatesPopup(props: {
       />
       {/* chip-load advice UNDER the boxes (Alice, 2026-11-01): the verdict
        * reads against the numbers the user just saw edited, not before them.
-       * The apply button joins the button row below it. */}
+       * The apply button joins the button row below it. Lasers get an
+       * explanatory line rather than an unexplained absence — the rpm slot
+       * is beam power there, so no chip load exists to advise on. */}
+      {advice.verdict === 'unknown' && tool.type === 'laser' && (
+        <p className="hint">no chip-load advice for a laser — its “rpm” slot is beam power %</p>
+      )}
       {advice.verdict !== 'unknown' && (
         <p className={chipCls} title={advice.note}>
           {advice.verdict === 'ok' ? '✓ ' : '⚠ '}
@@ -326,7 +331,8 @@ function RatesPopup(props: {
       )}
       {advice.docNote && <p className={chipCls}>⚠ {advice.docNote}</p>}
       <div className="buttons">
-        {advice.recommendedFeed !== null &&
+        {(advice.verdict === 'low' || advice.verdict === 'high') &&
+          advice.recommendedFeed !== null &&
           (rates.feed ?? defaults.feed) !== advice.recommendedFeed && (
             <button
               type="button"
