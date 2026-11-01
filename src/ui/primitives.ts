@@ -168,15 +168,16 @@ export function defaultCylinder(stock: Stock): Primitive {
 }
 
 /**
- * Artwork from a dropped SVG, PRE-FILLED from the stock (the
- * primary-job convenience — engraving IS the job), then independent
- * (docs/PLAN.md "Engrave + artwork import"): 4-axis wraps onto the
- * stock cylinder at its effective Ø with a 1mm-per-unit scale (clamped
- * to one turn); 3-axis lands flat on the stock crown. The wrapped
- * angular picture survives later Ø edits — the wrap angle is the
- * invariant, mm/unit derives.
+ * Artwork from a dropped SVG/DXF (both importers emit the same
+ * ImportedArtwork), PRE-FILLED from the stock (the primary-job
+ * convenience — engraving IS the job), then independent (docs/PLAN.md
+ * "Engrave + artwork import"): 4-axis wraps onto the stock cylinder at
+ * its effective Ø with a 1mm-per-unit scale (clamped to one turn);
+ * 3-axis lands flat on the stock crown. The wrapped angular picture
+ * survives later Ø edits — the wrap angle is the invariant, mm/unit
+ * derives.
  */
-export function artworkFromSvg(art: ImportedArtwork, stock: Stock): Primitive {
+export function artworkFromImport(art: ImportedArtwork, stock: Stock): Primitive {
   const [x0, x1] = stockSpan(stock, 'x');
   const [y0, y1] = stockSpan(stock, 'y');
   const [z0, z1] = stockSpan(stock, 'z');

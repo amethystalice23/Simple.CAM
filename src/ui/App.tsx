@@ -33,13 +33,14 @@ import { threadTargetsFromSelection } from './opTargets';
 import { internalMinorDiameter } from '../cam/threadMill';
 import { ModelPanel } from './ModelPanel';
 import {
-  artworkFromSvg,
+  artworkFromImport,
   boxFromPlane,
   cylinderFromCircle,
   defaultBox,
   defaultCylinder,
   seedPrimitiveIds,
 } from './primitives';
+import { parseDxf } from '../core/dxfImport';
 import { parseSvgPaths } from '../core/vectorImport';
 import {
   datumAngleBefore,
@@ -522,21 +523,29 @@ export function App() {
     });
   };
 
-  /** Drop-an-SVG: parse the line work and create the artwork primitive,
-   * stock-prefilled (docs/PLAN.md "Engrave + artwork import"). Text and
-   * shapes are the editor's job — Inkscape "object to path" first. */
+  /** Drop vector line work (SVG or DXF — both parsers emit the SAME
+   * ImportedArtwork, so it lands as the same artwork primitive and
+   * every op applies): parse, then create stock-prefilled (docs/PLAN.md
+   * "Engrave + artwork import"). SVG text/shapes and DXF text/dimensions
+   * are the editor's job — convert to line work first. */
   const addArtworkFromFile = async (f: File) => {
     const text = await f.text();
-    const art = parseSvgPaths(text);
-    if (art.paths.length === 0) {
-      window.alert(
-        'no paths found in the SVG — convert text and shapes to paths in Inkscape first (Object → Path)',
-      );
-      return;
+    try {
+      const art = /\.dxf$/i.test(f.name) ? parseDxf(text) : parseSvgPaths(text);
+      if (art.paths.length === 0) {
+        window.alert(
+          /\.dxf$/i.test(f.name)
+            ? 'no usable line work in the DXF — supported: line, arc, circle, polyline, spline, ellipse, hatch; text and dimensions stay in the CAD app'
+            : 'no paths found in the SVG — convert text and shapes to paths in Inkscape first (Object → Path)',
+        );
+        return;
+      }
+      const p = artworkFromImport(art, stock);
+      setPrimitives((prev) => [...prev, p]);
+      setSelectedObjectId(p.id);
+    } catch (e) {
+      window.alert(`could not read the vector file: ${String(e)}`);
     }
-    const p = artworkFromSvg(art, stock);
-    setPrimitives((prev) => [...prev, p]);
-    setSelectedObjectId(p.id);
   };
 
   /** The bitmap dialogue's Confirm: a heightmap lands in the MODEL slot —
@@ -565,7 +574,7 @@ export function App() {
       setTab('model');
       return;
     }
-    const p = artworkFromSvg(result.art, stock);
+    const p = artworkFromImport(result.art, stock);
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
   };
@@ -1314,7 +1323,7 @@ export function App() {
    * Only when the sniff fails does the file reach the STL loader.
    */
   const routeDroppedFile = async (f: File): Promise<void> => {
-    if (/\.svg$/i.test(f.name)) {
+    if (/\.(svg|dxf)$/i.test(f.name)) {
       void addArtworkFromFile(f);
       return;
     }
@@ -1559,7 +1568,7 @@ export function App() {
           <div className="drop-hint">
             {geometry
               ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-              : 'drop an STL, an SVG, a PNG/JPEG, or a saved job here'}
+              : 'drop an STL, an SVG or DXF, a PNG/JPEG, or a saved job here'}
           </div>
         </div>
         <aside>

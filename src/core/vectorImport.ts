@@ -15,13 +15,14 @@
 
 import type { Vec2 } from './types';
 
-/** affine [a b c d e f]: x' = a·x + c·y + e, y' = b·x + d·y + f */
-type Mat = { a: number; b: number; c: number; d: number; e: number; f: number };
+/** affine [a b c d e f]: x' = a·x + c·y + e, y' = b·x + d·y + f
+ *  (generic 2D affine — shared with the DXF parser) */
+export type Mat = { a: number; b: number; c: number; d: number; e: number; f: number };
 
 const IDENTITY: Mat = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
 /** m ∘ n — apply n first, then m (SVG's list composes like nested groups) */
-function matMul(m: Mat, n: Mat): Mat {
+export function matMul(m: Mat, n: Mat): Mat {
   return {
     a: m.a * n.a + m.c * n.b,
     b: m.b * n.a + m.d * n.b,
@@ -32,7 +33,7 @@ function matMul(m: Mat, n: Mat): Mat {
   };
 }
 
-const apply = (m: Mat, p: Vec2): Vec2 => ({
+export const apply = (m: Mat, p: Vec2): Vec2 => ({
   x: m.a * p.x + m.c * p.y + m.e,
   y: m.b * p.x + m.d * p.y + m.f,
 });
@@ -431,7 +432,7 @@ function subpathCoincident(cur: Vec2[], tol: number): boolean {
 /** flatten a cubic Bézier by de Casteljau splitting until the control
  * polygon is within `tol` of the chord (the emitted point EXCLUDES the
  * start — callers have it) */
-function flattenCubic(p0: Vec2, c1: Vec2, c2: Vec2, p1: Vec2, tol: number): Vec2[] {
+export function flattenCubic(p0: Vec2, c1: Vec2, c2: Vec2, p1: Vec2, tol: number): Vec2[] {
   const out: Vec2[] = [];
   const rec = (a: Vec2, b: Vec2, c: Vec2, d: Vec2, depth: number): void => {
     const flat = offchord(a, d, b) + offchord(a, d, c);

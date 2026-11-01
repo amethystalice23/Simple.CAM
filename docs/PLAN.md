@@ -216,7 +216,12 @@ viewport: stock-prefilled, flat/wrapped flip in the Model tab, own wrap
 through the shared overlay/snap/occlusion pipeline (amber, hoverable
 during op editing), and the Engrave OP (panel, generation, rotary-
 limited summary). Preview of engrave moves rides the general toolpath
-preview. Remaining: DXF import, pocket-region hookup for fills, and a
+preview. DXF import landed 2026-11-01 (`src/core/dxfImport.ts`,
+hand-rolled: LINE/ARC/CIRCLE/LWPOLYLINE+bulges/old POLYLINE, ELLIPSE,
+SPLINE via de Boor, INSERT→BLOCK nesting, HATCH→filled boundaries;
+$INSUNITS→mm, y-up→v-down, ASCII only, OCS (0,0,1) only — emits the
+same ImportedArtwork as SVG so the artwork primitive and all ops
+apply unchanged). Remaining: pocket-region hookup for fills, and a
 browser eyeball of the wrapped artwork before first metal.
 
 ### Stock: shape vs mode
@@ -1053,8 +1058,8 @@ reference these numbers):
    different op (chamfer rides a modelled edge; V-carve follows
    vector outlines at variable depth). Design together when taken up.
 3. **DXF import** — 2D CAD lingua franca, every competitor has it.
-   ALICE: cheap. (Already phase 3 of the engrave spec; no DXF code
-   exists yet.)
+   ALICE: cheap. LANDED 2026-11-01 (see the engrave spec status); a DXF
+   drops in as the same artwork primitive as an SVG.
 4. **Ramp/helical entry + arc lead-ins** — never plunge an end mill
    straight down; cheapest tool-life and finish win in CAM.
    ALICE: cheap. (Already noted as a future refinement.)
@@ -1075,7 +1080,8 @@ reference these numbers):
 8. **Rest machining** — small tool cleans only what the big one
    missed. ALICE: our allowance + finishingOnly knobs already cover
    the workflow manually; bundling risks a vastly more complex UI
-   for minimal gain. Deferred.
+   for minimal gain. Deferred. STRUCK OFF (2026-11-01): "we have a
+   manual equivalent" — not building it.
 9. **Swarf/flank milling (4-axis)** — cut walls with the tool's side
    in a continuous A+X move; the classic tapered-column/flute op,
    natural small sibling of the 4D-carve engine. ALICE: cheap.
@@ -1084,20 +1090,40 @@ reference these numbers):
     ALICE: cheap.
 11. **Fixture/clamp modeling & avoidance** — tell the CAM where the
     vise jaws sit and keep rapids clear; the most common real-world
-    crash our sim can't warn about today. (No verdict yet.)
+    crash our sim can't warn about today. STRUCK OFF (2026-11-01):
+    "a lot of additional input every time and requires the user to
+    measure things with accuracy" — not worth the setup burden. One
+    concession kept in mind: if the 4th-axis end-stock-holder park
+    point ever needs modeling, note that the entry-safety pass
+    (travel at existing height, position X/Y/A first, descend last
+    — landed 2026-10-23) plus the mid-file `G0 Y0` re-issue after
+    tool changes already tackle exactly that concern for the
+    highest part of the travel; revisit only if a real incident
+    says otherwise.
 12. **Chipload-based feeds/speeds** — ALICE: not a wizard; rather an
     auto-warning on op settings (step-down etc.) plus auto-suggest
     best speeds/settings when a tool is selected, for the novice —
     smarter presets, not new UI.
 
 Deliberately not pursued: coolant codes, canned drill cycles, G54+
-work offsets, controller-side probing — Carvera hardware + Community
-Controller make them near-irrelevant.
+work offsets, controller-side probing (Carvera hardware + Community
+Controller make them near-irrelevant); PCB/Gerber workflow (other
+tools' territory, 2026-11-01); greyscale laser raster via per-move S
+modulation (uncalibrable — every material/colour needs its own
+coupon, 2026-11-01); rest machining (manual knobs cover it,
+2026-11-01); fixture/clamp modeling (setup burden > benefit; the
+entry-safety + G0 Y0 work already covers the dangerous travel,
+2026-11-01).
 
 Remaining Makera-Studio parity gaps (the raison d'être is parity then
 some): DXF + STEP import (they have both), image import/trace-to-
-vector, PCB/Gerber workflow, laser-image dot matrix. Every other op
-on their list has a counterpart here.
+vector, laser-image dot matrix. Every other op on their list has a
+counterpart here. STRUCK OFF the gap list (2026-11-01): PCB/Gerber
+workflow — "leave that to other tools"; true greyscale laser raster
+(per-move S modulation) — would need a calibration coupon on every
+material/colour combination to mean anything ("beyond anything we
+should consider"); the halftone artwork approach IS the laser-image
+answer and it shipped in beta.13.
 
 Laser-image design note (ALICE, 2026-10-28): halftoning is the
 approach — her proven trick for making Studio's laser-image
@@ -1106,7 +1132,11 @@ ability (Inkscape's "newspaper" filter shows the method space:
 round/screen/line/dots-per-inch etc.). Halftone output is vector
 artwork, so laser-image could ride the EXISTING artwork → engrave
 (beam power) pipeline — same no-new-ops philosophy as the heightmap
-above, on both flat and wrapped frames.
+above, on both flat and wrapped frames. SHIPPED 2026-11-01 in the
+bitmap import (beta.13): halftone dots artwork mode. The parked
+"raster mode = LATER (per-move S modulation, M325)" note in the
+laser design is DEAD per the verdict above — vectorized halftone is
+the only laser-image mode this project will have.
 
 ## License policy (hard rule)
 
