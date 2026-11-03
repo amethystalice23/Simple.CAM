@@ -593,3 +593,69 @@ describe('detectFeatures: phantom-envelope regression (the retical ring session)
 
   // vRingWithDrills is module-scope (shared with the Pass 3b suite)
 });
+
+
+describe('fitCircle: mixed-tessellation chord lengths (the A180 hole session)', () => {
+  /** The 2026-11-03 report: the hole that comes up at datum A180 had NO
+   *  detected Ø0.5 circle — a geometrically exact 263-vertex walk whose
+   *  chords MIX the bore's and the drill wall's tessellation grids
+   *  (ratio 1.75) died at fitCircle's old chord-uniformity pre-filter
+   *  while its three sibling holes passed on tessellation phase luck.
+   *  The RANSAC 98% gate is the circularity test; uniformity only
+   *  guards degenerate junk. */
+  it('fits a perfect circle whose chord lengths alternate between two grid spacings', () => {
+    // r=5, alternating steps of 2° and 3.5° → chord ratio ~1.74
+    const pts: { x: number; y: number }[] = [];
+    let a = 0;
+    while (a < 355) {
+      pts.push({ x: Math.cos((a * Math.PI) / 180) * 5, y: Math.sin((a * Math.PI) / 180) * 5 });
+      a += pts.length % 2 === 0 ? 2 : 3.5;
+    }
+    expect(pts.length).toBeGreaterThanOrEqual(9);
+    const chords = pts.map((p, i) => {
+      const q = pts[(i + 1) % pts.length];
+      return Math.hypot(q.x - p.x, q.y - p.y);
+    });
+    expect(Math.max(...chords) / Math.min(...chords)).toBeGreaterThan(1.5); // the old reject
+    const f = detectFeatures(mixedChordCircle(pts));
+    const c = f.circles.find((x) => Math.abs(x.radius - 5) < 0.05);
+    expect(c).toBeDefined(); // RANSAC carries it: every point is ON the circle
+    expect(c?.arcs).toBeUndefined(); // whole loop — a complete circle
+  });
+
+  it('still rejects an outline with a genuinely straight run (RANSAC, not uniformity)', () => {
+    // 3/4 circle + a straight chord across: heterogeneous, NOT circular —
+    // the chord's interior points sit inside the circle, so RANSAC fails
+    // regardless of chord lengths
+    const pts: { x: number; y: number }[] = [];
+    for (let a = 90; a <= 270; a += 4) {
+      pts.push({ x: Math.cos((a * Math.PI) / 180) * 5, y: Math.sin((a * Math.PI) / 180) * 5 });
+    }
+    for (let i = 0; i <= 6; i++) pts.push({ x: -5 + (10 * i) / 6, y: -5 });
+    const f = detectFeatures(mixedChordCircle(pts));
+    expect(f.circles.some((c) => Math.abs(c.radius - 5) < 0.05 && !c.arcs)).toBe(false);
+  });
+});
+
+/** A closed surface of revolution carrying `pts` as its sharp-junction
+ *  circle: a cone-cylinder-cone lathe whose rim circle is `pts` at the
+ *  seam — the bore-exit walk shape, driven through detectFeatures so
+ *  the pin runs the whole real pipeline. */
+function mixedChordCircle(pts: { x: number; y: number }[]): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const n = pts.length;
+  // a flat top disc at z=0 with pts as its rim (uniform), plus a wall
+  // band below: the rim becomes a plane border loop AND a sharp junction
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    // top disc triangle (fan from the center)
+    positions.push(0, 0, 0, b.x, b.y, 0, a.x, a.y, 0);
+    // wall quad (down to z=-2), making the rim a 90° sharp junction
+    positions.push(a.x, a.y, 0, b.x, b.y, 0, b.x, b.y, -2);
+    positions.push(a.x, a.y, 0, b.x, b.y, -2, a.x, a.y, -2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  return g;
+}

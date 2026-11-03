@@ -333,7 +333,19 @@ function fitCircle(pts: Vec2[]): Circle2 | null {
     minL = Math.min(minL, l);
     maxL = Math.max(maxL, l);
   }
-  if (minL <= 0 || maxL / minL > 1.5) return null; // not a uniform tessellation
+  // Degenerate-junk guard ONLY (the retical-ring session, 2026-11-03):
+  // the old "> 1.5 = not a uniform tessellation" reject false-killed
+  // PERFECT circles on fine meshes — the θ=0 grub-screw bore exit walks
+  // a geometrically exact 263-vertex circle whose chords MIX the bore's
+  // and the drill wall's tessellation grids (0.0036 and 0.0063mm →
+  // ratio 1.75, every vertex within 0.07µm of the ideal rim), while
+  // its three sibling holes pass only by tessellation phase luck —
+  // hole features that exist "at some datums and not others". The
+  // RANSAC 98%-inlier gate below is the real circularity test: a mixed
+  // chord set on a true circle passes it, and a heterogeneous outline
+  // (a D-shape's straight side, a rectangle) fails it regardless of
+  // chord lengths. Zero-length chords (repeated vertices) stay fatal.
+  if (minL <= 0 || maxL / minL > 8) return null;
 
   const rand = mulberry32(42);
   let best: { c: Circle2; tol: number; inliers: number } | null = null;
