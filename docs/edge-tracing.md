@@ -139,7 +139,16 @@ it — the sharp-edge analogue of the plane path's broken-rim stitching:
   tolerance let the drill rims' neighborhood band merge chains and drag
   the Kasa fit to r 9.286 / center off 0.12mm before the fix).
 - The 120° envelope gate applies unchanged: 4 arcs spanning ~357°
-  qualify; clustered slivers do not.
+  qualify; clustered slivers do not. **Chain spans are the SIGNED SUM of
+  per-vertex angular steps** (2026-11-03 regression fix, both passes):
+  endpoint differences lie — a chain that walks +1° along a mouth arc
+  then jumps −20° to a stray far inlier covers 19.5°, not the 340° its
+  endpoints suggest. The old endpoint-difference code read skinny
+  drill-wall quad-column loops as ~359° envelopes and emitted phantom
+  circles of r 5–187 centered outside the part ("a bunch of horizontal
+  rings that aren't there" — the retical-ring viewport regression; the
+  bug existed at the old 126 seg/rev too, one circle, the finer
+  tessellation multiplied it to 45+).
 - Emitted as a PARTIAL circle (`arcs` = the chains). The plane offset
   comes from the CHAIN vertices only — the group centroid includes the
   off-circle detours and drags the center off-plane.

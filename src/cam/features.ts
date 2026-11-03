@@ -529,22 +529,44 @@ function fitCircleFragments(
     // stray single vertices are not arc evidence — drop their chains,
     // then gate on total coverage and the angular envelope: the chains'
     // CCW intervals about the fitted center, 360° minus the largest gap
-    // between neighbours, measured in each chain's own direction
+    // between neighbours. Each chain's interval is measured CCW from its
+    // own start as [from, from + span] — the span in the chain's walk
+    // direction normalized to CCW. (2026-11-03 regression fix: the old
+    // from/to flip on CW-walking chains made a single chain's wrap-gap
+    // formula measure the chain's OWN span as the "gap" — a skinny closed
+    // sliver (a drill-wall quad column, 0.2 × 4mm) read envelope ≈ 359°
+    // instead of its real ~9° and landed huge phantom circles centered
+    // outside the part. The retical ring at 252 seg/rev pushed 45+ of
+    // those into the output; the bug existed at the old 126 too, just less.)
+    // A chain's span is the SIGNED SUM of its per-vertex angular steps
+    // (each step taken as the signed delta in (-180, 180]): endpoints alone
+    // lie — a chain that walks +1° along an arc then jumps −20° to a stray
+    // inlier covers 19.5°, not the 340° its endpoint difference suggests.
     const kept = chains.filter((ch) => ch.verts.length >= MIN_FRAGMENT_VERTS);
     const t = kept.reduce((acc, ch) => acc + ch.verts.length, 0);
     let accepted = t >= MIN_FRAGMENT_TOTAL_VERTS;
     if (accepted && kept.length > 0) {
+      const signedStep = (a: number, b: number): number => {
+        let d = b - a;
+        if (d > 180) d -= 360;
+        if (d <= -180) d += 360;
+        return d;
+      };
       const bounds = kept
         .map((ch) => {
           const base = cycleOffset[ch.cycle];
-          const p0 = flat[base + ch.verts[0]];
-          const p1 = flat[base + ch.verts[1]];
-          const pN = flat[base + ch.verts[ch.verts.length - 1]];
-          const ccw = (angleOf(p1, c) - angleOf(p0, c) + 360) % 360 < 180;
-          return {
-            from: angleOf(ccw ? p0 : pN, c),
-            to: angleOf(ccw ? pN : p0, c),
-          };
+          let a = angleOf(flat[base + ch.verts[0]], c);
+          let span = 0;
+          for (let i = 1; i < ch.verts.length; i++) {
+            const b = angleOf(flat[base + ch.verts[i]], c);
+            span += signedStep(a, b);
+            a = b;
+          }
+          // CCW-walking chain ([start, start+span]); CW-walking chain's
+          // CCW interval is [start+span, start]
+          const from = span >= 0 ? angleOf(flat[base + ch.verts[0]], c) : (angleOf(flat[base + ch.verts[0]], c) + span + 360) % 360;
+          const spanCCW = Math.min(Math.abs(span), 360);
+          return { from, to: (from + spanCCW) % 360 };
         })
         .sort((a, b) => a.from - b.from);
       let maxGap = 0;
