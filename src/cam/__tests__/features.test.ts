@@ -691,3 +691,46 @@ describe('the closure gate (the bore-seam hallucinations, 2026-11-03)', () => {
   // D-shape (180°), the broken hole rim (255°) and the retical valley
   // partials (110–135°) — all above the 100° bar, all still detected.
 });
+
+describe('fitCircle revalidates at the final radius (the column-phantom session)', () => {
+  /** The 2026-11-03 report: "a sequence of overlapping 0.81mm circles
+   *  on the sides of the V shape the entire way round" — one phantom
+   *  "full" circle per cone tessellation column (595 of them on the
+   *  fine mesh). The RANSAC tolerance grows with the CANDIDATE radius
+   *  (r·0.005), so a giant-radius candidate swallows a whole non-circular
+   *  loop at 98%; kasaFit then shrinks the fit to the loop's
+   *  circumcircle-ish r≈0.4, and the result was never re-checked at the
+   *  FINAL radius. A tall skinny column outline (chord ratio ~2, under the
+   *  relaxed uniformity gate) sailed through. Revalidation at the final
+   *  radius kills it; every real circle re-passes trivially. */
+  it('rejects a tall skinny quad-column outline (giant-RANSAC swallow, kasa shrink)', () => {
+    // the column-outline shape: 0.2 wide, 1.06 tall, sides subdivided —
+    // 15+ verts, chord ratio ~2, exactly the fine-mesh cone column
+    const W = 0.1; // half-width
+    const H = 0.53; // half-height
+    const top: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 3; i++) top.push({ x: -W + (2 * W * i) / 3, y: H, z: 0 });
+    const bottom: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 3; i++) bottom.push({ x: W - (2 * W * i) / 3, y: -H, z: 0 });
+    const right: { x: number; y: number; z: number }[] = [];
+    for (let i = 1; i < 6; i++) right.push({ x: W, y: H - (2 * H * i) / 6, z: 0 });
+    const left: { x: number; y: number; z: number }[] = [];
+    for (let i = 1; i < 6; i++) left.push({ x: -W, y: -H + (2 * H * i) / 6, z: 0 });
+    const outline = [...top, ...right, ...bottom, ...left];
+    // build a plane strip whose border loop is this outline: a thin plate
+    const tris: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i < outline.length; i++) {
+      const a = outline[i];
+      const b = outline[(i + 1) % outline.length];
+      tris.push({ x: 0, y: 0, z: -1 }, b, a); // wall down to z=-1 (sharp 90° junction)
+    }
+    const pos: number[] = [];
+    for (const t of tris) pos.push(t.x, t.y, t.z);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const f = detectFeatures(g);
+    // the phantom fit (~r 0.4-0.55, the outline's circumcircle-ish) must be gone
+    const phantom = f.circles.filter((c) => c.radius > 0.3 && c.radius < 0.7);
+    expect(phantom.length).toBe(0);
+  });
+});

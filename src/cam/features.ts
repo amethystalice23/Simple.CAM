@@ -411,7 +411,23 @@ function fitCircle(pts: Vec2[]): Circle2 | null {
   const inlierPts = pts.filter(
     (p) => Math.abs(Math.hypot(p.x - best!.c.cx, p.y - best!.c.cy) - best!.c.r) <= best!.tol,
   );
-  return kasaFit(inlierPts) ?? best.c;
+  const fit = kasaFit(inlierPts) ?? best.c;
+  // REVALIDATE at the FINAL radius (the fine-tessellation column loops,
+  // 2026-11-03): the RANSAC tolerance grows with the CANDIDATE radius
+  // (r·0.005), so a giant-radius candidate swallows a whole non-circular
+  // loop at 98% — and kasaFit then shrinks the fit to the loop's
+  // circumcircle-ish r≈0.4, emitting a phantom "full" circle per cone
+  // tessellation column (595 of them, Ø0.76–0.86, all the way around
+  // the V groove on the fine mesh). No real circle is harmed: kasa
+  // refines an already-circular consensus, so every point re-passes at
+  // the final radius's tolerance; a skinny column outline's points are
+  // far off ANY circle and reject.
+  const finalTol = Math.max(0.01, fit.r * 0.005);
+  const finalInliers = pts.filter(
+    (p) => Math.abs(Math.hypot(p.x - fit.cx, p.y - fit.cy) - fit.r) <= finalTol,
+  ).length;
+  if (finalInliers / n < 0.98) return null;
+  return fit;
 }
 
 // ---------------------------------------------- partial-circle recognition
