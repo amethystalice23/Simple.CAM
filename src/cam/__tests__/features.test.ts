@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
-import { detectFeatures, holesFromCircles } from '../features';
+import { circleClosureDeg, detectFeatures, holesFromCircles } from '../features';
 import { boundingRadiusAboutX, axialExtentX } from '../features';
 import { transformedPositions } from '../slicing';
 
@@ -659,3 +659,35 @@ function mixedChordCircle(pts: { x: number; y: number }[]): THREE.BufferGeometry
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   return g;
 }
+
+describe('the closure gate (the bore-seam hallucinations, 2026-11-03)', () => {
+  /** The retical-ring report: "hallucinating a lot of holes all along
+   *  the walls of the V groove, there is no circular pattern there" —
+   *  22 partial fits through chunks of the drill×bore breakthrough
+   *  seam (a 3D saddle curve, locally arc-shaped). A real rim's sharp
+   *  seam hugs the fitted circumference; a seam chunk hugs only its
+   *  own arc. The gate demands ≥100° of segment-sampled sharp
+   *  coverage; the pinned keep-cases (fluted rim 140°, D-shape 180°,
+   *  broken hole rim 255°, her valley mouths 110–135°) all clear it. */
+  it('circleClosureDeg: a full ring reads 360, a 60° patch reads under 100', () => {
+    const segs = (pts: { x: number; y: number; z: number }[]) => {
+      const out: { a: { x: number; y: number; z: number }; b: { x: number; y: number; z: number }; len: number }[] = [];
+      for (let i = 0; i + 1 < pts.length; i++) {
+        out.push({ a: pts[i], b: pts[i + 1], len: Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y, pts[i + 1].z - pts[i].z) });
+      }
+      return out;
+    };
+    const onRing = (a: number) => ({ x: Math.cos(a) * 5, y: Math.sin(a) * 5, z: 0 });
+    const full: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 24; i++) full.push(onRing((i / 24) * 2 * Math.PI));
+    expect(circleClosureDeg({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 5, segs(full))).toBe(360);
+    const patch: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 6; i++) patch.push(onRing((i / 6) * (Math.PI / 3)));
+    expect(circleClosureDeg({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 5, segs(patch))).toBeLessThan(100);
+  });
+
+  // The keep-side of the gate is pinned by the existing broken-rim suite:
+  // the fluted rim (measured 140° under the segment-sampled gate), the
+  // D-shape (180°), the broken hole rim (255°) and the retical valley
+  // partials (110–135°) — all above the 100° bar, all still detected.
+});

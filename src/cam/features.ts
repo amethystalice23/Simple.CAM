@@ -203,6 +203,49 @@ function groupPlanes(topo: Topo): { planeOf: Int32Array; normals: Vec3[] } {
 }
 
 /** Newell normal + centroid of a closed vertex loop. */
+/** Angular coverage of a circle's circumference by nearby sharp-seam
+ *  geometry, in 5° buckets — the closure gate's measurement. Each sharp
+ *  edge is SAMPLED at tube/2 steps (midpoints alone miss a straight
+ *  bridge's near-end evidence — the fluted rim's gap chords). A sample
+ *  counts when it sits within `closureTube` of the circle both along
+ *  the axis and radially. Exported for direct pinning. */
+export function circleClosureDeg(
+  center: Vec3,
+  axis: Vec3,
+  radius: number,
+  sharpSegs: { a: Vec3; b: Vec3; len: number }[],
+): number {
+  const n = normalize(axis);
+  const ref = Math.abs(n.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const u = normalize(cross(ref, n));
+  const v = cross(n, u);
+  const tube = closureTube(radius);
+  const covered = new Set<number>();
+  const sample = (x: number, y: number, z: number) => {
+    const rx = x - center.x;
+    const ry = y - center.y;
+    const rz = z - center.z;
+    const axial = rx * n.x + ry * n.y + rz * n.z;
+    if (Math.abs(axial) > tube) return;
+    const inPlane = Math.sqrt(Math.max(0, rx * rx + ry * ry + rz * rz - axial * axial));
+    if (Math.abs(inPlane - radius) > tube) return;
+    const a =
+      ((Math.atan2(rx * v.x + ry * v.y + rz * v.z, rx * u.x + ry * u.y + rz * u.z) * 180) /
+        Math.PI +
+        360) %
+      360;
+    covered.add(Math.floor(a / 5));
+  };
+  for (const s of sharpSegs) {
+    const steps = Math.max(1, Math.ceil(s.len / (tube / 2)));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      sample(s.a.x + (s.b.x - s.a.x) * t, s.a.y + (s.b.y - s.a.y) * t, s.a.z + (s.b.z - s.a.z) * t);
+    }
+  }
+  return covered.size * 5;
+}
+
 function loopPlane(verts: Vec3[], loop: number[]): { point: Vec3; normal: Vec3 } {
   let nx = 0;
   let ny = 0;
@@ -383,6 +426,26 @@ const MIN_CIRCLE_ENVELOPE_DEG = 120;
 const MIN_FRAGMENT_VERTS = 2;
 /** And the whole set needs at least this many vertices on the circle. */
 const MIN_FRAGMENT_TOTAL_VERTS = 6;
+/**
+ * THE CLOSURE GATE (the bore-seam fits, 2026-11-03): a fragment-fit
+ * circle must CLOSE on the mesh — real sharp geometry (not just the
+ * fitted inliers) must hug ≥ this many degrees of its circumference,
+ * measured with points SAMPLED ALONG the sharp edges (midpoints alone
+ * miss a straight bridge's near-end evidence). The measured bands on
+ * the retical ring: Ø0.5 bore-exit rims 360°, valley-mouth partials
+ * 110–135°, and the HALLUCINATED fits — chunks of the drill×bore
+ * breakthrough seam (a 3D saddle curve, locally arc-shaped) fitted as
+ * "partial circles", 22 of them — 80–90°. The pinned fixtures: fluted
+ * rim (4×15° slivers, straight-bridged) 140°, D-shape 180°, broken
+ * hole rim 255°. A fitted circle's accepted chains can span 120°+ of
+ * envelope through points that merely sit within tolerance; the seam
+ * is the truth.
+ */
+const CIRCLE_CLOSURE_DEG = 100;
+/** Closure tube half-width: how far off-circle a sharp midpoint may sit. */
+function closureTube(r: number): number {
+  return Math.max(0.06, r * 0.12);
+}
 
 interface CircleChain {
   /** which border loop (cycle) the chain lives in */
@@ -883,12 +946,18 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
   const cosSharp = Math.cos((SHARP_DEG * Math.PI) / 180);
   const incident = new Map<number, { other: number; key: string }[]>();
   const featureKeys: string[] = [];
+  const sharpSegs: { a: Vec3; b: Vec3; len: number }[] = []; // closure-gate evidence
   for (const [key, faces] of topo.edgeFaces) {
     if (faces.length >= 2 && dot(topo.faceNormal[faces[0]], topo.faceNormal[faces[1]]) >= cosSharp) {
       continue; // smooth join, not a feature edge
     }
     featureKeys.push(key);
     const [a, b] = key.split('_').map(Number);
+    sharpSegs.push({
+      a: verts[a],
+      b: verts[b],
+      len: Math.hypot(verts[a].x - verts[b].x, verts[a].y - verts[b].y, verts[a].z - verts[b].z),
+    });
     for (const [from, to] of [
       [a, b],
       [b, a],
@@ -1124,6 +1193,23 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     plane,
     points: lv.map((vi) => verts[vi]),
   }));
+
+  // THE CLOSURE GATE (2026-11-03, the bore-seam hallucinations): a
+  // PARTIAL circle carries `arcs` — every one is fragment-born (Pass 1
+  // or Pass 3b), and a fragment fit can span ≥120° of envelope through
+  // points that merely sit inside the RANSAC tolerance. The retical
+  // ring's drill×bore breakthrough seam — a 3D saddle curve, locally
+  // arc-shaped — produced 22 such "partial circles" along the walls
+  // ("hallucinating a lot of holes... there is no circular pattern
+  // there"). A real rim's sharp SEAM hugs the fitted circumference
+  // (Ø0.5 exits: 360°, valley mouths: 110–130°); a seam chunk hugs
+  // only its own arc (45–55°). Measured, with margin on both sides.
+  for (let i = circles.length - 1; i >= 0; i--) {
+    const c = circles[i];
+    if (c.arcs && circleClosureDeg(c.center, c.axis, c.radius, sharpSegs) < CIRCLE_CLOSURE_DEG) {
+      circles.splice(i, 1);
+    }
+  }
 
   // ------------------------------------------------ final size filter
   // (MIN_FEATURE_SIZE_MM). Planes are measured by their in-plane
