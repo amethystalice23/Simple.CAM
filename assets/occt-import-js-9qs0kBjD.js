@@ -1,0 +1,1 @@
+var e=new URL(`occt-import-js-BhHfLpto.wasm`,import.meta.url).href;export{e as default};
