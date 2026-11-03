@@ -410,7 +410,15 @@ const BRIDGE_STEP_MAX_DEG = 60;
  * (envelope 285°) qualify, the same slivers bunched in one 45° wedge do
  * not. Returns the Kasa-refined fit plus the chains.
  */
-function fitCircleFragments(cycles: Vec2[][]): CircleFragments | null {
+function fitCircleFragments(
+  cycles: Vec2[][],
+  /** Radial inlier tolerance per unit radius (default 0.005 — Pass 1's
+   * plane-rim fragments). Pass 3b passes a TIGHTER 0.0005: weave vertices
+   * sit µm-scale on the ideal circle, and at the loose tolerance a real
+   * circle's own neighborhood band (the drill rims shearing the valley)
+   * falls inside it, merging chains and dragging the Kasa fit. */
+  tolPerR = 0.005,
+): CircleFragments | null {
   const flat = cycles.flat();
   const n = flat.length;
   if (n < MIN_FRAGMENT_TOTAL_VERTS) return null;
@@ -436,7 +444,7 @@ function fitCircleFragments(cycles: Vec2[][]): CircleFragments | null {
     if (i === j || j === k || i === k) continue;
     const c = circleFrom3(flat[i], flat[j], flat[k]);
     if (!c || c.r <= 0) continue;
-    const tol = Math.max(0.01, c.r * 0.005);
+    const tol = Math.max(0.01, c.r * tolPerR);
     const inlier = flat.map((p) => Math.abs(Math.hypot(p.x - c.cx, p.y - c.cy) - c.r) <= tol);
 
     let allInlier = true;
@@ -858,6 +866,8 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
   }
 
   const walked = new Set<string>();
+  /** sharp walks that produced no circle this pass — Pass 3b's input */
+  const failedWalks: number[][] = [];
   for (const key of featureKeys) {
     if (walked.has(key)) continue;
     const [a, b] = key.split('_').map(Number);
@@ -891,14 +901,24 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
       prev = cur;
       cur = pick.other;
     }
-    if (!closed) continue;
+    if (!closed) continue; // open chain: Pass 3b is for closed weaves only
+    // (open walks carry a ragged Newell plane from a partial traversal —
+    // a 2-vertex stub of a prism's side edge yields a meaningless plane
+    // and a spurious fragment fit; her valley weave is CLOSED, the arcs
+    // and their drill-rim detours forming one ring, so nothing real is
+    // lost by the restriction)
 
     const pts3 = loop.map((vi) => verts[vi]);
     const lp = loopPlane(pts3, pts3.map((_, i) => i));
     const { u, v } = basis(lp.normal);
     const pts2: Vec2[] = pts3.map((w) => ({ x: dot(w, u), y: dot(w, v) }));
     const circ = fitCircle(pts2);
-    if (!circ) continue;
+    if (!circ) {
+      // closed sharp weave whose vertices don't sit on one circle (her
+      // valley ring + drill-rim detours) — Pass 3b's case
+      failedWalks.push(loop);
+      continue;
+    }
 
     const h = dot(lp.point, lp.normal);
     const center = {
@@ -945,6 +965,116 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
       inner: vote < 0,
     };
     if (!circles.some((c) => sameCircle(c, circle))) circles.push(circle);
+  }
+
+  // Pass 3b: broken sharp rings — the sharp-edge analogue of Pass 1's
+  // broken plane rims. A sharp circle chopped by cross-cutting features
+  // (her retical ring: the V-valley circle at Ø18.5 cut into 4 arcs by
+  // the grub-screw drills) neither closes nor circle-fits as a walk, so
+  // the pass above dropped it. Group the failed walks by fitted plane
+  // (Newell normal within ANGLE_TOL, same convention as groupPlanes) and
+  // run the SAME fragment stitcher Pass 1 uses: RANSAC a circle through
+  // the group's vertices, chain the inliers, accept on the 120° envelope.
+  // Open walks are degenerate "cycles" here — a single pass through their
+  // vertices, no wrap edge, which is exactly what fitCircleFragments'
+  // off-circle/outlier chain-splitting expects; the wrapStep full-circle
+  // test is skipped for them (openInput below).
+  if (failedWalks.length > 0) {
+    // Newell normal per failed walk (loopPlane over its vertex sequence)
+    const planesOf: { point: Vec3; normal: Vec3 }[] = failedWalks.map((loop) =>
+      loopPlane(verts, loop),
+    );
+    const cosTolPlane = Math.cos((ANGLE_TOL * Math.PI) / 180);
+    // group by normal DIRECTION only (a plane's offset can differ per walk
+    // when the break is ragged — the circle fit sorts that out), against
+    // each group's representative normal (the first member's)
+    const grouped: { rep: Vec3; members: number[] }[] = [];
+    for (let i = 0; i < failedWalks.length; i++) {
+      const grp = grouped.find((gr) => dot(gr.rep, planesOf[i].normal) >= cosTolPlane);
+      if (grp) grp.members.push(i);
+      else grouped.push({ rep: planesOf[i].normal, members: [i] });
+    }
+    for (const { members } of grouped) {
+      // one plane frame per group: the first member's normal
+      const n = planesOf[members[0]].normal;
+      const { u, v } = basis(n);
+      const cycles: Vec2[][] = members.map((wi) =>
+        failedWalks[wi].map((vi) => {
+          const w = verts[vi];
+          return { x: dot(w, u), y: dot(w, v) };
+        }),
+      );
+      const frag = fitCircleFragments(cycles, 0.0005); // tight: see tolPerR
+      if (!frag || frag.full) continue; // full circles were Pass 3's job
+      // plane offset from the CHAIN vertices only — the ones the fit says
+      // sit on the circle. The group centroid includes the off-circle
+      // detours (drill rims wander ±0.5 mm off-plane), which otherwise
+      // drag h and the emitted center with them.
+      const chainPts: Vec3[] = [];
+      for (const ch of frag.chains) {
+        for (const vi of ch.verts) chainPts.push(verts[failedWalks[members[ch.cycle]][vi]]);
+      }
+      const chainCentroid = {
+        x: chainPts.reduce((s, p) => s + p.x, 0) / chainPts.length,
+        y: chainPts.reduce((s, p) => s + p.y, 0) / chainPts.length,
+        z: chainPts.reduce((s, p) => s + p.z, 0) / chainPts.length,
+      };
+      const h = dot(chainCentroid, n);
+      const center = {
+        x: u.x * frag.c.cx + v.x * frag.c.cy + n.x * h,
+        y: u.y * frag.c.cx + v.y * frag.c.cy + n.y * h,
+        z: u.z * frag.c.cx + v.z * frag.c.cy + n.z * h,
+      };
+      // inner vote: same radial surface-normal test as Pass 3's whole
+      // loops, restricted to the chain edges (vertices may belong to the
+      // circle while their walk detours off it — only inlier chain pairs
+      // vote, and the off-circle bridge edges between chain ends vote
+      // too, standing in for the removed rim segments)
+      let vote = 0;
+      let voted = 0;
+      for (const ch of frag.chains) {
+        const walk = failedWalks[members[ch.cycle]];
+        const pairs = ch.verts.length - 1;
+        for (let i = 0; i < pairs; i++) {
+          const ea = walk[ch.verts[i]];
+          const eb = walk[(ch.verts[i] + 1) % walk.length];
+          const faces = topo.edgeFaces.get(ea < eb ? `${ea}_${eb}` : `${eb}_${ea}`) ?? [];
+          if (faces.length < 2) continue;
+          const m = norm({
+            x: topo.faceNormal[faces[0]].x + topo.faceNormal[faces[1]].x,
+            y: topo.faceNormal[faces[0]].y + topo.faceNormal[faces[1]].y,
+            z: topo.faceNormal[faces[0]].z + topo.faceNormal[faces[1]].z,
+          });
+          const mid = {
+            x: (verts[ea].x + verts[eb].x) / 2,
+            y: (verts[ea].y + verts[eb].y) / 2,
+            z: (verts[ea].z + verts[eb].z) / 2,
+          };
+          vote += dot(m, norm(sub(mid, center)));
+          voted++;
+        }
+      }
+      const circle: CircleFeature = {
+        kind: 'circle',
+        id: featureId('circle', [
+          center.x,
+          center.y,
+          center.z,
+          n.x,
+          n.y,
+          n.z,
+          frag.c.r,
+        ]),
+        center,
+        axis: n,
+        radius: frag.c.r,
+        inner: voted > 0 ? vote < 0 : false,
+        arcs: frag.chains.map((ch) =>
+          ch.verts.map((vi) => verts[failedWalks[members[ch.cycle]][vi]]),
+        ),
+      };
+      if (!circles.some((c) => sameCircle(c, circle))) circles.push(circle);
+    }
   }
 
   // raw-triangle → plane mapping for face picking and plane highlighting

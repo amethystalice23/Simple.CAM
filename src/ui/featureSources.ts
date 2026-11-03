@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { detectFeatures, type DetectedFeatures } from '../cam/features';
+import { segmentsForRadius } from './meshSegments';
 import {
   identityTransform,
   originSpan,
@@ -48,9 +49,10 @@ export interface FeatureSource {
 
 /**
  * The single primitive-mesh builder: local space, centered at the origin,
- * cylinder axis along local X (matching the Viewport render). 48 segments
- * keeps rim circles fittable (the 8-segment snap mesh is below fitCircle's
- * n ≥ 9 threshold).
+ * cylinder axis along local X (matching the Viewport render). Segments
+ * are sagitta-scaled with the radius (meshSegments.ts) — small cylinders
+ * keep the 48 floor that keeps rim circles fittable (the 8-segment snap
+ * mesh is below fitCircle's n ≥ 9 threshold); big ones refine.
  */
 export function primitiveGeometry(p: Primitive): THREE.BufferGeometry {
   if (p.kind === 'box') {
@@ -62,7 +64,12 @@ export function primitiveGeometry(p: Primitive): THREE.BufferGeometry {
     // (plane picks, the occlusion gate) from ever hitting it
     return new THREE.BufferGeometry();
   }
-  const g = new THREE.CylinderGeometry(p.diameter / 2, p.diameter / 2, p.length, 48);
+  const g = new THREE.CylinderGeometry(
+    p.diameter / 2,
+    p.diameter / 2,
+    p.length,
+    segmentsForRadius(p.diameter / 2),
+  );
   g.rotateZ(Math.PI / 2); // geometry Y axis → local/machine X
   return g;
 }

@@ -118,6 +118,41 @@ The hole test for junction circles votes on the radial component of the
 adjacent surface normals: surfaces facing back toward the circle's axis
 mean material outside the loop (a bore).
 
+### Broken sharp rings (Pass 3b — the retical ring, 2026-11-03)
+
+A sharp circle can itself be broken by cross-cutting features: her
+Ø20 retical ring's V-valley circle (Ø18.5, two 45° cones meeting at a
+90° dihedral — sharp, so Pass 3's walk claims it) chopped into 4 arcs by
+the 4 grub-screw drills. The sharp-edge walk then produces ONE CLOSED
+WEAVE — valley arcs and drill-rim detours in a single ring (measured on
+her mesh: 448 vertices, 33% valley inliers) — which the whole-loop
+circle fit rejects, and 4 open chain remnants besides. Pass 3b rescues
+it — the sharp-edge analogue of the plane path's broken-rim stitching:
+
+- Failed walks (closed-but-unfit weaves; open walks are NOT collected —
+  a partial traversal's Newell plane is meaningless, and stub walks of
+  2–3 vertices on prism side edges were a false-positive source) are
+  grouped by fitted plane normal (the 0.5° coplanar tolerance).
+- Per group: the SAME `fitCircleFragments` RANSAC stitcher Pass 1 runs,
+  at a TIGHTER radial tolerance (0.05% of radius vs the plane path's
+  0.5% — weave vertices sit µm-scale on the ideal circle, and the loose
+  tolerance let the drill rims' neighborhood band merge chains and drag
+  the Kasa fit to r 9.286 / center off 0.12mm before the fix).
+- The 120° envelope gate applies unchanged: 4 arcs spanning ~357°
+  qualify; clustered slivers do not.
+- Emitted as a PARTIAL circle (`arcs` = the chains). The plane offset
+  comes from the CHAIN vertices only — the group centroid includes the
+  off-circle detours and drags the center off-plane.
+- Pinned by the synthetic vRingWithDrills fixture (features.test.ts):
+  the valley reconstructs at 4 arcs at two tessellation densities, the
+  V-tops stay full circles, no sub-mm spurious circles.
+
+Downstream, **cylinder chamfer accepts partial circles** when they are
+coaxial with the stock axis (the cut is a full 360° A sweep regardless —
+the fragments only reconstruct diameter + X; opTargets.ts). Path ops
+that need a real 360° path or a disc (flat chamfer, drill, pocket)
+keep refusing partial circles.
+
 ### Bounding measurements (for auto-sizing primitives)
 
 v1 deliberately skips full cylindrical-surface fitting. We provide the

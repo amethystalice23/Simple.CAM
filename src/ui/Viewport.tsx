@@ -10,6 +10,7 @@ import { movesToSegmentMoves } from './toolpathPreview';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import type { FeatureSource } from './featureSources';
 import { primitiveGeometry, primitivePose } from './featureSources';
+import { segmentsForRadius } from './meshSegments';
 import { NavCube } from './navcube';
 import {
   buildFeatureOverlayData,
@@ -863,7 +864,10 @@ export function Viewport({
 
     if (stock.kind === 'cylinder') {
       const r = stock.calibration.effectiveRadius;
-      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, stock.length, 64), stockMat);
+      const cyl = new THREE.Mesh(
+        new THREE.CylinderGeometry(r, r, stock.length, segmentsForRadius(r)),
+        stockMat,
+      );
       if (stock.axisMode === '3-axis') {
         // 3-axis: the cylinder stands vertical (axis ∥ Z), centered on X0/Y0;
         // machine Z0 sits along its height per xOrigin
@@ -2014,7 +2018,7 @@ export function Viewport({
       facePreview.diameter / 2,
       facePreview.diameter / 2,
       len,
-      48,
+      segmentsForRadius(facePreview.diameter / 2),
     );
     geo.rotateZ(Math.PI / 2); // geometry Y axis → machine X (the stock axis)
     // denser than the stock ghost and drawn over it (depthTest off):
@@ -2081,7 +2085,7 @@ export function Viewport({
       threadPreview.diameter / 2,
       threadPreview.diameter / 2,
       len,
-      48,
+      segmentsForRadius(threadPreview.diameter / 2),
     );
     geo.rotateX(Math.PI / 2); // geometry Y axis → machine Z (the thread axis)
     const mat = new THREE.MeshBasicMaterial({
