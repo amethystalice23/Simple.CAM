@@ -327,6 +327,27 @@ export function App() {
     return p.z;
   };
 
+  /** a feature's RADIUS about the stock axis in machine space — the
+   * rotary-chamfer depth pick's reading (a picked circle's own Ø/2, or a
+   * plane's facing point reduced to its radial distance from the axis).
+   * Null when the feature carries no point to read. */
+  const featureRadialInFrame = (featureId: string): number | null => {
+    const r = resolveFeature(sources, featureId);
+    if (!r) return null;
+    if (r.kind === 'circle') {
+      const c = r.feature as CircleFeature;
+      // a circle coaxial with the axis IS its own radius; any other
+      // circle's center still carries its radius about the axis
+      const center = transformFn(r.source.transform)(c.center);
+      const cal = rotaryCalibrationOf(stock);
+      return Math.hypot(center.y, center.z - cal.axisZ);
+    }
+    const p = featureMachinePoint(featureId);
+    if (!p) return null;
+    const cal = rotaryCalibrationOf(stock);
+    return Math.hypot(p.y, p.z - cal.axisZ);
+  };
+
   /** viewport feature clicks: edit the active op's selection, or the global
    * one (primitives / measuring) when no op is being edited. The first
    * feature into an op prefills its depth boxes. */
@@ -359,6 +380,10 @@ export function App() {
       if (!isDepthBearingJobOp(op)) return;
     } else if (kind === 'indexAngle') {
       if (op.kind !== 'index') return;
+    } else if (kind === 'chamferDepth') {
+      if (op.kind !== 'cylChamfer') return;
+    } else if (kind === 'drillDepth') {
+      if (op.kind !== 'drill') return;
     } else if (!takesFacePicks) {
       return;
     }
@@ -432,6 +457,43 @@ export function App() {
             ? { ...o, xStart: round2(p.x) }
             : { ...o, xEnd: round2(p.x) };
         }),
+      );
+      setFeaturePick(null);
+      return;
+    }
+    if (pick.kind === 'chamferDepth') {
+      // rotary chamfer: anchor circle Ø − picked feature Ø = tip depth.
+      // The picked feature's READING is its radius about the stock axis;
+      // the op's anchor is its FIRST selected circle — the one the
+      // chamfer rides (the panel's generation resolves it the same way).
+      const op = ops.find((o) => o.id === pick.opId && o.kind === 'cylChamfer');
+      if (!op || op.featureIds.length === 0) return; // nothing to anchor on
+      const anchorP = featureMachinePoint(op.featureIds[0]);
+      const cal = rotaryCalibrationOf(stock);
+      if (!anchorP) return;
+      const anchorR = Math.hypot(anchorP.y, anchorP.z - cal.axisZ);
+      const pickedR = featureRadialInFrame(featureId);
+      if (pickedR === null) return;
+      const depth = round2(Math.max(anchorR - pickedR, 0));
+      setOps((prev) =>
+        prev.map((o) => (o.id === pick.opId && o.kind === 'cylChamfer' ? { ...o, depth } : o)),
+      );
+      setFeaturePick(null);
+      return;
+    }
+    if (pick.kind === 'drillDepth') {
+      // drill: depth is measured FROM the selected hole rim (drill.ts:
+      // floorZ = topZ − depth), so the pick derives rim − picked Z in the
+      // cutting frame (indexed datums respected, like the floor pick).
+      const op = ops.find((o) => o.id === pick.opId && o.kind === 'drill');
+      if (!op || op.featureIds.length === 0) return; // no hole selected — stay in the mode
+      const rim = featureDepthInFrame(op, featureMachinePoint(op.featureIds[0]) ?? new Vector3());
+      const p = featureMachinePoint(featureId);
+      if (!p) return;
+      const pickedZ = featureDepthInFrame(op, p);
+      const depth = round2(Math.max(rim - pickedZ, 0.1));
+      setOps((prev) =>
+        prev.map((o) => (o.id === pick.opId && o.kind === 'drill' ? { ...o, depth } : o)),
       );
       setFeaturePick(null);
       return;

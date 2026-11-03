@@ -336,6 +336,19 @@ model faster). Banners per kind: "Selecting floor/target Ø/start X/
 end X — click a feature in the viewport"; a non-circle click in Ø mode
 stays waiting.
 
+**⇩ Depth picks (2026-11-03, Alice — the retical-ring session):**
+
+- **Rotary chamfer Depth**: `depth = anchor circle's radius − picked
+  feature's radius`, both about the stock axis — the pick selects the
+  feature the chamfer must REACH. On the retical ring: anchor the
+  V-top Ø20, pick the valley Ø18.5 → depth 0.75, the V-bit tip lands
+  exactly on the valley floor (the whole V re-cut by one anchor + one
+  pick). The anchor is the op's FIRST selected circle.
+- **Drill Depth**: `depth = selected hole's rim Z − picked feature's Z`
+  in the cutting frame — drill depth is measured **from the rim, not
+  the stock top** (drill.ts: `floorZ = topZ − depth`), so the pick
+  reads rim − floor. Indexed datums respected, like the floor pick.
+
 **Pick-aware highlighting**: while any pick is active the viewport
 highlights ONLY pickable features (`pickAllows` in the Viewport) — edges
 never flash (they carry no facing point, so they'd just steal clicks),

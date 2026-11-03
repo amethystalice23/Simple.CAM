@@ -598,6 +598,11 @@ export function Viewport({
       if (pk === 'indexAngle') return kind !== 'path';
       if (kind === 'edge') return false;
       if (pk === 'targetDiameter' || pk === 'wrapDiameter') return kind === 'circle';
+      // the depth picks (floor, chamferDepth, drillDepth) read a facing
+      // point: circles and planes carry one, artwork strokes don't
+      if (pk === 'floor' || pk === 'chamferDepth' || pk === 'drillDepth') {
+        return kind === 'circle' || kind === 'plane';
+      }
       return true;
     };
 
