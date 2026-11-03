@@ -309,6 +309,24 @@ export function Viewport({
   /** labels for the selected features, one per pick */
   const selLabelsRef = useRef<(HTMLDivElement | null)[]>([]);
   const distLabelRef = useRef<HTMLDivElement | null>(null);
+  /** A=0-frame overlay point → WORLD under the current datum view: the
+   * SAME rotation the datum group carries (Viewport must test features
+   * where they RENDER, not where they sat before the index — the
+   * indexed-drill hover/selection bug). Identity when the datum is A0. */
+  const viewDatumRef = useRef(viewDatum);
+  viewDatumRef.current = viewDatum;
+  const datumToWorld = (p: THREE.Vector3): THREE.Vector3 => {
+    const vd = viewDatumRef.current;
+    if (!vd) return p;
+    const th = vd.angle * D2R;
+    // the group's transform: world = off + R·(p − off), off = (0,0,axisZ)
+    const z = p.z - vd.axisZ;
+    return new THREE.Vector3(
+      p.x,
+      p.y * Math.cos(th) - z * Math.sin(th),
+      p.y * Math.sin(th) + z * Math.cos(th) + vd.axisZ,
+    );
+  };
 
   // ---- projection: perspective (default) or orthographic ----
   /** persisted per-user like the tool library — whoever asks for ortho
@@ -620,7 +638,7 @@ export function Viewport({
     ): { entry: SourceOverlay; nearest: NearestFeature } | null => {
       const ranked: { entry: SourceOverlay; nearest: NearestFeature }[] = [];
       for (const entry of overlaysRef.current) {
-        const nearest = findNearestFeature(entry.data, mx, my, camera, w, h);
+        const nearest = findNearestFeature(entry.data, mx, my, camera, w, h, datumToWorld);
         if (
           !nearest ||
           !pickAllows(nearest.kind) ||
@@ -1037,7 +1055,11 @@ export function Viewport({
           div.style.display = 'none';
           return;
         }
-        const p = anchor.clone().project(camera);
+        // selection labels anchor where the feature RENDERS: the A=0-frame
+        // center mapped through the datum view (the same world transform
+        // the snap uses — labels and rings must not part ways under an
+        // index datum)
+        const p = datumToWorld(anchor).project(camera);
         if (p.z > 1) {
           div.style.display = 'none';
           return;

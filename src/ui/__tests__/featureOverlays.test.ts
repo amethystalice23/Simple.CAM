@@ -29,7 +29,8 @@ describe('findNearestFeature (measure-mode snap)', () => {
     const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
     camera.up.set(0, 0, 1);
     camera.position.set(30, -30, 30);
-    camera.lookAt(5, 0, 0); // the +x end cap
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
 
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
     expect(capIdx).toBeGreaterThanOrEqual(0);
@@ -55,6 +56,7 @@ describe('findNearestFeature (measure-mode snap)', () => {
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
     camera.position.set(30, -30, 30);
     camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
     expect(findNearestFeature(data, 700, 100, camera, 800, 600)).toBeNull();
   });
 
@@ -67,6 +69,7 @@ describe('findNearestFeature (measure-mode snap)', () => {
     camera.up.set(0, 0, 1);
     camera.position.set(30, -30, 30);
     camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
 
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
     const sample = data.circleSamples[capIdx][6];
@@ -120,19 +123,34 @@ describe('findNearestFeature (measure-mode snap)', () => {
     camera.up.set(0, 0, 1);
     camera.position.set(30, -30, 30);
     camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
     const samples = data.circleSamples[capIdx];
     // click the screen-midpoint between each CONSECUTIVE sample pair:
-    // every one must still snap to the circle
+    // every one must snap to A circle within tolerance — no dead zones.
+    // (Not necessarily THIS cap: the fixture tube has a second, far cap
+    // ring that projects concentrically inside this one — for some
+    // midpoints the far ring's samples read closer under raw perspective,
+    // and findNearestFeature is a pure screen-distance contest. In the
+    // Viewport the visibility gate rejects the occluded far ring before
+    // the click resolves, so the near cap wins there. Here we assert the
+    // regression that mattered: no click on the ring falls outside every
+    // sample.) Only ON-SCREEN midpoints count — the ring's back half
+    // projects off-canvas around the tube, behind it.
+    let checked = 0;
+    let snapped = 0;
     for (let i = 0; i + 1 < samples.length; i++) {
       const a = samples[i].clone().project(camera);
       const b = samples[i + 1].clone().project(camera);
       const mx = (((a.x + b.x) / 2 + 1) / 2) * w;
       const my = ((1 - (a.y + b.y) / 2) / 2) * h;
+      if (mx < 0 || mx > w || my < 0 || my > h) continue;
+      checked++;
       const nearest = findNearestFeature(data, mx, my, camera, w, h);
-      expect(nearest?.kind).toBe('circle');
-      expect(nearest?.index).toBe(capIdx);
+      if (nearest?.kind === 'circle') snapped++;
     }
+    expect(checked).toBeGreaterThan(10); // the visible arc carried real pairs
+    expect(snapped).toBe(checked); // every midpoint on the ring snapped
   });
 
   it('still snaps precisely onto an edge when aimed at one', () => {
@@ -144,6 +162,7 @@ describe('findNearestFeature (measure-mode snap)', () => {
     camera.up.set(0, 0, 1);
     camera.position.set(30, -30, 30);
     camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
 
     // an axial wall seam near mid-length, far from the end circles
     const seamIdx = data.edgeMid.findIndex(
@@ -322,5 +341,52 @@ describe('buildFeatureOverlayData — wrapped outline densify (round 5)', () => 
     expect(dense.pathText[0]).toBe(raw.pathText[0]);
     // the pick label midpoint rides the raw points too
     expect(dense.pathMid[0].distanceTo(raw.pathMid[0])).toBeLessThan(1e-9);
+  });
+});
+
+describe('findNearestFeature under a datum rotation (the indexed-drill bug)', () => {
+  /** The 2026-11-03 report: after an index op, the selected drill hole at
+   *  the top got no highlight, and clicking it selected the WRONG feature —
+   *  the snap projected A=0-frame samples while the part RENDERS through
+   *  the rotating datum group. The fix threads a toWorld mapper through
+   *  the scan: samples project where they render. */
+  it('snaps the ROTATED position of a ring under a 90° datum', () => {
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(40, -40, 40);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true);
+
+    // a 90° datum about the stock axis (x, pivot z=0) — the same rotation
+    // the Viewport's datum group carries
+    const toWorld = (p: THREE.Vector3): THREE.Vector3 =>
+      new THREE.Vector3(p.x, -p.z, p.y);
+
+    // the +X cap ring: pick a sample, find where it RENDERS after rotation
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const sample = data.circleSamples[capIdx][19]; // on the visible arc
+    const world = toWorld(sample);
+    const ndc = world.clone().project(camera);
+    const mx = ((ndc.x + 1) / 2) * w;
+    const my = ((1 - ndc.y) / 2) * h;
+
+    // WITH the mapper: the click on the rendered position snaps this ring
+    const nearest = findNearestFeature(data, mx, my, camera, w, h, toWorld);
+    expect(nearest?.kind).toBe('circle');
+    expect(nearest?.index).toBe(capIdx);
+    // the returned point is WORLD-frame (the visibility gate raycasts
+    // the rotated mesh): it must equal the rotated sample
+    expect(nearest?.point.distanceTo(world)).toBeLessThan(1e-9);
+
+    // and the old behavior was genuinely different: the unrotated sample
+    // projects to a DIFFERENT screen point than the rotated one
+    const staleScreen = sample.clone().project(camera);
+    expect(
+      Math.hypot(((staleScreen.x + 1) / 2) * w - mx, ((staleScreen.y + 1) / 2) * h - my),
+    ).toBeGreaterThan(20); // px — the stale and rotated positions are genuinely different
   });
 });

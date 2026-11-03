@@ -592,6 +592,15 @@ export function pxPerMmAt(
  * precedence but snap tightly (CIRCLE_PRIORITY × the tolerance — they win
  * outright only inside that small radius, so faces stay easy to click).
  * Edges are the fallback, snapping within ~0.5 mm (10 px floor).
+ *
+ * `toWorld` (2026-11-03, the indexed-drill bug): the overlay samples are
+ * A=0-frame points that RENDER through the rotating datum group, so under
+ * a non-zero index datum the screen-space math must map them through the
+ * SAME rotation before projecting — otherwise the snap tests where the
+ * feature was before rotation, the hover misses the drawn ring, and (the
+ * reported bite) a click on the rotated hole snaps a DIFFERENT feature
+ * whose unrotated position happens to sit under the cursor. Null = the
+ * datum is A0, the transform is identity (the previous behavior, exact).
  */
 export function findNearestFeature(
   data: FeatureOverlayData,
@@ -600,7 +609,9 @@ export function findNearestFeature(
   camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
   w: number,
   h: number,
+  toWorld?: ((p: THREE.Vector3) => THREE.Vector3) | null,
 ): NearestFeature | null {
+  const world = toWorld ?? ((p: THREE.Vector3) => p);
   interface Candidate {
     index: number;
     samples: THREE.Vector3[];
@@ -616,11 +627,12 @@ export function findNearestFeature(
   ): (NearestFeature & { d: number }) | null => {
     let best: (NearestFeature & { d: number }) | null = null;
     for (const it of items) {
-      const proj = it.rep.clone().project(camera);
+      const rep = world(it.rep);
+      const proj = rep.clone().project(camera);
       if (proj.z > 1) continue; // behind the camera
       const px = ((proj.x + 1) / 2) * w;
       const py = ((1 - proj.y) / 2) * h;
-      const depth = it.rep.distanceTo(camera.position);
+      const depth = rep.distanceTo(camera.position);
       const tol = Math.max(
         SNAP_PX_FLOOR * tolScale,
         SNAP_MM * tolScale * pxPerMmAt(camera, h, depth),
@@ -628,7 +640,7 @@ export function findNearestFeature(
       let d = Infinity;
       let at: THREE.Vector3 | null = null;
       for (const s of it.samples) {
-        const sp = s.clone().project(camera);
+        const sp = world(s).project(camera);
         if (sp.z > 1) continue;
         const sd = Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY);
         if (sd < d) {
@@ -643,7 +655,9 @@ export function findNearestFeature(
           text: it.text,
           color: it.color,
           anchor: { x: px + 12, y: py - 14 },
-          point: at.clone(),
+          // the returned point is WORLD — the visibility gate raycasts
+          // the rotated mesh and compares depths in one frame
+          point: world(at),
           d,
         };
       }
