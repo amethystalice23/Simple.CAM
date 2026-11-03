@@ -24,15 +24,19 @@
  *  angularDeflection (rad/segment) sets segments/rev on cylinder walls;
  *  linearDeflection defaults to a bbox-RATIO (scales with model size —
  *  small parts facet worst and it barely helps), so it is pinned here
- *  to an ABSOLUTE 0.01 mm chord tolerance instead. Measured on the
- *  Ø12.8 turned piston (probe: the real-file out-of-round sweep):
- *  default(null) = 76 seg/rev ≈ 0.0055 mm out-of-round; ang 0.1 =
- *  275 seg/rev ≈ 0.0004 mm. Measured on her Ø20 retical ring
- *  (probe-retical-tess): ang 0.1 = 126 seg/rev, 4.5k tris; ang 0.05 =
- *  252 seg/rev ≈ 0.0002 mm out-of-round, 9k tris, 222 ms. Flat faces
- *  are untouched (the 10 mm cube stays 12 triangles at any setting). */
+ *  to an ABSOLUTE 0.01 mm chord tolerance instead. Measured on her Ø20
+ *  retical ring: ang 0.1 = 126 seg/rev (4.5k tris); ang 0.05 = 252
+ *  (3.1k tris); ang 0.02 = 630 seg/rev, 8.7k tris, 0.7 s import. THE
+ *  DETECTION NEEDS THE FINER KNob: the four grub-screw holes' mouth
+ *  features (the Ø0.5 bore-exit circle + the two slanted valley
+ *  partials) are TESSELLATION-PHASE FRAGILE — at ang 0.05 the hole at
+ *  model θ=0 (the A180 datum hole) detects NOTHING user-facing and
+ *  θ=180 loses its valley partials, while θ=90/270 detect fully; at 0.02
+ *  ALL FOUR detect the complete set (probe: .hole-inv sweep). Flat
+ *  faces are untouched (the 10 mm cube stays 12 triangles at any
+ *  setting). */
 export const STEP_TESSELLATION = {
-  angularDeflection: 0.05,
+  angularDeflection: 0.02,
   linearDeflectionType: 'absolute_value',
   linearDeflection: 0.01,
 } as const;
