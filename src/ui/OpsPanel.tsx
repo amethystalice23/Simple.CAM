@@ -1218,7 +1218,7 @@ function ParamFields(props: {
             <button
               type="button"
               className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'drillDepth' ? ' active' : ''}`}
-              title="Pick the drill depth — click, then select the floor feature in the viewport; depth = the selected hole's rim minus that feature's Z (measured from the rim, not the stock top)"
+              title="Pick the drill depth — the op's selected hole is the rim reference (select the hole first); depth = that rim minus the clicked feature's Z. With no hole selected yet, the first click just selects it"
               onClick={() => props.onFeaturePick(op, 'drillDepth')}
             >
               ⇩
