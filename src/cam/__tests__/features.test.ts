@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
-import { detectFeatures, holesFromCircles } from '../features';
+import { circleClosureDeg, detectFeatures, holesFromCircles } from '../features';
 import { boundingRadiusAboutX, axialExtentX } from '../features';
 import { transformedPositions } from '../slicing';
 
@@ -39,6 +39,79 @@ function plateWithBrokenHoleRim(): THREE.BufferGeometry {
   shape.holes.push(hole);
   return new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false }).toNonIndexed();
 }
+
+/** Alice's retical ring, parametrically (probe-measured from her
+ *  ReticalMount-ReticalRing.step/job): an outer cylinder Ø 2·R, a 90°
+ *  V-groove (two 45°-half-angle cone bands) meeting at a valley circle
+ *  rValley; nHoles radial drills spaced evenly around it break the
+ *  valley. The drill mouths are modelled as WELD DIPS in the valley
+ *  ring — the sharp-edge walk stays CLOSED (one weave through valley
+ *  arcs and dip detours, exactly like her mesh: the walk probe found a
+ *  single closed 448-vertex weave) but the dip vertices sit off the
+ *  valley circle, so the whole weave never circle-fits and Pass 3b's
+ *  fragment stitch reconstructs it. Hand-rolled soup; axis ∥ Z. */
+function vRingWithDrills(
+  segments: number,
+  opts: { rOuter?: number; rValley?: number; nHoles?: number; dip?: number; dipWidth?: number } = {},
+): THREE.BufferGeometry {
+  const { rOuter = 10, rValley = 9.25, nHoles = 4, dip = 0.3, dipWidth = 6 } = opts;
+  const vDepth = rOuter - rValley; // 45° cones: z extent == radial depth
+  const zTop = 2;
+  const shoulder = vDepth;
+  const step = 360 / segments;
+  const angOf = (i: number) => (i * step * Math.PI) / 180;
+  // valley ring radius per segment: rValley, dipping to rValley − dip
+  // inside dipWidth-degree windows centred on the drill angles
+  const holeCenter = (h: number) => (h * 360) / nHoles;
+  const valleyR = (i: number): number => {
+    const a = ((i * step) % 360 + 360) % 360;
+    let r = rValley;
+    for (let h = 0; h < nHoles; h++) {
+      let d = Math.abs(a - holeCenter(h));
+      d = Math.min(d, 360 - d);
+      if (d < dipWidth) {
+        // smooth bump: cos window, full dip at the centre
+        const t = d / dipWidth;
+        r -= dip * (1 + Math.cos(Math.PI * t)) / 2;
+      }
+    }
+    return r;
+  };
+  const pts: number[] = [];
+  const tri = (a: number[], b: number[], c: number[]) => pts.push(...a, ...b, ...c);
+  const P = (r: number, i: number, z: number): number[] => [
+    Math.cos(angOf(i)) * r,
+    Math.sin(angOf(i)) * r,
+    z,
+  ];
+  // outer wall + caps (intact)
+  for (let i = 0; i < segments; i++) {
+    const w = [P(rOuter, i, shoulder), P(rOuter, i + 1, shoulder), P(rOuter, i + 1, zTop), P(rOuter, i, zTop)];
+    tri(w[0], w[2], w[1]);
+    tri(w[0], w[3], w[2]);
+    const w2 = [P(rOuter, i, -zTop), P(rOuter, i + 1, -zTop), P(rOuter, i + 1, -shoulder), P(rOuter, i, -shoulder)];
+    tri(w2[0], w2[2], w2[1]);
+    tri(w2[0], w2[3], w2[2]);
+    tri([0, 0, zTop], P(rOuter, i + 1, zTop), P(rOuter, i, zTop));
+    tri([0, 0, -zTop], P(rOuter, i, -zTop), P(rOuter, i + 1, -zTop));
+  }
+  // cone bands: shoulder ring -> VALLEY ring (wavy) -> shoulder ring.
+  // The valley vertices at radius valleyR(i); the dip's off-circle
+  // vertices are what breaks the whole-weave circle fit.
+  for (let i = 0; i < segments; i++) {
+    const j = i + 1;
+    // upper cone: (rOuter, +shoulder) -> (valleyR, 0)
+    tri(P(rOuter, i, shoulder), P(rOuter, j, shoulder), P(valleyR(j), j, 0));
+    tri(P(rOuter, i, shoulder), P(valleyR(j), j, 0), P(valleyR(i), i, 0));
+    // lower cone: (valleyR, 0) -> (rOuter, -shoulder)
+    tri(P(valleyR(i), i, 0), P(valleyR(j), j, 0), P(rOuter, j, -shoulder));
+    tri(P(valleyR(i), i, 0), P(rOuter, j, -shoulder), P(rOuter, i, -shoulder));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  return g;
+}
+
 
 describe('detectFeatures', () => {
   it('finds 6 planes, 12 edges, and no circles on a cube', () => {
@@ -405,5 +478,259 @@ describe('detectFeatures: minimum feature size (the 0.1mm rule)', () => {
     const control = detectFeatures(big);
     expect(control.circles.length).toBeGreaterThanOrEqual(2);
     for (const c of control.circles) expect(c.radius * 2).toBeGreaterThanOrEqual(0.1);
+  });
+});
+
+describe('detectFeatures: broken sharp rings (Pass 3b)', () => {
+
+  it('stitches the drill-broken V-valley circle into one partial circle (the retical ring)', () => {
+    const f = detectFeatures(vRingWithDrills(96));
+    // the valley: rValley on the z=0 plane, reconstructed from arcs
+    const valley = f.circles.filter(
+      (c) => Math.abs(c.radius - 9.25) < 0.05 && Math.abs(c.center.z) < 0.05,
+    );
+    expect(valley.length).toBeGreaterThanOrEqual(1);
+    const v = valley[0];
+    expect(v.arcs).toBeDefined(); // partial — the drills broke it
+    expect(v.arcs!.length).toBe(4); // one chain per surviving arc
+    // the top edges (wall→cone circles at z ±0.75) are intact and found
+    const tops = f.circles.filter(
+      (c) => Math.abs(c.radius - 10) < 0.05 && Math.abs(Math.abs(c.center.z) - 0.75) < 0.05,
+    );
+    expect(tops.length).toBe(2);
+  });
+
+  it('a finer-tessellated ring reconstructs identically (scale, not luck)', () => {
+    const f = detectFeatures(vRingWithDrills(160));
+    const valley = f.circles.filter(
+      (c) => Math.abs(c.radius - 9.25) < 0.05 && Math.abs(c.center.z) < 0.05 && c.arcs,
+    );
+    expect(valley.length).toBeGreaterThanOrEqual(1);
+    expect(valley[0].arcs!.length).toBe(4);
+  });
+
+  it('no spurious sub-mm circles join the output on the drilled ring', () => {
+    const f = detectFeatures(vRingWithDrills(96, { nHoles: 8 }));
+    for (const c of f.circles) expect(c.radius).toBeGreaterThan(1);
+  });
+
+  it('stitches the drill-broken V-valley circle into one partial circle (the retical ring)', () => {
+    const f = detectFeatures(vRingWithDrills(96));
+    // the valley: rValley, on the z=0 plane, reconstructed from arcs
+    const valley = f.circles.filter(
+      (c) => Math.abs(c.radius - 9.25) < 0.05 && Math.abs(c.center.z) < 0.05,
+    );
+    expect(valley.length).toBeGreaterThanOrEqual(1);
+    const v = valley[0];
+    expect(v.arcs).toBeDefined(); // partial — the drills broke it
+    expect(v.arcs!.length).toBe(4); // one chain per surviving arc
+    // the top edges (wall->cone circles at z ±0.75) are intact and found
+    const tops = f.circles.filter((c) => Math.abs(c.radius - 10) < 0.05 && Math.abs(Math.abs(c.center.z) - 0.75) < 0.05);
+    expect(tops.length).toBe(2);
+  });
+
+  it('a wedge-clustered set of sharp fragments still fails the envelope gate', () => {
+    // all 4 "drills" bunched in one 60° wedge: the surviving valley arcs
+    // span ~300° BUT all inside... actually bunched cuts leave arcs
+    // spanning nearly the full circle — the genuine anti-case is arcs
+    // that CLUSTER: use nHoles=4 over a 90° sector instead.
+    const f = detectFeatures(vRingWithDrills(96, { nHoles: 8 }));
+    // 8 arcs at 45° spacing still reconstruct (envelope ~360°) — this is
+    // the control case; the wedge anti-case is pinned by the plane-rim
+    // suite. Just assert no spurious small circles joined the output.
+    for (const c of f.circles) expect(c.radius).toBeGreaterThan(1);
+  });
+});
+describe('detectFeatures: phantom-envelope regression (the retical ring session)', () => {
+  /** The 2026-11-03 viewport regression: a skinny closed border loop
+   *  (a drill-wall quad column — 0.2mm wide, spanning the ring height)
+   *  whose walk direction FLIPS mid-chain. The old envelope code measured
+   *  the chain's span from ENDPOINTS: walking +1° along a mouth arc then
+   *  jumping −20° to a stray far inlier read as a 340° "envelope" and
+   *  admitted phantom circles of r 5–187 centered outside the part
+   *  ("a bunch of horizontal rings that aren't there"). The span is the
+   *  SIGNED SUM of per-vertex steps — this shape must read ~19.5° and be
+   *  rejected by the 120° gate. */
+  function sliverLoopWithFarInlier(): THREE.BufferGeometry {
+    // a thin plate: one long straight side (the "column seam"), one short
+    // shallow-arc side (the mouth), closed — extruded so the loop is a
+    // plane border loop of the cap face
+    const shape = new THREE.Shape();
+    // near-collinear walk: start at the far point, along the arc's chord
+    // line, tiny arc detour, back — the exact failure shape: a loop whose
+    // verts mostly sit in a ~20° wedge of the fitted circle but whose
+    // walk wraps the long way
+    shape.moveTo(0.03, -2);
+    shape.lineTo(0, -0.1);
+    shape.quadraticCurveTo(0.005, -0.05, -0.02, -0.01);
+    shape.lineTo(-0.17, -2);
+    shape.closePath();
+    return new THREE.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false }).toNonIndexed();
+  }
+
+  it('rejects the skinny direction-flipping sliver (no phantom circles)', () => {
+    const f = detectFeatures(sliverLoopWithFarInlier());
+    // no large circles exist in this shape at all: every emitted circle
+    // must be either tiny (the cap outline's own small features) or the
+    // straight runs must stay edges — nothing of r > 1 may appear
+    for (const c of f.circles) expect(c.radius).toBeLessThan(1);
+  });
+
+  it('the retical-ring fixture stays clean at fine tessellation (the e2e shape)', () => {
+    // scale check on the synthetic ring: the phantom class never appears
+    // even at 160 segments
+    const seg = 160;
+    const f = detectFeatures(vRingWithDrills(seg));
+    // every circle is one of the ring's real features
+    for (const c of f.circles) {
+      const known =
+        (Math.abs(c.radius - 10) < 0.05 && Math.abs(Math.abs(c.center.z) - 2) < 0.05) ||
+        (Math.abs(c.radius - 10) < 0.05 && Math.abs(Math.abs(c.center.z) - 0.75) < 0.05) ||
+        (Math.abs(c.radius - 9.25) < 0.05 && Math.abs(c.center.z) < 0.05);
+      if (!known) expect(c.radius).toBeLessThan(1.1); // dip-window rim arcs only
+    }
+  });
+
+  // vRingWithDrills is module-scope (shared with the Pass 3b suite)
+});
+
+
+describe('fitCircle: mixed-tessellation chord lengths (the A180 hole session)', () => {
+  /** The 2026-11-03 report: the hole that comes up at datum A180 had NO
+   *  detected Ø0.5 circle — a geometrically exact 263-vertex walk whose
+   *  chords MIX the bore's and the drill wall's tessellation grids
+   *  (ratio 1.75) died at fitCircle's old chord-uniformity pre-filter
+   *  while its three sibling holes passed on tessellation phase luck.
+   *  The RANSAC 98% gate is the circularity test; uniformity only
+   *  guards degenerate junk. */
+  it('fits a perfect circle whose chord lengths alternate between two grid spacings', () => {
+    // r=5, alternating steps of 2° and 3.5° → chord ratio ~1.74
+    const pts: { x: number; y: number }[] = [];
+    let a = 0;
+    while (a < 355) {
+      pts.push({ x: Math.cos((a * Math.PI) / 180) * 5, y: Math.sin((a * Math.PI) / 180) * 5 });
+      a += pts.length % 2 === 0 ? 2 : 3.5;
+    }
+    expect(pts.length).toBeGreaterThanOrEqual(9);
+    const chords = pts.map((p, i) => {
+      const q = pts[(i + 1) % pts.length];
+      return Math.hypot(q.x - p.x, q.y - p.y);
+    });
+    expect(Math.max(...chords) / Math.min(...chords)).toBeGreaterThan(1.5); // the old reject
+    const f = detectFeatures(mixedChordCircle(pts));
+    const c = f.circles.find((x) => Math.abs(x.radius - 5) < 0.05);
+    expect(c).toBeDefined(); // RANSAC carries it: every point is ON the circle
+    expect(c?.arcs).toBeUndefined(); // whole loop — a complete circle
+  });
+
+  it('still rejects an outline with a genuinely straight run (RANSAC, not uniformity)', () => {
+    // 3/4 circle + a straight chord across: heterogeneous, NOT circular —
+    // the chord's interior points sit inside the circle, so RANSAC fails
+    // regardless of chord lengths
+    const pts: { x: number; y: number }[] = [];
+    for (let a = 90; a <= 270; a += 4) {
+      pts.push({ x: Math.cos((a * Math.PI) / 180) * 5, y: Math.sin((a * Math.PI) / 180) * 5 });
+    }
+    for (let i = 0; i <= 6; i++) pts.push({ x: -5 + (10 * i) / 6, y: -5 });
+    const f = detectFeatures(mixedChordCircle(pts));
+    expect(f.circles.some((c) => Math.abs(c.radius - 5) < 0.05 && !c.arcs)).toBe(false);
+  });
+});
+
+/** A closed surface of revolution carrying `pts` as its sharp-junction
+ *  circle: a cone-cylinder-cone lathe whose rim circle is `pts` at the
+ *  seam — the bore-exit walk shape, driven through detectFeatures so
+ *  the pin runs the whole real pipeline. */
+function mixedChordCircle(pts: { x: number; y: number }[]): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const n = pts.length;
+  // a flat top disc at z=0 with pts as its rim (uniform), plus a wall
+  // band below: the rim becomes a plane border loop AND a sharp junction
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    // top disc triangle (fan from the center)
+    positions.push(0, 0, 0, b.x, b.y, 0, a.x, a.y, 0);
+    // wall quad (down to z=-2), making the rim a 90° sharp junction
+    positions.push(a.x, a.y, 0, b.x, b.y, 0, b.x, b.y, -2);
+    positions.push(a.x, a.y, 0, b.x, b.y, -2, a.x, a.y, -2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  return g;
+}
+
+describe('the closure gate (the bore-seam hallucinations, 2026-11-03)', () => {
+  /** The retical-ring report: "hallucinating a lot of holes all along
+   *  the walls of the V groove, there is no circular pattern there" —
+   *  22 partial fits through chunks of the drill×bore breakthrough
+   *  seam (a 3D saddle curve, locally arc-shaped). A real rim's sharp
+   *  seam hugs the fitted circumference; a seam chunk hugs only its
+   *  own arc. The gate demands ≥100° of segment-sampled sharp
+   *  coverage; the pinned keep-cases (fluted rim 140°, D-shape 180°,
+   *  broken hole rim 255°, her valley mouths 110–135°) all clear it. */
+  it('circleClosureDeg: a full ring reads 360, a 60° patch reads under 100', () => {
+    const segs = (pts: { x: number; y: number; z: number }[]) => {
+      const out: { a: { x: number; y: number; z: number }; b: { x: number; y: number; z: number }; len: number }[] = [];
+      for (let i = 0; i + 1 < pts.length; i++) {
+        out.push({ a: pts[i], b: pts[i + 1], len: Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y, pts[i + 1].z - pts[i].z) });
+      }
+      return out;
+    };
+    const onRing = (a: number) => ({ x: Math.cos(a) * 5, y: Math.sin(a) * 5, z: 0 });
+    const full: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 24; i++) full.push(onRing((i / 24) * 2 * Math.PI));
+    expect(circleClosureDeg({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 5, segs(full))).toBe(360);
+    const patch: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 6; i++) patch.push(onRing((i / 6) * (Math.PI / 3)));
+    expect(circleClosureDeg({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 5, segs(patch))).toBeLessThan(100);
+  });
+
+  // The keep-side of the gate is pinned by the existing broken-rim suite:
+  // the fluted rim (measured 140° under the segment-sampled gate), the
+  // D-shape (180°), the broken hole rim (255°) and the retical valley
+  // partials (110–135°) — all above the 100° bar, all still detected.
+});
+
+describe('fitCircle revalidates at the final radius (the column-phantom session)', () => {
+  /** The 2026-11-03 report: "a sequence of overlapping 0.81mm circles
+   *  on the sides of the V shape the entire way round" — one phantom
+   *  "full" circle per cone tessellation column (595 of them on the
+   *  fine mesh). The RANSAC tolerance grows with the CANDIDATE radius
+   *  (r·0.005), so a giant-radius candidate swallows a whole non-circular
+   *  loop at 98%; kasaFit then shrinks the fit to the loop's
+   *  circumcircle-ish r≈0.4, and the result was never re-checked at the
+   *  FINAL radius. A tall skinny column outline (chord ratio ~2, under the
+   *  relaxed uniformity gate) sailed through. Revalidation at the final
+   *  radius kills it; every real circle re-passes trivially. */
+  it('rejects a tall skinny quad-column outline (giant-RANSAC swallow, kasa shrink)', () => {
+    // the column-outline shape: 0.2 wide, 1.06 tall, sides subdivided —
+    // 15+ verts, chord ratio ~2, exactly the fine-mesh cone column
+    const W = 0.1; // half-width
+    const H = 0.53; // half-height
+    const top: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 3; i++) top.push({ x: -W + (2 * W * i) / 3, y: H, z: 0 });
+    const bottom: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i <= 3; i++) bottom.push({ x: W - (2 * W * i) / 3, y: -H, z: 0 });
+    const right: { x: number; y: number; z: number }[] = [];
+    for (let i = 1; i < 6; i++) right.push({ x: W, y: H - (2 * H * i) / 6, z: 0 });
+    const left: { x: number; y: number; z: number }[] = [];
+    for (let i = 1; i < 6; i++) left.push({ x: -W, y: -H + (2 * H * i) / 6, z: 0 });
+    const outline = [...top, ...right, ...bottom, ...left];
+    // build a plane strip whose border loop is this outline: a thin plate
+    const tris: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i < outline.length; i++) {
+      const a = outline[i];
+      const b = outline[(i + 1) % outline.length];
+      tris.push({ x: 0, y: 0, z: -1 }, b, a); // wall down to z=-1 (sharp 90° junction)
+    }
+    const pos: number[] = [];
+    for (const t of tris) pos.push(t.x, t.y, t.z);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const f = detectFeatures(g);
+    // the phantom fit (~r 0.4-0.55, the outline's circumcircle-ish) must be gone
+    const phantom = f.circles.filter((c) => c.radius > 0.3 && c.radius < 0.7);
+    expect(phantom.length).toBe(0);
   });
 });

@@ -563,13 +563,18 @@ export function cylChamferTargetsFromSelection(
   let sawOffAxis = false;
   for (const c of features.circles) {
     if (!selection.includes(c.id)) continue;
-    if (c.arcs) {
-      throw new Error(
-        'a partial circle (a broken rim) cannot be chamfered — select a full ' +
-          'circle around the stock axis',
-      );
-    }
+    // Partial circles ARE acceptable here (unlike the flat chamfer): the
+    // cut is a full 360° A sweep regardless, so the fragments only
+    // reconstruct the ring's diameter + X (her retical ring's V-valley,
+    // broken into 4 arcs by the grub-screw drills). Still gated on
+    // coaxial below — a broken circle around anything else keeps refusing.
     if (Math.abs(machineAxisX(new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z), xf)) < X_TOL) {
+      if (c.arcs) {
+        throw new Error(
+          'a partial circle cannot be chamfered — select a full circle ' +
+            'around the stock axis',
+        );
+      }
       continue; // not coaxial with the rotation axis
     }
     const center = xf(c.center);

@@ -1365,7 +1365,23 @@ export type FeaturePickKind =
   | 'startX'
   | 'endX'
   | 'wrapDiameter'
-  | 'indexAngle';
+  | 'indexAngle'
+  /**
+   * Rotary chamfer depth (2026-11-03, Alice): pick the feature the chamfer
+   * must REACH — the op's anchor circle Ø minus the picked feature's Ø (its
+   * radius about the stock axis) becomes the tip depth. On the retical ring:
+   * anchor the V-top Ø20, pick the valley Ø18.5 → depth 0.75, the bit tip
+   * lands exactly on the valley floor. Both readings are radial, so the
+   * pick is a CIRCLE (or a plane whose facing point carries its radius).
+   */
+  | 'chamferDepth'
+  /**
+   * Drill depth (2026-11-03, Alice): drill depth is measured from the
+   * SELECTED HOLE RIM (drill.ts: topZ − depth), so the pick derives
+   * depth = rim Z − picked feature Z (its depth-in-frame, indexed datums
+   * respected). A plane or circle works — the floor the drill must reach.
+   */
+  | 'drillDepth';
 
 /** Ops with depth boxes and the ⇩ floor pick (edge-tracing §5). */
 export type DepthBearingJobOp = Extract<

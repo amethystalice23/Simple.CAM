@@ -327,6 +327,27 @@ export function App() {
     return p.z;
   };
 
+  /** a feature's RADIUS about the stock axis in machine space — the
+   * rotary-chamfer depth pick's reading (a picked circle's own Ø/2, or a
+   * plane's facing point reduced to its radial distance from the axis).
+   * Null when the feature carries no point to read. */
+  const featureRadialInFrame = (featureId: string): number | null => {
+    const r = resolveFeature(sources, featureId);
+    if (!r) return null;
+    if (r.kind === 'circle') {
+      const c = r.feature as CircleFeature;
+      // a circle coaxial with the axis IS its own radius; any other
+      // circle's center still carries its radius about the axis
+      const center = transformFn(r.source.transform)(c.center);
+      const cal = rotaryCalibrationOf(stock);
+      return Math.hypot(center.y, center.z - cal.axisZ);
+    }
+    const p = featureMachinePoint(featureId);
+    if (!p) return null;
+    const cal = rotaryCalibrationOf(stock);
+    return Math.hypot(p.y, p.z - cal.axisZ);
+  };
+
   /** viewport feature clicks: edit the active op's selection, or the global
    * one (primitives / measuring) when no op is being edited. The first
    * feature into an op prefills its depth boxes. */
@@ -359,6 +380,10 @@ export function App() {
       if (!isDepthBearingJobOp(op)) return;
     } else if (kind === 'indexAngle') {
       if (op.kind !== 'index') return;
+    } else if (kind === 'chamferDepth') {
+      if (op.kind !== 'cylChamfer') return;
+    } else if (kind === 'drillDepth') {
+      if (op.kind !== 'drill') return;
     } else if (!takesFacePicks) {
       return;
     }
@@ -368,27 +393,35 @@ export function App() {
     setMeasureMode(true);
   };
 
-  /** a viewport click applies the active pick; unclickable features (an
-   * edge, a non-circle for the Ø) keep the mode waiting */
+  /** Apply a one-shot pick to a clicked feature. Returns TRUE when the
+   * click was consumed by the pick mode (applied, or waiting for a
+   * better-kind feature — the established Ø-mode behavior); FALSE when
+   * the pick canceled itself and the click should fall through to normal
+   * selection. The depth picks return false when their op isn't ready
+   * (no selected hole to anchor the rim): with no anchor, NO future click
+   * can succeed either, so waiting would wedge the banner — clicks would
+   * be consumed forever and never select (the four-drill report: one op
+   * "does not let me select things"). They cancel and the click still
+   * selects — select the hole, then hit ⇩ again. */
   const applyFeaturePick = (
     pick: { opId: string; kind: FeaturePickKind },
     featureId: string,
-  ) => {
+  ): boolean => {
     if (pick.kind === 'indexAngle') {
       // aim the Index op at the clicked feature — its facing direction
       // becomes the op's absolute A
       const angle = indexAngleToward(featureId);
-      if (angle === null) return; // no facing direction — stay in the mode
+      if (angle === null) return true; // no facing direction — stay in the mode
       setOps((prev) =>
         prev.map((o) => (o.id === pick.opId && o.kind === 'index' ? { ...o, angle } : o)),
       );
       setFeaturePick(null);
-      return;
+      return true;
     }
     if (pick.kind === 'wrapDiameter') {
       // the artwork's Ø pick: pick.opId is the artwork PRIMITIVE's id
       const r = resolveFeature(sources, featureId);
-      if (!r || r.kind !== 'circle') return; // Ø comes off a circle only
+      if (!r || r.kind !== 'circle') return true; // Ø comes off a circle only
       const diameter = round2((r.feature as CircleFeature).radius * 2);
       setPrimitives((prev) =>
         prev.map((p) =>
@@ -396,11 +429,11 @@ export function App() {
         ),
       );
       setFeaturePick(null);
-      return;
+      return true;
     }
     if (pick.kind === 'targetDiameter') {
       const r = resolveFeature(sources, featureId);
-      if (!r || r.kind !== 'circle') return; // Ø comes off a circle only
+      if (!r || r.kind !== 'circle') return true; // Ø comes off a circle only
       const diameter = round2((r.feature as CircleFeature).radius * 2);
       setOps((prev) =>
         prev.map((o) => {
@@ -417,11 +450,11 @@ export function App() {
         }),
       );
       setFeaturePick(null);
-      return;
+      return true;
     }
     if (pick.kind === 'startX' || pick.kind === 'endX') {
       const p = featureMachinePoint(featureId);
-      if (!p) return; // an edge carries no facing point — stay in the mode
+      if (!p) return true; // an edge carries no facing point — stay in the mode
       setOps((prev) =>
         prev.map((o) => {
           if (o.id !== pick.opId) return o;
@@ -434,11 +467,58 @@ export function App() {
         }),
       );
       setFeaturePick(null);
-      return;
+      return true;
+    }
+    if (pick.kind === 'chamferDepth') {
+      // rotary chamfer: anchor circle Ø − picked feature Ø = tip depth.
+      // The picked feature's READING is its radius about the stock axis;
+      // the op's anchor is its FIRST selected circle — the one the
+      // chamfer rides (the panel's generation resolves it the same way).
+      const op = ops.find((o) => o.id === pick.opId && o.kind === 'cylChamfer');
+      if (!op || op.featureIds.length === 0) {
+        // no anchor circle selected — no future click can apply either:
+        // cancel (the click falls through and selects the anchor)
+        setFeaturePick(null);
+        return false;
+      }
+      const anchorP = featureMachinePoint(op.featureIds[0]);
+      const cal = rotaryCalibrationOf(stock);
+      if (!anchorP) return true;
+      const anchorR = Math.hypot(anchorP.y, anchorP.z - cal.axisZ);
+      const pickedR = featureRadialInFrame(featureId);
+      if (pickedR === null) return true;
+      const depth = round2(Math.max(anchorR - pickedR, 0));
+      setOps((prev) =>
+        prev.map((o) => (o.id === pick.opId && o.kind === 'cylChamfer' ? { ...o, depth } : o)),
+      );
+      setFeaturePick(null);
+      return true;
+    }
+    if (pick.kind === 'drillDepth') {
+      // drill: depth is measured FROM the selected hole rim (drill.ts:
+      // floorZ = topZ − depth), so the pick derives rim − picked Z in the
+      // cutting frame (indexed datums respected, like the floor pick).
+      const op = ops.find((o) => o.id === pick.opId && o.kind === 'drill');
+      if (!op || op.featureIds.length === 0) {
+        // no hole selected — no future click can apply either: cancel
+        // (the click falls through and selects the hole)
+        setFeaturePick(null);
+        return false;
+      }
+      const rim = featureDepthInFrame(op, featureMachinePoint(op.featureIds[0]) ?? new Vector3());
+      const p = featureMachinePoint(featureId);
+      if (!p) return true;
+      const pickedZ = featureDepthInFrame(op, p);
+      const depth = round2(Math.max(rim - pickedZ, 0.1));
+      setOps((prev) =>
+        prev.map((o) => (o.id === pick.opId && o.kind === 'drill' ? { ...o, depth } : o)),
+      );
+      setFeaturePick(null);
+      return true;
     }
     // 'floor': the feature's depth-in-frame drives end depth, live-linked
     const p = featureMachinePoint(featureId);
-    if (!p) return;
+    if (!p) return true;
     setOps((prev) =>
       prev.map((o) => {
         if (o.id !== pick.opId || !isDepthBearingJobOp(o)) return o;
@@ -449,13 +529,15 @@ export function App() {
       }),
     );
     setFeaturePick(null);
+    return true;
   };
 
 
   const toggleSelect = (id: string) => {
     if (featurePick) {
-      applyFeaturePick(featurePick, id);
-      return;
+      if (applyFeaturePick(featurePick, id)) return;
+      // the pick canceled itself (its op wasn't ready) — the click falls
+      // through and still selects (the stuck-banner wedge, 2026-11-03)
     }
     if (editingOpId) {
       const p = featureMachinePoint(id);

@@ -5,6 +5,7 @@ import { detectFeatures } from '../../cam/features';
 import {
   buildFeatureOverlayData,
   findNearestFeature,
+  findNearestFeatures,
   measureText,
   pickFromNearest,
   planeHighlightMesh,
@@ -29,7 +30,8 @@ describe('findNearestFeature (measure-mode snap)', () => {
     const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
     camera.up.set(0, 0, 1);
     camera.position.set(30, -30, 30);
-    camera.lookAt(5, 0, 0); // the +x end cap
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
 
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
     expect(capIdx).toBeGreaterThanOrEqual(0);
@@ -55,6 +57,7 @@ describe('findNearestFeature (measure-mode snap)', () => {
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
     camera.position.set(30, -30, 30);
     camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
     expect(findNearestFeature(data, 700, 100, camera, 800, 600)).toBeNull();
   });
 
@@ -67,6 +70,7 @@ describe('findNearestFeature (measure-mode snap)', () => {
     camera.up.set(0, 0, 1);
     camera.position.set(30, -30, 30);
     camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
 
     const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
     const sample = data.circleSamples[capIdx][6];
@@ -81,17 +85,73 @@ describe('findNearestFeature (measure-mode snap)', () => {
       h,
     );
     expect(near?.kind).toBe('circle');
-    // the old generous offset (~12px): beyond it — circles must not steal
-    // the click from the face work around them
+    // RADIAL offset off the ring line (~12px away from the circle itself):
+    // beyond the window — circles must not steal the click from the face
+    // work around them. (2026-11-03: the old test used a +10/+7 tangent
+    // offset that was genuinely ~2px from the ring once snap samples went
+    // arc-dense — a click ON the circle must snap, so the far case now
+    // moves off the ring, not along it.)
+    const center2d = data.circleCenter[capIdx].clone().project(camera);
+    const cx = ((center2d.x + 1) / 2) * w;
+    const cy = ((1 - center2d.y) / 2) * h;
+    const sx = ((ndc.x + 1) / 2) * w;
+    const sy = ((1 - ndc.y) / 2) * h;
+    const dir = { x: sx - cx, y: sy - cy };
+    const dl = Math.hypot(dir.x, dir.y) || 1;
+    const push = 12; // px radially outward from the ring
     const far = findNearestFeature(
       data,
-      ((ndc.x + 1) / 2) * w + 10,
-      ((1 - ndc.y) / 2) * h + 7,
+      sx + (dir.x / dl) * push,
+      sy + (dir.y / dl) * push,
       camera,
       w,
       h,
     );
     expect(far?.kind).not.toBe('circle');
+  });
+
+  it('a large ring snaps along its whole circumference (arc-scaled samples)', () => {
+    // the retical-ring report (2026-11-03): "selection on the rotary chamfer
+    // op keeps highlighting facets instead of circles" — the fixed 24
+    // samples left 2.4mm dead zones on a Ø18.5 ring, and a click dead
+    // center between samples fell outside the snap window. Arc-scaled
+    // samples close the dead zones: the WORST point on the ring must snap.
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(30, -30, 30);
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const samples = data.circleSamples[capIdx];
+    // click the screen-midpoint between each CONSECUTIVE sample pair:
+    // every one must snap to A circle within tolerance — no dead zones.
+    // (Not necessarily THIS cap: the fixture tube has a second, far cap
+    // ring that projects concentrically inside this one — for some
+    // midpoints the far ring's samples read closer under raw perspective,
+    // and findNearestFeature is a pure screen-distance contest. In the
+    // Viewport the visibility gate rejects the occluded far ring before
+    // the click resolves, so the near cap wins there. Here we assert the
+    // regression that mattered: no click on the ring falls outside every
+    // sample.) Only ON-SCREEN midpoints count — the ring's back half
+    // projects off-canvas around the tube, behind it.
+    let checked = 0;
+    let snapped = 0;
+    for (let i = 0; i + 1 < samples.length; i++) {
+      const a = samples[i].clone().project(camera);
+      const b = samples[i + 1].clone().project(camera);
+      const mx = (((a.x + b.x) / 2 + 1) / 2) * w;
+      const my = ((1 - (a.y + b.y) / 2) / 2) * h;
+      if (mx < 0 || mx > w || my < 0 || my > h) continue;
+      checked++;
+      const nearest = findNearestFeature(data, mx, my, camera, w, h);
+      if (nearest?.kind === 'circle') snapped++;
+    }
+    expect(checked).toBeGreaterThan(10); // the visible arc carried real pairs
+    expect(snapped).toBe(checked); // every midpoint on the ring snapped
   });
 
   it('still snaps precisely onto an edge when aimed at one', () => {
@@ -103,6 +163,7 @@ describe('findNearestFeature (measure-mode snap)', () => {
     camera.up.set(0, 0, 1);
     camera.position.set(30, -30, 30);
     camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true); // projections need a current world matrix
 
     // an axial wall seam near mid-length, far from the end circles
     const seamIdx = data.edgeMid.findIndex(
@@ -281,5 +342,133 @@ describe('buildFeatureOverlayData — wrapped outline densify (round 5)', () => 
     expect(dense.pathText[0]).toBe(raw.pathText[0]);
     // the pick label midpoint rides the raw points too
     expect(dense.pathMid[0].distanceTo(raw.pathMid[0])).toBeLessThan(1e-9);
+  });
+});
+
+describe('findNearestFeature under a datum rotation (the indexed-drill bug)', () => {
+  /** The 2026-11-03 report: after an index op, the selected drill hole at
+   *  the top got no highlight, and clicking it selected the WRONG feature —
+   *  the snap projected A=0-frame samples while the part RENDERS through
+   *  the rotating datum group. The fix threads a toWorld mapper through
+   *  the scan: samples project where they render. */
+  it('snaps the ROTATED position of a ring under a 90° datum', () => {
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(40, -40, 40);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true);
+
+    // a 90° datum about the stock axis (x, pivot z=0) — the same rotation
+    // the Viewport's datum group carries
+    const toWorld = (p: THREE.Vector3): THREE.Vector3 =>
+      new THREE.Vector3(p.x, -p.z, p.y);
+
+    // the +X cap ring: pick a sample, find where it RENDERS after rotation
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const sample = data.circleSamples[capIdx][19]; // on the visible arc
+    const world = toWorld(sample);
+    const ndc = world.clone().project(camera);
+    const mx = ((ndc.x + 1) / 2) * w;
+    const my = ((1 - ndc.y) / 2) * h;
+
+    // WITH the mapper: the click on the rendered position snaps this ring
+    const nearest = findNearestFeature(data, mx, my, camera, w, h, toWorld);
+    expect(nearest?.kind).toBe('circle');
+    expect(nearest?.index).toBe(capIdx);
+    // the returned point is WORLD-frame (the visibility gate raycasts
+    // the rotated mesh): it must equal the rotated sample
+    expect(nearest?.point.distanceTo(world)).toBeLessThan(1e-9);
+
+    // and the old behavior was genuinely different: the unrotated sample
+    // projects to a DIFFERENT screen point than the rotated one
+    const staleScreen = sample.clone().project(camera);
+    expect(
+      Math.hypot(((staleScreen.x + 1) / 2) * w - mx, ((staleScreen.y + 1) / 2) * h - my),
+    ).toBeGreaterThan(20); // px — the stale and rotated positions are genuinely different
+  });
+});
+
+describe('findNearestFeature never mutates the overlay data', () => {
+  /** The A0 regression (2026-11-03, the four-drill report): at the
+   *  identity datum the toWorld path returns the STORED sample, and
+   *  three.js project() mutates in place — one hover call corrupted the
+   *  whole samples array, and every later click tested garbage against
+   *  the real mouse position: nothing snapped, facets won, drill ops
+   *  1 (A0) and 3 (A180, same corrupted session) could not select their
+   *  holes while the later ops — entered after a selection change
+   *  rebuilt the overlay data — worked. */
+  it('an identity toWorld leaves the samples intact across calls', () => {
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(30, -30, 30);
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true);
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const sample = data.circleSamples[capIdx][6].clone(); // pre-call snapshot
+    const ndc = sample.clone().project(camera);
+    const mx = ((ndc.x + 1) / 2) * w;
+    const my = ((1 - ndc.y) / 2) * h;
+    const identity = (p: THREE.Vector3): THREE.Vector3 => p;
+
+    // TWO snaps through the identity path (hover, then click)
+    const first = findNearestFeature(data, mx, my, camera, w, h, identity);
+    expect(first?.kind).toBe('circle');
+    expect(first?.index).toBe(capIdx);
+    const second = findNearestFeature(data, mx, my, camera, w, h, identity);
+    expect(second?.kind).toBe('circle');
+    expect(second?.index).toBe(capIdx);
+    // and the stored sample is untouched
+    const after = data.circleSamples[capIdx][6];
+    expect(after.distanceTo(sample)).toBeLessThan(1e-9);
+  });
+});
+
+describe('findNearestFeatures (the visibility gate fallthrough list)', () => {
+  /** The A270-hole report (2026-11-03): one hole's circles dead — no
+   *  hover, no selection — while every other hole worked. Mechanism:
+   *  the snap returned ONE best circle; when that one sat hidden behind
+   *  the surface (the hole's far mouth shadows its near rim at some view
+   *  angles) the gate killed the whole pick with no alternative. The
+   *  plural snap returns every in-tolerance candidate ranked so the
+   *  gate can walk to the first VISIBLE one. */
+  it('returns every in-tolerance circle, ranked by distance', () => {
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(30, -30, 30);
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true);
+    // a click on the +X cap's ring: the far (-X) cap projects
+    // concentrically inside it — both rings' samples may be in
+    // tolerance, and BOTH must be in the list
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const farIdx = data.circleCenter.findIndex((c) => Math.abs(c.x + 5) < 0.05);
+    const sample = data.circleSamples[capIdx][6];
+    const ndc = sample.clone().project(camera);
+    const mx = ((ndc.x + 1) / 2) * w;
+    const my = ((1 - ndc.y) / 2) * h;
+
+    const ranked = findNearestFeatures(data, mx, my, camera, w, h);
+    expect(ranked.length).toBeGreaterThanOrEqual(1);
+    expect(ranked.every((r) => r.kind === 'circle')).toBe(true); // circles exclude others outright
+    expect(ranked[0].index).toBe(capIdx); // the nearest first
+    // ascending distance order, and every one inside its own tolerance
+    for (let i = 1; i < ranked.length; i++) {
+      expect(ranked[i].d).toBeGreaterThanOrEqual(ranked[i - 1].d);
+    }
+    // the single-best call is the head of the list (API consistency)
+    expect(findNearestFeature(data, mx, my, camera, w, h)?.index).toBe(ranked[0].index);
+    void farIdx;
   });
 });

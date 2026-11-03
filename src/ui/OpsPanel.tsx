@@ -227,6 +227,8 @@ const PICK_BANNERS: Record<FeaturePickKind, string> = {
   // banners in the Model tab — the artwork's own ⇩ Ø pick
   wrapDiameter: 'Selecting artwork Ø — click a circular feature',
   indexAngle: 'Selecting index angle — click a face or hole in the viewport',
+  chamferDepth: 'Selecting chamfer depth — click the feature the chamfer must reach',
+  drillDepth: 'Selecting drill depth — click the floor the drill must reach',
 };
 
 /** Cutting-rate overrides for one op — the optional popup behind the ⚡
@@ -1205,7 +1207,23 @@ function ParamFields(props: {
     case 'drill':
       return (
         <>
-          <NumberField label="Depth (mm)" value={op.depth} min={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
+          <div className="floor-row">
+            <NumberField
+              label="Depth (mm)"
+              className="floor-depth"
+              value={op.depth}
+              min={0.1}
+              onCommit={(v) => upd({ depth: v } as Partial<JobOp>)}
+            />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'drillDepth' ? ' active' : ''}`}
+              title="Pick the drill depth — the op's selected hole is the rim reference (select the hole first); depth = that rim minus the clicked feature's Z. With no hole selected yet, the first click just selects it"
+              onClick={() => props.onFeaturePick(op, 'drillDepth')}
+            >
+              ⇩
+            </button>
+          </div>
           <NumberField label="Peck (mm)" value={op.peckDepth} min={0} onCommit={(v) => upd({ peckDepth: v } as Partial<JobOp>)} />
         </>
       );
@@ -1320,14 +1338,25 @@ function ParamFields(props: {
     case 'cylChamfer':
       return (
         <>
-          <NumberField
-            label="Depth (mm)"
-            title="0 = anchor exactly on the selected circle — the flank cuts up-and-out through whatever rises above it (a step wall, the root of an existing chamfer). Above 0 = the circle is the highest point — the tip slides below it and the chamfer opens outward (a rod end, a chamfer top)"
-            value={op.depth}
-            min={0}
-            step={0.1}
-            onCommit={(v) => upd({ depth: Math.max(v, 0) } as Partial<JobOp>)}
-          />
+          <div className="floor-row">
+            <NumberField
+              label="Depth (mm)"
+              className="floor-depth"
+              title="0 = anchor exactly on the selected circle — the flank cuts up-and-out through whatever rises above it (a step wall, the root of an existing chamfer). Above 0 = the circle is the highest point — the tip slides below it and the chamfer opens outward (a rod end, a chamfer top)"
+              value={op.depth}
+              min={0}
+              step={0.1}
+              onCommit={(v) => upd({ depth: Math.max(v, 0) } as Partial<JobOp>)}
+            />
+            <button
+              type="button"
+              className={`icon-btn${props.picking?.opId === op.id && props.picking.kind === 'chamferDepth' ? ' active' : ''}`}
+              title="Pick the chamfer depth — click, then select the feature the chamfer must reach in the viewport; depth = the anchor circle's radius minus that feature's radius about the stock axis (pick the valley floor: the V-top anchor minus the valley Ø lands the tip exactly on it)"
+              onClick={() => props.onFeaturePick(op, 'chamferDepth')}
+            >
+              ⇩
+            </button>
+          </div>
           <FinishingOnlyCheck op={op} upd={upd} />
           {!op.finishingOnly && (
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />

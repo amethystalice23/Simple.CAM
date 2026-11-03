@@ -581,11 +581,29 @@ describe('cylChamferTargetsFromSelection', () => {
     ).toThrowError(/no circle around the stock axis/);
   });
 
-  it('refuses a partial circle loudly (a broken rim is no 360° path)', () => {
-    const partial = xCircle('p', 0, 40);
+  it('accepts a PARTIAL circle coaxial with the axis — the fragments reconstruct the ring', () => {
+    // her retical ring: the V-valley circle broken into 4 arcs by the
+    // grub-screw drills. The cut is a full 360° A sweep regardless, so
+    // the fragments only supply diameter + X (2026-11-03).
+    const partial = xCircle('p', 0, 18.5);
+    partial.arcs = [
+      [{ x: 0, y: 9.25, z: 0 }],
+      [{ x: 0, y: -9.25, z: 0 }],
+      [{ x: 0, y: 0, z: 9.25 }],
+      [{ x: 0, y: 0, z: -9.25 }],
+    ];
+    const res = cylChamferTargetsFromSelection(feats(partial), ['p'], identityTransform(), cal);
+    expect(res).not.toBeNull();
+    expect(res!.edges).toHaveLength(1);
+    expect(res!.edges[0].diameter).toBeCloseTo(18.5, 5);
+    expect(res!.edges[0].x).toBeCloseTo(0, 5);
+  });
+
+  it('still refuses a partial circle that is NOT coaxial (broken, off-axis)', () => {
+    const partial = zCircle('z');
     partial.arcs = [[{ x: 0, y: 0, z: 0 }]];
     expect(() =>
-      cylChamferTargetsFromSelection(feats(partial), ['p'], identityTransform(), cal),
+      cylChamferTargetsFromSelection(feats(partial), ['z'], identityTransform(), cal),
     ).toThrowError(/partial circle/);
   });
 

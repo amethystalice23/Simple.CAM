@@ -308,7 +308,27 @@ export const GLOBAL_SELECT_COLOR = 0x7fff9f;
 export const SLICE_COLOR = 0xcc66dd;
 
 const RING_SEGMENTS = 72;
-const RING_SAMPLES = 24; // hover-snap sampling density
+/**
+ * Hover-snap sampling density: arc-scaled — at least one sample per
+ * SNAP_ARC_MM of circumference (floor 24 = the old fixed density, cap
+ * 720). The fixed 24 (one per 15°) put a Ø18.5 ring's samples 2.4mm
+ * apart: a click dead-center between two fell ~9.7px from the nearest
+ * sample — outside the tight circle window (×0.55 ≈ 5.5px) — so the
+ * circle LOST to the facet under it (the retical-ring session:
+ * "circles should be the highest priority snap-to target, then if you
+ * are several pixels away fall back to facets/faces"). Arc-scaled
+ * samples keep every on-ring click within SNAP_ARC_MM/2 ≈ 1px of a
+ * sample; the facet fallback beyond several pixels is untouched.
+ */
+const RING_SAMPLES_FLOOR = 24;
+const SNAP_ARC_MM = 0.25;
+const RING_SAMPLES_CAP = 720;
+
+/** Snap-sample count for a circle: arc-scaled to SNAP_ARC_MM. */
+function ringSampleCount(c: CircleFeature): number {
+  const arc = 2 * Math.PI * c.radius;
+  return Math.min(RING_SAMPLES_CAP, Math.max(RING_SAMPLES_FLOOR, Math.ceil(arc / SNAP_ARC_MM)));
+}
 
 /** Measure-mode snap: screen-space floor (px) and mm floor at feature depth. */
 const SNAP_PX_FLOOR = 10;
@@ -443,7 +463,7 @@ export function buildFeatureOverlayData(
         target.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
       }
     }
-    circleSamples.push(ringPoints(c, xf, RING_SAMPLES));
+    circleSamples.push(ringPoints(c, xf, ringSampleCount(c)));
     circleCenter.push(xf(c.center));
     circleText.push(
       `Ø ${(c.radius * 2).toFixed(2)} mm${c.inner ? ' · hole' : ''}${c.arcs ? ' · partial' : ''}`,
@@ -572,6 +592,15 @@ export function pxPerMmAt(
  * precedence but snap tightly (CIRCLE_PRIORITY × the tolerance — they win
  * outright only inside that small radius, so faces stay easy to click).
  * Edges are the fallback, snapping within ~0.5 mm (10 px floor).
+ *
+ * `toWorld` (2026-11-03, the indexed-drill bug): the overlay samples are
+ * A=0-frame points that RENDER through the rotating datum group, so under
+ * a non-zero index datum the screen-space math must map them through the
+ * SAME rotation before projecting — otherwise the snap tests where the
+ * feature was before rotation, the hover misses the drawn ring, and (the
+ * reported bite) a click on the rotated hole snaps a DIFFERENT feature
+ * whose unrotated position happens to sit under the cursor. Null = the
+ * datum is A0, the transform is identity (the previous behavior, exact).
  */
 export function findNearestFeature(
   data: FeatureOverlayData,
@@ -580,7 +609,27 @@ export function findNearestFeature(
   camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
   w: number,
   h: number,
+  toWorld?: ((p: THREE.Vector3) => THREE.Vector3) | null,
 ): NearestFeature | null {
+  return findNearestFeatures(data, mouseX, mouseY, camera, w, h, toWorld)[0] ?? null;
+}
+
+/**
+ * Every in-tolerance snap candidate ranked by screen distance — the
+ * visibility gate's fallthrough list (see findNearestFeature's toWorld
+ * note). Kind precedence matches the single-best call: circles within
+ * their tight window exclude paths and edges outright; paths beat edges.
+ */
+export function findNearestFeatures(
+  data: FeatureOverlayData,
+  mouseX: number,
+  mouseY: number,
+  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+  w: number,
+  h: number,
+  toWorld?: ((p: THREE.Vector3) => THREE.Vector3) | null,
+): (NearestFeature & { d: number })[] {
+  const world = toWorld ?? ((p: THREE.Vector3) => p);
   interface Candidate {
     index: number;
     samples: THREE.Vector3[];
@@ -589,46 +638,57 @@ export function findNearestFeature(
     rep: THREE.Vector3;
   }
 
+  // ALL qualifying (feature, SAMPLE) candidates, ranked by screen
+  // distance (2026-11-03, the A270-hole report): the caller's visibility
+  // gate walks the list and takes the first VISIBLE entry. Per SAMPLE,
+  // not per feature — a circle's nearest sample is often on its HIDDEN
+  // side (a drill mouth rim climbs both slopes of the V groove, half
+  // behind the wall): a per-feature candidate made of that one sample
+  // had the gate reject the circle outright and fall through to a
+  // neighboring feature's ring, so hovering the hole picked Ø-rims from
+  // the far side and nothing ever selected. Per-sample entries let the
+  // gate reach the same circle's visible arc a few entries later.
   const scan = (
     kind: 'edge' | 'circle' | 'path',
     items: Candidate[],
     tolScale: number,
-  ): (NearestFeature & { d: number }) | null => {
-    let best: (NearestFeature & { d: number }) | null = null;
+  ): (NearestFeature & { d: number })[] => {
+    const hits: (NearestFeature & { d: number })[] = [];
     for (const it of items) {
-      const proj = it.rep.clone().project(camera);
+      const rep = world(it.rep);
+      const proj = rep.clone().project(camera);
       if (proj.z > 1) continue; // behind the camera
       const px = ((proj.x + 1) / 2) * w;
       const py = ((1 - proj.y) / 2) * h;
-      const depth = it.rep.distanceTo(camera.position);
+      const depth = rep.distanceTo(camera.position);
       const tol = Math.max(
         SNAP_PX_FLOOR * tolScale,
         SNAP_MM * tolScale * pxPerMmAt(camera, h, depth),
       );
-      let d = Infinity;
-      let at: THREE.Vector3 | null = null;
       for (const s of it.samples) {
-        const sp = s.clone().project(camera);
+        // CLONE before projecting: three.js project() mutates in place,
+        // and at the identity datum `world(s)` returns the STORED sample —
+        // projecting it raw corrupts the overlay data for every later
+        // snap (the A0 regression: one hover killed all selection)
+        const sp = world(s).clone().project(camera);
         if (sp.z > 1) continue;
         const sd = Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY);
-        if (sd < d) {
-          d = sd;
-          at = s;
-        }
-      }
-      if (at && d <= tol && (best === null || d < best.d)) {
-        best = {
+        if (sd > tol) continue;
+        hits.push({
           kind,
           index: it.index,
           text: it.text,
           color: it.color,
           anchor: { x: px + 12, y: py - 14 },
-          point: at.clone(),
-          d,
-        };
+          // the returned point is WORLD — the visibility gate raycasts
+          // the rotated mesh and compares depths in one frame. Cloned
+          // for the same reason as the samples above.
+          point: world(s).clone(),
+          d: sd,
+        });
       }
     }
-    return best;
+    return hits.sort((a, b) => a.d - b.d);
   };
 
   const circles: Candidate[] = data.circleSamples.map((samples, i) => ({
@@ -638,8 +698,9 @@ export function findNearestFeature(
     color: data.circleInner[i] ? HOLE_HOVER : CIRCLE_HOVER,
     rep: data.circleCenter[i],
   }));
-  const circleHit = scan('circle', circles, CIRCLE_PRIORITY);
-  if (circleHit) return circleHit; // key dimensions take precedence
+  const circleHits = scan('circle', circles, CIRCLE_PRIORITY);
+  // key dimensions take precedence outright (within their tight window)
+  if (circleHits.length > 0) return circleHits;
 
   // artwork paths snap like edges (they ride surfaces) but stay
   // hoverable during op editing — a different kind, not gated with
@@ -651,8 +712,8 @@ export function findNearestFeature(
     color: PATH_HOVER,
     rep: data.pathMid[i],
   }));
-  const pathHit = scan('path', paths, 1);
-  if (pathHit) return pathHit;
+  const pathHits = scan('path', paths, 1);
+  if (pathHits.length > 0) return pathHits;
 
   const edges: Candidate[] = data.edgeSamples.map((samples, i) => ({
     index: i,

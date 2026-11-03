@@ -203,6 +203,49 @@ function groupPlanes(topo: Topo): { planeOf: Int32Array; normals: Vec3[] } {
 }
 
 /** Newell normal + centroid of a closed vertex loop. */
+/** Angular coverage of a circle's circumference by nearby sharp-seam
+ *  geometry, in 5° buckets — the closure gate's measurement. Each sharp
+ *  edge is SAMPLED at tube/2 steps (midpoints alone miss a straight
+ *  bridge's near-end evidence — the fluted rim's gap chords). A sample
+ *  counts when it sits within `closureTube` of the circle both along
+ *  the axis and radially. Exported for direct pinning. */
+export function circleClosureDeg(
+  center: Vec3,
+  axis: Vec3,
+  radius: number,
+  sharpSegs: { a: Vec3; b: Vec3; len: number }[],
+): number {
+  const n = normalize(axis);
+  const ref = Math.abs(n.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const u = normalize(cross(ref, n));
+  const v = cross(n, u);
+  const tube = closureTube(radius);
+  const covered = new Set<number>();
+  const sample = (x: number, y: number, z: number) => {
+    const rx = x - center.x;
+    const ry = y - center.y;
+    const rz = z - center.z;
+    const axial = rx * n.x + ry * n.y + rz * n.z;
+    if (Math.abs(axial) > tube) return;
+    const inPlane = Math.sqrt(Math.max(0, rx * rx + ry * ry + rz * rz - axial * axial));
+    if (Math.abs(inPlane - radius) > tube) return;
+    const a =
+      ((Math.atan2(rx * v.x + ry * v.y + rz * v.z, rx * u.x + ry * u.y + rz * u.z) * 180) /
+        Math.PI +
+        360) %
+      360;
+    covered.add(Math.floor(a / 5));
+  };
+  for (const s of sharpSegs) {
+    const steps = Math.max(1, Math.ceil(s.len / (tube / 2)));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      sample(s.a.x + (s.b.x - s.a.x) * t, s.a.y + (s.b.y - s.a.y) * t, s.a.z + (s.b.z - s.a.z) * t);
+    }
+  }
+  return covered.size * 5;
+}
+
 function loopPlane(verts: Vec3[], loop: number[]): { point: Vec3; normal: Vec3 } {
   let nx = 0;
   let ny = 0;
@@ -333,7 +376,19 @@ function fitCircle(pts: Vec2[]): Circle2 | null {
     minL = Math.min(minL, l);
     maxL = Math.max(maxL, l);
   }
-  if (minL <= 0 || maxL / minL > 1.5) return null; // not a uniform tessellation
+  // Degenerate-junk guard ONLY (the retical-ring session, 2026-11-03):
+  // the old "> 1.5 = not a uniform tessellation" reject false-killed
+  // PERFECT circles on fine meshes — the θ=0 grub-screw bore exit walks
+  // a geometrically exact 263-vertex circle whose chords MIX the bore's
+  // and the drill wall's tessellation grids (0.0036 and 0.0063mm →
+  // ratio 1.75, every vertex within 0.07µm of the ideal rim), while
+  // its three sibling holes pass only by tessellation phase luck —
+  // hole features that exist "at some datums and not others". The
+  // RANSAC 98%-inlier gate below is the real circularity test: a mixed
+  // chord set on a true circle passes it, and a heterogeneous outline
+  // (a D-shape's straight side, a rectangle) fails it regardless of
+  // chord lengths. Zero-length chords (repeated vertices) stay fatal.
+  if (minL <= 0 || maxL / minL > 8) return null;
 
   const rand = mulberry32(42);
   let best: { c: Circle2; tol: number; inliers: number } | null = null;
@@ -356,7 +411,23 @@ function fitCircle(pts: Vec2[]): Circle2 | null {
   const inlierPts = pts.filter(
     (p) => Math.abs(Math.hypot(p.x - best!.c.cx, p.y - best!.c.cy) - best!.c.r) <= best!.tol,
   );
-  return kasaFit(inlierPts) ?? best.c;
+  const fit = kasaFit(inlierPts) ?? best.c;
+  // REVALIDATE at the FINAL radius (the fine-tessellation column loops,
+  // 2026-11-03): the RANSAC tolerance grows with the CANDIDATE radius
+  // (r·0.005), so a giant-radius candidate swallows a whole non-circular
+  // loop at 98% — and kasaFit then shrinks the fit to the loop's
+  // circumcircle-ish r≈0.4, emitting a phantom "full" circle per cone
+  // tessellation column (595 of them, Ø0.76–0.86, all the way around
+  // the V groove on the fine mesh). No real circle is harmed: kasa
+  // refines an already-circular consensus, so every point re-passes at
+  // the final radius's tolerance; a skinny column outline's points are
+  // far off ANY circle and reject.
+  const finalTol = Math.max(0.01, fit.r * 0.005);
+  const finalInliers = pts.filter(
+    (p) => Math.abs(Math.hypot(p.x - fit.cx, p.y - fit.cy) - fit.r) <= finalTol,
+  ).length;
+  if (finalInliers / n < 0.98) return null;
+  return fit;
 }
 
 // ---------------------------------------------- partial-circle recognition
@@ -371,6 +442,26 @@ const MIN_CIRCLE_ENVELOPE_DEG = 120;
 const MIN_FRAGMENT_VERTS = 2;
 /** And the whole set needs at least this many vertices on the circle. */
 const MIN_FRAGMENT_TOTAL_VERTS = 6;
+/**
+ * THE CLOSURE GATE (the bore-seam fits, 2026-11-03): a fragment-fit
+ * circle must CLOSE on the mesh — real sharp geometry (not just the
+ * fitted inliers) must hug ≥ this many degrees of its circumference,
+ * measured with points SAMPLED ALONG the sharp edges (midpoints alone
+ * miss a straight bridge's near-end evidence). The measured bands on
+ * the retical ring: Ø0.5 bore-exit rims 360°, valley-mouth partials
+ * 110–135°, and the HALLUCINATED fits — chunks of the drill×bore
+ * breakthrough seam (a 3D saddle curve, locally arc-shaped) fitted as
+ * "partial circles", 22 of them — 80–90°. The pinned fixtures: fluted
+ * rim (4×15° slivers, straight-bridged) 140°, D-shape 180°, broken
+ * hole rim 255°. A fitted circle's accepted chains can span 120°+ of
+ * envelope through points that merely sit within tolerance; the seam
+ * is the truth.
+ */
+const CIRCLE_CLOSURE_DEG = 100;
+/** Closure tube half-width: how far off-circle a sharp midpoint may sit. */
+function closureTube(r: number): number {
+  return Math.max(0.06, r * 0.12);
+}
 
 interface CircleChain {
   /** which border loop (cycle) the chain lives in */
@@ -410,7 +501,15 @@ const BRIDGE_STEP_MAX_DEG = 60;
  * (envelope 285°) qualify, the same slivers bunched in one 45° wedge do
  * not. Returns the Kasa-refined fit plus the chains.
  */
-function fitCircleFragments(cycles: Vec2[][]): CircleFragments | null {
+function fitCircleFragments(
+  cycles: Vec2[][],
+  /** Radial inlier tolerance per unit radius (default 0.005 — Pass 1's
+   * plane-rim fragments). Pass 3b passes a TIGHTER 0.0005: weave vertices
+   * sit µm-scale on the ideal circle, and at the loose tolerance a real
+   * circle's own neighborhood band (the drill rims shearing the valley)
+   * falls inside it, merging chains and dragging the Kasa fit. */
+  tolPerR = 0.005,
+): CircleFragments | null {
   const flat = cycles.flat();
   const n = flat.length;
   if (n < MIN_FRAGMENT_TOTAL_VERTS) return null;
@@ -436,7 +535,7 @@ function fitCircleFragments(cycles: Vec2[][]): CircleFragments | null {
     if (i === j || j === k || i === k) continue;
     const c = circleFrom3(flat[i], flat[j], flat[k]);
     if (!c || c.r <= 0) continue;
-    const tol = Math.max(0.01, c.r * 0.005);
+    const tol = Math.max(0.01, c.r * tolPerR);
     const inlier = flat.map((p) => Math.abs(Math.hypot(p.x - c.cx, p.y - c.cy) - c.r) <= tol);
 
     let allInlier = true;
@@ -521,22 +620,44 @@ function fitCircleFragments(cycles: Vec2[][]): CircleFragments | null {
     // stray single vertices are not arc evidence — drop their chains,
     // then gate on total coverage and the angular envelope: the chains'
     // CCW intervals about the fitted center, 360° minus the largest gap
-    // between neighbours, measured in each chain's own direction
+    // between neighbours. Each chain's interval is measured CCW from its
+    // own start as [from, from + span] — the span in the chain's walk
+    // direction normalized to CCW. (2026-11-03 regression fix: the old
+    // from/to flip on CW-walking chains made a single chain's wrap-gap
+    // formula measure the chain's OWN span as the "gap" — a skinny closed
+    // sliver (a drill-wall quad column, 0.2 × 4mm) read envelope ≈ 359°
+    // instead of its real ~9° and landed huge phantom circles centered
+    // outside the part. The retical ring at 252 seg/rev pushed 45+ of
+    // those into the output; the bug existed at the old 126 too, just less.)
+    // A chain's span is the SIGNED SUM of its per-vertex angular steps
+    // (each step taken as the signed delta in (-180, 180]): endpoints alone
+    // lie — a chain that walks +1° along an arc then jumps −20° to a stray
+    // inlier covers 19.5°, not the 340° its endpoint difference suggests.
     const kept = chains.filter((ch) => ch.verts.length >= MIN_FRAGMENT_VERTS);
     const t = kept.reduce((acc, ch) => acc + ch.verts.length, 0);
     let accepted = t >= MIN_FRAGMENT_TOTAL_VERTS;
     if (accepted && kept.length > 0) {
+      const signedStep = (a: number, b: number): number => {
+        let d = b - a;
+        if (d > 180) d -= 360;
+        if (d <= -180) d += 360;
+        return d;
+      };
       const bounds = kept
         .map((ch) => {
           const base = cycleOffset[ch.cycle];
-          const p0 = flat[base + ch.verts[0]];
-          const p1 = flat[base + ch.verts[1]];
-          const pN = flat[base + ch.verts[ch.verts.length - 1]];
-          const ccw = (angleOf(p1, c) - angleOf(p0, c) + 360) % 360 < 180;
-          return {
-            from: angleOf(ccw ? p0 : pN, c),
-            to: angleOf(ccw ? pN : p0, c),
-          };
+          let a = angleOf(flat[base + ch.verts[0]], c);
+          let span = 0;
+          for (let i = 1; i < ch.verts.length; i++) {
+            const b = angleOf(flat[base + ch.verts[i]], c);
+            span += signedStep(a, b);
+            a = b;
+          }
+          // CCW-walking chain ([start, start+span]); CW-walking chain's
+          // CCW interval is [start+span, start]
+          const from = span >= 0 ? angleOf(flat[base + ch.verts[0]], c) : (angleOf(flat[base + ch.verts[0]], c) + span + 360) % 360;
+          const spanCCW = Math.min(Math.abs(span), 360);
+          return { from, to: (from + spanCCW) % 360 };
         })
         .sort((a, b) => a.from - b.from);
       let maxGap = 0;
@@ -841,12 +962,18 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
   const cosSharp = Math.cos((SHARP_DEG * Math.PI) / 180);
   const incident = new Map<number, { other: number; key: string }[]>();
   const featureKeys: string[] = [];
+  const sharpSegs: { a: Vec3; b: Vec3; len: number }[] = []; // closure-gate evidence
   for (const [key, faces] of topo.edgeFaces) {
     if (faces.length >= 2 && dot(topo.faceNormal[faces[0]], topo.faceNormal[faces[1]]) >= cosSharp) {
       continue; // smooth join, not a feature edge
     }
     featureKeys.push(key);
     const [a, b] = key.split('_').map(Number);
+    sharpSegs.push({
+      a: verts[a],
+      b: verts[b],
+      len: Math.hypot(verts[a].x - verts[b].x, verts[a].y - verts[b].y, verts[a].z - verts[b].z),
+    });
     for (const [from, to] of [
       [a, b],
       [b, a],
@@ -858,6 +985,8 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
   }
 
   const walked = new Set<string>();
+  /** sharp walks that produced no circle this pass — Pass 3b's input */
+  const failedWalks: number[][] = [];
   for (const key of featureKeys) {
     if (walked.has(key)) continue;
     const [a, b] = key.split('_').map(Number);
@@ -891,14 +1020,24 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
       prev = cur;
       cur = pick.other;
     }
-    if (!closed) continue;
+    if (!closed) continue; // open chain: Pass 3b is for closed weaves only
+    // (open walks carry a ragged Newell plane from a partial traversal —
+    // a 2-vertex stub of a prism's side edge yields a meaningless plane
+    // and a spurious fragment fit; her valley weave is CLOSED, the arcs
+    // and their drill-rim detours forming one ring, so nothing real is
+    // lost by the restriction)
 
     const pts3 = loop.map((vi) => verts[vi]);
     const lp = loopPlane(pts3, pts3.map((_, i) => i));
     const { u, v } = basis(lp.normal);
     const pts2: Vec2[] = pts3.map((w) => ({ x: dot(w, u), y: dot(w, v) }));
     const circ = fitCircle(pts2);
-    if (!circ) continue;
+    if (!circ) {
+      // closed sharp weave whose vertices don't sit on one circle (her
+      // valley ring + drill-rim detours) — Pass 3b's case
+      failedWalks.push(loop);
+      continue;
+    }
 
     const h = dot(lp.point, lp.normal);
     const center = {
@@ -947,6 +1086,116 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     if (!circles.some((c) => sameCircle(c, circle))) circles.push(circle);
   }
 
+  // Pass 3b: broken sharp rings — the sharp-edge analogue of Pass 1's
+  // broken plane rims. A sharp circle chopped by cross-cutting features
+  // (her retical ring: the V-valley circle at Ø18.5 cut into 4 arcs by
+  // the grub-screw drills) neither closes nor circle-fits as a walk, so
+  // the pass above dropped it. Group the failed walks by fitted plane
+  // (Newell normal within ANGLE_TOL, same convention as groupPlanes) and
+  // run the SAME fragment stitcher Pass 1 uses: RANSAC a circle through
+  // the group's vertices, chain the inliers, accept on the 120° envelope.
+  // Open walks are degenerate "cycles" here — a single pass through their
+  // vertices, no wrap edge, which is exactly what fitCircleFragments'
+  // off-circle/outlier chain-splitting expects; the wrapStep full-circle
+  // test is skipped for them (openInput below).
+  if (failedWalks.length > 0) {
+    // Newell normal per failed walk (loopPlane over its vertex sequence)
+    const planesOf: { point: Vec3; normal: Vec3 }[] = failedWalks.map((loop) =>
+      loopPlane(verts, loop),
+    );
+    const cosTolPlane = Math.cos((ANGLE_TOL * Math.PI) / 180);
+    // group by normal DIRECTION only (a plane's offset can differ per walk
+    // when the break is ragged — the circle fit sorts that out), against
+    // each group's representative normal (the first member's)
+    const grouped: { rep: Vec3; members: number[] }[] = [];
+    for (let i = 0; i < failedWalks.length; i++) {
+      const grp = grouped.find((gr) => dot(gr.rep, planesOf[i].normal) >= cosTolPlane);
+      if (grp) grp.members.push(i);
+      else grouped.push({ rep: planesOf[i].normal, members: [i] });
+    }
+    for (const { members } of grouped) {
+      // one plane frame per group: the first member's normal
+      const n = planesOf[members[0]].normal;
+      const { u, v } = basis(n);
+      const cycles: Vec2[][] = members.map((wi) =>
+        failedWalks[wi].map((vi) => {
+          const w = verts[vi];
+          return { x: dot(w, u), y: dot(w, v) };
+        }),
+      );
+      const frag = fitCircleFragments(cycles, 0.0005); // tight: see tolPerR
+      if (!frag || frag.full) continue; // full circles were Pass 3's job
+      // plane offset from the CHAIN vertices only — the ones the fit says
+      // sit on the circle. The group centroid includes the off-circle
+      // detours (drill rims wander ±0.5 mm off-plane), which otherwise
+      // drag h and the emitted center with them.
+      const chainPts: Vec3[] = [];
+      for (const ch of frag.chains) {
+        for (const vi of ch.verts) chainPts.push(verts[failedWalks[members[ch.cycle]][vi]]);
+      }
+      const chainCentroid = {
+        x: chainPts.reduce((s, p) => s + p.x, 0) / chainPts.length,
+        y: chainPts.reduce((s, p) => s + p.y, 0) / chainPts.length,
+        z: chainPts.reduce((s, p) => s + p.z, 0) / chainPts.length,
+      };
+      const h = dot(chainCentroid, n);
+      const center = {
+        x: u.x * frag.c.cx + v.x * frag.c.cy + n.x * h,
+        y: u.y * frag.c.cx + v.y * frag.c.cy + n.y * h,
+        z: u.z * frag.c.cx + v.z * frag.c.cy + n.z * h,
+      };
+      // inner vote: same radial surface-normal test as Pass 3's whole
+      // loops, restricted to the chain edges (vertices may belong to the
+      // circle while their walk detours off it — only inlier chain pairs
+      // vote, and the off-circle bridge edges between chain ends vote
+      // too, standing in for the removed rim segments)
+      let vote = 0;
+      let voted = 0;
+      for (const ch of frag.chains) {
+        const walk = failedWalks[members[ch.cycle]];
+        const pairs = ch.verts.length - 1;
+        for (let i = 0; i < pairs; i++) {
+          const ea = walk[ch.verts[i]];
+          const eb = walk[(ch.verts[i] + 1) % walk.length];
+          const faces = topo.edgeFaces.get(ea < eb ? `${ea}_${eb}` : `${eb}_${ea}`) ?? [];
+          if (faces.length < 2) continue;
+          const m = norm({
+            x: topo.faceNormal[faces[0]].x + topo.faceNormal[faces[1]].x,
+            y: topo.faceNormal[faces[0]].y + topo.faceNormal[faces[1]].y,
+            z: topo.faceNormal[faces[0]].z + topo.faceNormal[faces[1]].z,
+          });
+          const mid = {
+            x: (verts[ea].x + verts[eb].x) / 2,
+            y: (verts[ea].y + verts[eb].y) / 2,
+            z: (verts[ea].z + verts[eb].z) / 2,
+          };
+          vote += dot(m, norm(sub(mid, center)));
+          voted++;
+        }
+      }
+      const circle: CircleFeature = {
+        kind: 'circle',
+        id: featureId('circle', [
+          center.x,
+          center.y,
+          center.z,
+          n.x,
+          n.y,
+          n.z,
+          frag.c.r,
+        ]),
+        center,
+        axis: n,
+        radius: frag.c.r,
+        inner: voted > 0 ? vote < 0 : false,
+        arcs: frag.chains.map((ch) =>
+          ch.verts.map((vi) => verts[failedWalks[members[ch.cycle]][vi]]),
+        ),
+      };
+      if (!circles.some((c) => sameCircle(c, circle))) circles.push(circle);
+    }
+  }
+
   // raw-triangle → plane mapping for face picking and plane highlighting
   const rawTriCount = Math.floor((geometry.index ? geometry.toNonIndexed() : geometry).getAttribute('position').count / 3);
   const faceToPlane = new Int32Array(rawTriCount).fill(-1);
@@ -960,6 +1209,23 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     plane,
     points: lv.map((vi) => verts[vi]),
   }));
+
+  // THE CLOSURE GATE (2026-11-03, the bore-seam hallucinations): a
+  // PARTIAL circle carries `arcs` — every one is fragment-born (Pass 1
+  // or Pass 3b), and a fragment fit can span ≥120° of envelope through
+  // points that merely sit inside the RANSAC tolerance. The retical
+  // ring's drill×bore breakthrough seam — a 3D saddle curve, locally
+  // arc-shaped — produced 22 such "partial circles" along the walls
+  // ("hallucinating a lot of holes... there is no circular pattern
+  // there"). A real rim's sharp SEAM hugs the fitted circumference
+  // (Ø0.5 exits: 360°, valley mouths: 110–130°); a seam chunk hugs
+  // only its own arc (45–55°). Measured, with margin on both sides.
+  for (let i = circles.length - 1; i >= 0; i--) {
+    const c = circles[i];
+    if (c.arcs && circleClosureDeg(c.center, c.axis, c.radius, sharpSegs) < CIRCLE_CLOSURE_DEG) {
+      circles.splice(i, 1);
+    }
+  }
 
   // ------------------------------------------------ final size filter
   // (MIN_FEATURE_SIZE_MM). Planes are measured by their in-plane

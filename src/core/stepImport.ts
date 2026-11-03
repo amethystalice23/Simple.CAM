@@ -18,14 +18,24 @@
 
 /** Tessellation quality for ReadStepFile — the ONE knob that controls
  *  circularity (2026-11-01, Alice: "still too coarse on cylinders when
- *  the model is this small… 256 might be acceptable"). angularDeflection
- *  sets segments/rev on cylinder walls; linearDeflection is a bbox-RATIO
- *  (scales with model size — small parts facet worst and it barely
- *  helps). Measured on the Ø12.8 turned piston (probe: the real-file
- *  out-of-round sweep): default(null) = 76 seg/rev ≈ 0.0055 mm
- *  out-of-round; ang 0.1 = 275 seg/rev ≈ 0.0004 mm. Flat faces are
- *  untouched (the 10 mm cube stays 12 triangles at any setting). */
-export const STEP_TESSELLATION = { angularDeflection: 0.1 } as const;
+ *  the model is this small… 256 might be acceptable"; 2026-11-03, the
+ *  Ø20 retical ring: "waaay too coarse… we did great on small scale
+ *  things, now we need to do better on large scale things too").
+ *  angularDeflection (rad/segment) sets segments/rev on cylinder walls;
+ *  linearDeflection defaults to a bbox-RATIO (scales with model size —
+ *  small parts facet worst and it barely helps), so it is pinned here
+ *  to an ABSOLUTE 0.01 mm chord tolerance instead. Measured on the
+ *  Ø12.8 turned piston (probe: the real-file out-of-round sweep):
+ *  default(null) = 76 seg/rev ≈ 0.0055 mm out-of-round; ang 0.1 =
+ *  275 seg/rev ≈ 0.0004 mm. Measured on her Ø20 retical ring
+ *  (probe-retical-tess): ang 0.1 = 126 seg/rev, 4.5k tris; ang 0.05 =
+ *  252 seg/rev ≈ 0.0002 mm out-of-round, 9k tris, 222 ms. Flat faces
+ *  are untouched (the 10 mm cube stays 12 triangles at any setting). */
+export const STEP_TESSELLATION = {
+  angularDeflection: 0.05,
+  linearDeflectionType: 'absolute_value',
+  linearDeflection: 0.01,
+} as const;
 
 export interface OcctMeshResult {
   name?: string;

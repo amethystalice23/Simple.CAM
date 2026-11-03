@@ -118,6 +118,50 @@ The hole test for junction circles votes on the radial component of the
 adjacent surface normals: surfaces facing back toward the circle's axis
 mean material outside the loop (a bore).
 
+### Broken sharp rings (Pass 3b — the retical ring, 2026-11-03)
+
+A sharp circle can itself be broken by cross-cutting features: her
+Ø20 retical ring's V-valley circle (Ø18.5, two 45° cones meeting at a
+90° dihedral — sharp, so Pass 3's walk claims it) chopped into 4 arcs by
+the 4 grub-screw drills. The sharp-edge walk then produces ONE CLOSED
+WEAVE — valley arcs and drill-rim detours in a single ring (measured on
+her mesh: 448 vertices, 33% valley inliers) — which the whole-loop
+circle fit rejects, and 4 open chain remnants besides. Pass 3b rescues
+it — the sharp-edge analogue of the plane path's broken-rim stitching:
+
+- Failed walks (closed-but-unfit weaves; open walks are NOT collected —
+  a partial traversal's Newell plane is meaningless, and stub walks of
+  2–3 vertices on prism side edges were a false-positive source) are
+  grouped by fitted plane normal (the 0.5° coplanar tolerance).
+- Per group: the SAME `fitCircleFragments` RANSAC stitcher Pass 1 runs,
+  at a TIGHTER radial tolerance (0.05% of radius vs the plane path's
+  0.5% — weave vertices sit µm-scale on the ideal circle, and the loose
+  tolerance let the drill rims' neighborhood band merge chains and drag
+  the Kasa fit to r 9.286 / center off 0.12mm before the fix).
+- The 120° envelope gate applies unchanged: 4 arcs spanning ~357°
+  qualify; clustered slivers do not. **Chain spans are the SIGNED SUM of
+  per-vertex angular steps** (2026-11-03 regression fix, both passes):
+  endpoint differences lie — a chain that walks +1° along a mouth arc
+  then jumps −20° to a stray far inlier covers 19.5°, not the 340° its
+  endpoints suggest. The old endpoint-difference code read skinny
+  drill-wall quad-column loops as ~359° envelopes and emitted phantom
+  circles of r 5–187 centered outside the part ("a bunch of horizontal
+  rings that aren't there" — the retical-ring viewport regression; the
+  bug existed at the old 126 seg/rev too, one circle, the finer
+  tessellation multiplied it to 45+).
+- Emitted as a PARTIAL circle (`arcs` = the chains). The plane offset
+  comes from the CHAIN vertices only — the group centroid includes the
+  off-circle detours and drags the center off-plane.
+- Pinned by the synthetic vRingWithDrills fixture (features.test.ts):
+  the valley reconstructs at 4 arcs at two tessellation densities, the
+  V-tops stay full circles, no sub-mm spurious circles.
+
+Downstream, **cylinder chamfer accepts partial circles** when they are
+coaxial with the stock axis (the cut is a full 360° A sweep regardless —
+the fragments only reconstruct diameter + X; opTargets.ts). Path ops
+that need a real 360° path or a disc (flat chamfer, drill, pocket)
+keep refusing partial circles.
+
 ### Bounding measurements (for auto-sizing primitives)
 
 v1 deliberately skips full cylindrical-surface fitting. We provide the
@@ -200,6 +244,25 @@ third region mode.
 - **Hover**: raycast → face → resolve to the feature owning that face
   (plane, circle-on-plane, edge via nearest-edge distance within a
   ~0.5 mm snap). Highlight the whole feature, not the triangle.
+  **Snap precedence (Alice, 2026-11-03): "circles should be the highest
+  priority snap-to target, then if you are several pixels away fall back
+  to facets/faces."** Circles snap inside a tight window (×0.55 of the
+  edge tolerance ≈ 5.5px screen floor) and win outright within it;
+  faces/planes are the fallback beyond. The window only works if the
+  click lands near a SAMPLE — snap samples are arc-scaled (one per
+  ≤0.25mm of circumference, floor 24, cap 720; featureOverlays.ts
+  `ringSampleCount`). The old fixed 24 (one per 15°) left 2.4mm dead
+  zones on a Ø18.5 ring, and clicks dead-center between samples fell
+  outside the window — the circle lost to the facet under it (the
+  retical-ring viewport report).
+  **The gate FALLS THROUGH the ranked list** (`findNearestFeatures`,
+  2026-11-03): the snap returns EVERY in-tolerance candidate ranked by
+  screen distance, and the visibility gate walks them — the first
+  VISIBLE one wins. A single best left the gate no alternative when the
+  nearest circle sat hidden behind the surface (the A270-hole report: a
+  hole's far mouth shadows its near rim at some view angles; the whole
+  hole read dead — no hover, no selection — while its identical
+  siblings worked).
 - **Measure mode is the single interaction mode** (no separate select
   mode): hover highlights transiently; a left click toggles the picked
   feature — nearest feature, else the face's plane group — into the
@@ -280,6 +343,19 @@ is gone (it never worked well; the pick modes position a face on the
 model faster). Banners per kind: "Selecting floor/target Ø/start X/
 end X — click a feature in the viewport"; a non-circle click in Ø mode
 stays waiting.
+
+**⇩ Depth picks (2026-11-03, Alice — the retical-ring session):**
+
+- **Rotary chamfer Depth**: `depth = anchor circle's radius − picked
+  feature's radius`, both about the stock axis — the pick selects the
+  feature the chamfer must REACH. On the retical ring: anchor the
+  V-top Ø20, pick the valley Ø18.5 → depth 0.75, the V-bit tip lands
+  exactly on the valley floor (the whole V re-cut by one anchor + one
+  pick). The anchor is the op's FIRST selected circle.
+- **Drill Depth**: `depth = selected hole's rim Z − picked feature's Z`
+  in the cutting frame — drill depth is measured **from the rim, not
+  the stock top** (drill.ts: `floorZ = topZ − depth`), so the pick
+  reads rim − floor. Indexed datums respected, like the floor pick.
 
 **Pick-aware highlighting**: while any pick is active the viewport
 highlights ONLY pickable features (`pickAllows` in the Viewport) — edges

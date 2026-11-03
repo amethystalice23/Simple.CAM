@@ -10,11 +10,12 @@ import { movesToSegmentMoves } from './toolpathPreview';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import type { FeatureSource } from './featureSources';
 import { primitiveGeometry, primitivePose } from './featureSources';
+import { segmentsForRadius } from './meshSegments';
 import { NavCube } from './navcube';
 import {
   buildFeatureOverlayData,
   connectorLine,
-  findNearestFeature,
+  findNearestFeatures,
   hoverLineGeometry,
   measureText,
   pickFromNearest,
@@ -308,6 +309,24 @@ export function Viewport({
   /** labels for the selected features, one per pick */
   const selLabelsRef = useRef<(HTMLDivElement | null)[]>([]);
   const distLabelRef = useRef<HTMLDivElement | null>(null);
+  /** A=0-frame overlay point → WORLD under the current datum view: the
+   * SAME rotation the datum group carries (Viewport must test features
+   * where they RENDER, not where they sat before the index — the
+   * indexed-drill hover/selection bug). Identity when the datum is A0. */
+  const viewDatumRef = useRef(viewDatum);
+  viewDatumRef.current = viewDatum;
+  const datumToWorld = (p: THREE.Vector3): THREE.Vector3 => {
+    const vd = viewDatumRef.current;
+    if (!vd) return p;
+    const th = vd.angle * D2R;
+    // the group's transform: world = off + R·(p − off), off = (0,0,axisZ)
+    const z = p.z - vd.axisZ;
+    return new THREE.Vector3(
+      p.x,
+      p.y * Math.cos(th) - z * Math.sin(th),
+      p.y * Math.sin(th) + z * Math.cos(th) + vd.axisZ,
+    );
+  };
 
   // ---- projection: perspective (default) or orthographic ----
   /** persisted per-user like the tool library — whoever asks for ortho
@@ -597,6 +616,11 @@ export function Viewport({
       if (pk === 'indexAngle') return kind !== 'path';
       if (kind === 'edge') return false;
       if (pk === 'targetDiameter' || pk === 'wrapDiameter') return kind === 'circle';
+      // the depth picks (floor, chamferDepth, drillDepth) read a facing
+      // point: circles and planes carry one, artwork strokes don't
+      if (pk === 'floor' || pk === 'chamferDepth' || pk === 'drillDepth') {
+        return kind === 'circle' || kind === 'plane';
+      }
       return true;
     };
 
@@ -612,17 +636,23 @@ export function Viewport({
       w: number,
       h: number,
     ): { entry: SourceOverlay; nearest: NearestFeature } | null => {
+      // EVERY in-tolerance candidate, not just the nearest per source
+      // (2026-11-03, the A270-hole report): the nearest circle can sit
+      // hidden behind the surface (a hole's far mouth shadows its near
+      // rim at some view angles) — with a single candidate the gate then
+      // killed the whole pick: no hover, no selection. The ranked list
+      // lets the gate fall through to the first VISIBLE feature.
       const ranked: { entry: SourceOverlay; nearest: NearestFeature }[] = [];
       for (const entry of overlaysRef.current) {
-        const nearest = findNearestFeature(entry.data, mx, my, camera, w, h);
-        if (
-          !nearest ||
-          !pickAllows(nearest.kind) ||
-          (!edgePickingRef.current && nearest.kind === 'edge')
-        ) {
-          continue;
+        for (const nearest of findNearestFeatures(entry.data, mx, my, camera, w, h, datumToWorld)) {
+          if (
+            !pickAllows(nearest.kind) ||
+            (!edgePickingRef.current && nearest.kind === 'edge')
+          ) {
+            continue;
+          }
+          ranked.push({ entry, nearest });
         }
-        ranked.push({ entry, nearest });
       }
       if (ranked.length === 0) return null;
       ranked.sort((a, b) => a.nearest.d - b.nearest.d);
@@ -863,7 +893,10 @@ export function Viewport({
 
     if (stock.kind === 'cylinder') {
       const r = stock.calibration.effectiveRadius;
-      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, stock.length, 64), stockMat);
+      const cyl = new THREE.Mesh(
+        new THREE.CylinderGeometry(r, r, stock.length, segmentsForRadius(r)),
+        stockMat,
+      );
       if (stock.axisMode === '3-axis') {
         // 3-axis: the cylinder stands vertical (axis ∥ Z), centered on X0/Y0;
         // machine Z0 sits along its height per xOrigin
@@ -1028,7 +1061,11 @@ export function Viewport({
           div.style.display = 'none';
           return;
         }
-        const p = anchor.clone().project(camera);
+        // selection labels anchor where the feature RENDERS: the A=0-frame
+        // center mapped through the datum view (the same world transform
+        // the snap uses — labels and rings must not part ways under an
+        // index datum)
+        const p = datumToWorld(anchor).project(camera);
         if (p.z > 1) {
           div.style.display = 'none';
           return;
@@ -2014,7 +2051,7 @@ export function Viewport({
       facePreview.diameter / 2,
       facePreview.diameter / 2,
       len,
-      48,
+      segmentsForRadius(facePreview.diameter / 2),
     );
     geo.rotateZ(Math.PI / 2); // geometry Y axis → machine X (the stock axis)
     // denser than the stock ghost and drawn over it (depthTest off):
@@ -2081,7 +2118,7 @@ export function Viewport({
       threadPreview.diameter / 2,
       threadPreview.diameter / 2,
       len,
-      48,
+      segmentsForRadius(threadPreview.diameter / 2),
     );
     geo.rotateX(Math.PI / 2); // geometry Y axis → machine Z (the thread axis)
     const mat = new THREE.MeshBasicMaterial({
