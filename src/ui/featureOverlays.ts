@@ -638,12 +638,16 @@ export function findNearestFeatures(
     rep: THREE.Vector3;
   }
 
-  // ALL qualifying candidates, ranked by screen distance (2026-11-03,
-  // the A270-hole report): the caller's visibility gate must be able to
-  // fall through to the next candidate when the nearest one is hidden —
-  // a single best left the gate no alternative when the nearest circle
-  // sat behind the surface (a hole's far mouth shadows its near rim at
-  // some view angles: the pick died outright, no hover, no selection).
+  // ALL qualifying (feature, SAMPLE) candidates, ranked by screen
+  // distance (2026-11-03, the A270-hole report): the caller's visibility
+  // gate walks the list and takes the first VISIBLE entry. Per SAMPLE,
+  // not per feature — a circle's nearest sample is often on its HIDDEN
+  // side (a drill mouth rim climbs both slopes of the V groove, half
+  // behind the wall): a per-feature candidate made of that one sample
+  // had the gate reject the circle outright and fall through to a
+  // neighboring feature's ring, so hovering the hole picked Ø-rims from
+  // the far side and nothing ever selected. Per-sample entries let the
+  // gate reach the same circle's visible arc a few entries later.
   const scan = (
     kind: 'edge' | 'circle' | 'path',
     items: Candidate[],
@@ -661,8 +665,6 @@ export function findNearestFeatures(
         SNAP_PX_FLOOR * tolScale,
         SNAP_MM * tolScale * pxPerMmAt(camera, h, depth),
       );
-      let d = Infinity;
-      let at: THREE.Vector3 | null = null;
       for (const s of it.samples) {
         // CLONE before projecting: three.js project() mutates in place,
         // and at the identity datum `world(s)` returns the STORED sample —
@@ -671,12 +673,7 @@ export function findNearestFeatures(
         const sp = world(s).clone().project(camera);
         if (sp.z > 1) continue;
         const sd = Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY);
-        if (sd < d) {
-          d = sd;
-          at = s;
-        }
-      }
-      if (at && d <= tol) {
+        if (sd > tol) continue;
         hits.push({
           kind,
           index: it.index,
@@ -686,8 +683,8 @@ export function findNearestFeatures(
           // the returned point is WORLD — the visibility gate raycasts
           // the rotated mesh and compares depths in one frame. Cloned
           // for the same reason as the samples above.
-          point: world(at).clone(),
-          d,
+          point: world(s).clone(),
+          d: sd,
         });
       }
     }
