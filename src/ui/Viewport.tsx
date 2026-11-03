@@ -15,7 +15,7 @@ import { NavCube } from './navcube';
 import {
   buildFeatureOverlayData,
   connectorLine,
-  findNearestFeature,
+  findNearestFeatures,
   hoverLineGeometry,
   measureText,
   pickFromNearest,
@@ -636,17 +636,23 @@ export function Viewport({
       w: number,
       h: number,
     ): { entry: SourceOverlay; nearest: NearestFeature } | null => {
+      // EVERY in-tolerance candidate, not just the nearest per source
+      // (2026-11-03, the A270-hole report): the nearest circle can sit
+      // hidden behind the surface (a hole's far mouth shadows its near
+      // rim at some view angles) — with a single candidate the gate then
+      // killed the whole pick: no hover, no selection. The ranked list
+      // lets the gate fall through to the first VISIBLE feature.
       const ranked: { entry: SourceOverlay; nearest: NearestFeature }[] = [];
       for (const entry of overlaysRef.current) {
-        const nearest = findNearestFeature(entry.data, mx, my, camera, w, h, datumToWorld);
-        if (
-          !nearest ||
-          !pickAllows(nearest.kind) ||
-          (!edgePickingRef.current && nearest.kind === 'edge')
-        ) {
-          continue;
+        for (const nearest of findNearestFeatures(entry.data, mx, my, camera, w, h, datumToWorld)) {
+          if (
+            !pickAllows(nearest.kind) ||
+            (!edgePickingRef.current && nearest.kind === 'edge')
+          ) {
+            continue;
+          }
+          ranked.push({ entry, nearest });
         }
-        ranked.push({ entry, nearest });
       }
       if (ranked.length === 0) return null;
       ranked.sort((a, b) => a.nearest.d - b.nearest.d);

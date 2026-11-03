@@ -5,6 +5,7 @@ import { detectFeatures } from '../../cam/features';
 import {
   buildFeatureOverlayData,
   findNearestFeature,
+  findNearestFeatures,
   measureText,
   pickFromNearest,
   planeHighlightMesh,
@@ -427,5 +428,47 @@ describe('findNearestFeature never mutates the overlay data', () => {
     // and the stored sample is untouched
     const after = data.circleSamples[capIdx][6];
     expect(after.distanceTo(sample)).toBeLessThan(1e-9);
+  });
+});
+
+describe('findNearestFeatures (the visibility gate fallthrough list)', () => {
+  /** The A270-hole report (2026-11-03): one hole's circles dead — no
+   *  hover, no selection — while every other hole worked. Mechanism:
+   *  the snap returned ONE best circle; when that one sat hidden behind
+   *  the surface (the hole's far mouth shadows its near rim at some view
+   *  angles) the gate killed the whole pick with no alternative. The
+   *  plural snap returns every in-tolerance candidate ranked so the
+   *  gate can walk to the first VISIBLE one. */
+  it('returns every in-tolerance circle, ranked by distance', () => {
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(30, -30, 30);
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true);
+    // a click on the +X cap's ring: the far (-X) cap projects
+    // concentrically inside it — both rings' samples may be in
+    // tolerance, and BOTH must be in the list
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const farIdx = data.circleCenter.findIndex((c) => Math.abs(c.x + 5) < 0.05);
+    const sample = data.circleSamples[capIdx][6];
+    const ndc = sample.clone().project(camera);
+    const mx = ((ndc.x + 1) / 2) * w;
+    const my = ((1 - ndc.y) / 2) * h;
+
+    const ranked = findNearestFeatures(data, mx, my, camera, w, h);
+    expect(ranked.length).toBeGreaterThanOrEqual(1);
+    expect(ranked.every((r) => r.kind === 'circle')).toBe(true); // circles exclude others outright
+    expect(ranked[0].index).toBe(capIdx); // the nearest first
+    // ascending distance order, and every one inside its own tolerance
+    for (let i = 1; i < ranked.length; i++) {
+      expect(ranked[i].d).toBeGreaterThanOrEqual(ranked[i - 1].d);
+    }
+    // the single-best call is the head of the list (API consistency)
+    expect(findNearestFeature(data, mx, my, camera, w, h)?.index).toBe(ranked[0].index);
+    void farIdx;
   });
 });

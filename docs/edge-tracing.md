@@ -255,6 +255,14 @@ third region mode.
   zones on a Ø18.5 ring, and clicks dead-center between samples fell
   outside the window — the circle lost to the facet under it (the
   retical-ring viewport report).
+  **The gate FALLS THROUGH the ranked list** (`findNearestFeatures`,
+  2026-11-03): the snap returns EVERY in-tolerance candidate ranked by
+  screen distance, and the visibility gate walks them — the first
+  VISIBLE one wins. A single best left the gate no alternative when the
+  nearest circle sat hidden behind the surface (the A270-hole report: a
+  hole's far mouth shadows its near rim at some view angles; the whole
+  hole read dead — no hover, no selection — while its identical
+  siblings worked).
 - **Measure mode is the single interaction mode** (no separate select
   mode): hover highlights transiently; a left click toggles the picked
   feature — nearest feature, else the face's plane group — into the

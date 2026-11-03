@@ -611,6 +611,24 @@ export function findNearestFeature(
   h: number,
   toWorld?: ((p: THREE.Vector3) => THREE.Vector3) | null,
 ): NearestFeature | null {
+  return findNearestFeatures(data, mouseX, mouseY, camera, w, h, toWorld)[0] ?? null;
+}
+
+/**
+ * Every in-tolerance snap candidate ranked by screen distance — the
+ * visibility gate's fallthrough list (see findNearestFeature's toWorld
+ * note). Kind precedence matches the single-best call: circles within
+ * their tight window exclude paths and edges outright; paths beat edges.
+ */
+export function findNearestFeatures(
+  data: FeatureOverlayData,
+  mouseX: number,
+  mouseY: number,
+  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+  w: number,
+  h: number,
+  toWorld?: ((p: THREE.Vector3) => THREE.Vector3) | null,
+): (NearestFeature & { d: number })[] {
   const world = toWorld ?? ((p: THREE.Vector3) => p);
   interface Candidate {
     index: number;
@@ -620,12 +638,18 @@ export function findNearestFeature(
     rep: THREE.Vector3;
   }
 
+  // ALL qualifying candidates, ranked by screen distance (2026-11-03,
+  // the A270-hole report): the caller's visibility gate must be able to
+  // fall through to the next candidate when the nearest one is hidden —
+  // a single best left the gate no alternative when the nearest circle
+  // sat behind the surface (a hole's far mouth shadows its near rim at
+  // some view angles: the pick died outright, no hover, no selection).
   const scan = (
     kind: 'edge' | 'circle' | 'path',
     items: Candidate[],
     tolScale: number,
-  ): (NearestFeature & { d: number }) | null => {
-    let best: (NearestFeature & { d: number }) | null = null;
+  ): (NearestFeature & { d: number })[] => {
+    const hits: (NearestFeature & { d: number })[] = [];
     for (const it of items) {
       const rep = world(it.rep);
       const proj = rep.clone().project(camera);
@@ -652,8 +676,8 @@ export function findNearestFeature(
           at = s;
         }
       }
-      if (at && d <= tol && (best === null || d < best.d)) {
-        best = {
+      if (at && d <= tol) {
+        hits.push({
           kind,
           index: it.index,
           text: it.text,
@@ -664,10 +688,10 @@ export function findNearestFeature(
           // for the same reason as the samples above.
           point: world(at).clone(),
           d,
-        };
+        });
       }
     }
-    return best;
+    return hits.sort((a, b) => a.d - b.d);
   };
 
   const circles: Candidate[] = data.circleSamples.map((samples, i) => ({
@@ -677,8 +701,9 @@ export function findNearestFeature(
     color: data.circleInner[i] ? HOLE_HOVER : CIRCLE_HOVER,
     rep: data.circleCenter[i],
   }));
-  const circleHit = scan('circle', circles, CIRCLE_PRIORITY);
-  if (circleHit) return circleHit; // key dimensions take precedence
+  const circleHits = scan('circle', circles, CIRCLE_PRIORITY);
+  // key dimensions take precedence outright (within their tight window)
+  if (circleHits.length > 0) return circleHits;
 
   // artwork paths snap like edges (they ride surfaces) but stay
   // hoverable during op editing — a different kind, not gated with
@@ -690,8 +715,8 @@ export function findNearestFeature(
     color: PATH_HOVER,
     rep: data.pathMid[i],
   }));
-  const pathHit = scan('path', paths, 1);
-  if (pathHit) return pathHit;
+  const pathHits = scan('path', paths, 1);
+  if (pathHits.length > 0) return pathHits;
 
   const edges: Candidate[] = data.edgeSamples.map((samples, i) => ({
     index: i,
