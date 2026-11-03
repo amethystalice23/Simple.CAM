@@ -390,3 +390,42 @@ describe('findNearestFeature under a datum rotation (the indexed-drill bug)', ()
     ).toBeGreaterThan(20); // px — the stale and rotated positions are genuinely different
   });
 });
+
+describe('findNearestFeature never mutates the overlay data', () => {
+  /** The A0 regression (2026-11-03, the four-drill report): at the
+   *  identity datum the toWorld path returns the STORED sample, and
+   *  three.js project() mutates in place — one hover call corrupted the
+   *  whole samples array, and every later click tested garbage against
+   *  the real mouse position: nothing snapped, facets won, drill ops
+   *  1 (A0) and 3 (A180, same corrupted session) could not select their
+   *  holes while the later ops — entered after a selection change
+   *  rebuilt the overlay data — worked. */
+  it('an identity toWorld leaves the samples intact across calls', () => {
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(30, -30, 30);
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true);
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const sample = data.circleSamples[capIdx][6].clone(); // pre-call snapshot
+    const ndc = sample.clone().project(camera);
+    const mx = ((ndc.x + 1) / 2) * w;
+    const my = ((1 - ndc.y) / 2) * h;
+    const identity = (p: THREE.Vector3): THREE.Vector3 => p;
+
+    // TWO snaps through the identity path (hover, then click)
+    const first = findNearestFeature(data, mx, my, camera, w, h, identity);
+    expect(first?.kind).toBe('circle');
+    expect(first?.index).toBe(capIdx);
+    const second = findNearestFeature(data, mx, my, camera, w, h, identity);
+    expect(second?.kind).toBe('circle');
+    expect(second?.index).toBe(capIdx);
+    // and the stored sample is untouched
+    const after = data.circleSamples[capIdx][6];
+    expect(after.distanceTo(sample)).toBeLessThan(1e-9);
+  });
+});

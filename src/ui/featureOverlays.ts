@@ -640,7 +640,11 @@ export function findNearestFeature(
       let d = Infinity;
       let at: THREE.Vector3 | null = null;
       for (const s of it.samples) {
-        const sp = world(s).project(camera);
+        // CLONE before projecting: three.js project() mutates in place,
+        // and at the identity datum `world(s)` returns the STORED sample —
+        // projecting it raw corrupts the overlay data for every later
+        // snap (the A0 regression: one hover killed all selection)
+        const sp = world(s).clone().project(camera);
         if (sp.z > 1) continue;
         const sd = Math.hypot(((sp.x + 1) / 2) * w - mouseX, ((1 - sp.y) / 2) * h - mouseY);
         if (sd < d) {
@@ -656,8 +660,9 @@ export function findNearestFeature(
           color: it.color,
           anchor: { x: px + 12, y: py - 14 },
           // the returned point is WORLD — the visibility gate raycasts
-          // the rotated mesh and compares depths in one frame
-          point: world(at),
+          // the rotated mesh and compares depths in one frame. Cloned
+          // for the same reason as the samples above.
+          point: world(at).clone(),
           d,
         };
       }
