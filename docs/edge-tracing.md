@@ -244,6 +244,17 @@ third region mode.
 - **Hover**: raycast → face → resolve to the feature owning that face
   (plane, circle-on-plane, edge via nearest-edge distance within a
   ~0.5 mm snap). Highlight the whole feature, not the triangle.
+  **Snap precedence (Alice, 2026-11-03): "circles should be the highest
+  priority snap-to target, then if you are several pixels away fall back
+  to facets/faces."** Circles snap inside a tight window (×0.55 of the
+  edge tolerance ≈ 5.5px screen floor) and win outright within it;
+  faces/planes are the fallback beyond. The window only works if the
+  click lands near a SAMPLE — snap samples are arc-scaled (one per
+  ≤0.25mm of circumference, floor 24, cap 720; featureOverlays.ts
+  `ringSampleCount`). The old fixed 24 (one per 15°) left 2.4mm dead
+  zones on a Ø18.5 ring, and clicks dead-center between samples fell
+  outside the window — the circle lost to the facet under it (the
+  retical-ring viewport report).
 - **Measure mode is the single interaction mode** (no separate select
   mode): hover highlights transiently; a left click toggles the picked
   feature — nearest feature, else the face's plane group — into the

@@ -81,17 +81,58 @@ describe('findNearestFeature (measure-mode snap)', () => {
       h,
     );
     expect(near?.kind).toBe('circle');
-    // the old generous offset (~12px): beyond it — circles must not steal
-    // the click from the face work around them
+    // RADIAL offset off the ring line (~12px away from the circle itself):
+    // beyond the window — circles must not steal the click from the face
+    // work around them. (2026-11-03: the old test used a +10/+7 tangent
+    // offset that was genuinely ~2px from the ring once snap samples went
+    // arc-dense — a click ON the circle must snap, so the far case now
+    // moves off the ring, not along it.)
+    const center2d = data.circleCenter[capIdx].clone().project(camera);
+    const cx = ((center2d.x + 1) / 2) * w;
+    const cy = ((1 - center2d.y) / 2) * h;
+    const sx = ((ndc.x + 1) / 2) * w;
+    const sy = ((1 - ndc.y) / 2) * h;
+    const dir = { x: sx - cx, y: sy - cy };
+    const dl = Math.hypot(dir.x, dir.y) || 1;
+    const push = 12; // px radially outward from the ring
     const far = findNearestFeature(
       data,
-      ((ndc.x + 1) / 2) * w + 10,
-      ((1 - ndc.y) / 2) * h + 7,
+      sx + (dir.x / dl) * push,
+      sy + (dir.y / dl) * push,
       camera,
       w,
       h,
     );
     expect(far?.kind).not.toBe('circle');
+  });
+
+  it('a large ring snaps along its whole circumference (arc-scaled samples)', () => {
+    // the retical-ring report (2026-11-03): "selection on the rotary chamfer
+    // op keeps highlighting facets instead of circles" — the fixed 24
+    // samples left 2.4mm dead zones on a Ø18.5 ring, and a click dead
+    // center between samples fell outside the snap window. Arc-scaled
+    // samples close the dead zones: the WORST point on the ring must snap.
+    const f = detectFeatures(tubeAlongX());
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(30, -30, 30);
+    camera.lookAt(5, 0, 0);
+    const capIdx = data.circleCenter.findIndex((c) => Math.abs(c.x - 5) < 0.05);
+    const samples = data.circleSamples[capIdx];
+    // click the screen-midpoint between each CONSECUTIVE sample pair:
+    // every one must still snap to the circle
+    for (let i = 0; i + 1 < samples.length; i++) {
+      const a = samples[i].clone().project(camera);
+      const b = samples[i + 1].clone().project(camera);
+      const mx = (((a.x + b.x) / 2 + 1) / 2) * w;
+      const my = ((1 - (a.y + b.y) / 2) / 2) * h;
+      const nearest = findNearestFeature(data, mx, my, camera, w, h);
+      expect(nearest?.kind).toBe('circle');
+      expect(nearest?.index).toBe(capIdx);
+    }
   });
 
   it('still snaps precisely onto an edge when aimed at one', () => {

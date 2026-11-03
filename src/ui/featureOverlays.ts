@@ -308,7 +308,27 @@ export const GLOBAL_SELECT_COLOR = 0x7fff9f;
 export const SLICE_COLOR = 0xcc66dd;
 
 const RING_SEGMENTS = 72;
-const RING_SAMPLES = 24; // hover-snap sampling density
+/**
+ * Hover-snap sampling density: arc-scaled — at least one sample per
+ * SNAP_ARC_MM of circumference (floor 24 = the old fixed density, cap
+ * 720). The fixed 24 (one per 15°) put a Ø18.5 ring's samples 2.4mm
+ * apart: a click dead-center between two fell ~9.7px from the nearest
+ * sample — outside the tight circle window (×0.55 ≈ 5.5px) — so the
+ * circle LOST to the facet under it (the retical-ring session:
+ * "circles should be the highest priority snap-to target, then if you
+ * are several pixels away fall back to facets/faces"). Arc-scaled
+ * samples keep every on-ring click within SNAP_ARC_MM/2 ≈ 1px of a
+ * sample; the facet fallback beyond several pixels is untouched.
+ */
+const RING_SAMPLES_FLOOR = 24;
+const SNAP_ARC_MM = 0.25;
+const RING_SAMPLES_CAP = 720;
+
+/** Snap-sample count for a circle: arc-scaled to SNAP_ARC_MM. */
+function ringSampleCount(c: CircleFeature): number {
+  const arc = 2 * Math.PI * c.radius;
+  return Math.min(RING_SAMPLES_CAP, Math.max(RING_SAMPLES_FLOOR, Math.ceil(arc / SNAP_ARC_MM)));
+}
 
 /** Measure-mode snap: screen-space floor (px) and mm floor at feature depth. */
 const SNAP_PX_FLOOR = 10;
@@ -443,7 +463,7 @@ export function buildFeatureOverlayData(
         target.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
       }
     }
-    circleSamples.push(ringPoints(c, xf, RING_SAMPLES));
+    circleSamples.push(ringPoints(c, xf, ringSampleCount(c)));
     circleCenter.push(xf(c.center));
     circleText.push(
       `Ø ${(c.radius * 2).toFixed(2)} mm${c.inner ? ' · hole' : ''}${c.arcs ? ' · partial' : ''}`,
