@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { postCarvera } from '../carvera';
 import { chamfer } from '../../cam/chamfer';
@@ -307,4 +307,30 @@ describe('generator post goldens', () => {
       options: { jobName: 'cyl-chamfer' },
     }),
   );
+
+  // THE Z1 TRUNCATION GUARD (field report, 2026-11-05): the firmware
+  // silently truncates instruction lines past its buffer — a lost
+  // coordinate or a lost F mid-G93 means ruined jobs and broken bits.
+  // Comments and TOOL headers are the controller's business (stripped
+  // upstream; Makera's own output ships megabyte comments), but every
+  // INSTRUCTION line in every golden must fit, forever.
+  it('no golden instruction line exceeds the firmware line buffer', () => {
+    const goldenDir = join(import.meta.dirname, 'golden');
+    const files = readdirSync(goldenDir).filter((f) => f.endsWith('.nc'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      const lines = readFileSync(join(goldenDir, f), 'utf8').split('\n');
+      for (const line of lines) {
+        // instruction lines only: G/M/T/S words, not ';' comments
+        if (line.startsWith(';')) continue;
+        // strip a trailing comment — the controller removes it upstream
+        const idx = line.indexOf(' ; ');
+        const instruction = idx > 0 ? line.slice(0, idx) : line;
+        expect(
+          instruction.length,
+          `${f}: overlong instruction line (${instruction.length} chars): "${instruction}"`,
+        ).toBeLessThanOrEqual(63);
+      }
+    }
+  });
 });

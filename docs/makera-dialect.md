@@ -373,6 +373,23 @@ code copied). Two versions matter:
   comments are stripped; `(` is not closed-paren aware. Bare word lines
   (`X.. Y.. F..`) auto-prefixed with the modal G1/G0 (pycam-style). CRLF
   tolerated. `;@MKR|` lines are just comments to the firmware.
+- **Line-length limits — TWO distinct constraints.** (1) The community
+  firmware in `reference/` (C1/AIR, not Z1): the Player reads file lines
+  into a 130-byte buffer and *discards* lines longer than ~128 chars with
+  a "Discarded long line" warning (`Player.cpp:247,900`) — comments are
+  NOT exempt there (a megabyte `;` comment line would be dropped, but
+  only the comment is lost, so jobs survive). (2) The Z1 (field report,
+  2026-11-05): **instruction lines over 63 chars are SILENTLY
+  TRUNCATED** — a dropped trailing word means a lost coordinate or a
+  lost F mid-G93, i.e. ruined jobs and broken bits. Comments and
+  `;@MKR|` headers are exempt (the controller consumes them upstream;
+  Makera's own Studio output ships 218-char TOOL headers and embedded
+  PNG comments that demonstrably survive). Our post enforces the
+  stricter one on instruction words: `MAX_INSTRUCTION_CHARS = 61` in
+  `carvera.ts` (headroom under 63 for the CR/LF pair), a loud emit-time
+  throw, and a trailing-comment trim so whole motion lines stay ≤ 63 —
+  pinned by tests in `carvera.test.ts` and an every-golden sweep in
+  `generators.test.ts`.
 
 ### M-codes relevant to jobs
 

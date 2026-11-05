@@ -22,6 +22,40 @@ export interface PostOptions {
   jobName: string;
 }
 
+/** Assemble a motion line with its trailing comment, keeping the WHOLE
+ * line within the Z1's reported 63-char buffer: the comment is decoration
+ * (the controller strips it), so it is trimmed — or dropped — to fit while
+ * the instruction words pass through untouched (the throw below guards
+ * them). Returns just the instruction when there is no comment. */
+function emitMotion(instruction: string, comment: string | undefined): string {
+  // the Z1 truncation guard, on the FULL instruction (prefix included —
+  // the firmware reads `G1 ` + words as one line): a legal worst case
+  // (G1 X-999.99 Y-999.99 Z-999.99 A-99999.99 F999.99) is 54 chars, so
+  // this can only fire on pathological values; when it does, failing
+  // LOUD at emit beats the machine silently dropping the tail.
+  if (instruction.length > MAX_INSTRUCTION_CHARS) {
+    throw new Error(
+      `instruction line exceeds the ${MAX_INSTRUCTION_CHARS}-char firmware buffer: "${instruction}" — ` +
+        'the Z1 silently truncates overlong lines',
+    );
+  }
+  if (!comment) return instruction;
+  const room = 63 - instruction.length - 3; // ' ; ' separator
+  if (room <= 0) return instruction; // no space for any comment — drop it
+  const text = comment.length <= room ? comment : `${comment.slice(0, room - 3)}...`;
+  return `${instruction} ; ${text}`;
+}
+
+/** The Z1 firmware's line buffer: instruction lines longer than this are
+ * SILENTLY TRUNCATED (field report, 2026-11-05) — a dropped trailing word
+ * means a lost coordinate or a lost F mid-G93, i.e. ruined jobs and broken
+ * bits. Comments and ;@MKR|TOOL headers are exempt (the controller strips
+ * them upstream — Makera's own Studio output ships megabyte PNG comments
+ * and 218-char TOOL headers that demonstrably survive); the INSTRUCTION
+ * portion of a line is what must fit. Enforced at 61 to leave headroom
+ * under the reported 63 (the CR/LF pair rides the buffer too). */
+export const MAX_INSTRUCTION_CHARS = 61;
+
 export interface PostInput {
   moves: Move[];
   tools: Tool[];
@@ -284,7 +318,7 @@ export function postCarvera(input: PostInput): string {
     if (m.words.a !== undefined) st.lastA = m.words.a;
 
     if (m.rapid) {
-      lines.push(`G0 ${wordsLine(m, false)}${m.comment ? ` ; ${m.comment}` : ''}`);
+      lines.push(emitMotion(`G0 ${wordsLine(m, false)}`, m.comment));
     } else {
       // laser beam power: the modal S word, on G1s only (G0 never
       // fires) — `S0.2 F100` rides the line like Makera's own
@@ -298,7 +332,7 @@ export function postCarvera(input: PostInput): string {
       // there; in G94 emit on change for readability (harmless either way).
       const withFeed = st.mode === 'G93' || m.feed !== st.lastFeed;
       if (withFeed) st.lastFeed = m.feed;
-      lines.push(`G1 ${wordsLine(m, withFeed, sWord)}${m.comment ? ` ; ${m.comment}` : ''}`);
+      lines.push(emitMotion(`G1 ${wordsLine(m, withFeed, sWord)}`, m.comment));
     }
     // the beam enables only once the head is AT focus height: after the
     // op's first Z-bearing move (the focus descent — which now FOLLOWS
