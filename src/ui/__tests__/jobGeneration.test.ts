@@ -2066,8 +2066,38 @@ describe('cylinder chamfer (edge circles → ring passes)', () => {
     expect(res.moves.find((m) => m.words.x !== undefined)!.words.x).toBeCloseTo(-30, 6);
   });
 
+  it('a ball-nose cuts a U-channel: semicircle depth, no error, honest summary', () => {
+    // Alice's Ø1 U-channel ask (2026-11-05): Ø50 stock end rim (r=25),
+    // 0.5mm deep with a Ø1 ball — the full semicircle, width = tool Ø
+    const ballTool: Tool = {
+      id: 'b9',
+      name: 'Ø1 ball end mill',
+      type: 'ball',
+      diameter: 1,
+      spindleRpm: 12000,
+    };
+    const ctxBall: GenContext = { ...chamCtx, tools: [...chamCtx.tools, ballTool] };
+    const res = generateJobOp({ ...rimOp, toolId: 'b9' }, ctxBall);
+    expect(res.error).toBeNull();
+    const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
+    expect(plunges[plunges.length - 1].words.z!).toBeCloseTo(24.5, 6); // tip at r − 0.5
+    expect(res.summary).toMatch(/U-channel/);
+    expect(res.summary).toMatch(/1\.00mm wide/);
+    expect(res.summary).not.toMatch(/equator/); // depth = radius: clean
+    // depth 0 with a ball is the meaningless anchor — refused with the
+    // ball-specific message, not the generic tool one
+    const anchor = generateJobOp({ ...rimOp, toolId: 'b9', depth: 0 }, ctxBall);
+    expect(anchor.error).toMatch(/cannot anchor/);
+    // past the equator: generates, but the summary carries the warning
+    const deep = generateJobOp({ ...rimOp, toolId: 'b9', depth: 0.7 }, ctxBall);
+    expect(deep.error).toBeNull();
+    expect(deep.summary).toMatch(/equator/);
+  });
+
   it('refuses flat tools and non-coaxial selections with explaining errors', () => {
-    expect(generateJobOp({ ...rimOp, toolId: 't1' }, chamCtx).error).toMatch(/needs a V-bit/);
+    expect(generateJobOp({ ...rimOp, toolId: 't1' }, chamCtx).error).toMatch(
+      /needs a V-bit or a ball-nose/,
+    );
     // the model's Z-facing hole rim is no stock-axis circle
     const modelCtx: GenContext = {
       ...chamCtx,

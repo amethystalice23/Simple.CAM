@@ -31,6 +31,16 @@ const rimOp: CylChamferOp = {
  * depth-0 "cut up-and-out" case. */
 const stepOp: CylChamferOp = { ...rimOp, edges: [{ x: 20, diameter: 15 }], depth: 0 };
 
+/** Ø1 ball end mill — Alice's U-channel ask (2026-11-05). */
+const ball: Tool = {
+  id: 'b1',
+  name: 'Ø1 ball end mill',
+  type: 'ball',
+  diameter: 1,
+  spindleRpm: 12000,
+};
+const ballOp: CylChamferOp = { ...rimOp, edges: [{ x: 40, diameter: 15 }], depth: 0.5 };
+
 describe('cylChamfer', () => {
   it('depth > 0: plunges below the circle, sweeps exactly 360° per level (G94 A-only)', () => {
     const res = cylChamfer(rimOp, cal, vbit, 90);
@@ -103,10 +113,7 @@ describe('cylChamfer', () => {
   });
 
   it('refuses impossible geometry with a message that explains itself', () => {
-    // non-V-bit
-    expect(() =>
-      cylChamfer(rimOp, cal, { ...vbit, type: 'flat' }, 0),
-    ).toThrow(/needs a V-bit/);
+    // non-V-bit, non-ball (the flat refusal lives in its own ball-era test below)
     // anchor above the stock surface
     expect(() =>
       cylChamfer({ ...rimOp, edges: [{ x: 10, diameter: 17 }] }, cal, vbit, 0),
@@ -130,5 +137,43 @@ describe('cylChamfer', () => {
     const res = cylChamfer({ ...rimOp, rotation: 'ccw' }, cal, vbit, 0);
     const aWords = res.moves.filter((m) => m.words.a !== undefined).map((m) => m.words.a!);
     expect(aWords).toEqual([-360, -720]);
+  });
+
+  it('ball-nose: depth = radius cuts the full semicircle U (width = tool Ø, center on the surface)', () => {
+    // Ø15 anchor, 0.5mm deep with a Ø1 ball → the classic 1mm U channel
+    const res = cylChamfer(ballOp, cal, ball, 0);
+    expect(res.width).toBeCloseTo(1, 9); // 2·√(0.5² − 0²) = the full Ø
+    expect(res.chamferAngleDeg).toBeNaN(); // an arc, not a flank
+    expect(res.warnings).toBeUndefined();
+    // motion identical to the V-bit case: 0.5 span at 0.3 step → 2 levels,
+    // tip Z ladder 7.25 → 7.0 (the ball's center lands on the surface at 7.5)
+    expect(res.passes).toBe(2);
+    const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
+    expect(plunges[0].words.z!).toBeCloseTo(7.25, 9);
+    expect(plunges[1].words.z!).toBeCloseTo(7.0, 9);
+  });
+
+  it('ball-nose: shallow depth is a circular-bottom groove narrower than the tool', () => {
+    // 0.3mm deep with the Ø1 ball: half-width = √(0.5² − 0.2²) = √0.21
+    const res = cylChamfer({ ...ballOp, depth: 0.3 }, cal, ball, 0);
+    expect(res.width).toBeCloseTo(2 * Math.sqrt(0.21), 9);
+    expect(res.warnings).toBeUndefined();
+  });
+
+  it('ball-nose: depth past the equator warns, width caps at the tool Ø', () => {
+    const res = cylChamfer({ ...ballOp, depth: 0.7 }, cal, ball, 0);
+    expect(res.width).toBeCloseTo(1, 9); // capped — the shank runs straight below
+    expect(res.warnings).toBeDefined();
+    expect(res.warnings!.join(' ')).toMatch(/equator/);
+  });
+
+  it('ball-nose cannot anchor on the circle (depth 0 is meaningless without a flank)', () => {
+    expect(() => cylChamfer({ ...ballOp, depth: 0 }, cal, ball, 0)).toThrow(/cannot anchor/);
+  });
+
+  it('flat tools remain refused with an updated message', () => {
+    expect(() =>
+      cylChamfer(rimOp, cal, { ...vbit, type: 'flat' }, 0),
+    ).toThrow(/needs a V-bit or a ball-nose/);
   });
 });

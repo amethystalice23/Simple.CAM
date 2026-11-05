@@ -432,17 +432,21 @@ export interface CylChamferEdge {
 
 /**
  * Chamfer edge circles coaxial with the rotary axis (docs/edge-tracing.md
- * §6): a V-bit parked at the circle's exact X, swept one full A revolution
+ * §6): the tool parked at the circle's exact X, swept one full A revolution
  * per level with its tip at Ø/2 − depth — the degenerate face-cylinder
  * vertical ring (one X, one ring per level). The depth IS the direction:
- * - 0 — the tip anchors exactly on the circle; the flank shears whatever
- *   rises above it on either side of X (a step wall, the root of an
- *   existing chamfer). The wall's height is deliberately unknown (the
+ * - 0 — the tip anchors exactly on the circle; the V-bit's flank shears
+ *   whatever rises above it on either side of X (a step wall, the root of
+ *   an existing chamfer). The wall's height is deliberately unknown (the
  *   one-circle rule), so levels descend from the stock surface — air
  *   sweeps are harmless and the wedge peels at stepDown increments.
- * - > 0 — the circle is the highest point; the tip slides below it and
- *   the flank opens outward (a rod end, the top of a modelled chamfer).
- *   The ladder tops out at the circle itself.
+ *   V-BIT ONLY: a ball-nose has no flank and cannot anchor (it throws).
+ * - > 0 — the circle is the highest point; the tip slides below it.
+ *   A V-bit's flank opens outward (a rod end, a chamfer top) and the
+ *   ladder tops out at the circle; a BALL-NOSE plunges a rounded
+ *   U-shaped channel — depth = ball radius is the full semicircle
+ *   (width = tool Ø), deeper passes the equator and the shank takes the
+ *   walls straight (warned, width capped at tool Ø).
  */
 export interface CylChamferOp {
   kind: 'cylChamfer';
