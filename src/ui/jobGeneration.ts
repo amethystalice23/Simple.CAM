@@ -2484,7 +2484,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         );
         const profile =
           tool.type === 'ball'
-            ? `U-channel${res.warnings?.length ? ` — ${res.warnings.join(' · ')}` : ''}, `
+            ? // depth 0 anchors on the circle — the upper hemisphere shears
+              // a fillet up-and-to-the-side, the ball analogue of the cone's chamfer
+              op.depth <= 1e-9
+                ? 'fillet up-and-out (ball-nose), '
+                : `U-channel${res.warnings?.length ? ` — ${res.warnings.join(' · ')}` : ''}, `
             : `${res.chamferAngleDeg.toFixed(0)}° from the bit, `;
         return {
           moves: res.moves,

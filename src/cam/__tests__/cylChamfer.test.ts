@@ -167,8 +167,16 @@ describe('cylChamfer', () => {
     expect(res.warnings!.join(' ')).toMatch(/equator/);
   });
 
-  it('ball-nose cannot anchor on the circle (depth 0 is meaningless without a flank)', () => {
-    expect(() => cylChamfer({ ...ballOp, depth: 0 }, cal, ball, 0)).toThrow(/cannot anchor/);
+  it('ball-nose depth 0 anchors on the circle and cuts a fillet up-and-out', () => {
+    // the rounded analogue of the V-bit's up-and-out chamfer: the upper
+    // hemisphere shears the corner where the wall meets the anchor circle
+    const res = cylChamfer({ ...ballOp, depth: 0 }, cal, ball, 0);
+    expect(res.warnings).toBeUndefined();
+    // ladder from the STOCK surface (8.175) to the anchor (7.5): the
+    // 0.675mm span at 0.3 rungs → 3 levels, finishing exactly on the circle
+    expect(res.passes).toBe(3);
+    const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
+    expect(plunges[2].words.z!).toBeCloseTo(7.5, 9);
   });
 
   it('flat tools remain refused with an updated message', () => {

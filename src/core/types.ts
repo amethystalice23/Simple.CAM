@@ -435,12 +435,14 @@ export interface CylChamferEdge {
  * §6): the tool parked at the circle's exact X, swept one full A revolution
  * per level with its tip at Ø/2 − depth — the degenerate face-cylinder
  * vertical ring (one X, one ring per level). The depth IS the direction:
- * - 0 — the tip anchors exactly on the circle; the V-bit's flank shears
- *   whatever rises above it on either side of X (a step wall, the root of
- *   an existing chamfer). The wall's height is deliberately unknown (the
+ * - 0 — the tip anchors exactly on the circle; the tool shears whatever
+ *   rises above it on either side of X (a step wall, the root of an
+ *   existing chamfer). The wall's height is deliberately unknown (the
  *   one-circle rule), so levels descend from the stock surface — air
  *   sweeps are harmless and the wedge peels at stepDown increments.
- *   V-BIT ONLY: a ball-nose has no flank and cannot anchor (it throws).
+ *   A V-bit cuts a chamfer up-and-to-the-side; a BALL-NOSE cuts the
+ *   rounded analogue — a fillet (her 2026-11-05 ruling: sometimes the
+ *   only clickable feature is the floor).
  * - > 0 — the circle is the highest point; the tip slides below it.
  *   A V-bit's flank opens outward (a rod end, a chamfer top) and the
  *   ladder tops out at the circle; a BALL-NOSE plunges a rounded

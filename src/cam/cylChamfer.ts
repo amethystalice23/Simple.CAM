@@ -10,13 +10,16 @@
  * - V-bit: the cone flank shears whichever side of X carries material —
  *   a chamfer (depth 0 = anchor on the circle and cut up-and-out).
  * - ball-nose: a rounded U-shaped channel plunged below the circle
- *   (Alice, 2026-11-05 — the Ø1 U channel ask). Depth 0 is meaningless
- *   for a ball (no flank to shear upward): it always plunges. Depth ≤
- *   ball radius is the true U — at depth = radius the ball's center
- *   sits ON the anchor surface and the channel is a full semicircle,
- *   width = tool Ø. Depth > radius sends the cut past the ball's
- *   equator: the shank takes the channel walls straight (flat-sided U)
- *   — warned, not blocked, width capped at the tool Ø.
+ *   (Alice, 2026-11-05 — the Ø1 U channel ask). Depth ≤ ball radius is
+ *   the true U — at depth = radius the ball's center sits ON the anchor
+ *   surface and the channel is a full semicircle, width = tool Ø. Depth
+ *   > radius sends the cut past the ball's equator: the shank takes the
+ *   channel walls straight (flat-sided U) — warned, not blocked, width
+ *   capped at the tool Ø. Depth 0 anchors on the circle like the V-bit:
+ *   the ball's upper hemisphere shears a FILLET up-and-to-the-side, the
+ *   rounded analogue of the cone's chamfer (her same-day ruling —
+ *   sometimes the only clickable feature is the floor; the sim reveals
+ *   what the fillet reached).
  *
  * Placement: tip at (edge.x, edge.diameter/2 − depth) — the DEPTH is the
  * only direction there is (see CylChamferOp). No side parameter exists
@@ -99,11 +102,6 @@ export function cylChamfer(
   let width: number;
   let warnings: string[] | undefined;
   if (isBall) {
-    if (op.depth <= 1e-9) {
-      throw new Error(
-        'a ball-nose cannot anchor on the circle (no flank to shear upward) — set a depth to plunge a U-shaped channel',
-      );
-    }
     if (op.depth > tool.diameter / 2 + 1e-9) {
       warnings = [
         `depth ${op.depth.toFixed(2)}mm passes the ball's equator (${(tool.diameter / 2).toFixed(2)}mm radius) — the shank takes the channel walls straight below it`,

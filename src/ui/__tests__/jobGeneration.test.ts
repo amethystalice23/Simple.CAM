@@ -2084,10 +2084,19 @@ describe('cylinder chamfer (edge circles → ring passes)', () => {
     expect(res.summary).toMatch(/U-channel/);
     expect(res.summary).toMatch(/1\.00mm wide/);
     expect(res.summary).not.toMatch(/equator/); // depth = radius: clean
-    // depth 0 with a ball is the meaningless anchor — refused with the
-    // ball-specific message, not the generic tool one
-    const anchor = generateJobOp({ ...rimOp, toolId: 'b9', depth: 0 }, ctxBall);
-    expect(anchor.error).toMatch(/cannot anchor/);
+    // depth 0 with a ball anchors on the step edge — a fillet up-and-out,
+    // the rounded analogue of the V-bit chamfer (her 2026-11-05 ruling).
+    // The stock END rim (at the surface Ø) still refuses depth 0 for any
+    // tool — nothing rises above it there
+    const anchor = generateJobOp(
+      { ...rimOp, toolId: 'b9', featureIds: ['o:face:jobop-1:start'], depth: 0 },
+      ctxBall,
+    );
+    expect(anchor.error).toBeNull();
+    expect(anchor.summary).toMatch(/fillet up-and-out/);
+    expect(generateJobOp({ ...rimOp, toolId: 'b9', depth: 0 }, ctxBall).error).toMatch(
+      /nothing rises above it/,
+    );
     // past the equator: generates, but the summary carries the warning
     const deep = generateJobOp({ ...rimOp, toolId: 'b9', depth: 0.7 }, ctxBall);
     expect(deep.error).toBeNull();
