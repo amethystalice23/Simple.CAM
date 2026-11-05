@@ -202,4 +202,57 @@ describe('carvera post-processor', () => {
     expect(existsSync(goldenPath), 'golden missing — run UPDATE_GOLDEN=1 npx vitest run once').toBe(true);
     expect(stripDate(gcode)).toBe(stripDate(readFileSync(goldenPath, 'utf8')));
   });
+
+  // THE Z1 TRUNCATION GUARD (field report, 2026-11-05): the firmware
+  // silently truncates overlong instruction lines — a dropped coordinate
+  // or a lost F mid-G93 is a ruined job or a broken bit. Comments and
+  // TOOL headers are the controller's, not the firmware's, so the limit
+  // guards INSTRUCTION words only.
+  it('a legal worst-case full house passes the buffer guard untouched', () => {
+    // every word at its sane worst: X/Y/Z ±999.99, A ±99999.99, F999.99 —
+    // still only ~43 instruction chars, far inside the 61-char guard
+    const out = postCarvera({
+      moves: [{ words: { x: -999.99, y: -999.99, z: -999.99, a: -99999.99 }, feed: 999.99 }],
+      tools: [tool],
+      options: { jobName: 'full-house' },
+    });
+    expect(out).toContain('G1 X-999.99 Y-999.99 Z-999.99 A-99999.99 F999.99');
+  });
+
+  it('throws on the pathological coordinate case (the guard fires)', () => {
+    // each word ~18 chars: the instruction line crosses the 61-char guard,
+    // so the post refuses to emit rather than let the Z1 truncate silently
+    expect(() =>
+      postCarvera({
+        moves: [
+          { words: { x: -999999999999.99, y: -999999999999.99, z: -999999999999.99 }, feed: 999.99 },
+        ],
+        tools: [tool],
+        options: { jobName: 'overflow-throw' },
+      }),
+    ).toThrow(/exceeds the \d+-char firmware buffer/);
+  });
+
+  it('trims a trailing comment to keep the whole motion line within 63 chars', () => {
+    const long = 'a'.repeat(80);
+    const out = postCarvera({
+      moves: [
+        { words: { x: 5 }, feed: 0, rapid: true, comment: long },
+      ],
+      tools: [tool],
+      options: { jobName: 'comment-trim' },
+    });
+    const motion = out.split('\n').find((l) => l.startsWith('G0 X5'))!;
+    expect(motion).toBeDefined();
+    expect(motion.length).toBeLessThanOrEqual(63);
+    expect(motion).toMatch(/ ; a+\.\.\.$/); // trimmed with an ellipsis
+    // a short comment rides through untouched
+    const short = postCarvera({
+      moves: [{ words: { x: 5 }, feed: 0, rapid: true, comment: 'level 1/2' }],
+      tools: [tool],
+      options: { jobName: 'comment-short' },
+    });
+    const shortLine = short.split('\n').find((l) => l.startsWith('G0 X5'))!;
+    expect(shortLine).toBe('G0 X5 ; level 1/2');
+  });
 });

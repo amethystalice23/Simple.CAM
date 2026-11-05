@@ -2066,8 +2066,47 @@ describe('cylinder chamfer (edge circles → ring passes)', () => {
     expect(res.moves.find((m) => m.words.x !== undefined)!.words.x).toBeCloseTo(-30, 6);
   });
 
+  it('a ball-nose cuts a U-channel: semicircle depth, no error, honest summary', () => {
+    // Alice's Ø1 U-channel ask (2026-11-05): Ø50 stock end rim (r=25),
+    // 0.5mm deep with a Ø1 ball — the full semicircle, width = tool Ø
+    const ballTool: Tool = {
+      id: 'b9',
+      name: 'Ø1 ball end mill',
+      type: 'ball',
+      diameter: 1,
+      spindleRpm: 12000,
+    };
+    const ctxBall: GenContext = { ...chamCtx, tools: [...chamCtx.tools, ballTool] };
+    const res = generateJobOp({ ...rimOp, toolId: 'b9' }, ctxBall);
+    expect(res.error).toBeNull();
+    const plunges = res.moves.filter((m) => m.words.z !== undefined && !m.rapid);
+    expect(plunges[plunges.length - 1].words.z!).toBeCloseTo(24.5, 6); // tip at r − 0.5
+    expect(res.summary).toMatch(/U-channel/);
+    expect(res.summary).toMatch(/1\.00mm wide/);
+    expect(res.summary).not.toMatch(/equator/); // depth = radius: clean
+    // depth 0 with a ball anchors on the step edge — a fillet up-and-out,
+    // the rounded analogue of the V-bit chamfer (her 2026-11-05 ruling).
+    // The stock END rim (at the surface Ø) still refuses depth 0 for any
+    // tool — nothing rises above it there
+    const anchor = generateJobOp(
+      { ...rimOp, toolId: 'b9', featureIds: ['o:face:jobop-1:start'], depth: 0 },
+      ctxBall,
+    );
+    expect(anchor.error).toBeNull();
+    expect(anchor.summary).toMatch(/fillet up-and-out/);
+    expect(generateJobOp({ ...rimOp, toolId: 'b9', depth: 0 }, ctxBall).error).toMatch(
+      /nothing rises above it/,
+    );
+    // past the equator: generates, but the summary carries the warning
+    const deep = generateJobOp({ ...rimOp, toolId: 'b9', depth: 0.7 }, ctxBall);
+    expect(deep.error).toBeNull();
+    expect(deep.summary).toMatch(/equator/);
+  });
+
   it('refuses flat tools and non-coaxial selections with explaining errors', () => {
-    expect(generateJobOp({ ...rimOp, toolId: 't1' }, chamCtx).error).toMatch(/needs a V-bit/);
+    expect(generateJobOp({ ...rimOp, toolId: 't1' }, chamCtx).error).toMatch(
+      /needs a V-bit or a ball-nose/,
+    );
     // the model's Z-facing hole rim is no stock-axis circle
     const modelCtx: GenContext = {
       ...chamCtx,

@@ -2427,10 +2427,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (ctx.stock.axisMode !== '4-axis') {
           return fail('cylinder chamfer needs 4-axis mode (Stock tab)');
         }
-        if (tool.type !== 'vbit') {
-          return fail('cylinder chamfer needs a V-bit — pick a chamfering/engraving bit from the library');
+        if (tool.type !== 'vbit' && tool.type !== 'ball') {
+          return fail(
+            'cylinder chamfer needs a V-bit or a ball-nose — pick a chamfering/engraving bit or a ball end mill from the library',
+          );
         }
-        if (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180) {
+        if (tool.type === 'vbit' && (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180)) {
           return fail('this V-bit has no usable tip angle — set the included angle in the tool library');
         }
         const SEL =
@@ -2480,6 +2482,14 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           tool,
           ctx.startA,
         );
+        const profile =
+          tool.type === 'ball'
+            ? // depth 0 anchors on the circle — the upper hemisphere shears
+              // a fillet up-and-to-the-side, the ball analogue of the cone's chamfer
+              op.depth <= 1e-9
+                ? 'fillet up-and-out (ball-nose), '
+                : `U-channel${res.warnings?.length ? ` — ${res.warnings.join(' · ')}` : ''}, `
+            : `${res.chamferAngleDeg.toFixed(0)}° from the bit, `;
         return {
           moves: res.moves,
           minutes: res.estimatedMinutes,
@@ -2490,7 +2500,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               ? 'up-and-out from the anchor Ø'
               : `${op.depth.toFixed(2)}mm below the rim (${res.width.toFixed(2)}mm wide)`) +
             (op.finishingOnly ? ', finishing pass only' : '') +
-            `, ${res.chamferAngleDeg.toFixed(0)}° from the bit, ~${res.estimatedMinutes.toFixed(1)} min`,
+            `, ${profile}~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
 

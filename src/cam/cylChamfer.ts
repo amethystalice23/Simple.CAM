@@ -1,14 +1,30 @@
 /**
- * Cylinder chamfer — a V-bit ring pass at one fixed X (edge-tracing §6,
- * the "circular chamfer"): the degenerate face-cylinder vertical pattern,
+ * Cylinder chamfer — a ring pass at one fixed X (edge-tracing §6, the
+ * "circular chamfer"): the degenerate face-cylinder vertical pattern,
  * one X, one full A revolution per level. Sweeps are A-only, so the post
  * runs them G94 at ROTARY_FEED_DEG_MIN (deg/min); level entries are G94
  * Z plunges at the seam angle, re-cut by the following sweep.
  *
+ * Two tool shapes cut it — the motion is identical, only the profile
+ * math differs:
+ * - V-bit: the cone flank shears whichever side of X carries material —
+ *   a chamfer (depth 0 = anchor on the circle and cut up-and-out).
+ * - ball-nose: a rounded U-shaped channel plunged below the circle
+ *   (Alice, 2026-11-05 — the Ø1 U channel ask). Depth ≤ ball radius is
+ *   the true U — at depth = radius the ball's center sits ON the anchor
+ *   surface and the channel is a full semicircle, width = tool Ø. Depth
+ *   > radius sends the cut past the ball's equator: the shank takes the
+ *   channel walls straight (flat-sided U) — warned, not blocked, width
+ *   capped at the tool Ø. Depth 0 anchors on the circle like the V-bit:
+ *   the ball's upper hemisphere shears a FILLET up-and-to-the-side, the
+ *   rounded analogue of the cone's chamfer (her same-day ruling —
+ *   sometimes the only clickable feature is the floor; the sim reveals
+ *   what the fillet reached).
+ *
  * Placement: tip at (edge.x, edge.diameter/2 − depth) — the DEPTH is the
- * only direction there is (see CylChamferOp). The cone flank shears
- * whichever side of X carries material, so no side parameter exists; and
- * the ladder never needs to know the adjoining diameter:
+ * only direction there is (see CylChamferOp). No side parameter exists
+ * (the tool is rotationally symmetric about Z); and the ladder never
+ * needs to know the adjoining diameter:
  * - depth 0 — levels descend from the STOCK surface (the wall above the
  *   anchor is unknown; levels above it sweep air, harmlessly) and the
  *   final pass at the anchor radius produces the finished flank;
@@ -23,10 +39,14 @@ export interface CylChamferResult {
   moves: Move[];
   /** full 360° sweeps (levels × edges) */
   passes: number;
-  /** chamfer angle from the rod axis, degrees — set by the tool (90 − half-angle) */
+  /** chamfer angle from the rod axis, degrees — set by the tool (90 − half-angle).
+   * NaN for a ball-nose (the profile is an arc, not a flank). */
   chamferAngleDeg: number;
-  /** axial chamfer width at the anchor Ø, mm (depth · tan(half-angle)) */
+  /** axial width of the cut at the anchor Ø, mm — V-bit: depth · tan(half-angle);
+   * ball: the channel's true width (see ballWidth), capped at the tool Ø. */
   width: number;
+  /** soft warnings (depth past the ball's equator); undefined when clean */
+  warnings?: string[];
   /** cutting time estimate, minutes (excludes rapids) */
   estimatedMinutes: number;
 }
@@ -49,6 +69,16 @@ function levelRadii(top: number, bottom: number, stepDown: number): number[] {
   return out;
 }
 
+/** A ball-nose channel's width at the anchor surface: the arc chord where
+ * the ball's profile circle crosses the surface plane. Tip depth d ≤ ball
+ * radius r → half-width = √(r² − (r − d)²); at d = r the center sits on the
+ * surface and the channel is a full semicircle, width = tool Ø. Deeper, the
+ * shank walls run straight down: width stays capped at the tool Ø. */
+function ballWidth(depth: number, r: number): number {
+  const d = Math.min(depth, r);
+  return 2 * Math.sqrt(Math.max(r * r - (r - d) * (r - d), 0));
+}
+
 export function cylChamfer(
   op: CylChamferOp,
   calibration: RotaryCalibration,
@@ -61,18 +91,36 @@ export function cylChamfer(
   if (op.depth < 0) throw new Error('chamfer depth cannot be negative');
   if (op.stepDown <= 0) throw new Error('stepDown must be positive');
   if (op.plungeFeed <= 0) throw new Error('plungeFeed must be positive');
-  if (tool.type !== 'vbit') {
-    throw new Error('cylinder chamfer needs a V-bit — pick a chamfering/engraving bit from the library');
+  const isBall = tool.type === 'ball';
+  if (tool.type !== 'vbit' && !isBall) {
+    throw new Error(
+      'cylinder chamfer needs a V-bit or a ball-nose — pick a chamfering/engraving bit or a ball end mill from the library',
+    );
   }
-  if (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180) {
-    throw new Error('chamfer tool needs a sane included tip angle (0–180°)');
+  let half = 0;
+  let rt = 0;
+  let width: number;
+  let warnings: string[] | undefined;
+  if (isBall) {
+    if (op.depth > tool.diameter / 2 + 1e-9) {
+      warnings = [
+        `depth ${op.depth.toFixed(2)}mm passes the ball's equator (${(tool.diameter / 2).toFixed(2)}mm radius) — the shank takes the channel walls straight below it`,
+      ];
+    }
+    width = ballWidth(op.depth, tool.diameter / 2);
+  } else {
+    if (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180) {
+      throw new Error('chamfer tool needs a sane included tip angle (0–180°)');
+    }
+    half = (tool.vAngle / 2) * (Math.PI / 180);
+    rt = (tool.tipDiameter ?? 0) / 2;
+    width = op.depth * Math.tan(half);
   }
-  const half = (tool.vAngle / 2) * (Math.PI / 180);
-  const rt = (tool.tipDiameter ?? 0) / 2;
-  const width = op.depth * Math.tan(half);
-  // depth > 0 cuts below the anchor Ø, so the flank must reach the anchor
-  // surface before the shank starts (depth 0 anchors ON it — no reach needed)
-  if (op.depth > 0 && rt + width > tool.diameter / 2 + 1e-9) {
+  // depth > 0 cuts below the anchor Ø, so the V-bit's flank must reach the
+  // anchor surface before the shank starts (depth 0 anchors ON it — no
+  // reach needed). A ball-nose needs no reach check: its profile is a
+  // hemisphere on the shank, always tangent at the equator.
+  if (!isBall && op.depth > 0 && rt + width > tool.diameter / 2 + 1e-9) {
     throw new Error(
       `chamfer of ${op.depth.toFixed(2)}mm needs ${(rt + width).toFixed(2)}mm of flank — ` +
         `the Ø${tool.diameter} bit's cone is too short`,
@@ -160,8 +208,11 @@ export function cylChamfer(
   return {
     moves,
     passes,
-    chamferAngleDeg: 90 - tool.vAngle / 2,
+    // NaN for a ball-nose — the profile is an arc, not a flank (the
+    // callers say "rounded profile" instead of an angle)
+    chamferAngleDeg: isBall ? NaN : 90 - tool.vAngle! / 2,
     width,
+    warnings,
     estimatedMinutes: minutes,
   };
 }

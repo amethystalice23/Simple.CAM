@@ -1342,7 +1342,7 @@ function ParamFields(props: {
             <NumberField
               label="Depth (mm)"
               className="floor-depth"
-              title="0 = anchor exactly on the selected circle — the flank cuts up-and-out through whatever rises above it (a step wall, the root of an existing chamfer). Above 0 = the circle is the highest point — the tip slides below it and the chamfer opens outward (a rod end, a chamfer top)"
+              title="V-bit: 0 = anchor exactly on the selected circle — the flank cuts up-and-out through whatever rises above it (a step wall, the root of an existing chamfer). Above 0 = the circle is the highest point — the tip slides below it and the chamfer opens outward (a rod end, a chamfer top). Ball-nose: 0 anchors on the circle and the upper hemisphere shears a fillet up-and-to-the-side; a depth plunges a U-shaped channel — depth = the ball's radius gives the full semicircle (width = tool Ø)"
               value={op.depth}
               min={0}
               step={0.1}
@@ -1375,7 +1375,12 @@ function ParamFields(props: {
             level from the stock surface; a depth slides below the circle from an already-clear rim
             (width = depth × tan(half the bit angle), the chamfer angle = 90° − half-angle). Face
             cylinder ops publish their step edges at their target Ø, and the stock its end rims, as
-            selectable green circles; a rod-end chamfer = the end rim + a depth
+            selectable green circles; a rod-end chamfer = the end rim + a depth.
+            A BALL-NOSE tool cuts rounded profiles instead: depth 0 anchors on the circle and the
+            upper hemisphere shears a FILLET up-and-to-the-side (the ball analogue of the
+            chamfer); a depth plunges a U-shaped channel — depth ≤ the ball's radius is the true
+            U (depth = radius = full semicircle, width = tool Ø); deeper goes past the equator
+            and the shank flattens the channel walls (warned)
           </p>
         </>
       );
