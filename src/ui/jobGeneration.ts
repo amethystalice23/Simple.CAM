@@ -1093,13 +1093,30 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
     // and the post's inter-op shrink drops them without motion)
     const deltaBack = finalA - lastA;
     if (Math.abs(deltaBack % 360) > 1e-9) {
+      // SHORTEST-PATH RETURN (2026-11-06, the op-7 chamfer ghost): the
+      // return targets the ≤180° spoke ALIAS of the datum, not the raw
+      // absolute — the sim and the time estimate replay the IR (they
+      // never see the post's G92.4 shrink + short-way alias), and a raw
+      // G0 A<datum> from an op that wound to 63 turns showed as ~63
+      // phantom backward loops in playback plus tens of phantom minutes
+      // in the estimate. The post handles the counter truth at its layer
+      // (its pre-anchor shrink drops the pile; its short-way branch
+      // re-anchors the counter after such moves), so the nc is
+      // unaffected — this only makes the IR honest for the consumers
+      // above it. The viewport path preview still draws the alias too
+      // (display-only). Same ruling as the post's short-way anchors,
+      // applied one layer up.
+      // shortestATo returns a DELTA (−180..+180), so the alias target is
+      // the machine's current pile + that delta — same spoke as finalA,
+      // ≤180° of travel from where the axis actually sits
+      const aliased = lastA + shortestATo(finalA, lastA);
       res.moves.push({
-        words: { a: finalA },
+        words: { a: aliased },
         feed: 0,
         rapid: true,
         comment: `return A to the borrowed datum ${finalA.toFixed(1)}° (datum discipline)`,
       });
-      lastA = finalA;
+      lastA = aliased;
     }
   }
   if (op.kind === 'index') {

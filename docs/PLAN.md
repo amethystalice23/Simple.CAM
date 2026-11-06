@@ -1119,6 +1119,28 @@ coupon, 2026-11-01); rest machining (manual knobs cover it,
 entry-safety + G0 Y0 work already covers the dangerous travel,
 2026-11-01).
 
+**13. Simulate the POSTED g-code, not the generator IR** (Alice's
+2026-11-06 call, after the op-7 chamfer ghost): the machine executes
+the nc; the sim/estimate execute the Move[] IR — everything the post
+does in between (G92.4 shrink, short-way alias, counter re-anchor)
+is invisible to them, so a wind-then-shrink sequence shows as
+~63 phantom loops and inflates the estimate by tens of minutes (the
+TDC_Adjust job carried ~35–40 phantom unwind minutes in its 2h32m
+estimate). THE FIX: a Carvera-dialect parser (nc text → Move[] + op
+metadata from the `;@MKR|TOOLPATH_START` markers + tools from the
+`;@MKR|TOOL` headers), then point Simulate… and the per-op time
+estimates at `postCarvera`'s output instead of `previewMoves`. The
+carve engine is untouched — only the source moves change. Acceptance:
+the parser round-trips every golden file and the 22-file mill-tested
+Makera corpus byte-honestly (Move-for-Move), and a simulated job's
+op boundaries show ≤180° returns matching the nc. IR-level band-aids
+(2026-11-06, shipped): the generator's datum-return move is now
+shortest-path so the sim and estimate stop paying the phantom unwind
+— the nc output is unchanged (the post's shrink machinery already
+handled it); the VIEWPORT path preview still draws IR moves, so the
+wind-then-return spiral remains visible there until this item lands
+(display-only; the sim was the lying part).
+
 Remaining Makera-Studio parity gaps (the raison d'être is parity then
 some): DXF + STEP import (they have both), image import/trace-to-
 vector, laser-image dot matrix. Every other op on their list has a

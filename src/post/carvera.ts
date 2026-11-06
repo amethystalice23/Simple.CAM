@@ -373,15 +373,24 @@ export function postCarvera(input: PostInput): string {
         m.words.y === undefined &&
         m.words.z === undefined;
       if (opts.wrapA && pureA) {
-        // PRE-ANCHOR SHRINK: drop the whole-turn pile with zero motion
-        // first. Firmware acts only when |work-A| is STRICTLY > 360
-        // (Robot.cpp:796) — at exactly ±360 the shrink is a no-op, so
-        // never emit it there (the short-way alias below handles that
-        // case with ZERO travel instead). shrinkA models where the
-        // firmware actually lands the counter (±360 boundary residue
-        // included), so the post's frame never lies to the next move.
+        // FRAME RE-EXPRESSION FIRST: the generator's datum return now
+        // targets the shortest-path ALIAS of the datum spoken in the
+        // pile frame (jobGeneration, 2026-11-06 — the IR/sim fix), so the
+        // raw target can be e.g. A14760 with the pile at 14760−δ. After
+        // the shrink re-bases the counter, the same SPOKE must be spoken
+        // in the new frame or the move means 40 revolutions of real
+        // travel. Post-shrink absolute = the new counter position plus
+        // the SUB-360 signed remainder of the original travel — the
+        // whole turns are dropped from the move too (that is the point
+        // of the shrink).
+        let tgt = target;
+        let after = preA;
         if (Math.abs(preA) > 360 + 1e-9) {
-          const after = shrinkA(preA);
+          after = shrinkA(preA);
+          // signed remainder of the original delta in (−180, 180]
+          let d = (((target - preA) % 360) + 360) % 360;
+          if (d > 180) d -= 360;
+          tgt = after + d;
           lines.push(
             `; shrink work-coordinate A by ${(preA - after).toFixed(0)}° (whole turns, no motion) — anchor turn stays < 1 rev`,
           );
@@ -403,18 +412,25 @@ export function postCarvera(input: PostInput): string {
         // this move's own target by the tracking line, which made the
         // remainder always 0 and silently disabled this whole path for
         // any anchor not preceded by a shrink.
-        const remain = target - preA;
+        const remain = tgt - after;
         if (Math.abs(remain) > 180 + 1e-9) {
-          const alias = target - Math.sign(remain) * 360;
+          const alias = tgt - Math.sign(remain) * 360;
           lines.push(
             `; go the short way: ${alias.toFixed(2)}° is ${(360 - Math.abs(remain)).toFixed(0)}° of travel vs ${Math.abs(remain).toFixed(0)}°`,
           );
           // the ALIAS target, not m.words.a — wordsLine would print the
           // original absolute and lose the whole point of the detour
           lines.push(emitMotion(`G0 A${fmt(alias, 2)}`, m.comment));
-          lines.push(`; re-anchor the counter to ${target.toFixed(2)}° (no motion)`);
-          lines.push(`G92.4 A${fmt(target, 2)}`);
-          st.lastA = target;
+          lines.push(`; re-anchor the counter to ${tgt.toFixed(2)}° (no motion)`);
+          lines.push(`G92.4 A${fmt(tgt, 2)}`);
+          st.lastA = tgt;
+          continue;
+        }
+        if (tgt !== target) {
+          // spoke re-expressed post-shrink: emit the reduced absolute
+          // (the counter is already there or within a partial turn)
+          lines.push(emitMotion(`G0 A${fmt(tgt, 2)}`, m.comment));
+          st.lastA = tgt;
           continue;
         }
       }

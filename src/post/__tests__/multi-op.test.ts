@@ -331,15 +331,23 @@ describe('inter-op A shrink (G92.4 A0 S0 at op boundaries)', () => {
       options: { jobName: 'pre-anchor-shrink' },
     });
     const lines = gcode.split('\n');
-    const anchor = lines.findIndex((l) => /^G0 A0/.test(l));
+    // 6678 piles 18.55 turns: the shrink drops 18 (6480°) leaving the
+    // counter at 198. The return's re-expressed target is
+    // 198 + signedRemainder(0 − 6678) = 198 + 162 = 360 — the SPOKE of
+    // the datum, spoken post-shrink. |360 − 198| = 162° of physical
+    // travel, ≤ 180: the alias branch doesn't fire (the property it
+    // protects — never > 180° — already holds), so the anchor emits as a
+    // direct G0 A360 and the counter lands ON the datum spoke 360 ≡ 0.
+    const anchor = lines.findIndex((l) => /^G0 A360(;| |$)/.test(l));
     expect(anchor).toBeGreaterThan(-1);
-    // the shrink sits IMMEDIATELY before the anchor (the frame rebase
-    // must not sit between any other A-bearing pair)
+    // the shrink is the last INSTRUCTION before the anchor motion — the
+    // frame rebase must not land between any other A-bearing pair
     expect(lines[anchor - 1]).toBe('G92.4 A0 S0');
     expect(lines[anchor - 2]).toMatch(/whole turns, no motion/);
-    // after the shrink the anchor is a partial turn: the next A word (the
-    // anchor's own target 0) is ≤ 360 from the shrunk position
-    // (6678 → 6678 − 18·360 = 298; |0 − 298| = 298 < 360)
+    // no further anchor motion or re-anchor needed: the counter is at
+    // the spoke the next op expects (360 ≡ 0 mod 360) — no plain
+    // G92.4 re-set after it
+    expect(lines[anchor + 1]).not.toMatch(/^G92\.4/);
   });
 
   it('never pre-shrinks a coordinated (X+Z+A) helix — cut moves keep frame', () => {
