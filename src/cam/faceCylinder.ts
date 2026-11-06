@@ -270,11 +270,22 @@ export function faceCylinder(
 
       const forward = i % 2 === 0;
       a += forward ? aSign * aAdvance : -aSign * aAdvance;
-      moves.push({
-        words: { x: sweepEnd, a },
-        feed: 1 / passMinutes, // G93 inverse time
-        comment: isFinish ? undefined : `rough to r=${(r0 - depth).toFixed(3)}`,
-      });
+      // ZERO-SPAN PATH (field report 2026-11-05, the TDC_Adjust halt):
+      // a face span at or below the tool Ø (her break-off tab channels,
+      // cut with a 2mm bit over a 2mm span) collapses the tool-center
+      // path to a point — pathSpan 0, so aAdvance 0 and passMinutes 0.
+      // The sweep would be a DEAD move (X and A already at target) whose
+      // 1/passMinutes feed is Infinity — the post would emit `FInfinity`
+      // and the Z1 halts parsing it ("Invalid number in expression", 4%
+      // into the job). The plunge + edge rings already face the whole
+      // flute-width band; emit the sweep only when it has length.
+      if (pathSpan > 0) {
+        moves.push({
+          words: { x: sweepEnd, a },
+          feed: 1 / passMinutes, // G93 inverse time
+          comment: isFinish ? undefined : `rough to r=${(r0 - depth).toFixed(3)}`,
+        });
+      }
 
       if (edgeRings) {
         // closing ring: the exit edge squared at passZ too — the level

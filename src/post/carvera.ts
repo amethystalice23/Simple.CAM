@@ -125,7 +125,18 @@ function wordsLine(m: Move, withFeed: boolean, sWord?: string): string {
   // min and sub-0.005 mm/min feeds cross it with legal op settings; clamp
   // to the smallest honest 2-decimal feed instead (the field report
   // audit, 2026-10-27).
-  if (withFeed) parts.push(`F${fmt(Math.max(m.feed, 0.01), 2)}`);
+  // NON-FINITE FEED IS REFUSED, not clamped: Math.max(Infinity, 0.01) is
+  // still Infinity — a literal `FInfinity` halted the Z1 mid-job parsing
+  // "Invalid number in expression" (field report 2026-11-05, a zero-span
+  // face path dividing 1/passMinutes by 0). Any future divide-by-zero
+  // anywhere upstream becomes a loud export-time error here, never a
+  // machine halt.
+  if (withFeed) {
+    if (!Number.isFinite(m.feed)) {
+      throw new Error(`non-finite feed (${m.feed}) on a cut move — generator bug`);
+    }
+    parts.push(`F${fmt(Math.max(m.feed, 0.01), 2)}`);
+  }
   return parts.join(' ');
 }
 

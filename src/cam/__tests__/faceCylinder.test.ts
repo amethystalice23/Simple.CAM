@@ -328,6 +328,37 @@ describe('faceCylinder: spiral with squared edges (cut-over OFF, the default)', 
     // sweeps alternate between the PATH bounds (not the raw xStart/xEnd)
     expect(sweeps.map((s) => s.words.x)).toEqual([pX1, pX0, pX1, pX0, pX1, pX0]);
   });
+
+  it('faces a flute-width band (span = tool Ø) with rings only — no dead sweep, finite feeds', () => {
+    // the 2026-11-05 field halt (TDC_Adjust): a 2mm span cut with a 2mm
+    // bit — her break-off tab channels. The tool-center path collapses to
+    // a point (pathSpan 0), so the sweep is a dead move whose G93 feed
+    // was 1/0 = Infinity and the post emitted a literal `FInfinity` that
+    // halted the Z1 ("Invalid number in expression", 4% into the job).
+    // The plunge + edge rings already face the whole band; the sweep must
+    // simply not be emitted, and every emitted feed must be finite.
+    const channelTool: Tool = { ...tool, name: '2mm flat', diameter: 2 };
+    const res2 = faceCylinder(
+      { ...op, xStart: 6.2, xEnd: 8.2, targetDiameter: 7, cutBeyondStock: false },
+      calibration,
+      channelTool,
+    );
+    // no X-bearing cut move at all: the path is a point, the flute covers
+    // the band from its parked X — only plunges and A-only rings cut
+    const xCuts = res2.moves.filter((m) => !m.rapid && m.words.x !== undefined);
+    expect(xCuts).toEqual([]);
+    // every emitted feed is finite (the regression the halt pinned)
+    for (const m of res2.moves) {
+      if (!m.rapid) expect(Number.isFinite(m.feed)).toBe(true);
+    }
+    // the rings still do the facing: one entry + exit ring per level.
+    // Ø50 stock to Ø7 with stepDown 1 + 0.2 allowance = 23 even levels
+    // (rough 21.3 in 22 rungs + finish 0.2) — the job's own parameters.
+    const rings = res2.moves.filter(
+      (m) => !m.rapid && m.words.a !== undefined && m.words.x === undefined && m.words.z === undefined,
+    );
+    expect(rings.length).toBe(46); // 23 levels × 2 rings
+  });
 });
 
 describe('faceCylinder: vertical (rings)', () => {
