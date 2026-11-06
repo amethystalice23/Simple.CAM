@@ -304,4 +304,58 @@ describe('inter-op A shrink (G92.4 A0 S0 at op boundaries)', () => {
     // footer's own wrap only fires on usedA — a pure index rapid sets it)
     expect(gcode).not.toMatch(/shrink work-coordinate A back/i);
   });
+
+  it('pre-anchor shrink: a >1-rev pure-A return rapid unwinds at most a partial turn', () => {
+    // Alice's 2026-11-06 unwind report: the datum-discipline return is a
+    // pure-A rapid from an accumulated pile (her TDC_Adjust face ops wound
+    // to 6678°, the returns spun the whole pile back — ~10 min of dead
+    // rotation). The post emits G92.4 A0 S0 (whole turns, zero motion)
+    // IMMEDIATELY before the anchor move, so the physical return is < 1
+    // rev. Partial-export safety (her ruling): the return stays a real
+    // move — the shrink only shortens it, never replaces it.
+    const op = { number: 1, name: 'Rotary face', toolNumber: 1 };
+    const gcode = postCarvera({
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op },
+        { words: { z: 4, a: 6678 }, feed: 26.4, op }, // G93 helix, piles 18.55 turns
+        {
+          words: { a: 0 },
+          feed: 0,
+          rapid: true,
+          op,
+          comment: 'return A to the borrowed datum 0.0° (datum discipline)',
+        },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'pre-anchor-shrink' },
+    });
+    const lines = gcode.split('\n');
+    const anchor = lines.findIndex((l) => /^G0 A0/.test(l));
+    expect(anchor).toBeGreaterThan(-1);
+    // the shrink sits IMMEDIATELY before the anchor (the frame rebase
+    // must not sit between any other A-bearing pair)
+    expect(lines[anchor - 1]).toBe('G92.4 A0 S0');
+    expect(lines[anchor - 2]).toMatch(/whole turns, no motion/);
+    // after the shrink the anchor is a partial turn: the next A word (the
+    // anchor's own target 0) is ≤ 360 from the shrunk position
+    // (6678 → 6678 − 18·360 = 298; |0 − 298| = 298 < 360)
+  });
+
+  it('never pre-shrinks a coordinated (X+Z+A) helix — cut moves keep frame', () => {
+    const op = { number: 1, name: 'Thread', toolNumber: 1 };
+    const gcode = postCarvera({
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op },
+        { words: { x: 23.6, a: -4680 }, feed: 0.51, op }, // G93 thread helix — the cut itself
+        { words: { x: 23.6, a: -4680 }, feed: 0.51, op },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'no-midcut-shrink' },
+    });
+    // no shrink between the two helix passes: a rebase mid-op would strand
+    // every later absolute A word by whole turns
+    expect(gcode).not.toMatch(/whole turns, no motion[\s\S]*G93[\s\S]*G1 X23\.6 A-4680[\s\S]*whole turns, no motion/);
+  });
 });

@@ -323,12 +323,48 @@ export function postCarvera(input: PostInput): string {
 
     const simultaneous = isSimultaneous(m);
 
+    // the pre-shrink position — the anchor check must compare against
+    // where the axis IS, not where the anchor targets (st.lastA is
+    // updated below, so grab the value first)
+    const preA = st.lastA;
+
     // track the accumulated work-coordinate A for the inter-op shrink (a
     // move's A word is absolute in the work frame — the last one commanded
     // is the running value)
     if (m.words.a !== undefined) st.lastA = m.words.a;
 
     if (m.rapid) {
+      // PRE-ANCHOR SHRINK (Alice, 2026-11-06 — the unwind report): a
+      // pure-A rapid that would travel MORE than a whole turn is a
+      // frame-anchoring return — the datum-discipline move a rotary op
+      // appends (or an Index op's rotation). Emit `G92.4 A0 S0` FIRST:
+      // it drops whole turns from the work-coordinate A with ZERO
+      // motion, so the anchor move itself spins at most a partial turn
+      // instead of unwinding the whole pile (her TDC_Adjust job spent
+      // ~9 minutes spinning ~23000° backwards between ops). The shrink
+      // must sit IMMEDIATELY before the anchor: any A word before it is
+      // pre-shrink absolute, any A word after is post-shrink — a shrink
+      // anywhere mid-op would rebase the frame and strand every later
+      // absolute A in that op by whole turns. Non-pure-A rapids and cut
+      // moves are untouched (their A words must keep frame); the
+      // inter-op shrink at the op boundary stays as the general backstop.
+      const target = m.words.a;
+      const pureA =
+        target !== undefined &&
+        m.words.x === undefined &&
+        m.words.y === undefined &&
+        m.words.z === undefined;
+      if (opts.wrapA && pureA && Math.abs(target - preA) > 360 + 1e-9) {
+        const turns = Math.trunc(preA / 360);
+        lines.push(
+          `; shrink work-coordinate A by ${turns * 360}° (whole turns, no motion) — anchor turn stays < 1 rev`,
+        );
+        lines.push('G92.4 A0 S0');
+        // the shrink drops whole turns from the CURRENT counter, spokes
+        // preserved — the tracked work-A becomes the remainder. The
+        // anchor's absolute target still names the same spoke.
+        st.lastA = preA - turns * 360;
+      }
       lines.push(emitMotion(`G0 ${wordsLine(m, false)}`, m.comment));
     } else {
       // laser beam power: the modal S word, on G1s only (G0 never
