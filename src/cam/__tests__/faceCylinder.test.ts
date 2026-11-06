@@ -525,8 +525,41 @@ describe('faceCylinder: validation', () => {
     ).toThrowError(/not below stock radius/);
   });
 
-  it('rejects a zero-length axial range', () => {
-    expect(() => faceCylinder({ ...op, xEnd: 0 }, calibration, tool)).toThrowError(/must differ/);
+  it('rejects a channel narrower than the tool when cut-over is off — in channel terms', () => {
+    // Alice's 2026-11-06 ruling: the span is a channel WIDTH. Narrower
+    // than the tool with cut-over OFF is the error; the old "xStart and
+    // xEnd must differ" refused legitimate centerline channels.
+    // (this fixture runs cutBeyondStock: true — the guard must not fire)
+    expect(() =>
+      faceCylinder({ ...op, cutBeyondStock: false, xEnd: 0 }, calibration, tool),
+    ).toThrowError(/channel width .* narrower than the tool/);
+  });
+
+  it('accepts a centerline channel (xStart == xEnd) with cut-over on — plunge + rings', () => {
+    // her U-channel: a ball-nose channel specified by its centerline —
+    // legal as a tool-width plunge cut when "allow tail stock cut-over"
+    // is enabled. Zero span, cut-over ON: the guard must NOT fire, and
+    // the result must carry only finite feeds (no dead sweeps).
+    const ball: Tool = { ...tool, name: '1mm ball', type: 'ball', diameter: 1 };
+    const res = faceCylinder({ ...op, xStart: 8.2, xEnd: 8.2, targetDiameter: 4.18 }, calibration, ball);
+    expect(res.moves.filter((m) => !m.rapid).length).toBeGreaterThan(0);
+    for (const m of res.moves) {
+      if (!m.rapid) expect(Number.isFinite(m.feed)).toBe(true);
+    }
+  });
+
+  it('accepts a tool-width channel with cut-over off — rings only, finite feeds', () => {
+    // span == tool Ø exactly: the inset collapses the path to a point but
+    // the guard (span < Ø) must not fire — the rings face the band.
+    const ch: Tool = { ...tool, name: '2mm flat', diameter: 2 };
+    const res = faceCylinder(
+      { ...op, xStart: 6.2, xEnd: 8.2, cutBeyondStock: false, targetDiameter: 40 },
+      calibration,
+      ch,
+    );
+    for (const m of res.moves) {
+      if (!m.rapid) expect(Number.isFinite(m.feed)).toBe(true);
+    }
   });
 
   it('rejects a non-positive cut feed', () => {

@@ -111,7 +111,23 @@ export function faceCylinder(
   }
 
   const span = Math.abs(op.xEnd - op.xStart);
-  if (span <= 0) throw new Error('xStart and xEnd must differ');
+  const toolR = tool.diameter / 2;
+
+  // CHANNEL-WIDTH GUARD (Alice, 2026-11-06, the U-channel report): the
+  // span is a channel WIDTH, not a requirement that the X values differ —
+  // a ball-nose U-channel is legitimately specified by its centerline
+  // (xStart == xEnd: plunge + rings cut a tool-width hemispherical
+  // channel, like her break-off tabs). But a channel NARROWER than the
+  // tool with cut-over OFF has no honest toolpath: the inset collapses
+  // the tool-center path to a point and the flute overcuts the defined
+  // edges. Say that, in those terms — the old "xStart and xEnd must
+  // differ" refused legitimate centerline channels.
+  if (!op.cutBeyondStock && span < tool.diameter - 1e-9) {
+    throw new Error(
+      `channel width ${span.toFixed(2)}mm is narrower than the tool (Ø${tool.diameter}mm) — ` +
+        `widen the channel or enable "allow tail stock cut-over" to plunge-cut a tool-width channel at this X`,
+    );
+  }
 
   // TOOL-CENTER PATH BOUNDS (Alice, 2026-10-27 "cutting too far" report):
   // a path centered on xStart/xEnd overhangs the defined span by the tool
@@ -120,7 +136,6 @@ export function faceCylinder(
   // rule): inset the tool-center travel by toolR so the flute's EDGE cuts
   // exactly to the line. With cut-over ON the overhang is the point —
   // the raw path bounds stand.
-  const toolR = tool.diameter / 2;
   const pathX0 = op.cutBeyondStock
     ? op.xStart
     : Math.min(op.xStart + toolR, op.xEnd - toolR);

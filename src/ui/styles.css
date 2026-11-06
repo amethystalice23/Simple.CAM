@@ -266,7 +266,7 @@ button.secondary:disabled:hover { background: #31373e; }
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.op-status { font-size: 11px; color: #7d8891; }
+.op-status { font-size: 11px; color: #ff5c5c; }
 .icon-btn {
   background: transparent;
   border: none;
