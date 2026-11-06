@@ -111,6 +111,21 @@ function toolComments(tools: Tool[], toolNumbers?: number[]): string[] {
     });
 }
 
+/**
+ * Firmware-faithful `G92.4 A0 S0` shrink model (Robot.cpp:796): the
+ * firmware subtracts whole turns ONLY while |work-A| is strictly > 360 —
+ * so a pile that is an exact multiple of 360 lands AT ±360, not 0. Every
+ * place the post models a shrink's effect on its tracked A must use THIS,
+ * not a trunc() shortcut: a boundary residue of ±360 that the post
+ * believes is 0 becomes a phantom 360° move later (the strand-1 rapid
+ * after the thread op in the TDC_Adjust job measured exactly this).
+ */
+function shrinkA(a: number): number {
+  let v = a;
+  while (Math.abs(v) > 360 + 1e-9) v -= Math.sign(v) * 360;
+  return v;
+}
+
 function wordsLine(m: Move, withFeed: boolean, sWord?: string): string {
   const w = m.words;
   const parts: string[] = [];
@@ -252,10 +267,13 @@ export function postCarvera(input: PostInput): string {
         // `G92.4 A<deg>` reset is deliberately NOT used here: it sets work-A
         // to an arbitrary value and could lose registration with the
         // stock's current orientation if a later op assumed continuity.
-        if (opts.wrapA && Math.abs(st.lastA) > 360) {
+        if (opts.wrapA && Math.abs(st.lastA) > 360 + 1e-9) {
           lines.push(`; shrink work-coordinate A back to ±360 (was ${st.lastA.toFixed(2)})`);
           lines.push('G92.4 A0 S0');
-          st.lastA = 0;
+          // the firmware lands the counter at shrinkA(lastA) — at exactly
+          // ±360 for whole-turn piles, NOT 0 (the boundary residue is real
+          // and the next op's first A move must account for it)
+          st.lastA = shrinkA(st.lastA);
         }
 
         // Tool change?
@@ -354,16 +372,51 @@ export function postCarvera(input: PostInput): string {
         m.words.x === undefined &&
         m.words.y === undefined &&
         m.words.z === undefined;
-      if (opts.wrapA && pureA && Math.abs(target - preA) > 360 + 1e-9) {
-        const turns = Math.trunc(preA / 360);
-        lines.push(
-          `; shrink work-coordinate A by ${turns * 360}° (whole turns, no motion) — anchor turn stays < 1 rev`,
-        );
-        lines.push('G92.4 A0 S0');
-        // the shrink drops whole turns from the CURRENT counter, spokes
-        // preserved — the tracked work-A becomes the remainder. The
-        // anchor's absolute target still names the same spoke.
-        st.lastA = preA - turns * 360;
+      if (opts.wrapA && pureA) {
+        // PRE-ANCHOR SHRINK: drop the whole-turn pile with zero motion
+        // first. Firmware acts only when |work-A| is STRICTLY > 360
+        // (Robot.cpp:796) — at exactly ±360 the shrink is a no-op, so
+        // never emit it there (the short-way alias below handles that
+        // case with ZERO travel instead). shrinkA models where the
+        // firmware actually lands the counter (±360 boundary residue
+        // included), so the post's frame never lies to the next move.
+        if (Math.abs(preA) > 360 + 1e-9) {
+          const after = shrinkA(preA);
+          lines.push(
+            `; shrink work-coordinate A by ${(preA - after).toFixed(0)}° (whole turns, no motion) — anchor turn stays < 1 rev`,
+          );
+          lines.push('G92.4 A0 S0');
+          st.lastA = after;
+        }
+        // SHORTEST-DIRECTION ANCHOR (Alice, 2026-11-06): a >180° pure-A
+        // rapid is faster reached going the other way — same spoke.
+        // Command the ALIAS (target ∓ 360), then erase it with a plain
+        // `G92.4 A<target>` (pure counter reset — no motion, no EEPROM,
+        // Robot.cpp:776-833), leaving the counter at the true target for
+        // the next op's absolute encodings (a thread's A-4680 IS 13 turns
+        // encoded absolutely). Safe on ANY pure-A rapid: the alias lands
+        // on the same physical spoke and the reset restores the frame, so
+        // generators' in-op shortest-path targets (already ≤180) pass
+        // through untouched, near-full-turn anchors take the short way.
+        // NB: the comparison is against the position BEFORE this move
+        // (preA, as shrunk above) — st.lastA was already overwritten with
+        // this move's own target by the tracking line, which made the
+        // remainder always 0 and silently disabled this whole path for
+        // any anchor not preceded by a shrink.
+        const remain = target - preA;
+        if (Math.abs(remain) > 180 + 1e-9) {
+          const alias = target - Math.sign(remain) * 360;
+          lines.push(
+            `; go the short way: ${alias.toFixed(2)}° is ${(360 - Math.abs(remain)).toFixed(0)}° of travel vs ${Math.abs(remain).toFixed(0)}°`,
+          );
+          // the ALIAS target, not m.words.a — wordsLine would print the
+          // original absolute and lose the whole point of the detour
+          lines.push(emitMotion(`G0 A${fmt(alias, 2)}`, m.comment));
+          lines.push(`; re-anchor the counter to ${target.toFixed(2)}° (no motion)`);
+          lines.push(`G92.4 A${fmt(target, 2)}`);
+          st.lastA = target;
+          continue;
+        }
       }
       lines.push(emitMotion(`G0 ${wordsLine(m, false)}`, m.comment));
     } else {
@@ -404,7 +457,7 @@ export function postCarvera(input: PostInput): string {
   // the footer wrap: only when the LAST op's pile never met a boundary
   // shrink (the inter-op shrink above handles op boundaries; a no-op
   // shrink on small-A jobs is dropped — the firmware only acts past ±360)
-  if (opts.wrapA && usedA && Math.abs(st.lastA) > 360) {
+  if (opts.wrapA && usedA && Math.abs(st.lastA) > 360 + 1e-9) {
     lines.push(`; shrink work-coordinate A back to ±360 (was ${st.lastA.toFixed(2)})`);
     lines.push('G92.4 A0 S0');
   }
