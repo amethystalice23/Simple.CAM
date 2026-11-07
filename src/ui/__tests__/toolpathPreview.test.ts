@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Move, Stock } from '../../core/types';
 import { faceCylinder } from '../../cam/faceCylinder';
+import { APPROACH_CLEARANCE } from '../../cam/paths';
 import { movesToSegments } from '../toolpathPreview';
 
 const cylinderStock: Extract<Stock, { kind: 'cylinder' }> = {
@@ -71,7 +72,11 @@ describe('movesToSegments', () => {
     // sub-segments, 36 numbers — and its final mapped point lands on the
     // cylinder side at radius 24 (surface 25 − 1 depth), angle 90°
     const plungePts = segs.feed.slice(0, 36);
-    expect(plungePts[2]).toBeCloseTo(25 + 5, 1); // starts at safe Z (surface+5)
+    // the descent rapid stops APPROACH_CLEARANCE above the crown (the
+    // 2026-11-07 entry change), and the helical entry starts from there —
+    // 0.5mm above the surface, not 5mm above it at the old safe plane
+    expect(segs.rapid.slice(3, 6)).toEqual([0, 0, 25 + APPROACH_CLEARANCE]);
+    expect(plungePts[2]).toBeCloseTo(25 + APPROACH_CLEARANCE, 1);
     const lastX = plungePts[33];
     const lastY = plungePts[34];
     const lastZ = plungePts[35];

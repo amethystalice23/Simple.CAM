@@ -5,6 +5,7 @@ import {
   ROTARY_FEED_DEG_MIN,
   SAFE_CLEARANCE,
 } from '../faceCylinder';
+import { APPROACH_CLEARANCE } from '../paths';
 import type { FaceCylinderOp, RotaryCalibration, Stock, Tool } from '../../core/types';
 import { isSimultaneous, rotaryCalibrationOf } from '../../core/types';
 
@@ -118,20 +119,40 @@ describe('faceCylinder: spiral', () => {
     // existing height (after a tool change, the swap macro's high park),
     // the descent happens over the destination. The spiral has no pattern
     // phase, so there is no positioning rotation at all; never a
-    // coordinated X+A rapid
+    // coordinated X+A rapid. The fixture runs cutBeyondStock (no edge
+    // rings): the descent stops APPROACH_CLEARANCE above the crown — the
+    // helical entry then spirals the increment in from there instead of
+    // spinning in air from the safe plane (Alice, 2026-11-07) — and the
+    // final retract still lifts to the full safe plane.
     const zRapids = res.moves.filter((m) => m.rapid && m.words.z !== undefined && m.words.x === undefined);
     expect(zRapids.length).toBe(2); // entry descent + final retract
-    for (const m of zRapids) expect(m.words.z).toBe(25 + SAFE_CLEARANCE);
+    expect(zRapids[0].words.z).toBe(25 + APPROACH_CLEARANCE); // above the crown
+    expect(zRapids[1].words.z).toBe(25 + SAFE_CLEARANCE); // the final retract
     const xRapids = res.moves.filter((m) => m.rapid && m.words.x !== undefined);
     expect(xRapids).toHaveLength(1);
     expect(xRapids[0].words.x).toBe(op.xStart);
     expect(xRapids[0].comment).toMatch(/pass 1\/6/); // the pass label rides the travel
     // the travel PRECEDES the descent
     expect(res.moves[0].words.x).toBe(op.xStart);
-    expect(res.moves[1].words.z).toBe(25 + SAFE_CLEARANCE);
+    expect(res.moves[1].words.z).toBe(25 + APPROACH_CLEARANCE);
     expect(
       res.moves.some((m) => m.rapid && m.words.a !== undefined && m.words.x !== undefined),
     ).toBe(false);
+  });
+
+  it('keeps the safe-plane descent for squared-edge spirals (cut-over OFF)', () => {
+    // the low entry descent is cut-over-ON only: with edge rings the
+    // straight plunge happens before any A motion and the entry ring
+    // squares the edge from passZ — the safe-plane descent stands
+    const squared = faceCylinder(
+      { ...op, cutBeyondStock: false },
+      calibration,
+      tool,
+    );
+    const zs = squared.moves
+      .filter((m) => m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z);
+    expect(zs).toEqual([25 + SAFE_CLEARANCE, 25 + SAFE_CLEARANCE]);
   });
 
   it('continues from the machine\'s A (startA) — never unwinds the pile', () => {
@@ -622,13 +643,19 @@ describe('faceCylinder: 4-axis box stock (derived diagonal calibration)', () => 
 });
 describe('faceCylinder: clearance override', () => {
   it('lifts the approach to the ⚡ clearance above the stock surface', () => {
-    // stock R25 surface at Z25: default clearance 5 → safe Z30, override 9 → Z34
+    // stock R25 surface at Z25: default clearance 5 → safe Z30, override 9 → Z34.
+    // The override governs the FINAL RETRACT and the safe-plane descent
+    // everywhere the helix does not start below it; the cut-over spiral's
+    // ENTRY descent still stops APPROACH_CLEARANCE above the crown (the
+    // op knows the declared crown is clear — that is the one altitude it
+    // must not second-guess), so the first rapid reads 25.5 here.
     const res = faceCylinder({ ...op, clearance: 9 }, calibration, tool);
     const zs = res.moves.filter((m) => m.rapid && m.words.z !== undefined).map((m) => m.words.z);
     expect(zs.length).toBeGreaterThan(0);
-    for (const z of zs) expect(z).toBeCloseTo(34, 6);
+    expect(zs[0]).toBeCloseTo(25 + APPROACH_CLEARANCE, 6); // the cut-over entry descent
+    for (const z of zs.slice(1)) expect(z).toBeCloseTo(34, 6); // retract at the override
     const plain = faceCylinder(op, calibration, tool);
     const plainZ = plain.moves.find((m) => m.rapid && m.words.z !== undefined)?.words.z;
-    expect(plainZ).toBeCloseTo(30, 6);
+    expect(plainZ).toBeCloseTo(25 + APPROACH_CLEARANCE, 6);
   });
 });

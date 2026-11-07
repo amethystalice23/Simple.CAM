@@ -8,7 +8,7 @@ G90 G21
 G92.4 A0 R0
 G0 Y0
 G0 X0 ; pass 1/6 depth 0.960mm radial
-G0 Z30
+G0 Z25.5
 G93
 G1 Z24.04 A90 F26.4 ; helical entry 0.960mm radial
 G1 X100 A22590 F0.11 ; rough to r=24.040
@@ -24,7 +24,7 @@ G1 Z20 A23040 F26.4 ; spiral step down 0.200mm radial
 G1 X0 A540 F0.11
 G0 Z30
 G0 X0 ; pass 1/6 depth 0.960mm radial
-G0 Z30
+G0 Z25.5
 G1 Z24.04 A630 F26.4 ; helical entry 0.960mm radial
 G1 X100 A23130 F0.11 ; rough to r=24.040
 G1 Z23.08 A23220 F26.4 ; spiral step down 0.960mm radial

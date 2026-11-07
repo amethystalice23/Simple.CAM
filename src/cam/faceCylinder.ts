@@ -28,6 +28,7 @@
  */
 
 import type { FaceCylinderOp, Move, RotaryCalibration, Tool } from '../core/types';
+import { APPROACH_CLEARANCE } from './paths';
 
 /** Community-firmware sustainable rotary limit (C1 harmonic drive). */
 export const MAX_ROTARY_RPM = 6.6;
@@ -235,7 +236,22 @@ export function faceCylinder(
         // change, the swap macro's high park — never a low diagonal
         // descent), then descend at the destination
         moves.push({ words: { x: sweepStart }, feed: 0, rapid: true, comment: passComment });
-        moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+        // CUT-OVER SPIRAL DESCENT (Alice, 2026-11-07): with edge rings off
+        // the level-0 helical entry used to start from the SAFE PLANE — a
+        // 90° sweep mostly spinning in air 5mm above the crown, then
+        // engaging at a steep lead in the last few degrees. With cut-over
+        // ON, rapid down to APPROACH_CLEARANCE above the DECLARED crown
+        // (cut-over cuts past the span, and neighbors may already sit
+        // lower — the declared stock radius is the one altitude the op
+        // KNOWS is clear) and spiral the increment in from there.
+        // Squared-edge ops keep the safe-plane descent: their straight
+        // plunge happens before any A motion, and the entry ring squares
+        // the edge from passZ.
+        moves.push({
+          words: { z: op.cutBeyondStock ? surfaceZ + APPROACH_CLEARANCE : safeZ },
+          feed: 0,
+          rapid: true,
+        });
       }
 
       // helical entry / in-cut step down, then the sweep. The sweep RETRACES

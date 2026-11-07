@@ -8,7 +8,7 @@ G90 G21
 G92.4 A0 R0
 G0 Y0
 G0 X0 ; pass 1/6 depth 0.960mm radial
-G0 Z30
+G0 Z25.5
 G93
 G1 Z24.04 A90 F26.4 ; helical entry 0.960mm radial
 G1 X100 A7590 F0.32 ; rough to r=24.040
