@@ -109,9 +109,40 @@ describe('movesToSegments', () => {
     expect(segs.feed.length / 6).toBe(2);
     expect(segs.rapid).toEqual([]);
     const tail = segs.feed.slice(6, 12);
-    expect(tail.slice(0, 4)).toEqual([5, 5, 0, 10]);
+    // the segment STARTS at the re-anchored cursor: the index rapid re-maps
+    // the parked tool (5, 5, 0) to its display position under the new datum
+    // (5, −5, ~0) — the pre-2026-11-07 stale cursor drew a chord from the
+    // un-rotated (5, 5, 0) to the mirrored (10, −5, −30)
+    expect(tail[0]).toBeCloseTo(5, 9);
+    expect(tail[1]).toBeCloseTo(-5, 9); // the mirrored parked point
+    expect(tail[2]).toBeCloseTo(0, 9);
+    expect(tail[3]).toBeCloseTo(10, 9);
     expect(tail[4]).toBeCloseTo(-5, 9); // cos(π) is not exactly −1
     expect(tail[5]).toBeCloseTo(-30, 9);
+  });
+
+  it('a pure-A rapid re-anchors the display cursor; the next move starts at the re-mapped point, not a chord through the stock', () => {
+    // the rocket_valve op-4 report (2026-11-07): op 3 ended upside-down at
+    // θ≡180°, its Z10 retract drew at −10 in the display frame, and the
+    // 180° datum return rapid left `prev` stale — op 4's approach rapid
+    // then drew a straight chord from (18.7, −10) through the stock to
+    // (19.1, +10). The machine does none of it: the tool parks, the stock
+    // rotates, the approach traverses at park height.
+    const moves: Move[] = [
+      { words: { x: 18.7, z: 10, a: 0 }, feed: 0, rapid: true }, // op 3's parked tool at Z+10
+      { words: { z: -10 }, feed: 300 }, // its exit plunge — draws at the far side, Z−10
+      { words: { a: 180 }, feed: 0, rapid: true }, // the 180° datum return: draws nothing
+      { words: { x: 19.1, z: 10 }, feed: 0, rapid: true }, // op 4's approach at park height
+    ];
+    const segs = movesToSegments(moves, cylinderStock);
+    // the datum return and the op-4 approach are the only rapids — one
+    // segment each (both draw nothing): no chord
+    expect(segs.rapid.length / 6).toBe(1);
+    const seg = segs.rapid.slice(0, 6);
+    expect(seg[0]).toBeCloseTo(18.7, 9); // x unchanged — the tool parked
+    expect(seg[1]).toBeCloseTo(0, 6); // mapped Y: the parked point flipped to the near side
+    expect(seg[2]).toBeCloseTo(10, 6); // mapped Z: ABOVE the stock, not −10
+    expect(seg[3]).toBeCloseTo(19.1, 9); // the approach ends over the crown
   });
 
   it('A-only feed moves draw (vertical rings); A-only rapids stay invisible', () => {
