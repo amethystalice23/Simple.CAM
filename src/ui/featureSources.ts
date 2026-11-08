@@ -328,9 +328,9 @@ export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
  * resolution, labels, depth prefills, and generation. */
 export interface ResolvedFeature {
   source: FeatureSource;
-  kind: 'plane' | 'circle' | 'edge' | 'path';
+  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain';
   index: number;
-  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature;
+  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature | RadialChainFeature;
 }
 
 export function resolveFeature(
@@ -356,6 +356,8 @@ export function resolveFeature(
   if (ei >= 0) return { source, kind: 'edge', index: ei, feature: source.features.edges[ei] };
   const pa = source.features.paths.findIndex((f) => f.id === id);
   if (pa >= 0) return { source, kind: 'path', index: pa, feature: source.features.paths[pa] };
+  const ri = source.features.radialChains.findIndex((f) => f.id === id);
+  if (ri >= 0) return { source, kind: 'radialChain', index: ri, feature: source.features.radialChains[ri] };
   return null;
 }
 

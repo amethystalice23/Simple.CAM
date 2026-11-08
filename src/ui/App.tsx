@@ -24,12 +24,17 @@ import type {
   Primitive,
   Stock,
   Tool,
+  Vec2,
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { decodeBitmapFile, type GrayBitmap } from '../core/bitmapImport';
 import { planeExtents, transformFn } from './featureOverlays';
 import { opEdgeSource, resolveFeature, sourcesFor, splitSelection } from './featureSources';
-import { cylChamferTargetsFromSelection, threadTargetsFromSelection } from './opTargets';
+import {
+  cylChamferTargetsFromSelection,
+  pocketRegionsFromSelection,
+  threadTargetsFromSelection,
+} from './opTargets';
 import { internalMinorDiameter } from '../cam/threadMill';
 import { ModelPanel } from './ModelPanel';
 import {
@@ -922,6 +927,37 @@ export function App() {
     return out.length > 0 ? out : null;
   }, [ops, expandedOpId, sources, stock, tools]);
 
+  /** the expanded pocket op's intended AREA (2026-11-08, Alice's slot
+   * pick): the projected region(s) the op will cut — the selection's
+   * loops (planes, circles, or constant-radius chains) resolved through
+   * the SAME projection generation uses, so a curved-feature chain
+   * (a slot on the cylinder surface) shows its honest 2D footprint
+   * before generating. Rendered as a translucent flat ghost at the
+   * selection's rim Z. Null when the open op isn't a pocket or its
+   * selection hasn't resolved. */
+  const pocketPreview = useMemo(() => {
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!op || op.kind !== 'pocket' || op.featureIds.length === 0) return null;
+    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    const rotate =
+      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    const out: { regions: Vec2[][]; selectionZ: number }[] = [];
+    for (const part of splitSelection(sources, op.featureIds)) {
+      try {
+        const src = pocketRegionsFromSelection(
+          part.source.features,
+          part.ids,
+          part.source.transform,
+          rotate,
+        );
+        if (src) out.push({ regions: src.regions, selectionZ: src.selectionZ });
+      } catch {
+        continue; // a bad selection ghosts nothing — generation says why
+      }
+    }
+    return out.length > 0 ? out : null;
+  }, [ops, expandedOpId, sources, stock]);
+
   /** the open op's cutting frame: the viewport shows the part rotated to
    * the index datum established above that op — A0 when nothing is open
    * (edge-tracing §5 "view follows the datum") */
@@ -1717,6 +1753,7 @@ export function App() {
             facePreview={facePreview}
             threadPreview={threadPreview}
             chamferPreview={chamferPreview}
+            pocketPreview={pocketPreview}
             simChunks={showSim && carveSim.state.chunks.size > 0 ? carveSim.state.chunks : null}
             // the marker gate is the TIP's EXISTENCE, not `running` —
             // running flips false at `done` and nothing ever restores it

@@ -157,7 +157,7 @@ export function planeExtents(
 
 /** One manually selected item in measure mode (right-click). */
 export interface MeasurePick {
-  kind: 'edge' | 'circle' | 'plane' | 'path';
+  kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain';
   index: number;
   /** machine-space center used for distance computation */
   center: THREE.Vector3;
@@ -187,6 +187,15 @@ export function pickFromNearest(data: FeatureOverlayData, nearest: NearestFeatur
       center: data.pathMid[nearest.index].clone(),
       color: nearest.color,
       text: data.pathText[nearest.index],
+    };
+  }
+  if (nearest.kind === 'radialChain') {
+    return {
+      kind: 'radialChain',
+      index: nearest.index,
+      center: data.chainMid[nearest.index].clone(),
+      color: nearest.color,
+      text: data.chainText[nearest.index],
     };
   }
   return {
@@ -291,11 +300,13 @@ export const EDGE_COLOR = 0xff5555;
 export const CIRCLE_COLOR = 0x44cc66;
 export const HOLE_COLOR = 0x55ccee;
 export const PATH_COLOR = 0xddaa33; // artwork line work — amber
+export const CHAIN_COLOR = 0xff66cc; // constant-radius chains — magenta
 /** brighter tints for the hovered feature */
 export const EDGE_HOVER = 0xff9999;
 export const CIRCLE_HOVER = 0x88ffbb;
 export const HOLE_HOVER = 0x99eeff;
 export const PATH_HOVER = 0xffdd88;
+export const CHAIN_HOVER = 0xff99ee; // chain hover
 /** face/plane selection highlight */
 export const PLANE_SELECT = 0xf0c050;
 /** operation-selection highlight (distinct from measure picks) */
@@ -347,16 +358,21 @@ export interface FeatureOverlayData {
   circleLines: THREE.LineSegments;
   holeLines: THREE.LineSegments; // inner loops (drill candidates) in cyan
   pathLines: THREE.LineSegments; // artwork line work in amber
+  /** constant-radius chains: closed silhouette outlines (slot walls) */
+  chainLines: THREE.LineSegments;
   /** machine-space hover samples, parallel to the feature arrays */
   edgeSamples: THREE.Vector3[][];
   circleSamples: THREE.Vector3[][];
   pathSamples: THREE.Vector3[][];
+  chainSamples: THREE.Vector3[][];
   edgeMid: THREE.Vector3[];
   circleCenter: THREE.Vector3[];
   pathMid: THREE.Vector3[];
+  chainMid: THREE.Vector3[];
   edgeText: string[];
   circleText: string[];
   pathText: string[];
+  chainText: string[];
   circleInner: boolean[];
 }
 
@@ -498,6 +514,26 @@ export function buildFeatureOverlayData(
     pathText.push(`artwork · L ${len.toFixed(2)} mm`);
   }
 
+  // constant-radius chains: closed silhouette outlines (slot walls),
+  // drawn as line work in their own color, densified samples for hover
+  // snapping (the same shape as edge samples, so the snap machinery
+  // shares it)
+  const chainPos: number[] = [];
+  const chainSamples: THREE.Vector3[][] = [];
+  const chainMid: THREE.Vector3[] = [];
+  const chainText: string[] = [];
+  for (const c of features.radialChains) {
+    const pts = c.points.map((q) => xf(q));
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      chainPos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+    chainSamples.push(pts);
+    chainMid.push(pts[Math.floor(pts.length / 2)].clone());
+    chainText.push(`chain · ${c.meanRadius.toFixed(2)} mm`);
+  }
+
   const mk = (positions: number[], color: number) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -517,21 +553,25 @@ export function buildFeatureOverlayData(
     circleLines: mk(circlePos, CIRCLE_COLOR),
     holeLines: mk(holePos, HOLE_COLOR),
     pathLines: mk(pathPos, PATH_COLOR),
+    chainLines: mk(chainPos, CHAIN_COLOR),
     edgeSamples,
     circleSamples,
     pathSamples,
+    chainSamples,
     edgeMid,
     circleCenter,
     pathMid,
+    chainMid,
     edgeText,
     circleText,
     pathText,
+    chainText,
     circleInner,
   };
 }
 
 export interface NearestFeature {
-  kind: 'edge' | 'circle' | 'path';
+  kind: 'edge' | 'circle' | 'path' | 'radialChain';
   index: number;
   text: string;
   color: number;
@@ -649,7 +689,7 @@ export function findNearestFeatures(
   // the far side and nothing ever selected. Per-sample entries let the
   // gate reach the same circle's visible arc a few entries later.
   const scan = (
-    kind: 'edge' | 'circle' | 'path',
+    kind: 'edge' | 'circle' | 'path' | 'radialChain',
     items: Candidate[],
     tolScale: number,
   ): (NearestFeature & { d: number })[] => {
@@ -728,7 +768,7 @@ export function findNearestFeatures(
 /** A crisp single-feature outline for the hovered feature. */
 export function hoverLineGeometry(
   data: FeatureOverlayData,
-  kind: 'edge' | 'circle' | 'path',
+  kind: 'edge' | 'circle' | 'path' | 'radialChain',
   index: number,
 ): THREE.BufferGeometry {
   const positions: number[] = [];
@@ -740,6 +780,14 @@ export function hoverLineGeometry(
     const s = data.pathSamples[index];
     for (let i = 0; i < s.length - 1; i++) {
       positions.push(s[i].x, s[i].y, s[i].z, s[i + 1].x, s[i + 1].y, s[i + 1].z);
+    }
+  } else if (kind === 'radialChain') {
+    // the whole closed silhouette — the chain's loop, in loop order
+    const s = data.chainSamples[index];
+    for (let i = 0; i < s.length; i++) {
+      const a = s[i];
+      const b = s[(i + 1) % s.length];
+      positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
     }
   } else {
     const s = data.circleSamples[index];

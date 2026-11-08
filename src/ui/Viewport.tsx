@@ -5,7 +5,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { originSpan, rotaryCalibrationOf } from '../core/types';
-import type { FeaturePickKind, ModelTransform, Move, Primitive, Stock } from '../core/types';
+import type { FeaturePickKind, ModelTransform, Move, Primitive, Stock, Vec2 } from '../core/types';
 import { movesToSegmentMoves } from './toolpathPreview';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import type { FeatureSource } from './featureSources';
@@ -66,7 +66,7 @@ function disposeGroup(g: THREE.Group): void {
 export interface ResolvedSelection {
   /** owning feature source: 'model' or a primitive id */
   sourceId: string;
-  kind: 'plane' | 'circle' | 'edge' | 'path';
+  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain';
   index: number;
 }
 
@@ -104,9 +104,12 @@ function picksFromSelection(
       });
       continue;
     }
-    if (s.kind === 'path') {
+    if (s.kind === 'path' || s.kind === 'radialChain') {
       // artwork: highlighted (via the selection line walk), but not a
-      // measurement pick — distances between artwork strokes are noise
+      // measurement pick — distances between artwork strokes are noise.
+      // A chain: highlighted (via the selection line walk), but not a
+      // measurement pick — a chain's silhouette is a closed seam, not a
+      // measurable point.
       continue;
     }
     out.push({
@@ -211,6 +214,14 @@ interface Props {
     width: number;
     axisZ: number;
   }[] | null;
+  /** the pocket op's projected region(s) (2026-11-08, Alice's slot
+   *  pick): the selection's loops resolved through the same projection
+   *  generation uses — machine-space XY outlines, drawn as a flat
+   *  translucent ghost at the selection's rim Z. */
+  pocketPreview: {
+    regions: Vec2[][];
+    selectionZ: number;
+  }[] | null;
   /** the carve simulator's chunk meshes, when the Simulation layer is on
    *  (PLAN "cutting simulator"): stock-frame greedy-meshed voxels keyed by
    *  chunk id, machine-space positions baked in. The meshes parent into
@@ -261,6 +272,7 @@ export function Viewport({
   facePreview,
   threadPreview,
   chamferPreview,
+  pocketPreview,
   simChunks,
   simTip,
   displayLayers,
@@ -611,7 +623,9 @@ export function Viewport({
                 ? feats?.circles[pick.index]?.id
                 : pick.kind === 'path'
                   ? feats?.paths[pick.index]?.id
-                  : feats?.edges[pick.index]?.id;
+                  : pick.kind === 'radialChain'
+                    ? feats?.radialChains[pick.index]?.id
+                    : feats?.edges[pick.index]?.id;
           if (id) onToggleSelectRef.current(id);
         }
       }
@@ -620,7 +634,7 @@ export function Viewport({
      * (edge-tracing §5): edges never flash (they carry no facing
      * point); the Ø pick wants circles alone — planes would flash and
      * then bounce anyway. Normal measure mode allows everything. */
-    const pickAllows = (kind: 'edge' | 'circle' | 'plane' | 'path'): boolean => {
+    const pickAllows = (kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain'): boolean => {
       const pk = pickKindRef.current;
       if (!pk) return true;
       // the index-angle pick: every solid feature carries a direction to
@@ -630,7 +644,9 @@ export function Viewport({
       if (kind === 'edge') return false;
       if (pk === 'targetDiameter' || pk === 'wrapDiameter') return kind === 'circle';
       // the depth picks (floor, chamferDepth, drillDepth) read a facing
-      // point: circles and planes carry one, artwork strokes don't
+      // point: circles and planes carry one, artwork strokes don't — a
+      // chain's silhouette is a closed seam, not a floor, so it refuses
+      // them too
       if (pk === 'floor' || pk === 'chamferDepth' || pk === 'drillDepth') {
         return kind === 'circle' || kind === 'plane';
       }
@@ -1592,7 +1608,7 @@ export function Viewport({
           entry.source.id === selectedObjectId ? 0xffe066 : PATH_COLOR,
         );
       }
-      group.add(data.edgeLines, data.circleLines, data.holeLines, data.pathLines);
+      group.add(data.edgeLines, data.circleLines, data.holeLines, data.pathLines, data.chainLines);
     }
 
     const hoverLine = new THREE.LineSegments(
@@ -2201,6 +2217,80 @@ export function Viewport({
       mat.dispose();
     };
   }, [chamferPreview]);
+
+  // the pocket op's projected AREA (2026-11-08, Alice's slot pick): a
+  // flat translucent ghost at the selection's rim Z — the region(s) the
+  // op will cut, resolved through the same projection generation uses
+  // (planes, circles, and constant-radius chains alike). Machine space;
+  // drawn through the stock/model like the other ghosts (depthTest off).
+  useEffect(() => {
+    const group = sliceGroupRef.current;
+    if (!group) return;
+    if (!pocketPreview || pocketPreview.length === 0) return;
+    const meshes: THREE.Mesh[] = [];
+    const geos: THREE.BufferGeometry[] = [];
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff55ee,
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    for (const part of pocketPreview) {
+      // orientLoops already made outer CCW / holes CW — THREE.Shape's
+      // convention: outer CCW, holes CW
+      const signedArea = (pts: Vec2[]): number => {
+        let a = 0;
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
+          const q = pts[(i + 1) % pts.length];
+          a += p.x * q.y - q.x * p.y;
+        }
+        return a / 2;
+      };
+      const shapes: THREE.Shape[] = [];
+      const outerAreas: number[] = [];
+      const holes: { pts: Vec2[]; area: number }[] = [];
+      for (const loop of part.regions) {
+        const signed = signedArea(loop);
+        const poly = loop.map((p) => new THREE.Vector2(p.x, p.y));
+        if (signed >= 0) {
+          shapes.push(new THREE.Shape(poly));
+          outerAreas.push(Math.abs(signed));
+        } else {
+          holes.push({ pts: loop, area: Math.abs(signed) });
+        }
+      }
+      // holes attach to the smallest enclosing outer
+      for (const h of holes) {
+        let best = -1;
+        let bestArea = Infinity;
+        for (let i = 0; i < shapes.length; i++) {
+          if (outerAreas[i] > h.area && outerAreas[i] < bestArea) {
+            bestArea = outerAreas[i];
+            best = i;
+          }
+        }
+        if (best >= 0)
+          shapes[best].holes.push(new THREE.Path(h.pts.map((p) => new THREE.Vector2(p.x, p.y))));
+      }
+      for (const shape of shapes) {
+        const geo = new THREE.ShapeGeometry(shape);
+        geos.push(geo);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(0, 0, part.selectionZ);
+        mesh.renderOrder = 3;
+        group.add(mesh);
+        meshes.push(mesh);
+      }
+    }
+    return () => {
+      for (const m of meshes) group.remove(m);
+      for (const g of geos) g.dispose();
+      mat.dispose();
+    };
+  }, [pocketPreview]);
 
   // unmount only: no fresh effect run follows, so end any drag and give
   // the controls back

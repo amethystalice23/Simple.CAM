@@ -228,11 +228,39 @@ export function pocketRegionsFromSelection(
     faceZ = Math.max(faceZ, xf(p.point).z);
   }
 
+  // constant-radius chains (2026-11-08, Alice's slot pick): a chain's
+  // silhouette is a closed seam on the cylinder surface — project its
+  // model-space loop through the same transform into machine XY and
+  // pocket it like a plane's outline (the 3-axis pocket of a curved
+  // feature: the chain was detected because it IS one radial surface
+  // about the stock axis, so its projection is the honest footprint)
+  const chainRegions: Vec2[][] = [];
+  let chainZ = -Infinity;
+  for (const ch of features.radialChains) {
+    if (!selection.includes(ch.id)) continue;
+    const loop = ch.points.map((pt) => {
+      const v = xf(pt);
+      return { x: v.x, y: v.y };
+    });
+    if (loop.length < 3) continue;
+    chainRegions.push(...orientLoops([loop]));
+    chainZ = Math.max(chainZ, ...ch.points.map((pt) => xf(pt).z));
+  }
+
   if (circleRegions.length > 0 && planeRegions.length > 0) {
+    throw new Error('select either faces or holes for this operation, not both');
+  }
+  if (circleRegions.length > 0 && chainRegions.length > 0) {
+    throw new Error('select either faces or holes for this operation, not both');
+  }
+  if (planeRegions.length > 0 && chainRegions.length > 0) {
     throw new Error('select either faces or holes for this operation, not both');
   }
   if (planeRegions.length > 0) {
     return { regions: planeRegions, selectionZ: faceZ };
+  }
+  if (chainRegions.length > 0) {
+    return { regions: chainRegions, selectionZ: chainZ };
   }
   if (circleRegions.length > 0) {
     return { regions: circleRegions, selectionZ: rimZ };
