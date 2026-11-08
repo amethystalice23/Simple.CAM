@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
+import { BufferAttribute, BufferGeometry, Euler, Quaternion, Vector3 } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { axialExtentX, detectFeatures } from '../cam/features';
+import { axialExtentX, detectFeatures, type DetectAxis } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { sampleSpiralMarks } from '../cam/spiralCarve';
@@ -223,20 +223,54 @@ export function App() {
   // sizing) sees the simplified copy.
   const detection = useMemo(() => {
     if (!geometry) return null;
+    // the stock axis in MODEL space (the chain detector's frame): machine
+    // +X through (y=0, z=axisZ) inverse-mapped through the model transform.
+    // 4-axis only — a 3-axis job has no rotation axis, so no chains.
+    let axis: DetectAxis | undefined;
+    if (stock.axisMode === '4-axis') {
+      const cal = rotaryCalibrationOf(stock);
+      const rot = new Quaternion().setFromEuler(
+        new Euler(
+          (transform.rotationDeg.x * Math.PI) / 180,
+          (transform.rotationDeg.y * Math.PI) / 180,
+          (transform.rotationDeg.z * Math.PI) / 180,
+          'XYZ',
+        ),
+      );
+      const inv = rot.clone().invert();
+      // machine +X is the axis direction — inverse-rotate into local
+      const dir = new Vector3(1, 0, 0).applyQuaternion(inv);
+      // a point on the machine axis line: (0, 0, axisZ). Its local image:
+      // subtract position, inverse-rotate, divide scale
+      const p = new Vector3(0, 0, cal.axisZ)
+        .sub(new Vector3(transform.position.x, transform.position.y, transform.position.z))
+        .applyQuaternion(inv);
+      axis = {
+        point: { x: p.x / transform.scale.x, y: p.y / transform.scale.y, z: p.z / transform.scale.z },
+        dir: { x: dir.x / transform.scale.x, y: dir.y / transform.scale.y, z: dir.z / transform.scale.z },
+      };
+      // normalize the direction (the detector measures distances from it)
+      const dl = Math.hypot(axis.dir.x, axis.dir.y, axis.dir.z) || 1;
+      axis.dir = { x: axis.dir.x / dl, y: axis.dir.y / dl, z: axis.dir.z / dl };
+    }
     const tris = (geometry.getAttribute('position')?.count ?? 0) / 3;
     if (tris <= DETECTION_TRIANGLE_CAP) {
-      return { geometry, features: detectFeatures(geometry), note: null as string | null };
+      return {
+        geometry,
+        features: detectFeatures(geometry, axis),
+        note: null as string | null,
+      };
     }
     const decimated = decimateForDetection(geometry, DETECTION_DECIMATE_TARGET);
     return {
       geometry: decimated.geometry,
-      features: detectFeatures(decimated.geometry),
+      features: detectFeatures(decimated.geometry, axis),
       note:
         `features detected on a simplified copy — ${Math.round(tris)} → ${decimated.triangles} ` +
         `triangles clustered at ${decimated.pitch.toFixed(2)}mm; the full mesh is untouched ` +
         'for display and cutting',
     };
-  }, [geometry]);
+  }, [geometry, transform, stock]);
   const features = detection?.features ?? null;
   /**
    * Model size as displayed — bounding box × per-axis model scale, same
