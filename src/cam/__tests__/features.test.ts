@@ -707,7 +707,6 @@ describe('detectFeatures: constant-radius chains (Pass 4)', () => {
     // build an open-ended tube (no caps) as a shared vertex grid
     // u = θ·R, v = x along axis
     const positions: number[] = [];
-    const indices: number[] = [];
     const verts: THREE.Vector3[] = [];
     // grid of vertices
     for (let j = 0; j <= segmentsAlong; j++) {
@@ -733,24 +732,6 @@ describe('detectFeatures: constant-radius chains (Pass 4)', () => {
         const vA = -length / 2 + (length * j) / segmentsAlong;
         const vB = -length / 2 + (length * (j + 1)) / segmentsAlong;
         const vMid = (vA + vB) / 2;
-        // capsule: two caps at ±(capsuleStraight/2), radius capsuleCapR, joined by straight sides
-        const inCapsule = (u: number, v: number): boolean => {
-          if (v >= -capsuleStraight / 2 && v <= capsuleStraight / 2) {
-            return u * u + v * v <= capsuleCapR * capsuleCapR; // wait, this is wrong - capsule in unwrap space
-          }
-          // Actually capsule in unwrap: straight segment in u from -capsuleCapR to +capsuleCapR at each v
-          // No - the capsule outline: two semicircles at the ends, straight sides along u
-          // Let's do: cap radius Rcap along v, straight length L along u
-          // centered at (u=0, v=0) in unwrap
-          const capR = capsuleCapR;
-          const halfStraight = capsuleStraight / 2;
-          if (v < -halfStraight) return false;
-          if (v > halfStraight) return false;
-          if (Math.abs(u) <= halfStraight) return true;
-          // circular caps at ends
-          const du = Math.abs(u) - halfStraight;
-          return du * du + 0 <= capR * capR; // this is wrong too
-        };
         // The capsule in (u,v) unwrap space: center (0,0), caps of radius capsuleCapR at v=±straight/2
         // Actually: capsule = rectangle of width 2*capsuleCapR, height capsuleStraight, with semicircular ends
         // So: |v| ≤ capsuleStraight/2 + capsuleCapR? No.

@@ -1597,6 +1597,12 @@ export function Viewport({
       data.edgeLines.visible = displayLayers.features;
       data.circleLines.visible = displayLayers.features;
       data.holeLines.visible = displayLayers.features;
+      // chain silhouettes are pick TARGETS, not decoration (Alice,
+      // 2026-11-08): magenta only while features are selectable — measure
+      // mode, which op feature-add and every one-shot pick arm. A
+      // SELECTED chain highlights through the generic op-selection walk
+      // below, for any open op, regardless of this gate.
+      data.chainLines.visible = displayLayers.features && measureMode;
       // artwork line work is the OBJECT's body — an authored primitive
       // must not vanish with the features toggle (there is no volume to
       // render; the amber lines are it)
@@ -1760,7 +1766,13 @@ export function Viewport({
 
     return () => {
       for (const { data } of entries) {
-        for (const l of [data.edgeLines, data.circleLines, data.holeLines, data.pathLines]) {
+        for (const l of [
+          data.edgeLines,
+          data.circleLines,
+          data.holeLines,
+          data.pathLines,
+          data.chainLines,
+        ]) {
           group.remove(l);
           l.geometry.dispose();
           (l.material as THREE.Material).dispose();
@@ -1784,7 +1796,7 @@ export function Viewport({
       hoverLineRef.current = null;
       fillShadeMeshesRef.current = [];
     };
-  }, [sources, stock, displayLayers.features, opSelection, selColor, selectedObjectId, fillShade]);
+  }, [sources, stock, displayLayers.features, measureMode, opSelection, selColor, selectedObjectId, fillShade]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR.
   // THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): while a playback
