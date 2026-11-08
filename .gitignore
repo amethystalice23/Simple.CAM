@@ -13,3 +13,5 @@ reference/
 CLAUDE.md
 # Untracked probe/scratch scripts — kept out of git status noise
 scripts/scratch/
+# graphify code-graph output (local tooling, not part of the software)
+graphify-out/

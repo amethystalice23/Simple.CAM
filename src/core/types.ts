@@ -505,6 +505,21 @@ export interface EdgeFeature {
   b: Vec3;
 }
 
+/** One constant-radius chain: a closed sharp-seam loop whose vertices
+ * all sit at one radial distance from the STOCK AXIS (a caller-supplied
+ * model-space line; 4-axis jobs only). Gates: perimeter ≥0.5mm, every
+ * vertex's axis-distance within 0.1mm of the loop's mean radius, and
+ * the loop's extent along the axis ≥0.5mm. Ops re-derive the machine-
+ * space axis at op time. See cam/features.ts Pass 4. */
+export interface RadialChainFeature {
+  kind: 'radialChain';
+  id: string;
+  /** the chain's model-space point ring, in loop order */
+  points: Vec3[];
+  /** the chain's mean radius about the stock axis, mm */
+  meanRadius: number;
+}
+
 /** Artwork line work: one flattened polyline from an imported SVG, in
  * the SOURCE's local space like every other feature kind. */
 export interface PathFeature {

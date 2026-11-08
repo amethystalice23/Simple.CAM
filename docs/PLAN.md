@@ -45,7 +45,9 @@ full clean-slate swap, job saves the tessellation as binary STL)
      shapes — see docs/edge-tracing.md; primitives are FEATURE SOURCES:
      their local-mesh features carry `p:<primId>:` ids and are selectable
      in ops exactly like model features, and the Model tab works with no
-     STL loaded)
+     STL loaded); **constant-radius chains (Pass 4) join planes/circles as
+     pickable features for pockets (2026-11-08), detected against the
+     model-space stock axis**
    → Operations (ordered list: type + features + tool + params)
    → Toolpath gen (parametric wrapped generators + Clipper2 2.5D + opencamlib WASM for 3-axis)
    → Preview (Move[] IR → viewport polylines — see below)
@@ -109,6 +111,11 @@ paths run off the stock edge (clean exits on tight stocks; the slice
 pocket's outside mode could clear to the stock wall when the frame fits
 the tool), OFF clamps regions within the stock footprint
 (docs/edge-tracing.md §2).
+**chain-following chamfer** — a chamfer along a chain seam needs true 3D
+flank-following (X, Y and Z riding the curve), NOT the 2D projection
+the pocket uses; filed 2026-11-08 (Alice: a chamfer op would be much
+more complex than the pocket's 2D projection); the current chain
+wiring serves the pocket op only.
 
 **"Finishing pass only" (2026-10-26, Alice's call — the rough/finish split
 is the user's artistic choice per op, never implicit in the op kind):** one

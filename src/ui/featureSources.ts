@@ -13,13 +13,54 @@
  */
 
 import * as THREE from 'three';
-import { detectFeatures, type DetectedFeatures } from '../cam/features';
+import { detectFeatures, type DetectedFeatures, type DetectAxis } from '../cam/features';
 import { segmentsForRadius } from './meshSegments';
 import {
   identityTransform,
   originSpan,
   rotaryCalibrationOf,
 } from '../core/types';
+
+/**
+ * The stock rotation axis in MODEL space (the chain detector's frame).
+ * Model space is the geometry's coordinate system BEFORE the model transform.
+ * 4-axis only — a 3-axis job has no rotation axis, so no chains.
+ *
+ * Machine +X is the axis direction — inverse-rotate into local, then divide by
+ * scale. A point on the machine axis line (0, 0, axisZ) inverse-maps the same
+ * way: subtract position, inverse-rotate, divide per-axis by scale.
+ */
+export function stockAxisInModelSpace(
+  stock: Stock,
+  transform: ModelTransform,
+): DetectAxis | undefined {
+  if (stock.axisMode !== '4-axis') return undefined;
+  const cal = rotaryCalibrationOf(stock);
+  const rot = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(
+      (transform.rotationDeg.x * Math.PI) / 180,
+      (transform.rotationDeg.y * Math.PI) / 180,
+      (transform.rotationDeg.z * Math.PI) / 180,
+      'XYZ',
+    ),
+  );
+  const inv = rot.clone().invert();
+  // machine +X is the axis direction — inverse-rotate into local
+  const dir = new THREE.Vector3(1, 0, 0).applyQuaternion(inv);
+  // a point on the machine axis line: (0, 0, axisZ). Its local image:
+  // subtract position, inverse-rotate, divide scale
+  const p = new THREE.Vector3(0, 0, cal.axisZ)
+    .sub(new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z))
+    .applyQuaternion(inv);
+  const axis = {
+    point: { x: p.x / transform.scale.x, y: p.y / transform.scale.y, z: p.z / transform.scale.z },
+    dir: { x: dir.x / transform.scale.x, y: dir.y / transform.scale.y, z: dir.z / transform.scale.z },
+  };
+  // normalize the direction (the detector measures distances from it)
+  const dl = Math.hypot(axis.dir.x, axis.dir.y, axis.dir.z) || 1;
+  axis.dir = { x: axis.dir.x / dl, y: axis.dir.y / dl, z: axis.dir.z / dl };
+  return axis;
+}
 import type {
   CircleFeature,
   EdgeFeature,
@@ -28,6 +69,7 @@ import type {
   PathFeature,
   PlaneFeature,
   Primitive,
+  RadialChainFeature,
   Stock,
   Vec3,
 } from '../core/types';
@@ -144,6 +186,7 @@ function namespaceIds(features: DetectedFeatures, primId: string): DetectedFeatu
     planes: features.planes.map((f: PlaneFeature) => ({ ...f, id: ns(f.id) })),
     circles: features.circles.map((f: CircleFeature) => ({ ...f, id: ns(f.id) })),
     edges: features.edges.map((f: EdgeFeature) => ({ ...f, id: ns(f.id) })),
+    radialChains: features.radialChains.map((f: RadialChainFeature) => ({ ...f, id: ns(f.id) })),
     paths: features.paths.map((f: PathFeature) => ({ ...f, id: ns(f.id) })),
     planeLoops: features.planeLoops,
     faceToPlane: features.faceToPlane,
@@ -216,6 +259,7 @@ function artworkFeatures(p: Extract<Primitive, { kind: 'artwork' }>): DetectedFe
         ? {}
         : { closed: p.pathMeta?.[i]?.closed, filled: p.pathMeta?.[i]?.filled }),
     })),
+    radialChains: [],
     faceToPlane: new Int32Array(0),
     planeLoops: [],
   };
@@ -312,6 +356,7 @@ export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
       planes: [],
       circles,
       edges: [],
+      radialChains: [],
       paths: [],
       faceToPlane: new Int32Array(0),
       planeLoops: [],
@@ -324,9 +369,9 @@ export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
  * resolution, labels, depth prefills, and generation. */
 export interface ResolvedFeature {
   source: FeatureSource;
-  kind: 'plane' | 'circle' | 'edge' | 'path';
+  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain';
   index: number;
-  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature;
+  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature | RadialChainFeature;
 }
 
 export function resolveFeature(
@@ -352,6 +397,8 @@ export function resolveFeature(
   if (ei >= 0) return { source, kind: 'edge', index: ei, feature: source.features.edges[ei] };
   const pa = source.features.paths.findIndex((f) => f.id === id);
   if (pa >= 0) return { source, kind: 'path', index: pa, feature: source.features.paths[pa] };
+  const ri = source.features.radialChains.findIndex((f) => f.id === id);
+  if (ri >= 0) return { source, kind: 'radialChain', index: ri, feature: source.features.radialChains[ri] };
   return null;
 }
 

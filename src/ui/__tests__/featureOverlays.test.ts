@@ -184,6 +184,136 @@ describe('findNearestFeature (measure-mode snap)', () => {
   });
 });
 
+describe('findNearestFeature — chains are pickable targets (2026-11-08)', () => {
+  /** Alice's rule: chains pick like every other feature. A capsule slot
+   *  on a tube (the Pass-4 positive fixture) leaves one closed silhouette
+   *  seam — hover dead on its samples must snap the CHAIN, not a
+   *  tessellation chord edge of the same seam. */
+  function capsuleSlotTube(): THREE.BufferGeometry {
+    // open-ended tube, R=3.15 x=−5..5, one capsule-shaped hole's worth of
+    // quads deleted around θ=0 (caps 1.5, straight 4 along the axis)
+    const R = 3.15;
+    const length = 10;
+    const segmentsAround = 24;
+    const segmentsAlong = 20;
+    const positions: number[] = [];
+    const verts: THREE.Vector3[] = [];
+    for (let j = 0; j <= segmentsAlong; j++) {
+      const x = -length / 2 + (length * j) / segmentsAlong;
+      for (let i = 0; i <= segmentsAround; i++) {
+        const theta = (i * 2 * Math.PI) / segmentsAround;
+        verts.push(new THREE.Vector3(x, Math.cos(theta) * R, Math.sin(theta) * R));
+      }
+    }
+    // capsule in unwrap space (u = θ·R, v = x): straight 4, caps 1.5
+    const capR = 1.5;
+    const halfStraight = 4 / 2;
+    const inCapsule = (u: number, v: number): boolean => {
+      if (v >= -halfStraight && v <= halfStraight) return Math.abs(u) <= capR;
+      const dv = v > 0 ? v - halfStraight : v + halfStraight;
+      return u * u + dv * dv <= capR * capR;
+    };
+    for (let j = 0; j < segmentsAlong; j++) {
+      for (let i = 0; i < segmentsAround; i++) {
+        const uA = ((i * 2 * Math.PI) / segmentsAround) * R;
+        const uB = (((i + 1) % segmentsAround) * 2 * Math.PI) / segmentsAround * R;
+        const uMid = (uA + uB) / 2;
+        const vA = -length / 2 + (length * j) / segmentsAlong;
+        const vB = -length / 2 + (length * (j + 1)) / segmentsAlong;
+        if (inCapsule(uMid, (vA + vB) / 2)) continue;
+        const a = j * (segmentsAround + 1) + i;
+        const b = a + 1;
+        const c = a + (segmentsAround + 1);
+        const d = c + 1;
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+        positions.push(verts[b].x, verts[b].y, verts[b].z);
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[c].x, verts[c].y, verts[c].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }
+
+  it('snaps the chain, not a chord edge, when hovered on the silhouette', () => {
+    const f = detectFeatures(capsuleSlotTube(), {
+      point: { x: 0, y: 0, z: 0 },
+      dir: { x: 1, y: 0, z: 0 },
+    });
+    expect(f.radialChains).toHaveLength(1); // the fixture is the Pass-4 positive
+    const data = buildFeatureOverlayData(f, identityTransform());
+
+    const w = 800;
+    const h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(30, -30, 30);
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld(true);
+
+    // hover exactly on the chain's samples. Circles keep their outright
+    // precedence (their tight ×0.55 window — the established priority
+    // Alice tuned), so samples sitting on-screen within that window of a
+    // cap-ring sample may lose to the circle, exactly like a path near a
+    // hole rim does. Everywhere else the CHAIN must win — and before
+    // this tier existed its own silhouette snapped a tessellation chord
+    // EDGE instead.
+    let checked = 0;
+    let snapped = 0;
+    for (const s of data.chainSamples[0]) {
+      const ndc = s.clone().project(camera);
+      if (ndc.z > 1) continue; // behind the camera
+      const mx = ((ndc.x + 1) / 2) * w;
+      const my = ((1 - ndc.y) / 2) * h;
+      if (mx < 0 || mx > w || my < 0 || my > h) continue;
+      // outside every circle sample's priority window (8px > the ~5.5px
+      // window at this camera/depth): the circle tier yields no
+      // candidate, so the chain and the edges contest it alone
+      let nearCircle = false;
+      for (const ring of data.circleSamples) {
+        for (const c of ring) {
+          const p = c.clone().project(camera);
+          if (Math.hypot(((p.x + 1) / 2) * w - mx, ((1 - p.y) / 2) * h - my) <= 8) {
+            nearCircle = true;
+            break;
+          }
+        }
+        if (nearCircle) break;
+      }
+      if (nearCircle) continue;
+      checked++;
+      const nearest = findNearestFeature(data, mx, my, camera, w, h);
+      if (nearest?.kind === 'radialChain' && nearest.index === 0) snapped++;
+    }
+    expect(checked).toBeGreaterThan(5); // real samples contested edges alone
+    expect(snapped).toBe(checked); // every one snapped the chain, not a chord
+  });
+
+  it('pickFromNearest resolves a chain pick to its own center and text', () => {
+    const f = detectFeatures(capsuleSlotTube(), {
+      point: { x: 0, y: 0, z: 0 },
+      dir: { x: 1, y: 0, z: 0 },
+    });
+    const data = buildFeatureOverlayData(f, identityTransform());
+    const nearest = {
+      kind: 'radialChain' as const,
+      index: 0,
+      text: '',
+      color: 0,
+      anchor: { x: 0, y: 0 },
+      point: new THREE.Vector3(),
+      d: 0,
+    };
+    const pick = pickFromNearest(data, nearest);
+    expect(pick.kind).toBe('radialChain');
+    expect(pick.center.distanceTo(data.chainMid[0])).toBeLessThan(1e-9);
+    expect(pick.text).toContain('chain');
+  });
+});
+
 describe('manual measuring', () => {
   it('picks features with their centers and text', () => {
     const f = detectFeatures(tubeAlongX());
@@ -305,6 +435,7 @@ describe('buildFeatureOverlayData — wrapped outline densify (round 5)', () => 
     planes: [],
     circles: [],
     edges: [],
+    radialChains: [],
     paths: [wrappedPath],
     faceToPlane: new Int32Array(0),
     planeLoops: [],

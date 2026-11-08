@@ -5,6 +5,7 @@ import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
 import { sampleSpiralMarks } from '../cam/spiralCarve';
+import { ballWidth } from '../cam/cylChamfer';
 import { threadDepth, threadFaceDiameter } from '../cam/thread';
 import {
   identityTransform,
@@ -23,12 +24,17 @@ import type {
   Primitive,
   Stock,
   Tool,
+  Vec2,
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { decodeBitmapFile, type GrayBitmap } from '../core/bitmapImport';
 import { planeExtents, transformFn } from './featureOverlays';
-import { opEdgeSource, resolveFeature, sourcesFor, splitSelection } from './featureSources';
-import { threadTargetsFromSelection } from './opTargets';
+import { opEdgeSource, resolveFeature, sourcesFor, splitSelection, stockAxisInModelSpace } from './featureSources';
+import {
+  cylChamferTargetsFromSelection,
+  pocketRegionsFromSelection,
+  threadTargetsFromSelection,
+} from './opTargets';
 import { internalMinorDiameter } from '../cam/threadMill';
 import { ModelPanel } from './ModelPanel';
 import {
@@ -217,20 +223,28 @@ export function App() {
   // sizing) sees the simplified copy.
   const detection = useMemo(() => {
     if (!geometry) return null;
+    // the stock axis in MODEL space (the chain detector's frame): machine
+    // +X through (y=0, z=axisZ) inverse-mapped through the model transform.
+    // 4-axis only — a 3-axis job has no rotation axis, so no chains.
+    const axis = stockAxisInModelSpace(stock, transform);
     const tris = (geometry.getAttribute('position')?.count ?? 0) / 3;
     if (tris <= DETECTION_TRIANGLE_CAP) {
-      return { geometry, features: detectFeatures(geometry), note: null as string | null };
+      return {
+        geometry,
+        features: detectFeatures(geometry, axis),
+        note: null as string | null,
+      };
     }
     const decimated = decimateForDetection(geometry, DETECTION_DECIMATE_TARGET);
     return {
       geometry: decimated.geometry,
-      features: detectFeatures(decimated.geometry),
+      features: detectFeatures(decimated.geometry, axis),
       note:
         `features detected on a simplified copy — ${Math.round(tris)} → ${decimated.triangles} ` +
         `triangles clustered at ${decimated.pitch.toFixed(2)}mm; the full mesh is untouched ` +
         'for display and cutting',
     };
-  }, [geometry]);
+  }, [geometry, transform, stock]);
   const features = detection?.features ?? null;
   /**
    * Model size as displayed — bounding box × per-axis model scale, same
@@ -283,11 +297,17 @@ export function App() {
     return map;
   }, [sources]);
 
-  /** the feature set the viewport highlights/measures: the op being edited,
-   * or the global selection when no op is active */
+  /** the feature set the viewport highlights/measures: the op being edited
+   *  (measure mode), or the op being EXPANDED (2026-11-08: merely opening a
+   *  rotary chamfer op's panel hid which feature it acts on — the picked
+   *  feature now highlights with the same op-selection semantics, so the
+   *  right op in a long list can be identified at a glance), or the global
+   *  selection when no op is active */
   const activeFeatureIds = editingOpId
     ? (ops.find((o) => o.id === editingOpId)?.featureIds ?? [])
-    : selection;
+    : expandedOpId
+      ? (ops.find((o) => o.id === expandedOpId)?.featureIds ?? [])
+      : selection;
   const resolvedSelection: ResolvedSelection[] = useMemo(() => {
     const out: ResolvedSelection[] = [];
     for (const id of activeFeatureIds) {
@@ -875,6 +895,76 @@ export function App() {
     }
     return null;
   }, [ops, expandedOpId, stock, tools]);
+
+  /** the expanded rotary-chamfer op's intended AREA (2026-11-08): one
+   *  ghost cylinder per resolved edge circle about the stock axis at the
+   *  anchor Ø, axially as wide as the chamfer's calculated width — the
+   *  same formulas generation cuts (V-bit: depth·tan(half-angle); ball:
+   *  the channel's true chord width). Null when the open op isn't a
+   *  rotary chamfer or its selection hasn't resolved. */
+  const chamferPreview = useMemo(() => {
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!op || op.kind !== 'cylChamfer' || op.featureIds.length === 0) return null;
+    const t = tools.find((x) => x.id === op.toolId);
+    if (!t || (t.type !== 'vbit' && t.type !== 'ball')) return null;
+    const cal = rotaryCalibrationOf(stock);
+    const width =
+      t.type === 'ball'
+        ? ballWidth(op.depth, t.diameter / 2)
+        : op.depth * Math.tan((((t.vAngle ?? 90) / 2) * Math.PI) / 180);
+    if (width <= 0) return null;
+    const out: { x: number; diameter: number; width: number; axisZ: number }[] = [];
+    for (const part of splitSelection(sources, op.featureIds)) {
+      let src;
+      try {
+        src = cylChamferTargetsFromSelection(
+          part.source.features,
+          part.ids,
+          part.source.transform,
+          cal,
+        );
+      } catch {
+        continue; // a bad selection ghosts nothing — generation says why
+      }
+      if (src) {
+        for (const e of src.edges) {
+          out.push({ x: e.x, diameter: e.diameter, width, axisZ: cal.axisZ });
+        }
+      }
+    }
+    return out.length > 0 ? out : null;
+  }, [ops, expandedOpId, sources, stock, tools]);
+
+  /** the expanded pocket op's intended AREA (2026-11-08, Alice's slot
+   * pick): the projected region(s) the op will cut — the selection's
+   * loops (planes, circles, or constant-radius chains) resolved through
+   * the SAME projection generation uses, so a curved-feature chain
+   * (a slot on the cylinder surface) shows its honest 2D footprint
+   * before generating. Rendered as a translucent flat ghost at the
+   * selection's rim Z. Null when the open op isn't a pocket or its
+   * selection hasn't resolved. */
+  const pocketPreview = useMemo(() => {
+    const op = ops.find((o) => o.id === expandedOpId);
+    if (!op || op.kind !== 'pocket' || op.featureIds.length === 0) return null;
+    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    const rotate =
+      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    const out: { regions: Vec2[][]; selectionZ: number }[] = [];
+    for (const part of splitSelection(sources, op.featureIds)) {
+      try {
+        const src = pocketRegionsFromSelection(
+          part.source.features,
+          part.ids,
+          part.source.transform,
+          rotate,
+        );
+        if (src) out.push({ regions: src.regions, selectionZ: src.selectionZ });
+      } catch {
+        continue; // a bad selection ghosts nothing — generation says why
+      }
+    }
+    return out.length > 0 ? out : null;
+  }, [ops, expandedOpId, sources, stock]);
 
   /** the open op's cutting frame: the viewport shows the part rotated to
    * the index datum established above that op — A0 when nothing is open
@@ -1649,7 +1739,7 @@ export function App() {
             measureMode={measureMode}
             edgePickingEnabled={editingOpId === null}
             opSelection={resolvedSelection}
-            selectionIsOp={editingOpId !== null}
+            selectionIsOp={editingOpId !== null || expandedOpId !== null}
             fillShade={fillShade}
             primitives={primitives}
             previewMoves={previewMoves}
@@ -1670,6 +1760,8 @@ export function App() {
             pickKind={featurePick?.kind ?? null}
             facePreview={facePreview}
             threadPreview={threadPreview}
+            chamferPreview={chamferPreview}
+            pocketPreview={pocketPreview}
             simChunks={showSim && carveSim.state.chunks.size > 0 ? carveSim.state.chunks : null}
             // the marker gate is the TIP's EXISTENCE, not `running` —
             // running flips false at `done` and nothing ever restores it

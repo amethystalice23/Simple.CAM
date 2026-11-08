@@ -13,6 +13,7 @@ import type {
   ModelTransform,
   PathFeature,
   PlaneFeature,
+  RadialChainFeature,
   Vec2,
   Vec3,
 } from '../core/types';
@@ -21,6 +22,15 @@ export interface DetectedFeatures {
   planes: PlaneFeature[];
   circles: CircleFeature[];
   edges: EdgeFeature[];
+  /**
+   * Constant-radius chains (2026-11-08, Alice's slot pick): closed sharp
+   * seams whose vertices share one radial distance from the rotation axis
+   * — a slot/capsule wall's silhouette, or a bore's mouth where the
+   * surrounding walls are not planar. Each chain is a closed loop of
+   * model-space points; it projects onto the cutting frame as a pocket
+   * region. Empty unless a mesh carries one.
+   */
+  radialChains: RadialChainFeature[];
   /** artwork line work — only artwork sources carry any (empty for
    * meshes; the detector never emits paths) */
   paths: PathFeature[];
@@ -93,6 +103,19 @@ function cross(a: Vec3, b: Vec3): Vec3 {
 function normalize(a: Vec3): Vec3 {
   const l = Math.hypot(a.x, a.y, a.z) || 1;
   return { x: a.x / l, y: a.y / l, z: a.z / l };
+}
+
+/** Perpendicular distance from `p` to the axis line (a chain candidate's
+ * radius — the seam rides the enclosing cylinder about this axis). */
+function radialDistanceToAxis(p: Vec3, axis: DetectAxis): number {
+  const d = sub(p, axis.point);
+  const along = dot(d, axis.dir);
+  const radial = sub(d, {
+    x: axis.dir.x * along,
+    y: axis.dir.y * along,
+    z: axis.dir.z * along,
+  });
+  return Math.hypot(radial.x, radial.y, radial.z);
 }
 
 /** Stable id: FNV-1a over quantized parameters (model-space geometry). */
@@ -690,7 +713,27 @@ function fitCircleFragments(
 
 // ---------------------------------------------------------------- detection
 
-export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures {
+/**
+ * The rotation axis in MODEL space, for the constant-radius chain pass:
+ * chains are seams at one radial distance from the stock axis, and the
+ * stock axis is a property of the STOCK — the detector sees model space,
+ * where the axis exists only through the model's placement. Derived by
+ * the caller (featureSources / App) from stock + transform.
+ */
+export interface DetectAxis {
+  /** a point on the axis line, model space */
+  point: Vec3;
+  /** the axis direction, model space (unit) */
+  dir: Vec3;
+}
+
+export function detectFeatures(
+  geometry: THREE.BufferGeometry,
+  /** the stock axis in model space — chains chain about it. Absent:
+   * no chain pass runs (the detector stays axis-agnostic for
+   * axis-less contexts like artwork sources). */
+  axis?: DetectAxis,
+): DetectedFeatures {
   const topo = buildTopo(geometry);
   const { verts, faces } = topo;
   const { planeOf, normals } = groupPlanes(topo);
@@ -1196,6 +1239,105 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     }
   }
 
+  // Pass 4: constant-radius chains (2026-11-08, Alice's slot pick). A
+  // capsule slot cut into a cylindrical body meets it in seams that are
+  // neither planar nor circular — each rides up and down as it wraps,
+  // yet every vertex sits at one radial distance from the STOCK AXIS
+  // (the enclosing cylinder's core — the seam follows the outer
+  // surface). The pass re-walks the sharp seams (fresh walked set —
+  // Passes 1–3 consumed theirs), then per closed loop:
+  //   1. perimeter gate: noise rings die (MIN_CHAIN_PERIM)
+  //   2. RADIAL TEST: every vertex's distance from the AXIS (the
+  //      caller's model-space stock axis) stays within RADIAL_TOL of
+  //      the loop's mean radius — the probe measured 3.150 ±0.001 on
+  //      the slot seams; the noise rings that failed the first version
+  //      sat ~0.06 off their own fitted lines
+  //   3. AXIS SPREAD: the loop's extents along the axis exceed the
+  //      minimum — a junction noise ring (perimeter 0.5–1.6mm) barely
+  //      extends along the axis, while the slot outline runs ~7mm
+  // The id hashes the point ring, so it survives model moves; ops
+  // re-derive the machine-space axis at op time.
+  const radialChains: RadialChainFeature[] = [];
+  if (axis) {
+    const RADIAL_TOL = 0.1; // mm — Alice's suggested tolerance
+    const MIN_CHAIN_PERIM = 0.5; // mm — a real feature, not a noise ring
+    const MIN_AXIS_SPREAD = 0.5; // mm — a real feature extends along the axis
+    const walked4 = new Set<string>();
+    for (const key of featureKeys) {
+      if (walked4.has(key)) continue;
+      const [a, b] = key.split('_').map(Number);
+      walked4.add(key);
+      const loop: number[] = [a, b];
+      let prev = a;
+      let cur = b;
+      let guard = verts.length + 2;
+      let closed = false;
+      while (guard-- > 0) {
+        const cands = (incident.get(cur) ?? []).filter((c) => !walked4.has(c.key));
+        if (cands.length === 0) break;
+        let pick = cands[0];
+        if (cands.length > 1) {
+          const dir = norm(sub(verts[cur], verts[prev]));
+          let bestCos = -Infinity;
+          for (const c of cands) {
+            const cos = dot(dir, norm(sub(verts[c.other], verts[cur])));
+            if (cos > bestCos) {
+              bestCos = cos;
+              pick = c;
+            }
+          }
+        }
+        walked4.add(pick.key);
+        if (pick.other === loop[0]) {
+          closed = true;
+          break;
+        }
+        loop.push(pick.other);
+        prev = cur;
+        cur = pick.other;
+      }
+      if (!closed) continue;
+      const pts3 = loop.map((vi) => verts[vi]);
+      // perimeter gate: noise rings die here
+      let perim = 0;
+      for (let i = 0; i < pts3.length; i++) {
+        const p = pts3[i];
+        const q = pts3[(i + 1) % pts3.length];
+        perim += Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z);
+      }
+      if (perim < MIN_CHAIN_PERIM) continue;
+      // radial test: every vertex's distance from the axis line within
+      // RADIAL_TOL of the loop's mean radius
+      let rSum = 0;
+      let rMax = 0;
+      let rMin = Infinity;
+      for (const p of pts3) {
+        const r = radialDistanceToAxis(p, axis);
+        rSum += r;
+        if (r > rMax) rMax = r;
+        if (r < rMin) rMin = r;
+      }
+      const mean = rSum / pts3.length;
+      if (rMax - mean > RADIAL_TOL || mean - rMin > RADIAL_TOL) continue;
+      // axis spread: the loop's extents along the axis direction
+      let sMin = Infinity;
+      let sMax = -Infinity;
+      for (const p of pts3) {
+        const d = sub(p, axis.point);
+        const s = dot(d, axis.dir);
+        if (s < sMin) sMin = s;
+        if (s > sMax) sMax = s;
+      }
+      if (sMax - sMin < MIN_AXIS_SPREAD) continue;
+      radialChains.push({
+        kind: 'radialChain',
+        id: featureId('radialChain', pts3.flatMap((p) => [p.x, p.y, p.z])),
+        points: pts3,
+        meanRadius: mean,
+      });
+    }
+  }
+
   // raw-triangle → plane mapping for face picking and plane highlighting
   const rawTriCount = Math.floor((geometry.index ? geometry.toNonIndexed() : geometry).getAttribute('position').count / 3);
   const faceToPlane = new Int32Array(rawTriCount).fill(-1);
@@ -1295,6 +1437,7 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     planes: keptPlanes,
     circles: keptCircles,
     edges: keptEdges,
+    radialChains,
     paths: [],
     faceToPlane: keptFaceToPlane,
     planeLoops: keptLoops,
