@@ -73,8 +73,10 @@ function levelRadii(top: number, bottom: number, stepDown: number): number[] {
  * the ball's profile circle crosses the surface plane. Tip depth d ≤ ball
  * radius r → half-width = √(r² − (r − d)²); at d = r the center sits on the
  * surface and the channel is a full semicircle, width = tool Ø. Deeper, the
- * shank walls run straight down: width stays capped at the tool Ø. */
-function ballWidth(depth: number, r: number): number {
+ * shank walls run straight down: width stays capped at the tool Ø. Exported
+ * for the op's preview ghost (the UI must show the same width generation
+ * cuts). */
+export function ballWidth(depth: number, r: number): number {
   const d = Math.min(depth, r);
   return 2 * Math.sqrt(Math.max(r * r - (r - d) * (r - d), 0));
 }

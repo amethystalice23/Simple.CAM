@@ -199,6 +199,18 @@ interface Props {
     bottomZ: number;
     diameter: number;
   } | null;
+  /** the expanded rotary-chamfer op's intended AREA (2026-11-08): one
+   *  magenta ghost cylinder per resolved edge circle, about the stock
+   *  axis at the anchor Ø, axially as wide as the chamfer's calculated
+   *  width (V-bit: depth·tan(half-angle); ball: the channel's true chord
+   *  width). Null when the open op isn't a rotary chamfer or its
+   *  selection hasn't resolved. */
+  chamferPreview: {
+    x: number;
+    diameter: number;
+    width: number;
+    axisZ: number;
+  }[] | null;
   /** the carve simulator's chunk meshes, when the Simulation layer is on
    *  (PLAN "cutting simulator"): stock-frame greedy-meshed voxels keyed by
    *  chunk id, machine-space positions baked in. The meshes parent into
@@ -248,6 +260,7 @@ export function Viewport({
   pickKind,
   facePreview,
   threadPreview,
+  chamferPreview,
   simChunks,
   simTip,
   displayLayers,
@@ -2143,6 +2156,51 @@ export function Viewport({
       mat.dispose();
     };
   }, [threadPreview]);
+
+  // the rotary-chamfer op's intended AREA (2026-11-08): one magenta ghost
+  // cylinder per resolved edge circle about the stock axis — the anchor Ø
+  // the tip descends to, axially as wide as the chamfer's calculated
+  // width (V-bit: depth·tan(half-angle); ball: the channel's true chord
+  // width). The same formulas the generator cuts, so the ghost shows the
+  // real effect. Machine space (the chamfer is coaxial with the rotation
+  // axis, so the datum view leaves it untouched); drawn through the
+  // stock/model like the other ghosts (depthTest off), live with the
+  // depth boxes.
+  useEffect(() => {
+    const group = sliceGroupRef.current;
+    if (!group) return;
+    if (!chamferPreview || chamferPreview.length === 0) return;
+    const meshes: THREE.Mesh[] = [];
+    const geos: THREE.BufferGeometry[] = [];
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff55ee,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    for (const c of chamferPreview) {
+      const geo = new THREE.CylinderGeometry(
+        c.diameter / 2,
+        c.diameter / 2,
+        c.width,
+        segmentsForRadius(c.diameter / 2),
+      );
+      geos.push(geo);
+      geo.rotateZ(Math.PI / 2); // geometry Y axis → machine X (the stock axis)
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(c.x, 0, c.axisZ);
+      mesh.renderOrder = 3;
+      group.add(mesh);
+      meshes.push(mesh);
+    }
+    return () => {
+      for (const m of meshes) group.remove(m);
+      for (const g of geos) g.dispose();
+      mat.dispose();
+    };
+  }, [chamferPreview]);
 
   // unmount only: no fresh effect run follows, so end any drag and give
   // the controls back
