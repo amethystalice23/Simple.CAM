@@ -755,6 +755,21 @@ export function findNearestFeatures(
   const pathHits = scan('path', paths, 1);
   if (pathHits.length > 0) return pathHits;
 
+  // chains snap like paths (they ride radial surfaces) with equal
+  // tolerance — after paths, before edges: a chain's silhouette sits
+  // ON seams whose tessellation chords are also edges, and the chain
+  // (the closed feature) must win the hover, not one chord of it.
+  // Circles keep their tighter ×0.55 priority window ahead of both.
+  const chains: Candidate[] = data.chainSamples.map((samples, i) => ({
+    index: i,
+    samples,
+    text: data.chainText[i],
+    color: CHAIN_HOVER,
+    rep: data.chainMid[i],
+  }));
+  const chainHits = scan('radialChain', chains, 1);
+  if (chainHits.length > 0) return chainHits;
+
   const edges: Candidate[] = data.edgeSamples.map((samples, i) => ({
     index: i,
     samples,
