@@ -162,6 +162,26 @@ the fragments only reconstruct diameter + X; opTargets.ts). Path ops
 that need a real 360° path or a disc (flat chamfer, drill, pocket)
 keep refusing partial circles.
 
+### Constant-radius chains (Pass 4 — Alice's slot pick, 2026-11-08)
+
+A capsule slot cut into a cylindrical body meets it in seams that are
+neither planar nor circular — each rides up and down as it wraps, yet
+every vertex sits at one radial distance from the STOCK AXIS (the
+enclosing cylinder's core). The pass re-walks the sharp seams (fresh
+walks — Passes 1–3 consumed theirs) and per closed loop applies three
+gates:
+
+1. **Perimeter** ≥0.5mm (kills noise rings).
+2. **Radial tolerance**: every vertex's distance from the caller-supplied
+   model-space stock axis stays within 0.1mm of the loop's mean radius.
+3. **Axis spread**: the loop's extent along the axis direction exceeds
+   0.5mm (kills circumferential slits and junction noise rings).
+
+The id hashes the point ring, so it survives model moves; ops re-derive
+the machine-space axis at op time. The stock axis comes from the
+caller (the App derives it for 4-axis jobs; `featureSources/primitives`
+pass none so primitives produce no chains).
+
 ### Bounding measurements (for auto-sizing primitives)
 
 v1 deliberately skips full cylindrical-surface fitting. We provide the

@@ -692,6 +692,260 @@ describe('the closure gate (the bore-seam hallucinations, 2026-11-03)', () => {
   // partials (110–135°) — all above the 100° bar, all still detected.
 });
 
+describe('detectFeatures: constant-radius chains (Pass 4)', () => {
+  // axis along local X (machine 4th axis convention)
+  const axisX = { point: { x: 0, y: 0, z: 0 }, dir: { x: 1, y: 0, z: 0 } };
+
+  function buildCapsuleSlotTube(
+    R: number,
+    length: number,
+    segmentsAround: number,
+    segmentsAlong: number,
+    capsuleCapR: number,
+    capsuleStraight: number,
+  ): THREE.BufferGeometry {
+    // build an open-ended tube (no caps) as a shared vertex grid
+    // u = θ·R, v = x along axis
+    const positions: number[] = [];
+    const indices: number[] = [];
+    const verts: THREE.Vector3[] = [];
+    // grid of vertices
+    for (let j = 0; j <= segmentsAlong; j++) {
+      const x = -length / 2 + (length * j) / segmentsAlong;
+      for (let i = 0; i <= segmentsAround; i++) {
+        const theta = (i * 2 * Math.PI) / segmentsAround;
+        const y = Math.cos(theta) * R;
+        const z = Math.sin(theta) * R;
+        verts.push(new THREE.Vector3(x, y, z));
+      }
+    }
+    // quads from grid
+    for (let j = 0; j < segmentsAlong; j++) {
+      for (let i = 0; i < segmentsAround; i++) {
+        const a = j * (segmentsAround + 1) + i;
+        const b = a + 1;
+        const c = a + (segmentsAround + 1);
+        const d = c + 1;
+        // unwrap centroid for capsule test
+        const uA = (i * 2 * Math.PI / segmentsAround) * R;
+        const uB = ((i + 1) * 2 * Math.PI / segmentsAround) * R;
+        const uMid = (uA + uB) / 2;
+        const vA = -length / 2 + (length * j) / segmentsAlong;
+        const vB = -length / 2 + (length * (j + 1)) / segmentsAlong;
+        const vMid = (vA + vB) / 2;
+        // capsule: two caps at ±(capsuleStraight/2), radius capsuleCapR, joined by straight sides
+        const inCapsule = (u: number, v: number): boolean => {
+          if (v >= -capsuleStraight / 2 && v <= capsuleStraight / 2) {
+            return u * u + v * v <= capsuleCapR * capsuleCapR; // wait, this is wrong - capsule in unwrap space
+          }
+          // Actually capsule in unwrap: straight segment in u from -capsuleCapR to +capsuleCapR at each v
+          // No - the capsule outline: two semicircles at the ends, straight sides along u
+          // Let's do: cap radius Rcap along v, straight length L along u
+          // centered at (u=0, v=0) in unwrap
+          const capR = capsuleCapR;
+          const halfStraight = capsuleStraight / 2;
+          if (v < -halfStraight) return false;
+          if (v > halfStraight) return false;
+          if (Math.abs(u) <= halfStraight) return true;
+          // circular caps at ends
+          const du = Math.abs(u) - halfStraight;
+          return du * du + 0 <= capR * capR; // this is wrong too
+        };
+        // The capsule in (u,v) unwrap space: center (0,0), caps of radius capsuleCapR at v=±straight/2
+        // Actually: capsule = rectangle of width 2*capsuleCapR, height capsuleStraight, with semicircular ends
+        // So: |v| ≤ capsuleStraight/2 + capsuleCapR? No.
+        // Standard capsule: two circles radius R at (0, ±L/2) with straight sides connecting them
+        // Here R = capsuleCapR, L = capsuleStraight
+        // A point (u,v) is inside if:
+        // - if |v| ≤ capsuleStraight/2: |u| ≤ capsuleCapR
+        // - else: distance to (0, sign(v)*capsuleStraight/2) ≤ capsuleCapR
+        const halfStraight = capsuleStraight / 2;
+        const inCapsuleReal = (u: number, v: number): boolean => {
+          if (v >= -halfStraight && v <= halfStraight) {
+            return Math.abs(u) <= capsuleCapR;
+          }
+          const centerV = v > 0 ? halfStraight : -halfStraight;
+          const du = u;
+          const dv = v - centerV;
+          return du * du + dv * dv <= capsuleCapR * capsuleCapR;
+        };
+        if (inCapsuleReal(uMid, vMid)) {
+          // delete this quad - don't add triangles
+          continue;
+        }
+        // add two triangles for the quad
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+        positions.push(verts[b].x, verts[b].y, verts[b].z);
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[c].x, verts[c].y, verts[c].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }
+
+  function buildConeTube(
+    R1: number,
+    R2: number,
+    length: number,
+    segmentsAround: number,
+    segmentsAlong: number,
+    capsuleCapR: number,
+    capsuleStraight: number,
+  ): THREE.BufferGeometry {
+    const positions: number[] = [];
+    const verts: THREE.Vector3[] = [];
+    for (let j = 0; j <= segmentsAlong; j++) {
+      const t = j / segmentsAlong;
+      const x = -length / 2 + length * t;
+      const R = R1 + (R2 - R1) * t;
+      for (let i = 0; i <= segmentsAround; i++) {
+        const theta = (i * 2 * Math.PI) / segmentsAround;
+        const y = Math.cos(theta) * R;
+        const z = Math.sin(theta) * R;
+        verts.push(new THREE.Vector3(x, y, z));
+      }
+    }
+    const halfStraight = capsuleStraight / 2;
+    for (let j = 0; j < segmentsAlong; j++) {
+      const t = (j + 0.5) / segmentsAlong;
+      const v = -length / 2 + length * t;
+      for (let i = 0; i < segmentsAround; i++) {
+        const u = (i + 0.5) / segmentsAround * 2 * Math.PI * (R1 + (R2 - R1) * t);
+        const inCapsule = (u: number, v: number): boolean => {
+          if (v >= -halfStraight && v <= halfStraight) return Math.abs(u) <= capsuleCapR;
+          const centerV = v > 0 ? halfStraight : -halfStraight;
+          const du = u;
+          const dv = v - centerV;
+          return du * du + dv * dv <= capsuleCapR * capsuleCapR;
+        };
+        if (inCapsule(u, v)) continue;
+        const a = j * (segmentsAround + 1) + i;
+        const b = a + 1;
+        const c = a + (segmentsAround + 1);
+        const d = c + 1;
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+        positions.push(verts[b].x, verts[b].y, verts[b].z);
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[c].x, verts[c].y, verts[c].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }
+
+  function buildCircumferentialSlitTube(
+    R: number,
+    length: number,
+    segmentsAround: number,
+    segmentsAlong: number,
+    slitAngleDeg: number,
+  ): THREE.BufferGeometry {
+    const positions: number[] = [];
+    const verts: THREE.Vector3[] = [];
+    for (let j = 0; j <= segmentsAlong; j++) {
+      const x = -length / 2 + (length * j) / segmentsAlong;
+      for (let i = 0; i <= segmentsAround; i++) {
+        const theta = (i * 2 * Math.PI) / segmentsAround;
+        const y = Math.cos(theta) * R;
+        const z = Math.sin(theta) * R;
+        verts.push(new THREE.Vector3(x, y, z));
+      }
+    }
+    const slitStart = -slitAngleDeg / 2 * Math.PI / 180;
+    const slitEnd = slitAngleDeg / 2 * Math.PI / 180;
+    for (let j = 0; j < segmentsAlong; j++) {
+      for (let i = 0; i < segmentsAround; i++) {
+        const thetaMid = (i + 0.5) / segmentsAround * 2 * Math.PI;
+        // delete only ONE row along x within the slit angle
+        // to make axial spread clearly < 0.5mm (1 row * 10/100 = 0.1mm)
+        if (j === 0 && thetaMid >= slitStart && thetaMid <= slitEnd) continue;
+        const a = j * (segmentsAround + 1) + i;
+        const b = a + 1;
+        const c = a + (segmentsAround + 1);
+        const d = c + 1;
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+        positions.push(verts[b].x, verts[b].y, verts[b].z);
+        positions.push(verts[a].x, verts[a].y, verts[a].z);
+        positions.push(verts[c].x, verts[c].y, verts[c].z);
+        positions.push(verts[d].x, verts[d].y, verts[d].z);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }
+
+  it('detects the capsule slot seam as one radial chain (positive)', () => {
+    const R = 3.15;
+    const length = 10;
+    const geo = buildCapsuleSlotTube(R, length, 24, 20, 1.5, 4);
+    const f = detectFeatures(geo, axisX);
+    expect(f.radialChains).toHaveLength(1);
+    const chain = f.radialChains[0];
+    expect(chain.meanRadius).toBeCloseTo(R, 2);
+    expect(chain.points.length).toBeGreaterThanOrEqual(8);
+    for (const p of chain.points) {
+      const r = Math.hypot(p.y, p.z); // distance from X axis at origin
+      expect(Math.abs(r - chain.meanRadius)).toBeLessThan(0.001);
+    }
+    // axis spread: the seam runs ~7mm along x (capsule straight 4 + 2*1.5 caps)
+    const xs = chain.points.map((p) => p.x);
+    const spread = Math.max(...xs) - Math.min(...xs);
+    expect(spread).toBeGreaterThanOrEqual(4);
+  });
+
+  it('rejects a circumferential slit (axis spread < 0.5mm)', () => {
+    const R = 3.15;
+    const length = 10;
+    const geo = buildCircumferentialSlitTube(R, length, 24, 100, 60); // 60° slit, one row (0.1mm axial spread)
+    const f = detectFeatures(geo, axisX);
+    expect(f.radialChains).toHaveLength(0);
+  });
+
+  it('rejects a cone (varying radius kills radial test)', () => {
+    const R1 = 3.15;
+    const R2 = 3.5;
+    const length = 10;
+    const geo = buildConeTube(R1, R2, length, 24, 20, 1.5, 4);
+    const f = detectFeatures(geo, axisX);
+    expect(f.radialChains).toHaveLength(0);
+  });
+
+  it('returns no chains when no axis is supplied', () => {
+    const R = 3.15;
+    const length = 10;
+    const geo = buildCapsuleSlotTube(R, length, 24, 20, 1.5, 4);
+    const f = detectFeatures(geo); // no axis
+    expect(f.radialChains).toHaveLength(0);
+  });
+
+  it('tolerance edge: axis offset by 0.05mm still detects, 1.0mm does not', () => {
+    const R = 3.15;
+    const length = 10;
+    const geo = buildCapsuleSlotTube(R, length, 24, 20, 1.5, 4);
+    // offset by 0.05 (within 0.1 tolerance)
+    const axisOffset05 = { point: { x: 0, y: 0.05, z: 0 }, dir: { x: 1, y: 0, z: 0 } };
+    const f1 = detectFeatures(geo, axisOffset05);
+    expect(f1.radialChains).toHaveLength(1);
+    // meanRadius is distance from OFFSET axis, not R; check it's within RADIAL_TOL of expected
+    // The offset is 0.05 in Y, so meanRadius ≈ R + 0.05 (for points near +Y) to R - 0.05
+    // but since the seam wraps all around, mean ≈ R
+    expect(Math.abs(f1.radialChains[0].meanRadius - R)).toBeLessThan(0.1);
+    // offset by 1.0 (exceeds 0.1 tolerance - deviation >> 0.1)
+    const axisOffset10 = { point: { x: 0, y: 1.0, z: 0 }, dir: { x: 1, y: 0, z: 0 } };
+    const f2 = detectFeatures(geo, axisOffset10);
+    expect(f2.radialChains).toHaveLength(0);
+  });
+});
+
 describe('fitCircle revalidates at the final radius (the column-phantom session)', () => {
   /** The 2026-11-03 report: "a sequence of overlapping 0.81mm circles
    *  on the sides of the V shape the entire way round" — one phantom

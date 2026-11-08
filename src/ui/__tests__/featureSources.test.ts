@@ -13,6 +13,7 @@ import {
   resolveFeature,
   sourcesFor,
   splitSelection,
+  stockAxisInModelSpace,
   unmatchedIds,
 } from '../featureSources';
 import { buildFeatureOverlayData, transformFn } from '../featureOverlays';
@@ -385,5 +386,99 @@ describe('opEdgeSource', () => {
       expect(Math.hypot(s.y, s.z)).toBeCloseTo(25, 5);
       expect(s.x).toBeCloseTo(-40, 5);
     }
+  });
+});
+
+describe('stockAxisInModelSpace', () => {
+  const cylStock4 = {
+    kind: 'cylinder' as const,
+    length: 80,
+    xOrigin: 'mid' as const,
+    calibration: { aOriginDeg: 0, axisZ: 7.5, effectiveRadius: 25 },
+    axisMode: '4-axis' as const,
+    materialId: 'aluminum-6061',
+  };
+  const boxStock4 = {
+    kind: 'box' as const,
+    sizeX: 80,
+    sizeY: 50,
+    sizeZ: 30,
+    origin: { x: 'mid' as const, y: 'mid' as const, z: 'mid' as const },
+    axisMode: '4-axis' as const,
+    materialId: 'aluminum-6061',
+  };
+  const cylStock3 = {
+    ...cylStock4,
+    axisMode: '3-axis' as const,
+  };
+
+  it('identity transform: 4-axis cylinder with axisZ=7.5 returns defined, dir≈(1,0,0), point≈(0,0,7.5)', () => {
+    const axis = stockAxisInModelSpace(cylStock4, identityTransform());
+    expect(axis).not.toBeUndefined();
+    expect(axis!.dir.x).toBeCloseTo(1, 9);
+    expect(Math.abs(axis!.dir.y)).toBeLessThan(1e-9);
+    expect(Math.abs(axis!.dir.z)).toBeLessThan(1e-9);
+    expect(axis!.point.x).toBeCloseTo(0, 9);
+    expect(axis!.point.y).toBeCloseTo(0, 9);
+    expect(axis!.point.z).toBeCloseTo(7.5, 9);
+  });
+
+  it('Y=90 transform: machine +X maps to local ±Z, round-trip to machine y=0, z=axisZ', () => {
+    const transform = {
+      ...identityTransform(),
+      rotationDeg: { x: 0, y: 90, z: 0 },
+    };
+    const axis = stockAxisInModelSpace(cylStock4, transform);
+    expect(axis).not.toBeUndefined();
+    // machine +X rotated by Y=90 in model space → local ±Z
+    expect(Math.abs(axis!.dir.z)).toBeGreaterThan(0.99);
+    expect(Math.abs(axis!.dir.x)).toBeLessThan(1e-9);
+    expect(Math.abs(axis!.dir.y)).toBeLessThan(1e-9);
+    // round-trip: apply transform forward to point and point+dir·100
+    const quat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(
+        (transform.rotationDeg.x * Math.PI) / 180,
+        (transform.rotationDeg.y * Math.PI) / 180,
+        (transform.rotationDeg.z * Math.PI) / 180,
+        'XYZ',
+      ),
+    );
+    const pModel = new THREE.Vector3(axis!.point.x, axis!.point.y, axis!.point.z);
+    const dModel = new THREE.Vector3(axis!.dir.x, axis!.dir.y, axis!.dir.z);
+    // forward: model → machine
+    const pMach = pModel.clone().multiply(new THREE.Vector3(1, 1, 1)).applyQuaternion(quat);
+    const dMach = dModel.clone().multiply(new THREE.Vector3(1, 1, 1)).applyQuaternion(quat).normalize();
+    // both must lie on machine axis line y=0, z=axisZ
+    expect(Math.abs(pMach.y)).toBeLessThan(1e-9);
+    expect(pMach.z).toBeCloseTo(7.5, 9);
+    const p100 = pMach.clone().addScaledVector(dMach, 100);
+    expect(Math.abs(p100.y)).toBeLessThan(1e-9);
+    expect(p100.z).toBeCloseTo(7.5, 9);
+  });
+
+  it('Y=90 transform: the measured sign of dir.z for the round-trip', () => {
+    const transform = {
+      ...identityTransform(),
+      rotationDeg: { x: 0, y: 90, z: 0 },
+    };
+    const axis = stockAxisInModelSpace(cylStock4, transform);
+    expect(axis).not.toBeUndefined();
+    // capture the actual sign for the fixture
+    expect(axis!.dir.z).not.toBe(0);
+    // the round-trip test above verifies correctness; this just records the sign
+  });
+
+  it('3-axis stock returns undefined', () => {
+    expect(stockAxisInModelSpace(cylStock3, identityTransform())).toBeUndefined();
+    expect(stockAxisInModelSpace({ ...cylStock3, axisMode: '3-axis' }, identityTransform())).toBeUndefined();
+  });
+
+  it('4-axis box stock works (rotaryCalibrationOf derives axisZ)', () => {
+    // box: axisZ = (z0+z1)/2 where z0,z1 from originSpan(origin.z, sizeZ)
+    // origin.z='mid' sizeZ=30 → z0=-15, z1=15 → axisZ=0
+    const axis = stockAxisInModelSpace(boxStock4, identityTransform());
+    expect(axis).not.toBeUndefined();
+    expect(axis!.dir.x).toBeCloseTo(1, 9);
+    expect(axis!.point.z).toBeCloseTo(0, 9);
   });
 });

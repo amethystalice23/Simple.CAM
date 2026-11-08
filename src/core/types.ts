@@ -506,18 +506,17 @@ export interface EdgeFeature {
 }
 
 /** One constant-radius chain: a closed sharp-seam loop whose vertices
- * share one radial distance from a straight line (a capsule slot's
- * silhouette on a cylindrical body — the seam rides up and down in Z as
- * it wraps, but every point sits at one distance from the enclosing
- * cylinder's core). The loop's own fitted line is the frame; ops
- * re-derive the machine-space axis at op time. See
- * cam/features.ts Pass 4. */
+ * all sit at one radial distance from the STOCK AXIS (a caller-supplied
+ * model-space line; 4-axis jobs only). Gates: perimeter ≥0.5mm, every
+ * vertex's axis-distance within 0.1mm of the loop's mean radius, and
+ * the loop's extent along the axis ≥0.5mm. Ops re-derive the machine-
+ * space axis at op time. See cam/features.ts Pass 4. */
 export interface RadialChainFeature {
   kind: 'radialChain';
   id: string;
   /** the chain's model-space point ring, in loop order */
   points: Vec3[];
-  /** the chain's mean radius about its own fitted line, mm */
+  /** the chain's mean radius about the stock axis, mm */
   meanRadius: number;
 }
 

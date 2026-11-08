@@ -13,13 +13,54 @@
  */
 
 import * as THREE from 'three';
-import { detectFeatures, type DetectedFeatures } from '../cam/features';
+import { detectFeatures, type DetectedFeatures, type DetectAxis } from '../cam/features';
 import { segmentsForRadius } from './meshSegments';
 import {
   identityTransform,
   originSpan,
   rotaryCalibrationOf,
 } from '../core/types';
+
+/**
+ * The stock rotation axis in MODEL space (the chain detector's frame).
+ * Model space is the geometry's coordinate system BEFORE the model transform.
+ * 4-axis only — a 3-axis job has no rotation axis, so no chains.
+ *
+ * Machine +X is the axis direction — inverse-rotate into local, then divide by
+ * scale. A point on the machine axis line (0, 0, axisZ) inverse-maps the same
+ * way: subtract position, inverse-rotate, divide per-axis by scale.
+ */
+export function stockAxisInModelSpace(
+  stock: Stock,
+  transform: ModelTransform,
+): DetectAxis | undefined {
+  if (stock.axisMode !== '4-axis') return undefined;
+  const cal = rotaryCalibrationOf(stock);
+  const rot = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(
+      (transform.rotationDeg.x * Math.PI) / 180,
+      (transform.rotationDeg.y * Math.PI) / 180,
+      (transform.rotationDeg.z * Math.PI) / 180,
+      'XYZ',
+    ),
+  );
+  const inv = rot.clone().invert();
+  // machine +X is the axis direction — inverse-rotate into local
+  const dir = new THREE.Vector3(1, 0, 0).applyQuaternion(inv);
+  // a point on the machine axis line: (0, 0, axisZ). Its local image:
+  // subtract position, inverse-rotate, divide scale
+  const p = new THREE.Vector3(0, 0, cal.axisZ)
+    .sub(new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z))
+    .applyQuaternion(inv);
+  const axis = {
+    point: { x: p.x / transform.scale.x, y: p.y / transform.scale.y, z: p.z / transform.scale.z },
+    dir: { x: dir.x / transform.scale.x, y: dir.y / transform.scale.y, z: dir.z / transform.scale.z },
+  };
+  // normalize the direction (the detector measures distances from it)
+  const dl = Math.hypot(axis.dir.x, axis.dir.y, axis.dir.z) || 1;
+  axis.dir = { x: axis.dir.x / dl, y: axis.dir.y / dl, z: axis.dir.z / dl };
+  return axis;
+}
 import type {
   CircleFeature,
   EdgeFeature,
