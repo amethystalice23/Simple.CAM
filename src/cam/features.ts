@@ -13,6 +13,7 @@ import type {
   ModelTransform,
   PathFeature,
   PlaneFeature,
+  RadialChainFeature,
   Vec2,
   Vec3,
 } from '../core/types';
@@ -21,6 +22,15 @@ export interface DetectedFeatures {
   planes: PlaneFeature[];
   circles: CircleFeature[];
   edges: EdgeFeature[];
+  /**
+   * Constant-radius chains (2026-11-08, Alice's slot pick): closed sharp
+   * seams whose vertices share one radial distance from the rotation axis
+   * — a slot/capsule wall's silhouette, or a bore's mouth where the
+   * surrounding walls are not planar. Each chain is a closed loop of
+   * model-space points; it projects onto the cutting frame as a pocket
+   * region. Empty unless a mesh carries one.
+   */
+  radialChains: RadialChainFeature[];
   /** artwork line work — only artwork sources carry any (empty for
    * meshes; the detector never emits paths) */
   paths: PathFeature[];
@@ -93,6 +103,69 @@ function cross(a: Vec3, b: Vec3): Vec3 {
 function normalize(a: Vec3): Vec3 {
   const l = Math.hypot(a.x, a.y, a.z) || 1;
   return { x: a.x / l, y: a.y / l, z: a.z / l };
+}
+
+/** The loop's vertex spread's largest-variance direction (PCA major
+ * axis): the seam rides a cylinder about the axis — it spreads along
+ * the axis the slot's length, so the axis direction carries the most
+ * spread. Deterministic up to sign (the loop's own direction is
+ * unsigned). */
+function pcaMajorAxis(pts: Vec3[]): Vec3 {
+  // centroid
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+  // covariance
+  let xx = 0;
+  let xy = 0;
+  let xz = 0;
+  let yy = 0;
+  let yz = 0;
+  let zz = 0;
+  for (const p of pts) {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const dz = p.z - cz;
+    xx += dx * dx;
+    xy += dx * dy;
+    xz += dx * dz;
+    yy += dy * dy;
+    yz += dy * dz;
+    zz += dz * dz;
+  }
+  const n = pts.length;
+  xx /= n; xy /= n; xz /= n; yy /= n; yz /= n; zz /= n;
+  // largest eigenvector of the 3×3 covariance (power iteration — the
+  // matrix is small and symmetric)
+  let v = { x: 1, y: 0, z: 0 };
+  for (let i = 0; i < 24; i++) {
+    const w = {
+      x: xx * v.x + xy * v.y + xz * v.z,
+      y: xy * v.x + yy * v.y + yz * v.z,
+      z: xz * v.x + yz * v.y + zz * v.z,
+    };
+    const l = Math.hypot(w.x, w.y, w.z);
+    if (l === 0) break;
+    v = { x: w.x / l, y: w.y / l, z: w.z / l };
+  }
+  return v;
+}
+
+/** A line along `dir` through the loop's centroid: the axis the loop's
+ * radial distances are measured from. */
+function fitLineAlong(pts: Vec3[], dir: Vec3): { point: Vec3; dir: Vec3 } {
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+  return { point: { x: cx, y: cy, z: cz }, dir: normalize(dir) };
+}
+
+/** Perpendicular distance from `p` to the line. */
+function radialDistanceToLine(p: Vec3, line: { point: Vec3; dir: Vec3 }): number {
+  const d = sub(p, line.point);
+  const along = dot(d, line.dir);
+  const radial = sub(d, { x: line.dir.x * along, y: line.dir.y * along, z: line.dir.z * along });
+  return Math.hypot(radial.x, radial.y, radial.z);
 }
 
 /** Stable id: FNV-1a over quantized parameters (model-space geometry). */
@@ -1196,6 +1269,100 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     }
   }
 
+  // Pass 4: constant-radius chains (2026-11-08, Alice's slot pick). A
+  // capsule slot cut into a cylindrical body meets it in seams that are
+  // neither planar nor circular — each rides up and down as it wraps,
+  // yet every vertex sits at one radial distance from a straight line
+  // (the enclosing cylinder's core, which the seam terminates). The
+  // pass re-walks the sharp seams (fresh walked set — Passes 1–3
+  // consumed theirs), then per closed loop:
+  //   1. perimeter gate: noise rings die (MIN_CHAIN_PERIM)
+  //   2. the loop's vertices spread along the seam — the slot's
+  //      direction (the largest-variance PCA axis) is the chain's own
+  //      axis line
+  //   3. accept when every vertex's radial distance from the line
+  //      stays within RADIAL_TOL of the loop's mean radius
+  // The loop's own fitted line is the frame: the detector sees the
+  // model space where the stock axis doesn't exist yet. The id hashes
+  // the point ring, so it survives model moves; ops re-derive the
+  // machine-space axis at op time.
+  const radialChains: RadialChainFeature[] = [];
+  {
+    const RADIAL_TOL = 0.05; // mm — Alice's tolerance
+    const MIN_CHAIN_PERIM = 0.5; // mm — a real feature, not a noise ring
+    const walked4 = new Set<string>();
+    for (const key of featureKeys) {
+      if (walked4.has(key)) continue;
+      const [a, b] = key.split('_').map(Number);
+      walked4.add(key);
+      const loop: number[] = [a, b];
+      let prev = a;
+      let cur = b;
+      let guard = verts.length + 2;
+      let closed = false;
+      while (guard-- > 0) {
+        const cands = (incident.get(cur) ?? []).filter((c) => !walked4.has(c.key));
+        if (cands.length === 0) break;
+        let pick = cands[0];
+        if (cands.length > 1) {
+          const dir = norm(sub(verts[cur], verts[prev]));
+          let bestCos = -Infinity;
+          for (const c of cands) {
+            const cos = dot(dir, norm(sub(verts[c.other], verts[cur])));
+            if (cos > bestCos) {
+              bestCos = cos;
+              pick = c;
+            }
+          }
+        }
+        walked4.add(pick.key);
+        if (pick.other === loop[0]) {
+          closed = true;
+          break;
+        }
+        loop.push(pick.other);
+        prev = cur;
+        cur = pick.other;
+      }
+      if (!closed) continue;
+      const pts3 = loop.map((vi) => verts[vi]);
+      // perimeter gate: noise rings die here
+      let perim = 0;
+      for (let i = 0; i < pts3.length; i++) {
+        const p = pts3[i];
+        const q = pts3[(i + 1) % pts3.length];
+        perim += Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z);
+      }
+      if (perim < MIN_CHAIN_PERIM) continue;
+      // PCA: the loop's vertex spread. The largest-variance direction
+      // is the chain's own axis (the seam rides a cylinder about the
+      // axis: it spreads along the axis the slot's length, so the axis
+      // direction carries the most spread). The loop's own axis line
+      // is the seam's own axis.
+      const axisDir = pcaMajorAxis(pts3);
+      const axisLine = fitLineAlong(pts3, axisDir);
+      // radial distance from the axis line: every vertex's distance
+      // from the line (the axis line's perpendicular distance), and
+      // accept when the loop's mean radius stays within RADIAL_TOL
+      let rSum = 0;
+      let rMax = 0;
+      for (const p of pts3) {
+        const r = radialDistanceToLine(p, axisLine);
+        rSum += r;
+        if (r > rMax) rMax = r;
+      }
+      const mean = rSum / pts3.length;
+      if (rMax - mean <= RADIAL_TOL) {
+        radialChains.push({
+          kind: 'radialChain',
+          id: featureId('radialChain', pts3.flatMap((p) => [p.x, p.y, p.z])),
+          points: pts3,
+          meanRadius: mean,
+        });
+      }
+    }
+  }
+
   // raw-triangle → plane mapping for face picking and plane highlighting
   const rawTriCount = Math.floor((geometry.index ? geometry.toNonIndexed() : geometry).getAttribute('position').count / 3);
   const faceToPlane = new Int32Array(rawTriCount).fill(-1);
@@ -1295,6 +1462,7 @@ export function detectFeatures(geometry: THREE.BufferGeometry): DetectedFeatures
     planes: keptPlanes,
     circles: keptCircles,
     edges: keptEdges,
+    radialChains,
     paths: [],
     faceToPlane: keptFaceToPlane,
     planeLoops: keptLoops,

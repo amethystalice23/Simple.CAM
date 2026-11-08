@@ -28,6 +28,7 @@ import type {
   PathFeature,
   PlaneFeature,
   Primitive,
+  RadialChainFeature,
   Stock,
   Vec3,
 } from '../core/types';
@@ -144,6 +145,7 @@ function namespaceIds(features: DetectedFeatures, primId: string): DetectedFeatu
     planes: features.planes.map((f: PlaneFeature) => ({ ...f, id: ns(f.id) })),
     circles: features.circles.map((f: CircleFeature) => ({ ...f, id: ns(f.id) })),
     edges: features.edges.map((f: EdgeFeature) => ({ ...f, id: ns(f.id) })),
+    radialChains: features.radialChains.map((f: RadialChainFeature) => ({ ...f, id: ns(f.id) })),
     paths: features.paths.map((f: PathFeature) => ({ ...f, id: ns(f.id) })),
     planeLoops: features.planeLoops,
     faceToPlane: features.faceToPlane,
@@ -216,6 +218,7 @@ function artworkFeatures(p: Extract<Primitive, { kind: 'artwork' }>): DetectedFe
         ? {}
         : { closed: p.pathMeta?.[i]?.closed, filled: p.pathMeta?.[i]?.filled }),
     })),
+    radialChains: [],
     faceToPlane: new Int32Array(0),
     planeLoops: [],
   };
@@ -312,6 +315,7 @@ export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
       planes: [],
       circles,
       edges: [],
+      radialChains: [],
       paths: [],
       faceToPlane: new Int32Array(0),
       planeLoops: [],

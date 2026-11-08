@@ -505,6 +505,22 @@ export interface EdgeFeature {
   b: Vec3;
 }
 
+/** One constant-radius chain: a closed sharp-seam loop whose vertices
+ * share one radial distance from a straight line (a capsule slot's
+ * silhouette on a cylindrical body — the seam rides up and down in Z as
+ * it wraps, but every point sits at one distance from the enclosing
+ * cylinder's core). The loop's own fitted line is the frame; ops
+ * re-derive the machine-space axis at op time. See
+ * cam/features.ts Pass 4. */
+export interface RadialChainFeature {
+  kind: 'radialChain';
+  id: string;
+  /** the chain's model-space point ring, in loop order */
+  points: Vec3[];
+  /** the chain's mean radius about its own fitted line, mm */
+  meanRadius: number;
+}
+
 /** Artwork line work: one flattened polyline from an imported SVG, in
  * the SOURCE's local space like every other feature kind. */
 export interface PathFeature {
