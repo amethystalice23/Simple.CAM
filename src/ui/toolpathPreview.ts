@@ -116,6 +116,19 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
       m.words.z === undefined;
     if (aOnly && m.rapid) {
       prevM = { ...pos };
+      // The stock rotates under a parked tool — the tool's display position
+      // is UNCHANGED in machine terms. But `prev` holds the last drawn point
+      // mapped into the DISPLAY frame (un-rotated by the OLD accumulated A):
+      // leave it and the next move draws a chord across the stock (a 180°
+      // datum return showed the following approach rapid from the mirrored
+      // far side, cutting through the stock — the phantom that had op 4 of
+      // rocket_valve spiral from 5mm below the displayed far side). Re-map
+      // the parked tool position to the new datum so the next segment
+      // starts where the machine actually is.
+      if (prev) {
+        const [dy, dz] = toDisplay((pos.a * Math.PI) / 180, prevM.y, prevM.z);
+        prev = { x: prevM.x, y: dy, z: dz };
+      }
       continue;
     }
 
