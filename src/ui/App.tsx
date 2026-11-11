@@ -27,6 +27,7 @@ import type {
   Vec2,
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
+import { deriveBaseline } from './toolNames';
 import { decodeBitmapFile, type GrayBitmap } from '../core/bitmapImport';
 import { planeExtents, transformFn } from './featureOverlays';
 import { opEdgeSource, resolveFeature, sourcesFor, splitSelection, stockAxisInModelSpace } from './featureSources';
@@ -110,15 +111,24 @@ const DETECTION_DECIMATE_TARGET = 50_000;
  * halftone artwork) — before the STL fallback, by extension or MIME. */
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif)$/i;
 
-function loadToolLibrary(): Tool[] {
+function loadToolLibrary(): { tools: Tool[]; baseline: Tool[] } {
   try {
     const raw = localStorage.getItem(TOOL_STORAGE_KEY);
-    const parsed = raw ? (JSON.parse(raw) as { tools?: Tool[] }) : null;
-    if (parsed?.tools && Array.isArray(parsed.tools) && parsed.tools.length > 0) return parsed.tools;
+    const parsed = raw ? (JSON.parse(raw) as { tools?: Tool[]; baseline?: Tool[] }) : null;
+    if (parsed?.tools && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+      const tools = parsed.tools;
+      // v2 carries the badge-baseline snapshot; a v1 library (no snapshot)
+      // derives one — imported entries baseline as themselves, Makera
+      // presets stay measured against the shipped versions
+      const baseline = Array.isArray(parsed.baseline)
+        ? parsed.baseline
+        : deriveBaseline(parsed.tools, BUILT_IN_TOOLS);
+      return { tools, baseline };
+    }
   } catch {
     // corrupt or unavailable storage — fall back to presets
   }
-  return BUILT_IN_TOOLS;
+  return { tools: BUILT_IN_TOOLS, baseline: [...BUILT_IN_TOOLS] };
 }
 
 /** Sensible default selection for the demo job: a Ø6 flat cutter. */
@@ -158,11 +168,18 @@ export function App() {
   const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
+  /** the status strip's note: the LAST operation's outcome (a drop, a
+   * recalculation, a save, …) — every operation updates it, so the strip
+   * always says what just happened instead of going stale (Alice,
+   * 2026-11-11). Null = the fallback defaults (model dims / drop hint). */
+  const [statusNote, setStatusNote] = useState<string | null>(null);
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
   const [tab, setTab] = useState<Tab>('stock');
-  const [tools, setTools] = useState<Tool[]>(loadToolLibrary);
-  const [toolId, setToolId] = useState<string>(() => defaultToolId(loadToolLibrary()));
+  const [library] = useState(loadToolLibrary); // loaded once — tools + badge baseline
+  const [tools, setTools] = useState<Tool[]>(library.tools);
+  const [toolBaseline, setToolBaseline] = useState<Tool[]>(library.baseline);
+  const [toolId, setToolId] = useState<string>(() => defaultToolId(library.tools));
   const [measureMode, setMeasureMode] = useState(false);
   /** viewport display layers (Alice's 2026-10-25 consolidation): the
    *  top-right Layers dropdown is the ONE place visibility is controlled
@@ -643,9 +660,15 @@ export function App() {
         );
         return;
       }
-      const p = artworkFromImport(art, stock);
+      const p = artworkFromImport(art, stock, {
+        name: f.name,
+        kind: /\.dxf$/i.test(f.name) ? 'dxf' : 'svg',
+      });
       setPrimitives((prev) => [...prev, p]);
       setSelectedObjectId(p.id);
+      setStatusNote(
+        `imported artwork ${f.name} · ${art.paths.length} path${art.paths.length === 1 ? '' : 's'}`,
+      );
     } catch (e) {
       window.alert(`could not read the vector file: ${String(e)}`);
     }
@@ -675,11 +698,16 @@ export function App() {
       carveSim.dispose(); // the sim carved the old model's moves
       setShowSim(false);
       setTab('model');
+      setStatusNote(null); // the fallback shows the fresh relief dims
       return;
     }
-    const p = artworkFromImport(result.art, stock);
+    const p = artworkFromImport(result.art, stock, {
+      name: result.name,
+      kind: 'halftone',
+    });
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
+    setStatusNote(`imported halftone artwork ${result.name}`);
   };
 
   /** Create a primitive, sized from the selection when it matches the kind. */
@@ -1126,6 +1154,12 @@ export function App() {
     }
     setGenerated(next);
     updateJobOutput(next);
+    const failed = ops.filter((o) => next[o.id]?.error).length;
+    setStatusNote(
+      failed === 0
+        ? `recalculated ${ops.length} op${ops.length === 1 ? '' : 's'}`
+        : `recalculated — ${failed} of ${ops.length} op${ops.length === 1 ? '' : 's'} failed (the ops panel says why)`,
+    );
     setShowPreview(true); // recalculate turns the path display on
     // the sim carved the OLD moves — a recalc invalidates it (Alice's
     // 2026-10-25 rule: any toolpath lifecycle change clears the sim layer)
@@ -1168,6 +1202,11 @@ export function App() {
     const next = { ...generated, [id]: result };
     setGenerated(next);
     updateJobOutput(next);
+    setStatusNote(
+      result.error
+        ? `recalculated — ${op.kind} failed (the ops panel says why)`
+        : `recalculated ${op.kind} — ok`,
+    );
     setShowPreview(true);
     // the sim carved the OLD moves — any toolpath lifecycle change clears it
     carveSim.dispose();
@@ -1380,11 +1419,14 @@ export function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(TOOL_STORAGE_KEY, JSON.stringify({ v: 1, tools }));
+      localStorage.setItem(
+        TOOL_STORAGE_KEY,
+        JSON.stringify({ v: 2, tools, baseline: toolBaseline }),
+      );
     } catch {
       // storage unavailable — edits live for the session only
     }
-  }, [tools]);
+  }, [tools, toolBaseline]);
 
   const tool = tools.find((t) => t.id === toolId) ?? tools[0];
 
@@ -1406,6 +1448,7 @@ export function App() {
       setShowSim(false);
       setTab('model');
       setError(null);
+      setStatusNote(null); // the fallback shows the fresh "STL loaded · dims"
     } catch (e) {
       setError(`could not parse STL: ${String(e)}`);
     }
@@ -1453,6 +1496,7 @@ export function App() {
       setShowSim(false);
       setTab('model');
       setError(null);
+      setStatusNote(null); // the fallback shows "STL loaded · dims" for the STEP too
     } catch (e) {
       setError(`could not import STEP: ${String(e)}`);
     } finally {
@@ -1479,6 +1523,7 @@ export function App() {
       lastSavedRef.current = jobFingerprint(file);
       setDirty(false);
       setError(null);
+      setStatusNote(`saved ${(base || 'job')}.cam.json · ${ops.length} op${ops.length === 1 ? '' : 's'}`);
     } catch (e) {
       setError(`could not save job: ${String(e)}`);
     }
@@ -1532,6 +1577,7 @@ export function App() {
       applyJob(parseJobFile(await file.text()));
       setTab('ops');
       setError(null);
+      setStatusNote(null); // the fallback reports the freshly opened job
     } catch (e) {
       setError(`could not open job: ${String(e)}`);
     }
@@ -1607,6 +1653,7 @@ export function App() {
     );
     setDirty(false);
     setError(null);
+    setStatusNote(null); // a fresh job — the drop hint shows
   };
 
   /** Restore the autosaved job once on mount (reload / browse away + back). */
@@ -1670,24 +1717,35 @@ export function App() {
         </button>
         <span className="tag">Carvera · open CAM</span>
         <div className="header-actions">
-          {dirty && (
-            <span className="unsaved" title="Unsaved changes">
-              ● unsaved
-            </span>
-          )}
-          <button type="button" onClick={newJob}>
-            New job
-          </button>
-          <button
-            type="button"
-            onClick={saveJob}
-            disabled={!geometry && primitives.length === 0 && ops.length === 0}
-          >
-            Save job
-          </button>
-          <button type="button" onClick={() => openJobInputRef.current?.click()}>
-            Open job…
-          </button>
+          {/* the job-file group: a quieter sub-panel, set apart from the
+           * action buttons — these manage the DOCUMENT (new/save/open),
+           * the blue ones act on the WORK (calibrate, simulate, export) */}
+          <div className="job-actions">
+            {dirty && (
+              <span className="unsaved" title="Unsaved changes">
+                ● unsaved
+              </span>
+            )}
+            <button type="button" className="job-btn" onClick={newJob}>
+              New job
+            </button>
+            <button
+              type="button"
+              className="job-btn"
+              onClick={saveJob}
+              disabled={!geometry && primitives.length === 0 && ops.length === 0}
+            >
+              Save job
+            </button>
+            <button
+              type="button"
+              className="job-btn"
+              onClick={() => openJobInputRef.current?.click()}
+            >
+              Open job…
+            </button>
+          </div>
+          <span className="header-sep" aria-hidden />
           <button
             type="button"
             title="Generate a feed/speed test-pattern coupon as ordinary toolpaths"
@@ -1798,9 +1856,10 @@ export function App() {
           <div className="drop-hint">
             {stepBusy
               ? 'importing STEP… (tessellating — can take a few seconds)'
-              : geometry
-                ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-                : 'drop an STL or STEP, an SVG or DXF, a PNG/JPEG, or a saved job here'}
+              : (statusNote ??
+                (geometry
+                  ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
+                  : 'drop an STL or STEP, an SVG or DXF, a PNG/JPEG, or a saved job here'))}
           </div>
         </div>
         <aside>
@@ -1809,7 +1868,7 @@ export function App() {
               <button
                 key={t}
                 type="button"
-                className={t === tab ? 'active' : ''}
+                className={`tab-${t}${t === tab ? ' active' : ''}`}
                 onClick={() => setTab(t)}
               >
                 {TAB_LABELS[t]}
@@ -1847,12 +1906,15 @@ export function App() {
           {tab === 'tools' && (
             <ToolPanel
               tools={tools}
+              baseline={toolBaseline}
               selectedId={tool.id}
               materialId={stock.materialId}
               onSelect={setToolId}
               onChange={setTools}
+              onBaseline={setToolBaseline}
               onRestorePresets={() => {
                 setTools(BUILT_IN_TOOLS);
+                setToolBaseline([...BUILT_IN_TOOLS]);
                 setToolId(defaultToolId(BUILT_IN_TOOLS));
               }}
             />

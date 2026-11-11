@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '../../core/types';
-import { groupToolsBySubtype, shortToolName, toolOptionLabel } from '../toolNames';
+import { deriveBaseline, groupToolsBySubtype, shortToolName, toolMetaLine, toolOptionLabel, toolState } from '../toolNames';
 
 function tool(name: string, subtype: string | undefined, diameter: number): Tool {
   return { id: name, name, subtype, type: 'flat', diameter, spindleRpm: 18000 };
@@ -65,5 +65,73 @@ describe('toolOptionLabel', () => {
 
   it('omits the suffix when the shank is unknown', () => {
     expect(toolOptionLabel(tool('My custom shape', undefined, 5))).toBe('My custom shape');
+  });
+});
+
+describe('toolMetaLine', () => {
+  it('carries what matters when selecting: type, Ø, cut length, shank', () => {
+    const spiral: Tool = {
+      ...tool('Spiral O Metal 6*25mm DLC', 'Spiral O · Metal', 6),
+      fluteLength: 25,
+      shaftDiameter: 6,
+    };
+    expect(toolMetaLine(spiral)).toBe('flat · Ø6 · cut 25mm · shank 6');
+  });
+
+  it('shows the cutting angle for V-bits unless the name already carries it', () => {
+    const vbit: Tool = {
+      ...tool('V-Bit Engraving 0.2mm', 'Engraving · V', 0.2),
+      type: 'vbit',
+      vAngle: 60,
+      tipDiameter: 0.2,
+      fluteLength: 8,
+    };
+    expect(toolMetaLine(vbit)).toBe('vbit · Ø0.2 · cut 8mm · 60°');
+    const named: Tool = { ...vbit, name: 'V-Bit 60° 0.2mm' };
+    expect(toolMetaLine(named)).toBe('vbit · Ø0.2 · cut 8mm');
+  });
+
+  it('omits the unknowns quietly — no placeholder clutter', () => {
+    expect(toolMetaLine(tool('Custom shape', undefined, 5))).toBe('flat · Ø5');
+  });
+});
+
+describe('toolState', () => {
+  const preset: Tool = { id: 't1', name: 'Factory bit', type: 'flat', diameter: 6, spindleRpm: 18000 };
+  const presetIds = new Set(['t1']);
+
+  it('preset = unchanged AND shipped; an unchanged import earns NO badge', () => {
+    const imported: Tool = { ...preset, id: 'fusion-1' };
+    expect(toolState(preset, [preset, imported], presetIds)).toBe('preset');
+    expect(toolState(imported, [preset, imported], presetIds)).toBe(null);
+  });
+
+  it('edited = same id, changed since the baseline snapshot', () => {
+    expect(toolState({ ...preset, diameter: 8 }, [preset], presetIds)).toBe('edited');
+    const imported: Tool = { ...preset, id: 'fusion-1' };
+    expect(toolState({ ...imported, name: 'Retuned' }, [imported], presetIds)).toBe('edited');
+  });
+
+  it('new = not in the baseline — an import that joined the baseline stops reading new', () => {
+    expect(toolState(preset, [], presetIds)).toBe('new');
+    const imported: Tool = { ...preset, id: 'fusion-1' };
+    // before the baseline folds the import in…
+    expect(toolState(imported, [preset], presetIds)).toBe('new');
+    // …and after (importMerge's onBaseline call)
+    expect(toolState(imported, [preset, imported], presetIds)).toBe(null);
+  });
+});
+
+describe('deriveBaseline', () => {
+  const shipped: Tool = { id: 't1', name: 'Factory bit', type: 'flat', diameter: 6, spindleRpm: 18000 };
+
+  it('a v1 library: imported entries baseline as themselves, shipped wins for shared ids', () => {
+    const imported: Tool = { id: 'fusion-1', name: 'My bit', type: 'ball', diameter: 3, spindleRpm: 12000 };
+    const editedPreset: Tool = { ...shipped, diameter: 8 };
+    const baseline = deriveBaseline([imported, editedPreset], [shipped]);
+    // the edited preset measures against the SHIPPED version (edit stays visible)
+    expect(baseline.find((t) => t.id === 't1')).toEqual(shipped);
+    // the import baselines as itself — never new this session
+    expect(baseline.find((t) => t.id === 'fusion-1')).toEqual(imported);
   });
 });

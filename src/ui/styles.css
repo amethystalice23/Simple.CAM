@@ -58,6 +58,27 @@ header {
   align-items: center;
 }
 .header-actions button { padding: 5px 12px; font-size: 12px; }
+/* the job-file group (2026-11-11): a quieter sub-panel, set apart from
+ * the blue action buttons — these manage the DOCUMENT, not the work */
+.job-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  padding: 3px 4px;
+}
+.job-actions button {
+  background: transparent;
+  color: #aeb7bf;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+.job-actions button:hover:not(:disabled) { background: #31373e; color: #fff; }
+.job-actions button:disabled { color: #5a636b; }
+/* the divider between the document group and the work actions */
+.header-sep { width: 1px; align-self: stretch; background: #31373e; }
 .unsaved {
   color: #ffd27f;
   font-size: 11px;
@@ -96,7 +117,7 @@ main { display: flex; flex: 1; min-height: 0; }
   pointer-events: none;
 }
 aside {
-  width: 340px;
+  width: 380px;
   overflow-y: auto;
   border-left: 1px solid #262b30;
   padding: 12px;
@@ -160,8 +181,16 @@ button:disabled:hover { background: #2e6f9e; }
 button.secondary:disabled:hover { background: #31373e; }
 
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+/* per-tab accents (2026-11-11): a subtle colored underline hints each
+ * section's hue at rest; the active tab takes the tint fully, so which
+ * section you are in reads at a glance */
+.tab-stock { --tab-accent: #e6a23c; }
+.tab-model { --tab-accent: #4ecf7a; }
+.tab-tools { --tab-accent: #b48cff; }
+.tab-ops { --tab-accent: #4fc3f7; }
 .tabs button {
   flex: 1;
+  position: relative;
   background: #1b1f24;
   border: 1px solid #31373e;
   color: #9aa4ad;
@@ -169,15 +198,183 @@ button.secondary:disabled:hover { background: #31373e; }
   font-size: 11px;
   border-radius: 5px;
 }
-.tabs button.active { background: #2e6f9e; border-color: #2e6f9e; color: #fff; }
+.tabs button::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--tab-accent, #4d94c9);
+  opacity: 0.3;
+}
+.tabs button.active {
+  background: color-mix(in srgb, var(--tab-accent, #2e6f9e) 16%, #1b1f24);
+  border-color: var(--tab-accent, #2e6f9e);
+  color: var(--tab-accent, #fff);
+}
+.tabs button.active::after { opacity: 1; }
 
+/* the Tools tab's three zones read as distinct cards (2026-11-11):
+ * filters → scrollable library → editor */
+.tool-filters {
+  border: 1px solid #262b30;
+  border-radius: 6px;
+  background: #171a1f;
+  padding: 7px 10px 2px;
+  margin: 4px 0 8px;
+}
+.tool-filters .filters-head {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d8891;
+  margin-bottom: 2px;
+}
+.tool-filters .filter-row { display: flex; gap: 10px; }
+.tool-filters .filter-row .field { flex: 1; }
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d8891;
+  margin: 0 0 4px;
+}
+.list-legend { display: flex; gap: 4px; }
+/* the library-state badge: preset (as shipped) / edited / new */
+.tool-state {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.tool-state.preset { background: #262b30; color: #9aa4ad; }
+.tool-state.edited { background: rgba(240, 176, 78, 0.15); color: #f0b04e; }
+.tool-state.new { background: rgba(78, 207, 122, 0.15); color: #4ecf7a; }
+/* the editor card — the same background as the selected tool row's
+ * highlight, tying "this card edits that row" together (2026-11-11) */
+.tool-editor {
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  background: #1f2b36;
+  padding: 8px 10px 10px;
+  margin-top: 12px;
+}
+.tool-editor .panel-head { display: flex; align-items: center; gap: 8px; }
+.tool-row-state { display: flex; align-items: center; padding: 0 8px 0 0; }
+/* ---- the Model tab's object zones (2026-11-11): add-buttons live in the
+ * list's header; the editor is one card tied to the selection by the
+ * type's accent bar and the same highlight background as the row ---- */
+.objects-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.objects-head h2 { margin: 0; }
+.objects-head .buttons { margin: 0; }
+.objects-head .buttons button { padding: 3px 8px; font-size: 11px; }
+/* object types, color-coded like the op kinds */
+.obj-model { --type-color: #b48cff; }
+.obj-cylinder { --type-color: #4fc3f7; }
+.obj-box { --type-color: #ff9d5c; }
+.obj-artwork { --type-color: #ff66cc; }
+.obj-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--type-color, #7d8891);
+}
+.obj-dot.big { width: 10px; height: 10px; }
+.tool-row-main { align-items: center; }
+/* the object editor card: one card for Size + Position + Rotation,
+ * wearing the selected row's highlight background, accent-barred by its
+ * type color */
+.object-editor {
+  border: 1px solid #31373e;
+  border-left: 3px solid var(--type-color, #31373e);
+  border-radius: 6px;
+  background: #1f2b36;
+  padding: 8px 10px 10px;
+  margin-top: 12px;
+}
+.object-editor .panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.object-editor .obj-editor-tag {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d8891;
+}
+/* the ⓘ affordance — text lives in tooltips, not paragraphs */
+.info-tip {
+  background: none;
+  border: none;
+  color: #7d8891;
+  font-size: 11px;
+  padding: 0 2px;
+  cursor: help;
+  line-height: 1.2;
+}
+.info-tip:hover { color: #7fdfff; }
+/* the urgent variant — a live constraint the user must see */
+.info-tip.warn { color: #e0785a; font-weight: 700; }
+.info-tip.warn:hover { color: #ffb08a; }
+/* the op ⓘ help popup — an intro line, then spaced beats, never a wall */
+.op-help-modal { width: 480px; }
+.op-help-text { font-size: 12px; line-height: 1.5; color: #b8c0c8; margin: 8px 0 6px; }
+.op-help-points {
+  margin: 0;
+  padding: 0 0 4px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.op-help-points li {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b8c0c8;
+}
+.op-help-points li::marker { color: var(--kind-color, #4d94c9); }
+/* the merge-or-replace import dialog */
+.import-choice { width: 430px; }
+.import-warn { max-height: 120px; overflow-y: auto; }
+.import-opts { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.import-opts button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  font-size: 13px;
+}
+.import-opts button small { font-weight: 400; font-size: 10px; opacity: 0.85; }
 .tool-list {
   max-height: 320px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 6px;
+  border: 1px solid #262b30;
+  border-radius: 6px;
+  background: #14171a;
+  padding: 4px;
 }
 .group-header {
   font-size: 11px;
@@ -235,31 +432,151 @@ button.secondary:disabled:hover { background: #31373e; }
   border-color: #6b5842;
 }
 
-.op-panel { border: 1px solid #31373e; border-radius: 6px; margin: 6px 0; overflow: hidden; }
+.op-panel { border: 1px solid #31373e; border-left: 3px solid var(--kind-color, #31373e); border-radius: 6px; margin: 6px 0; overflow: hidden; }
 .op-panel.dragging { opacity: 0.45; }
 .op-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  padding: 5px 8px 6px 5px;
   background: #1b1f24;
   cursor: pointer;
   user-select: none;
 }
+.op-title:hover { background: #20252b; }
+.op-line1 { display: flex; align-items: center; gap: 6px; }
+.op-line2 { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding-left: 20px; }
 .op-title .grip { color: #7d8891; cursor: grab; font-size: 14px; line-height: 1; }
 .op-title .op-seq { color: #d8dde2; font-size: 12px; font-weight: 600; min-width: 24px; }
 .op-title select.op-kind {
   background: transparent;
   border: none;
-  color: #d8dde2;
+  color: var(--kind-color, #d8dde2);
   font-size: 12px;
   font-weight: 600;
   flex: none;
-  max-width: 110px;
+  max-width: 150px;
 }
-.op-snippet {
+/* the spacer that shoves the line-1 icon cluster right */
+.op-title-gap { flex: 1; }
+/* the fixed T-chip slot left of an aligned name column (picker + rows) */
+.tool-chip-slot {
+  flex: none;
+  width: 26px;
+  display: inline-flex;
+  justify-content: flex-start;
+}
+
+/* ---- the custom tool picker popup (replaces the native <select>) ---- */
+.tool-picker { position: relative; width: 200px; }
+.tool-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 4px;
+  color: #d8dde2;
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.tool-picker-btn:hover { border-color: #2e6f9e; }
+.tool-picker-name {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.tool-picker-meta { flex: none; color: #7d8891; font-size: 10px; }
+.tool-picker-caret { flex: none; color: #7d8891; font-size: 10px; }
+.tool-popup {
+  /* fixed + clamped: positioned by ToolPicker from the trigger's rect so
+   * it never clips at the ops pane's edge (position:fixed escapes the
+   * sidebar's and op-panel's overflow containers) */
+  position: fixed;
+  z-index: 60;
+  width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #171a1f;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  padding: 4px;
+}
+.tool-popup-head {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d8891;
+  padding: 5px 6px 3px;
+}
+.tool-popup-head.in-use { color: #f0b04e; }
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #d8dde2;
+  padding: 5px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+}
+.tool-row:hover { background: #262c33; }
+.tool-row.current { background: #21303d; }
+.tool-row-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.tool-row-meta { flex: 1; min-width: 0; color: #7d8891; font-size: 10px; white-space: nowrap; }
+.tool-row-check { flex: none; color: #7fdfff; font-size: 11px; }
+/* the cutter-type dot: flat green, ball sky, vbit amber, laser red */
+.tool-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7d8891;
+}
+.tool-dot-flat { background: #4ecf7a; }
+.tool-dot-ball { background: #4fc3f7; }
+.tool-dot-vbit { background: #e08a2e; }
+.tool-dot-laser { background: #f05c5c; }
+/* the controller tool number chip (ZCam-style): warm amber, dark text */
+.tool-chip {
+  flex: none;
+  background: #e08a2e;
+  color: #17191d;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.op-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  color: #aeb7bf;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.op-summary.err { color: #ff8a8a; }
+.op-snippet {
+  flex: none;
+  max-width: 40%;
   font-size: 10px;
   color: #7d8891;
   overflow: hidden;
@@ -353,6 +670,17 @@ input.num-input:focus { outline: 1px solid #2e6f9e; }
 .tool-row.selected { border-color: #7fdfff; background: #1c2a33; }
 .tool-row .tool-name { font-size: 12px; color: #d8dde2; }
 .tool-row .tool-meta { font-size: 10px; color: #7d8891; }
+/* the object list colors like the ops list (2026-11-11): a left accent
+ * bar + colored name — no dots. After .tool-row.active so the accent
+ * wins the border. */
+.tool-row.obj-model,
+.tool-row.obj-cylinder,
+.tool-row.obj-box,
+.tool-row.obj-artwork { border-left: 3px solid var(--type-color); }
+.tool-row.obj-model .tool-name,
+.tool-row.obj-cylinder .tool-name,
+.tool-row.obj-box .tool-name,
+.tool-row.obj-artwork .tool-name { color: var(--type-color); }
 pre {
   font-size: 11px;
   background: #101315;

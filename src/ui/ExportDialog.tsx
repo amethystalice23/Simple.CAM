@@ -10,6 +10,7 @@ import type { JobOp, Move, Stock, Tool } from '../core/types';
 import { postCarvera } from '../post/carvera';
 import { NumInput } from './fields';
 import { OP_KINDS, type GeneratedOp } from './jobGeneration';
+import { panelToolNumbers } from './toolAssignment';
 import {
   allIncluded,
   assignToolNumbers,
@@ -70,9 +71,13 @@ export function ExportDialog(props: Props) {
         }).map((o) => o.id),
       ),
   );
-  /** toolId → controller tool number; auto-assigned among the checked ops,
-   * kept stable as boxes are ticked, hand-editable per tool */
-  const [toolNumbers, setToolNumbers] = useState<ReadonlyMap<string, number>>(() => new Map());
+  /** toolId → controller tool number; SEEDED FROM THE OPS PANEL (Alice,
+   * 2026-11-11: the panel is the source of truth — the T1 it shows is the
+   * number this dialog stamps). Hand-editable per tool as always; the
+   * auto-assign effect below only fills tools the panel didn't number. */
+  const [toolNumbers, setToolNumbers] = useState<ReadonlyMap<string, number>>(() =>
+    panelToolNumbers(props.ops),
+  );
   /** export-moment timestamp, captured once per open — the suggestion is
    * stable while the dialog is up */
   const [openedAt] = useState(() => new Date());
@@ -109,7 +114,8 @@ export function ExportDialog(props: Props) {
     [props.ops, props.generated, included],
   );
 
-  /** auto-assign on every check change — existing numbers stay put */
+  /** auto-assign on every check change — existing numbers stay put (the
+   * panel-seeded seed and any hand edits are prev entries, never renumbered) */
   const checkedToolIds = includedOps.map((o) => o.toolId);
   const checkedKey = checkedToolIds.join('\u0000');
   useEffect(() => {

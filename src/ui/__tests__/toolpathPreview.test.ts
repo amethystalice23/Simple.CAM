@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Move, Stock } from '../../core/types';
 import { faceCylinder } from '../../cam/faceCylinder';
+import { spiralCarve } from '../../cam/spiralCarve';
 import { APPROACH_CLEARANCE } from '../../cam/paths';
-import { movesToSegments } from '../toolpathPreview';
+import { movesToSegments, movesToSegmentMoves } from '../toolpathPreview';
 
 const cylinderStock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
@@ -219,5 +220,62 @@ describe('movesToSegments', () => {
     // 3-axis mode: the same moves draw raw — no rotary mapping at all
     const flat = movesToSegments(moves, { ...boxStock4, axisMode: '3-axis' });
     expect(flat.feed.slice(3, 6)).toEqual([50, 0, 25]);
+  });
+
+  it('no segment starts on the stock axis — the entry rapid draws from the tool-change park', () => {
+    // The spiral-groove center-plunge report (2026-11-11, spiral_test.cam.json):
+    // a fresh spiralCarve op emits its entry as A-rapid → X-rapid → Z-rapid
+    // (the generators' entry-safety convention: travel at park height, THEN
+    // descend), and `pos` used to seed the unknown machine start at z=0 —
+    // so the FIRST DRAWN SEGMENT (the X→Z rapid pair) ran from the seeded
+    // (x, 0, 0), i.e. straight up the rotation axis (axisZ=0) through the
+    // crown: a red "plunge to the center of the stock" that alarmed users.
+    // The seed now mirrors the sim's startZ (src/sim/poses.ts): the machine
+    // begins at the tool-change park, crown + clearance — the entry rapid
+    // is park→safeZ, an invisible above-stock hop.
+    const res = spiralCarve(
+      {
+        kind: 'spiralCarve',
+        id: 'op1',
+        toolId: 't1',
+        surfaceDiameter: 50,
+        xStart: 20,
+        xEnd: 80,
+        spiralAngle: 30,
+        count: 1,
+        depth: 1,
+        width: 0, // "just follow the lines"
+        stepDown: 0.2,
+        rotation: 'cw',
+        feed: 1800,
+        plungeFeed: 200,
+      },
+      cylinderStock.calibration,
+      3.175,
+      0, // datumAngle
+      0, // startA
+    );
+    const axisZ = cylinderStock.calibration.axisZ;
+    const R = cylinderStock.calibration.effectiveRadius;
+    const segs = movesToSegmentMoves(res.moves, cylinderStock);
+    // every drawn segment endpoint stays outside the groove's own cut
+    // cylinder (radius ≥ R − depth = 24): feed chords ride the cut radius,
+    // rapids stay above the crown — the phantom entry at radius 0 is gone.
+    // (− 1e-6: trig rounding puts a chord endpoint a float hair under exact 24)
+    const minR = R - 1 - 1e-6; // depth 1
+    for (const kind of ['feed', 'rapid'] as const) {
+      const arr = segs[kind];
+      for (let i = 0; i < arr.length; i += 6) {
+        expect(Math.hypot(arr[i + 1], arr[i + 2] - axisZ)).toBeGreaterThanOrEqual(minR);
+        expect(Math.hypot(arr[i + 4], arr[i + 5] - axisZ)).toBeGreaterThanOrEqual(minR);
+      }
+    }
+    // the entry rapid pair draws from the PARK height, never from z=0:
+    // the A-rapid and X-rapid only position (nothing draws into them), so
+    // the first drawn rapid is the Z hop — zero-length at (20, 0, 30),
+    // crown 25 + 5 clearance. The bug drew it as (20, 0, 0) → (20, 0, 30).
+    expect(segs.rapid.length / 6).toBe(2);
+    const entry = segs.rapid.slice(0, 6);
+    expect(entry).toEqual([20, 0, 30, 20, 0, 30]);
   });
 });

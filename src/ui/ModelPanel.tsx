@@ -44,6 +44,20 @@ const EDGE_LABELS: Record<Axis, Record<'min' | 'mid' | 'max', string>> = {
 
 const SIZE_LABELS: Record<Axis, string> = { x: 'X', y: 'Y', z: 'Z' };
 
+/** object types, color-coded like the op kinds (2026-11-11): the dot on
+ * each list row and the editor card's accent bar share --type-color */
+type ObjKind = 'model' | 'cylinder' | 'box' | 'artwork';
+
+/** the ⓘ affordance: explanatory text lives in a tooltip, never dropped
+ * into a list or panel as a paragraph (Alice, 2026-11-11) */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <button type="button" className="info-tip" title={text}>
+      ⓘ
+    </button>
+  );
+}
+
 /** Label + editable number + per-field revert button. */
 function SizeField(props: {
   label: string;
@@ -120,6 +134,41 @@ export function ModelPanel(props: Props) {
     };
   }
 
+  // the selection's type + label — the editor card's identity
+  const selKind: ObjKind = isModel
+    ? 'model'
+    : ((selectedPrimitive?.kind as ObjKind | undefined) ?? 'box');
+  const artworkKind = (p: Extract<Primitive, { kind: 'artwork' }>): string =>
+    p.sourceKind === 'svg' ? 'SVG Artwork' : p.sourceKind === 'dxf' ? 'DXF Artwork' : p.sourceKind === 'halftone' ? 'Halftone Artwork' : 'Artwork';
+  /** the model's file type from its name's extension — the meta line's
+   * first word ('loaded' told nobody anything) */
+  const modelType = (() => {
+    const m = /\.([a-z0-9]+)$/i.exec(props.modelName);
+    return m ? m[1].toUpperCase() : 'STL';
+  })();
+  const selLabel = isModel
+    ? props.modelName
+    : selectedPrimitive &&
+      (selectedPrimitive.kind === 'cylinder'
+        ? `cylinder Ø${selectedPrimitive.diameter.toFixed(1)} × ${selectedPrimitive.length.toFixed(1)}`
+        : selectedPrimitive.kind === 'artwork'
+          ? `${artworkKind(selectedPrimitive)} · ${selectedPrimitive.paths.length} path(s)`
+          : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
+  const rowLabel = (p: Primitive) =>
+    p.kind === 'cylinder'
+      ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
+      : p.kind === 'artwork'
+        ? `${artworkKind(p)} · ${p.paths.length} path(s)`
+        : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
+  /** the row's SECOND line: type + size, mirroring the model row's shape
+   * (filename on top, file type + dims under) */
+  const rowMeta = (p: Primitive) =>
+    p.kind === 'artwork'
+      ? `${(p.width * p.transform.scale.x).toFixed(1)} × ${(p.height * p.transform.scale.y).toFixed(1)} mm`
+      : null;
+  const rowName = (p: Primitive) =>
+    p.kind === 'artwork' ? (p.sourceName ?? 'Artwork') : rowLabel(p);
+
   const setPosition = (axis: Axis, v: number) =>
     setActive({ ...active, position: { ...active.position, [axis]: v } });
   const setRotation = (axis: Axis, v: number) =>
@@ -139,10 +188,21 @@ export function ModelPanel(props: Props) {
   return (
     <>
       <section>
-        <h2>Objects</h2>
+        <div className="objects-head">
+          <h2>Objects</h2>
+          {/* the add buttons belong to the LIST they populate (2026-11-11) */}
+          <div className="buttons">
+            <button type="button" className="secondary" onClick={() => props.onAddPrimitive('cylinder')}>
+              + Cylinder
+            </button>
+            <button type="button" className="secondary" onClick={() => props.onAddPrimitive('box')}>
+              + Box
+            </button>
+          </div>
+        </div>
         <div className="tool-list">
           {geometry && (
-            <div className={`tool-row${isModel ? ' active' : ''}`}>
+            <div className={`tool-row obj-model${isModel ? ' active' : ''}`}>
               <button
                 type="button"
                 className="tool-row-main"
@@ -150,31 +210,31 @@ export function ModelPanel(props: Props) {
               >
                 <span className="tool-name">{props.modelName}</span>
                 <span className="tool-meta">
-                  loaded · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
+                  {modelType} · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
                   {displayed!.z.toFixed(1)} mm
                 </span>
               </button>
+              {props.detectionNote && (
+                <span className="tool-row-state">
+                  <InfoTip text={props.detectionNote} />
+                </span>
+              )}
             </div>
           )}
-          {props.detectionNote && <p className="hint">{props.detectionNote}</p>}
           {primitives.map((p) => (
             <div
               key={p.id}
-              className={`tool-row${p.id === selectedObjectId ? ' active' : ''}`}
+              className={`tool-row obj-${p.kind}${p.id === selectedObjectId ? ' active' : ''}`}
             >
               <button
                 type="button"
                 className="tool-row-main"
                 onClick={() => props.onSelectObject(p.id)}
               >
-                <span className="tool-name">
-                  {p.kind === 'cylinder'
-                    ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
-                    : p.kind === 'artwork'
-                      ? `artwork · ${p.paths.length} path(s)`
-                      : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`}
+                <span className="tool-name">{rowName(p)}</span>
+                <span className="tool-meta">
+                  {p.kind === 'artwork' ? `${rowLabel(p)} · ${rowMeta(p)}` : rowLabel(p)}
                 </span>
-                <span className="tool-meta">primitive</span>
               </button>
               <button
                 type="button"
@@ -187,13 +247,30 @@ export function ModelPanel(props: Props) {
             </div>
           ))}
           {!geometry && primitives.length === 0 && (
-            <p className="hint">no model loaded — add a primitive below</p>
+            <p className="hint">no model loaded — add a primitive above</p>
           )}
         </div>
+        <label
+          className="check"
+          title="hover highlights · click selects (two = distance) · right-click clears"
+        >
+          <input
+            type="checkbox"
+            checked={props.measureMode}
+            onChange={(e) => props.onMeasureModeChange(e.target.checked)}
+          />
+          <span>Measure mode</span>
+        </label>
       </section>
 
-      <section>
-        <h2>Size (mm)</h2>
+      {hasActive && (
+      <section className={`object-editor obj-${selKind}`}>
+        <h2 className="panel-head">
+          <span className="obj-dot big" />
+          {selLabel}
+          <span className="obj-editor-tag">editing</span>
+        </h2>
+        <p className="subhead">Size (mm)</p>
         {/* the uniform checkbox governs the model/cylinder/box resize
          *  fields — artwork sizing is uniform BY DESIGN (the wrapped
          *  invariant "the logo never shears", kept for flat W/H), so for
@@ -227,10 +304,9 @@ export function ModelPanel(props: Props) {
                 }
               />
             ))}
-            <p className="hint">
-              scale {transform.scale.x.toFixed(2)} / {transform.scale.y.toFixed(2)} /{' '}
-              {transform.scale.z.toFixed(2)}
-            </p>
+            <InfoTip
+              text={`scale ${transform.scale.x.toFixed(2)} / ${transform.scale.y.toFixed(2)} / ${transform.scale.z.toFixed(2)}`}
+            />
           </>
         ) : selectedPrimitive && selectedPrimitive.kind === 'cylinder' ? (
           <>
@@ -345,23 +421,15 @@ export function ModelPanel(props: Props) {
                     +90°
                   </button>
                 </div>
-                <p className="hint">
-                  wraps {selectedPrimitive.wrapAngle.toFixed(0)}° of Ø
-                  {selectedPrimitive.wrapDiameter.toFixed(1)} —{' '}
-                  {(
+                <InfoTip
+                  text={`wraps ${selectedPrimitive.wrapAngle.toFixed(0)}° of Ø${selectedPrimitive.wrapDiameter.toFixed(1)} — ${(
                     ((selectedPrimitive.wrapAngle / 360) *
                       Math.PI *
                       selectedPrimitive.wrapDiameter) /
                     Math.max(selectedPrimitive.width, 1e-9)
-                  ).toFixed(2)}{' '}
-                  mm per artwork unit (the Ø is the artwork's own — point it at
-                  the faced surface, not the stock)
-                </p>
-                <p className="hint">
-                  spin° is where the artwork sits around the cylinder — the X
-                  rotation below, surfaced here because it IS the A position;
-                  the seam check wants the artwork clear of ±180°
-                </p>
+                  ).toFixed(2)} mm per artwork unit (the Ø is the artwork's own — point it at the faced surface, not the stock)`}
+                />
+                <InfoTip text="spin° is where the artwork sits around the cylinder — the X rotation below, surfaced here because it IS the A position; the seam check wants the artwork clear of ±180°" />
               </>
             ) : (
               <>
@@ -383,10 +451,9 @@ export function ModelPanel(props: Props) {
                   onCommit={(v) => commitArtworkScale(v / Math.max(selectedPrimitive.height, 1e-9))}
                   onRevert={revertArtworkScale}
                 />
-                <p className="hint">
-                  scale ×{active.scale.x.toFixed(2)} — W/H drive the same
-                  uniform scale; ↺ reverts to the imported size
-                </p>
+                <InfoTip
+                  text={`scale ×${active.scale.x.toFixed(2)} — W/H drive the same uniform scale; ↺ reverts to the imported size`}
+                />
               </>
             )}
           </>
@@ -405,11 +472,8 @@ export function ModelPanel(props: Props) {
             />
           ))
         ) : null}
-      </section>
 
-      {hasActive && (
-        <section>
-          <p className="subhead">Position (mm)</p>
+        <p className="subhead">Position (mm)</p>
         {AXES.map((a) => (
           <div className="axis-row" key={a}>
             <span className="axis-label">{a.toUpperCase()}</span>
@@ -447,35 +511,8 @@ export function ModelPanel(props: Props) {
             </button>
           </div>
         ))}
-        </section>
-      )}
-
-      <section>
-        <div className="buttons">
-          <button type="button" onClick={() => props.onAddPrimitive('cylinder')}>
-            + Cylinder
-          </button>
-          <button type="button" onClick={() => props.onAddPrimitive('box')}>
-            + Box
-          </button>
-        </div>
-        {/* the features/measure toggles live in the viewport's Layers
-         * dropdown + this measure tick (display options consolidated
-         * 2026-10-25 — see the Viewport's top-right dropdown) */}
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={props.measureMode}
-            onChange={(e) => props.onMeasureModeChange(e.target.checked)}
-          />
-          <span>
-            Measure mode
-            <span className="legend">
-              hover highlights · click selects (two = distance) · right-click clears
-            </span>
-          </span>
-        </label>
       </section>
+      )}
     </>
   );
 }

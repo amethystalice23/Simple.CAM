@@ -19,6 +19,8 @@
 
 import type { Move, Stock } from '../core/types';
 import { rotaryCalibrationOf } from '../core/types';
+import { stockTopZ } from './placement';
+import { SIM_PARK_CLEARANCE } from '../sim/poses';
 
 export interface PreviewSegments {
   /** flat xyz pairs per segment: [x0,y0,z0, x1,y1,z1, ...] */
@@ -55,7 +57,19 @@ export function movesToSegmentMoves(moves: Move[], stock: Stock | null): Preview
 function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
   const rotary = stock?.axisMode === '4-axis';
   const axisZ = rotary ? rotaryCalibrationOf(stock).axisZ : 0;
-  const pos = { x: 0, y: 0, z: 0, a: 0 };
+  // Modal start: X/Y unknown (the first move only positions — nothing draws
+  // into it), but Z sits at the TOOL-CHANGE PARK (crown + clearance — the
+  // machine begins at the swap macro's park, the sim's own startZ rule in
+  // src/sim/poses.ts). Seeding Z at 0 drew the entry rapid as a line from the
+  // stock's axis (axisZ=0) up through the crown — the "plunge to the center"
+  // that alarmed rotary users. X/Y stay 0: the first-move rule keeps them
+  // undrawn anyway.
+  const pos = {
+    x: 0,
+    y: 0,
+    z: stock ? stockTopZ(stock) + SIM_PARK_CLEARANCE : 0,
+    a: 0,
+  };
   const feed: number[] = [];
   const rapid: number[] = [];
   const feedMoves: number[] = [];
