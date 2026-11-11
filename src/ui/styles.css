@@ -271,6 +271,68 @@ button.secondary:disabled:hover { background: #31373e; }
 }
 .tool-editor .panel-head { display: flex; align-items: center; gap: 8px; }
 .tool-row-state { display: flex; align-items: center; padding: 0 8px 0 0; }
+/* ---- the Model tab's object zones (2026-11-11): add-buttons live in the
+ * list's header; the editor is one card tied to the selection by the
+ * type's accent bar and the same highlight background as the row ---- */
+.objects-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.objects-head h2 { margin: 0; }
+.objects-head .buttons { margin: 0; }
+.objects-head .buttons button { padding: 3px 8px; font-size: 11px; }
+/* object types, color-coded like the op kinds */
+.obj-model { --type-color: #b48cff; }
+.obj-cylinder { --type-color: #4fc3f7; }
+.obj-box { --type-color: #ff9d5c; }
+.obj-artwork { --type-color: #ff66cc; }
+.obj-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--type-color, #7d8891);
+}
+.obj-dot.big { width: 10px; height: 10px; }
+.tool-row-main { align-items: center; }
+/* the object editor card: one card for Size + Position + Rotation,
+ * wearing the selected row's highlight background, accent-barred by its
+ * type color */
+.object-editor {
+  border: 1px solid #31373e;
+  border-left: 3px solid var(--type-color, #31373e);
+  border-radius: 6px;
+  background: #1f2b36;
+  padding: 8px 10px 10px;
+  margin-top: 12px;
+}
+.object-editor .panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.object-editor .obj-editor-tag {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d8891;
+}
+/* the ⓘ affordance — text lives in tooltips, not paragraphs */
+.info-tip {
+  background: none;
+  border: none;
+  color: #7d8891;
+  font-size: 11px;
+  padding: 0 2px;
+  cursor: help;
+  line-height: 1.2;
+}
+.info-tip:hover { color: #7fdfff; }
 /* the merge-or-replace import dialog */
 .import-choice { width: 430px; }
 .import-warn { max-height: 120px; overflow-y: auto; }
