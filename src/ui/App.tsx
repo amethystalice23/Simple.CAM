@@ -168,6 +168,11 @@ export function App() {
   const [hiddenOps, setHiddenOps] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
+  /** the status strip's note: the LAST operation's outcome (a drop, a
+   * recalculation, a save, …) — every operation updates it, so the strip
+   * always says what just happened instead of going stale (Alice,
+   * 2026-11-11). Null = the fallback defaults (model dims / drop hint). */
+  const [statusNote, setStatusNote] = useState<string | null>(null);
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
   const [tab, setTab] = useState<Tab>('stock');
@@ -661,6 +666,9 @@ export function App() {
       });
       setPrimitives((prev) => [...prev, p]);
       setSelectedObjectId(p.id);
+      setStatusNote(
+        `imported artwork ${f.name} · ${art.paths.length} path${art.paths.length === 1 ? '' : 's'}`,
+      );
     } catch (e) {
       window.alert(`could not read the vector file: ${String(e)}`);
     }
@@ -690,6 +698,7 @@ export function App() {
       carveSim.dispose(); // the sim carved the old model's moves
       setShowSim(false);
       setTab('model');
+      setStatusNote(null); // the fallback shows the fresh relief dims
       return;
     }
     const p = artworkFromImport(result.art, stock, {
@@ -698,6 +707,7 @@ export function App() {
     });
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
+    setStatusNote(`imported halftone artwork ${result.name}`);
   };
 
   /** Create a primitive, sized from the selection when it matches the kind. */
@@ -1144,6 +1154,12 @@ export function App() {
     }
     setGenerated(next);
     updateJobOutput(next);
+    const failed = ops.filter((o) => next[o.id]?.error).length;
+    setStatusNote(
+      failed === 0
+        ? `recalculated ${ops.length} op${ops.length === 1 ? '' : 's'}`
+        : `recalculated — ${failed} of ${ops.length} op${ops.length === 1 ? '' : 's'} failed (the ops panel says why)`,
+    );
     setShowPreview(true); // recalculate turns the path display on
     // the sim carved the OLD moves — a recalc invalidates it (Alice's
     // 2026-10-25 rule: any toolpath lifecycle change clears the sim layer)
@@ -1186,6 +1202,11 @@ export function App() {
     const next = { ...generated, [id]: result };
     setGenerated(next);
     updateJobOutput(next);
+    setStatusNote(
+      result.error
+        ? `recalculated — ${op.kind} failed (the ops panel says why)`
+        : `recalculated ${op.kind} — ok`,
+    );
     setShowPreview(true);
     // the sim carved the OLD moves — any toolpath lifecycle change clears it
     carveSim.dispose();
@@ -1427,6 +1448,7 @@ export function App() {
       setShowSim(false);
       setTab('model');
       setError(null);
+      setStatusNote(null); // the fallback shows the fresh "STL loaded · dims"
     } catch (e) {
       setError(`could not parse STL: ${String(e)}`);
     }
@@ -1474,6 +1496,7 @@ export function App() {
       setShowSim(false);
       setTab('model');
       setError(null);
+      setStatusNote(null); // the fallback shows "STL loaded · dims" for the STEP too
     } catch (e) {
       setError(`could not import STEP: ${String(e)}`);
     } finally {
@@ -1500,6 +1523,7 @@ export function App() {
       lastSavedRef.current = jobFingerprint(file);
       setDirty(false);
       setError(null);
+      setStatusNote(`saved ${(base || 'job')}.cam.json · ${ops.length} op${ops.length === 1 ? '' : 's'}`);
     } catch (e) {
       setError(`could not save job: ${String(e)}`);
     }
@@ -1553,6 +1577,7 @@ export function App() {
       applyJob(parseJobFile(await file.text()));
       setTab('ops');
       setError(null);
+      setStatusNote(null); // the fallback reports the freshly opened job
     } catch (e) {
       setError(`could not open job: ${String(e)}`);
     }
@@ -1628,6 +1653,7 @@ export function App() {
     );
     setDirty(false);
     setError(null);
+    setStatusNote(null); // a fresh job — the drop hint shows
   };
 
   /** Restore the autosaved job once on mount (reload / browse away + back). */
@@ -1830,9 +1856,10 @@ export function App() {
           <div className="drop-hint">
             {stepBusy
               ? 'importing STEP… (tessellating — can take a few seconds)'
-              : geometry
-                ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
-                : 'drop an STL or STEP, an SVG or DXF, a PNG/JPEG, or a saved job here'}
+              : (statusNote ??
+                (geometry
+                  ? `STL loaded · ${modelDims!.x.toFixed(1)} × ${modelDims!.y.toFixed(1)} × ${modelDims!.z.toFixed(1)} mm`
+                  : 'drop an STL or STEP, an SVG or DXF, a PNG/JPEG, or a saved job here'))}
           </div>
         </div>
         <aside>
