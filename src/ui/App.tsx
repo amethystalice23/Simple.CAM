@@ -77,6 +77,8 @@ import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
 import { OpsPanel } from './OpsPanel';
+import { describePickedFeature } from './opSuggest';
+import { SuggestPopup } from './SuggestPopup';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
 import { Viewport, type ResolvedSelection } from './Viewport';
@@ -193,6 +195,13 @@ export function App() {
   const [showModel, setShowModel] = useState(true);
   const [showSim, setShowSim] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
+  /** suggest-ops picker (docs/PLAN.md "Suggest ops", round 1): armed by the
+   *  ops panel's "Suggest ops…" button — the NEXT picked feature opens the
+   *  knowledge popup instead of toggling the selection. suggestPickId holds
+   *  the popup's feature while it's open (highlighted green in the viewport
+   *  via activeFeatureIds, so the popup ties to what was clicked). */
+  const [suggestArmed, setSuggestArmed] = useState(false);
+  const [suggestPickId, setSuggestPickId] = useState<string | null>(null);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>('model');
   const [modelName, setModelName] = useState('Loaded model');
@@ -324,7 +333,9 @@ export function App() {
     ? (ops.find((o) => o.id === editingOpId)?.featureIds ?? [])
     : expandedOpId
       ? (ops.find((o) => o.id === expandedOpId)?.featureIds ?? [])
-      : selection;
+      : suggestPickId !== null
+        ? [suggestPickId]
+        : selection;
   const resolvedSelection: ResolvedSelection[] = useMemo(() => {
     const out: ResolvedSelection[] = [];
     for (const id of activeFeatureIds) {
@@ -570,7 +581,52 @@ export function App() {
   };
 
 
+  // ---- suggest-ops picker (docs/PLAN.md "Suggest ops", round 1) ----
+  /** arm: the "Suggest ops…" button. Measure mode is forced on (the viewport
+   *  only routes feature clicks there) and the status strip carries the
+   *  prompt; the NEXT picked feature opens the knowledge popup. */
+  const armSuggest = () => {
+    setFeaturePick(null); // a one-shot pick banner and the picker compete for the same clicks
+    setSuggestPickId(null);
+    setSuggestArmed(true);
+    setMeasureMode(true);
+    setStatusNote('suggest ops — click a feature in the viewport (Esc cancels)');
+  };
+  /** disarm without picking: the button toggles off, Esc, or right-click */
+  const disarmSuggest = () => {
+    setSuggestArmed(false);
+    setMeasureMode(false);
+    setStatusNote(null);
+  };
+  useEffect(() => {
+    if (!suggestArmed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') disarmSuggest();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestArmed]);
+  /** the popup's knowledge of its picked feature, recomputed as the sources
+   *  rebuild — a resolved id keeps describing its feature, a vanished one
+   *  (model swapped mid-popup) closes the popup via the render guard */
+  const suggestKnowledge = useMemo(() => {
+    if (suggestPickId === null) return null;
+    const r = resolveFeature(sources, suggestPickId);
+    return r ? describePickedFeature(r, stock) : null;
+  }, [suggestPickId, sources, stock]);
+
   const toggleSelect = (id: string) => {
+    if (suggestArmed) {
+      // the picker consumes the click: ONE feature → the knowledge popup,
+      // never the selection (the popup ties to it by description + the
+      // green highlight, so the selection is left untouched)
+      setSuggestArmed(false);
+      setMeasureMode(false);
+      setSuggestPickId(id);
+      setStatusNote(null);
+      return;
+    }
     if (featurePick) {
       if (applyFeaturePick(featurePick, id)) return;
       // the pick canceled itself (its op wasn't ready) — the click falls
@@ -611,6 +667,10 @@ export function App() {
   };
 
   const clearSelection = () => {
+    if (suggestArmed) {
+      disarmSuggest();
+      return;
+    }
     if (editingOpId) {
       setOps((prev) => prev.map((o) => (o.id === editingOpId ? { ...o, featureIds: [] } : o)));
       return;
@@ -1933,6 +1993,8 @@ export function App() {
               primitives={primitives}
               featureLabels={featureLabels}
               onAddOp={addOp}
+              onSuggestOps={armSuggest}
+              suggestArmed={suggestArmed}
               onChangeOp={(op) => {
                 setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)));
                 const before = ops.find((o) => o.id === op.id);
@@ -1986,6 +2048,16 @@ export function App() {
         </aside>
       </main>
       {showAbout && <AboutBox onClose={() => setShowAbout(false)} />}
+      {suggestKnowledge && (
+        <SuggestPopup
+          knowledge={suggestKnowledge}
+          onClose={() => setSuggestPickId(null)}
+          onPickAnother={() => {
+            setSuggestPickId(null);
+            armSuggest();
+          }}
+        />
+      )}
       {showExport && (
         <ExportDialog
           ops={ops}

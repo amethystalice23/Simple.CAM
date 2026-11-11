@@ -87,6 +87,12 @@ interface Props {
   /** short feature description by id, for the title-bar snippet */
   featureLabels: Record<string, string>;
   onAddOp: () => void;
+  /** arm the suggest-ops picker (docs/PLAN.md "Suggest ops", round 1):
+   *  the next viewport feature pick opens the knowledge popup instead of
+   *  selecting — App owns the state; the panel only arms and labels it */
+  onSuggestOps: () => void;
+  /** the picker is waiting for a click — the button labels itself live */
+  suggestArmed: boolean;
   onChangeOp: (op: JobOp) => void;
   /** floor/rim switch — re-prefills the depth boxes from the selection */
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
@@ -1447,6 +1453,14 @@ export function OpsPanel(props: Props) {
       <div className="buttons">
         <button type="button" onClick={props.onAddOp}>
           + Add toolpath
+        </button>
+        <button
+          type="button"
+          className={`suggest-btn${props.suggestArmed ? ' armed' : ''}`}
+          title="Pick a feature in the viewport — the detector tells you what it measured and which operations could drive it"
+          onClick={props.onSuggestOps}
+        >
+          {props.suggestArmed ? '◉ picking — click a feature' : 'Suggest ops…'}
         </button>
       </div>
       {props.ops.length === 0 && (

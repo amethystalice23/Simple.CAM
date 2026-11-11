@@ -1126,6 +1126,29 @@ coupon, 2026-11-01); rest machining (manual knobs cover it,
 entry-safety + G0 Y0 work already covers the dangerous travel,
 2026-11-01).
 
+**14. Suggest ops — selection-driven auto-suggest** (Alice's 2026-11-11
+design ruling, after weighing whole-object scan vs selection-driven):
+**selection-driven first**. A "Suggest ops…" button beside "+ Add
+toolpath" arms a picker (measure mode + status-strip prompt); the NEXT
+viewport feature click opens a sheet showing what the detector measured
+about that ONE feature and which operations could drive it — a proposal
+sheet, not instant ops (she rules: nothing is added to the ops list
+unreviewed). Round-1 families, all reusing existing target machinery
+(src/ui/opTargets.ts): flat face → Pocket (+ Chamfer on its outline);
+vertical hole rim → Drill + Thread mill (internal; external on a boss
+rim — metricPitch rides the offer) + Chamfer; circle around the stock
+axis → Rotary chamfer / Rotary face; radial chain → 4D Contour +
+Raster Contour; artwork path → Engrave. The ENGINE is pure
+(`describePickedFeature` / round 2 `suggestOps` in src/ui/opSuggest.ts)
+and its acceptance gates MIRROR opTargets.ts's own tolerances — a
+suggested op must be one its op would accept, pinned by tests. Round 2
+(the todo's "auto" completion): a whole-model scan is the SAME engine
+looped over every detected feature, sheet grouped by tool — a
+composition, not a second design. Deliberately excluded (her round-1
+scope): auto-facing, auto-waterline, tool assignment changes, any
+auto-accept path. Landed 2026-11-11: the picker + knowledge sheet
+(round 1); the proposal → op-creation checkboxes are round 2.
+
 **13. Simulate the POSTED g-code, not the generator IR** (Alice's
 2026-11-06 call, after the op-7 chamfer ghost): the machine executes
 the nc; the sim/estimate execute the Move[] IR — everything the post
