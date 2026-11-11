@@ -192,7 +192,6 @@ export function ModelPanel(props: Props) {
                 className="tool-row-main"
                 onClick={() => props.onSelectObject('model')}
               >
-                <span className="obj-dot" />
                 <span className="tool-name">{props.modelName}</span>
                 <span className="tool-meta">
                   loaded · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
@@ -216,7 +215,6 @@ export function ModelPanel(props: Props) {
                 className="tool-row-main"
                 onClick={() => props.onSelectObject(p.id)}
               >
-                <span className="obj-dot" />
                 <span className="tool-name">{rowLabel(p)}</span>
               </button>
               <button

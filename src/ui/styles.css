@@ -651,6 +651,17 @@ input.num-input:focus { outline: 1px solid #2e6f9e; }
 .tool-row.selected { border-color: #7fdfff; background: #1c2a33; }
 .tool-row .tool-name { font-size: 12px; color: #d8dde2; }
 .tool-row .tool-meta { font-size: 10px; color: #7d8891; }
+/* the object list colors like the ops list (2026-11-11): a left accent
+ * bar + colored name — no dots. After .tool-row.active so the accent
+ * wins the border. */
+.tool-row.obj-model,
+.tool-row.obj-cylinder,
+.tool-row.obj-box,
+.tool-row.obj-artwork { border-left: 3px solid var(--type-color); }
+.tool-row.obj-model .tool-name,
+.tool-row.obj-cylinder .tool-name,
+.tool-row.obj-box .tool-name,
+.tool-row.obj-artwork .tool-name { color: var(--type-color); }
 pre {
   font-size: 11px;
   background: #101315;
