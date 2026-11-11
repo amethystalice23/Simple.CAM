@@ -1670,24 +1670,35 @@ export function App() {
         </button>
         <span className="tag">Carvera · open CAM</span>
         <div className="header-actions">
-          {dirty && (
-            <span className="unsaved" title="Unsaved changes">
-              ● unsaved
-            </span>
-          )}
-          <button type="button" onClick={newJob}>
-            New job
-          </button>
-          <button
-            type="button"
-            onClick={saveJob}
-            disabled={!geometry && primitives.length === 0 && ops.length === 0}
-          >
-            Save job
-          </button>
-          <button type="button" onClick={() => openJobInputRef.current?.click()}>
-            Open job…
-          </button>
+          {/* the job-file group: a quieter sub-panel, set apart from the
+           * action buttons — these manage the DOCUMENT (new/save/open),
+           * the blue ones act on the WORK (calibrate, simulate, export) */}
+          <div className="job-actions">
+            {dirty && (
+              <span className="unsaved" title="Unsaved changes">
+                ● unsaved
+              </span>
+            )}
+            <button type="button" className="job-btn" onClick={newJob}>
+              New job
+            </button>
+            <button
+              type="button"
+              className="job-btn"
+              onClick={saveJob}
+              disabled={!geometry && primitives.length === 0 && ops.length === 0}
+            >
+              Save job
+            </button>
+            <button
+              type="button"
+              className="job-btn"
+              onClick={() => openJobInputRef.current?.click()}
+            >
+              Open job…
+            </button>
+          </div>
+          <span className="header-sep" aria-hidden />
           <button
             type="button"
             title="Generate a feed/speed test-pattern coupon as ordinary toolpaths"
@@ -1809,7 +1820,7 @@ export function App() {
               <button
                 key={t}
                 type="button"
-                className={t === tab ? 'active' : ''}
+                className={`tab-${t}${t === tab ? ' active' : ''}`}
                 onClick={() => setTab(t)}
               >
                 {TAB_LABELS[t]}

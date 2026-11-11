@@ -58,6 +58,27 @@ header {
   align-items: center;
 }
 .header-actions button { padding: 5px 12px; font-size: 12px; }
+/* the job-file group (2026-11-11): a quieter sub-panel, set apart from
+ * the blue action buttons — these manage the DOCUMENT, not the work */
+.job-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  padding: 3px 4px;
+}
+.job-actions button {
+  background: transparent;
+  color: #aeb7bf;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+.job-actions button:hover:not(:disabled) { background: #31373e; color: #fff; }
+.job-actions button:disabled { color: #5a636b; }
+/* the divider between the document group and the work actions */
+.header-sep { width: 1px; align-self: stretch; background: #31373e; }
 .unsaved {
   color: #ffd27f;
   font-size: 11px;
@@ -160,8 +181,16 @@ button:disabled:hover { background: #2e6f9e; }
 button.secondary:disabled:hover { background: #31373e; }
 
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+/* per-tab accents (2026-11-11): a subtle colored underline hints each
+ * section's hue at rest; the active tab takes the tint fully, so which
+ * section you are in reads at a glance */
+.tab-stock { --tab-accent: #e6a23c; }
+.tab-model { --tab-accent: #4ecf7a; }
+.tab-tools { --tab-accent: #b48cff; }
+.tab-ops { --tab-accent: #4fc3f7; }
 .tabs button {
   flex: 1;
+  position: relative;
   background: #1b1f24;
   border: 1px solid #31373e;
   color: #9aa4ad;
@@ -169,7 +198,23 @@ button.secondary:disabled:hover { background: #31373e; }
   font-size: 11px;
   border-radius: 5px;
 }
-.tabs button.active { background: #2e6f9e; border-color: #2e6f9e; color: #fff; }
+.tabs button::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--tab-accent, #4d94c9);
+  opacity: 0.3;
+}
+.tabs button.active {
+  background: color-mix(in srgb, var(--tab-accent, #2e6f9e) 16%, #1b1f24);
+  border-color: var(--tab-accent, #2e6f9e);
+  color: var(--tab-accent, #fff);
+}
+.tabs button.active::after { opacity: 1; }
 
 .tool-list {
   max-height: 320px;
