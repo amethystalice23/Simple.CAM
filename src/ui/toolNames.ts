@@ -81,3 +81,26 @@ export function toolMetaLine(tool: Tool): string {
   if (tool.shaftDiameter !== undefined) parts.push(`shank ${tool.shaftDiameter}`);
   return parts.join(' · ');
 }
+
+/** The library-state of a tool entry (2026-11-11): against the SHIPPED
+ * preset baseline — 'preset' = exactly as Makera shipped it, 'edited' =
+ * same id but any field changed since, 'new' = not in the baseline at all
+ * (hand-added or CSV-imported). The library autosaves to storage, so
+ * "unsaved" never applies; the baseline is what the badge honest-ly
+ * measures against. */
+export type ToolState = 'preset' | 'edited' | 'new';
+
+/** key-sorted JSON: two rounds through localStorage must compare equal */
+function stableJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val) =>
+    val !== null && typeof val === 'object' && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : val,
+  );
+}
+
+export function toolState(tool: Tool, builtIns: readonly Tool[]): ToolState {
+  const base = builtIns.find((b) => b.id === tool.id);
+  if (!base) return 'new';
+  return stableJson(base) === stableJson(tool) ? 'preset' : 'edited';
+}

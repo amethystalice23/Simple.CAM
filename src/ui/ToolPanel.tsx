@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Tool } from '../core/types';
 import { exportToolsCsv, mergeImportedTools, parseFusionToolCsv } from '../core/toolImport';
+import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { getMaterial, MATERIALS } from '../core/materials';
 import { chipLoad } from '../core/cutAdvisor';
 import { toolPresetFor } from './jobGeneration';
+import { toolState, type ToolState } from './toolNames';
 import { NumberField, TextField } from './fields';
 import { Toasts, useToasts } from './Toasts';
 
@@ -154,6 +156,11 @@ function PresetTablePopup(props: { tool: Tool; materialId: string; onClose: () =
 
 const TOOL_TYPES: Tool['type'][] = ['flat', 'ball', 'bull', 'vbit', 'drill', 'threadmill', 'corn', 'laser'];
 
+/** the library-state badge, colored per state (see .tool-state) */
+function StateBadge({ state }: { state: ToolState }) {
+  return <span className={`tool-state ${state}`}>{state}</span>;
+}
+
 /** Nested grouping for the list: shank → subtype → tools by ascending diameter. */
 function groupTools(tools: Tool[]) {
   const byShank = new Map<number | undefined, Map<string, Tool[]>>();
@@ -192,6 +199,8 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
   const [shankFilter, setShankFilter] = useState<string>('all');
   const importInputRef = useRef<HTMLInputElement>(null);
   const [showPresets, setShowPresets] = useState(false);
+  /** parsed import awaiting the merge-or-replace decision (2026-11-11) */
+  const [importChoice, setImportChoice] = useState<{ imported: Tool[]; warnings: string[] } | null>(null);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
   /** distinct shank sizes in the library, ascending */
@@ -230,9 +239,10 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
 
   /**
    * Import Fusion 360 tool-library CSV exports: parse each picked file,
-   * merge its tools into the library (ids suffixed on collision, existing
-   * entries untouched), select the first new tool, and toast the outcome.
-   * Zero tools across all files leaves the library alone.
+   * then ASK whether to merge (current behavior — ids suffixed on
+   * collision, existing entries untouched) or REPLACE the whole library
+   * (Alice, 2026-11-11). Zero tools across all files leaves the library
+   * alone and just toasts.
    */
   const importFiles = async (files: File[]) => {
     const imported: Tool[] = [];
@@ -251,15 +261,33 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
       for (const w of warnings) pushToast(w, 'warn');
       return;
     }
-    const merged = mergeImportedTools(tools, imported);
+    setImportChoice({ imported, warnings });
+  };
+
+  const importMerge = () => {
+    if (!importChoice) return;
+    const merged = mergeImportedTools(tools, importChoice.imported);
     onChange(merged);
     setDraft(null);
     setIsNew(false);
     const firstNewId = merged[tools.length]?.id;
     if (firstNewId) onSelect(firstNewId);
-    const n = imported.length === 1 ? '1 tool' : `${imported.length} tools`;
-    pushToast(warnings.length > 0 ? `Imported ${n}, skipped ${warnings.length}` : `Imported ${n}`);
-    for (const w of warnings) pushToast(w, 'warn');
+    finishImport(`Imported ${importChoice.imported.length} tool(s) into the library`);
+  };
+
+  const importReplace = () => {
+    if (!importChoice) return;
+    onChange(importChoice.imported);
+    setDraft(null);
+    setIsNew(false);
+    onSelect(importChoice.imported[0]?.id ?? '');
+    finishImport(`Library replaced — ${importChoice.imported.length} tool(s)`);
+  };
+
+  const finishImport = (msg: string) => {
+    if (importChoice) for (const w of importChoice.warnings) pushToast(w, 'warn');
+    pushToast(msg);
+    setImportChoice(null);
   };
 
   /** the exact inverse of the CSV import — tweaked libraries are worth
@@ -286,37 +314,50 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
     <>
       <section>
         <h2>Tool Library</h2>
-        <label className="field">
-          <span>Search</span>
-          <input
-            type="text"
-            placeholder="name, type, Ø…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Bit type</span>
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as Tool['type'] | 'all')}>
-            <option value="all">All types</option>
-            {TOOL_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Shank Ø</span>
-          <select value={shankFilter} onChange={(e) => setShankFilter(e.target.value)}>
-            <option value="all">All shanks</option>
-            {shankSizes.map((d) => (
-              <option key={d} value={String(d)}>
-                {d} mm
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="tool-filters">
+          <div className="filters-head">Filter</div>
+          <label className="field">
+            <span>Search</span>
+            <input
+              type="text"
+              placeholder="name, type, Ø…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          <div className="filter-row">
+            <label className="field">
+              <span>Bit type</span>
+              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as Tool['type'] | 'all')}>
+                <option value="all">All types</option>
+                {TOOL_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Shank Ø</span>
+              <select value={shankFilter} onChange={(e) => setShankFilter(e.target.value)}>
+                <option value="all">All shanks</option>
+                {shankSizes.map((d) => (
+                  <option key={d} value={String(d)}>
+                    {d} mm
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="list-head">
+          Library — {filtered.length} of {tools.length}
+          <span className="list-legend">
+            <StateBadge state="preset" />
+            <StateBadge state="edited" />
+            <StateBadge state="new" />
+          </span>
+        </div>
         <div className="tool-list">
           {groupTools(filtered).map((g) => (
             <div key={g.shank ?? 'unknown'} className="tool-group">
@@ -337,9 +378,14 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
                         setIsNew(false);
                       }}
                     >
-                      <span className="tool-name">{t.name}</span>
-                      <span className="tool-meta">
-                        {t.type} · Ø{t.diameter}
+                      <span className="tool-row-main">
+                        <span className="tool-name">{t.name}</span>
+                        <span className="tool-meta">
+                          {t.type} · Ø{t.diameter}
+                        </span>
+                      </span>
+                      <span className="tool-row-state">
+                        <StateBadge state={toolState(t, BUILT_IN_TOOLS)} />
                       </span>
                     </button>
                   ))}
@@ -351,7 +397,7 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
         </div>
         <div className="buttons">
           <button type="button" onClick={newTool}>
-            New
+            Add Tool
           </button>
           <button
             type="button"
@@ -375,9 +421,10 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
         </div>
       </section>
       {editing && (
-        <section>
+        <section className="tool-editor">
         <h2 className="panel-head">
           {isNew ? 'New Tool' : 'Edit Tool'}
+          {!isNew && selected && <StateBadge state={toolState(selected, BUILT_IN_TOOLS)} />}
           <button
             type="button"
             className="icon-btn"
@@ -469,6 +516,42 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
           if (files.length > 0) void importFiles(files);
         }}
       />
+      {importChoice && (
+        <div className="modal-overlay">
+          <div className="modal import-choice" role="dialog" aria-modal="true" aria-label="Import tools">
+            <h2>
+              Import {importChoice.imported.length} tool{importChoice.imported.length === 1 ? '' : 's'}?
+            </h2>
+            {importChoice.warnings.length > 0 && (
+              <div className="import-warn">
+                {importChoice.warnings.map((w, i) => (
+                  <p className="hint warn" key={i}>
+                    {w}
+                  </p>
+                ))}
+              </div>
+            )}
+            <div className="import-opts">
+              <button type="button" onClick={importMerge}>
+                Merge into library
+                <small>keeps every existing tool; id collisions get a suffix ({tools.length} + {importChoice.imported.length})</small>
+              </button>
+              <button type="button" className="secondary" onClick={importReplace}>
+                Replace library
+                <small>
+                  the {tools.length} existing tool{tools.length === 1 ? '' : 's'} go away — ops
+                  pointing at a removed tool fail until re-pointed
+                </small>
+              </button>
+            </div>
+            <div className="buttons">
+              <button type="button" className="secondary" onClick={() => setImportChoice(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Toasts toasts={toasts} onDismiss={dismissToast} />
       {showPresets && editing && (
         <PresetTablePopup tool={editing} materialId={materialId} onClose={() => setShowPresets(false)} />

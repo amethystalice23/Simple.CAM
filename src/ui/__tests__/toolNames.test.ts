@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '../../core/types';
-import { groupToolsBySubtype, shortToolName, toolMetaLine, toolOptionLabel } from '../toolNames';
+import { groupToolsBySubtype, shortToolName, toolMetaLine, toolOptionLabel, toolState } from '../toolNames';
 
 function tool(name: string, subtype: string | undefined, diameter: number): Tool {
   return { id: name, name, subtype, type: 'flat', diameter, spindleRpm: 18000 };
@@ -93,5 +93,26 @@ describe('toolMetaLine', () => {
 
   it('omits the unknowns quietly — no placeholder clutter', () => {
     expect(toolMetaLine(tool('Custom shape', undefined, 5))).toBe('flat · Ø5');
+  });
+});
+
+describe('toolState', () => {
+  const preset: Tool = { id: 't1', name: 'Factory bit', type: 'flat', diameter: 6, spindleRpm: 18000 };
+
+  it('preset = identical to the shipped entry (even after a JSON round-trip)', () => {
+    const shipped = { ...preset, presets: [{ material: 'Aluminum', spindleRpm: 12000, feed: 500, plungeFeed: 200, stepDown: 1, rampFeed: 333 }] };
+    const roundTripped = JSON.parse(JSON.stringify(shipped)) as Tool;
+    expect(toolState(roundTripped, [shipped])).toBe('preset');
+  });
+
+  it('edited = same id, any field changed', () => {
+    const shipped: Tool = { ...preset, fluteLength: 20 };
+    expect(toolState({ ...shipped, fluteLength: 25 }, [shipped])).toBe('edited');
+    expect(toolState({ ...shipped, name: 'Renamed bit' }, [shipped])).toBe('edited');
+  });
+
+  it('new = not in the shipped baseline at all', () => {
+    expect(toolState(preset, [])).toBe('new');
+    expect(toolState({ ...preset, id: 'custom-1' }, [preset])).toBe('new');
   });
 });
