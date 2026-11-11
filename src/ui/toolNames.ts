@@ -82,12 +82,13 @@ export function toolMetaLine(tool: Tool): string {
   return parts.join(' · ');
 }
 
-/** The library-state of a tool entry (2026-11-11): against the SHIPPED
- * preset baseline — 'preset' = exactly as Makera shipped it, 'edited' =
- * same id but any field changed since, 'new' = not in the baseline at all
- * (hand-added or CSV-imported). The library autosaves to storage, so
- * "unsaved" never applies; the baseline is what the badge honest-ly
- * measures against. */
+/** The library-state of a tool entry (2026-11-11, against a BASELINE
+ * SNAPSHOT of the library — the tools as last imported/restored/loaded,
+ * not the shipped set): 'edited' = same id, changed since the snapshot;
+ * 'new' = added since it (Add Tool this session); 'preset' = unchanged
+ * AND a shipped Makera entry — an unchanged tool that isn't shipped
+ * (your imports) earns NO badge. The library autosaves, so the snapshot
+ * is what "edited since import" honestly measures against. */
 export type ToolState = 'preset' | 'edited' | 'new';
 
 /** key-sorted JSON: two rounds through localStorage must compare equal */
@@ -99,8 +100,23 @@ function stableJson(v: unknown): string {
   );
 }
 
-export function toolState(tool: Tool, builtIns: readonly Tool[]): ToolState {
-  const base = builtIns.find((b) => b.id === tool.id);
+export function toolState(
+  tool: Tool,
+  baseline: readonly Tool[],
+  presetIds: ReadonlySet<string>,
+): ToolState | null {
+  const base = baseline.find((b) => b.id === tool.id);
   if (!base) return 'new';
-  return stableJson(base) === stableJson(tool) ? 'preset' : 'edited';
+  if (stableJson(base) === stableJson(tool)) return presetIds.has(tool.id) ? 'preset' : null;
+  return 'edited';
+}
+
+/** A library snapshot that predates snapshots (the v1 storage format):
+ * shipped versions win for shared ids (edits to Makera presets stay
+ * visible), while imported/hand-added entries baseline as themselves —
+ * they were never new *this* session. */
+export function deriveBaseline(tools: readonly Tool[], builtIns: readonly Tool[]): Tool[] {
+  const byId = new Map(tools.map((t) => [t.id, t]));
+  for (const b of builtIns) byId.set(b.id, b);
+  return [...byId.values()];
 }

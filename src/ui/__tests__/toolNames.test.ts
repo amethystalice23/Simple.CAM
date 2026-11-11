@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '../../core/types';
-import { groupToolsBySubtype, shortToolName, toolMetaLine, toolOptionLabel, toolState } from '../toolNames';
+import { deriveBaseline, groupToolsBySubtype, shortToolName, toolMetaLine, toolOptionLabel, toolState } from '../toolNames';
 
 function tool(name: string, subtype: string | undefined, diameter: number): Tool {
   return { id: name, name, subtype, type: 'flat', diameter, spindleRpm: 18000 };
@@ -98,21 +98,40 @@ describe('toolMetaLine', () => {
 
 describe('toolState', () => {
   const preset: Tool = { id: 't1', name: 'Factory bit', type: 'flat', diameter: 6, spindleRpm: 18000 };
+  const presetIds = new Set(['t1']);
 
-  it('preset = identical to the shipped entry (even after a JSON round-trip)', () => {
-    const shipped = { ...preset, presets: [{ material: 'Aluminum', spindleRpm: 12000, feed: 500, plungeFeed: 200, stepDown: 1, rampFeed: 333 }] };
-    const roundTripped = JSON.parse(JSON.stringify(shipped)) as Tool;
-    expect(toolState(roundTripped, [shipped])).toBe('preset');
+  it('preset = unchanged AND shipped; an unchanged import earns NO badge', () => {
+    const imported: Tool = { ...preset, id: 'fusion-1' };
+    expect(toolState(preset, [preset, imported], presetIds)).toBe('preset');
+    expect(toolState(imported, [preset, imported], presetIds)).toBe(null);
   });
 
-  it('edited = same id, any field changed', () => {
-    const shipped: Tool = { ...preset, fluteLength: 20 };
-    expect(toolState({ ...shipped, fluteLength: 25 }, [shipped])).toBe('edited');
-    expect(toolState({ ...shipped, name: 'Renamed bit' }, [shipped])).toBe('edited');
+  it('edited = same id, changed since the baseline snapshot', () => {
+    expect(toolState({ ...preset, diameter: 8 }, [preset], presetIds)).toBe('edited');
+    const imported: Tool = { ...preset, id: 'fusion-1' };
+    expect(toolState({ ...imported, name: 'Retuned' }, [imported], presetIds)).toBe('edited');
   });
 
-  it('new = not in the shipped baseline at all', () => {
-    expect(toolState(preset, [])).toBe('new');
-    expect(toolState({ ...preset, id: 'custom-1' }, [preset])).toBe('new');
+  it('new = not in the baseline — an import that joined the baseline stops reading new', () => {
+    expect(toolState(preset, [], presetIds)).toBe('new');
+    const imported: Tool = { ...preset, id: 'fusion-1' };
+    // before the baseline folds the import in…
+    expect(toolState(imported, [preset], presetIds)).toBe('new');
+    // …and after (importMerge's onBaseline call)
+    expect(toolState(imported, [preset, imported], presetIds)).toBe(null);
+  });
+});
+
+describe('deriveBaseline', () => {
+  const shipped: Tool = { id: 't1', name: 'Factory bit', type: 'flat', diameter: 6, spindleRpm: 18000 };
+
+  it('a v1 library: imported entries baseline as themselves, shipped wins for shared ids', () => {
+    const imported: Tool = { id: 'fusion-1', name: 'My bit', type: 'ball', diameter: 3, spindleRpm: 12000 };
+    const editedPreset: Tool = { ...shipped, diameter: 8 };
+    const baseline = deriveBaseline([imported, editedPreset], [shipped]);
+    // the edited preset measures against the SHIPPED version (edit stays visible)
+    expect(baseline.find((t) => t.id === 't1')).toEqual(shipped);
+    // the import baselines as itself — never new this session
+    expect(baseline.find((t) => t.id === 'fusion-1')).toEqual(imported);
   });
 });

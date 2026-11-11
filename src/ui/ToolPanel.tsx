@@ -5,17 +5,21 @@ import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { getMaterial, MATERIALS } from '../core/materials';
 import { chipLoad } from '../core/cutAdvisor';
 import { toolPresetFor } from './jobGeneration';
-import { toolState, type ToolState } from './toolNames';
+import { deriveBaseline, toolState, type ToolState } from './toolNames';
 import { NumberField, TextField } from './fields';
 import { Toasts, useToasts } from './Toasts';
 
 interface Props {
   tools: Tool[];
+  /** the badge baseline: the library as last imported/restored/loaded */
+  baseline: Tool[];
   selectedId: string;
   /** the stock material — highlights which preset row its rates come from */
   materialId: string;
   onSelect: (id: string) => void;
   onChange: (tools: Tool[]) => void;
+  /** replaces the baseline snapshot (import merge/replace) */
+  onBaseline: (baseline: Tool[]) => void;
   onRestorePresets: () => void;
 }
 
@@ -161,6 +165,10 @@ function StateBadge({ state }: { state: ToolState }) {
   return <span className={`tool-state ${state}`}>{state}</span>;
 }
 
+/** the shipped Makera ids — a tool unchanged AND shipped earns the
+ * 'preset' badge; your own imported entries earn nothing when unchanged */
+const PRESET_IDS = new Set(BUILT_IN_TOOLS.map((t) => t.id));
+
 /** Nested grouping for the list: shank → subtype → tools by ascending diameter. */
 function groupTools(tools: Tool[]) {
   const byShank = new Map<number | undefined, Map<string, Tool[]>>();
@@ -188,7 +196,7 @@ function groupTools(tools: Tool[]) {
 }
 
 /** Pick, edit, add, and delete tools in the library. */
-export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, onRestorePresets }: Props) {
+export function ToolPanel({ tools, baseline, selectedId, materialId, onSelect, onChange, onBaseline, onRestorePresets }: Props) {
   // only a genuine click selects — no first-tool fallback, so the edit form
   // stays hidden until the user picks something from the list
   const selected = tools.find((t) => t.id === selectedId);
@@ -268,6 +276,8 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
     if (!importChoice) return;
     const merged = mergeImportedTools(tools, importChoice.imported);
     onChange(merged);
+    // the imported entries join the baseline — they are no longer "new"
+    onBaseline(deriveBaseline(merged, BUILT_IN_TOOLS));
     setDraft(null);
     setIsNew(false);
     const firstNewId = merged[tools.length]?.id;
@@ -278,10 +288,30 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
   const importReplace = () => {
     if (!importChoice) return;
     onChange(importChoice.imported);
+    onBaseline(deriveBaseline(importChoice.imported, BUILT_IN_TOOLS));
     setDraft(null);
     setIsNew(false);
     onSelect(importChoice.imported[0]?.id ?? '');
     finishImport(`Library replaced — ${importChoice.imported.length} tool(s)`);
+  };
+
+  /** the wipe (Alice, 2026-11-11): empty the library for a fresh import —
+   * the import dialog's Replace only fires with a file in hand; this is
+   * the explicit clear. Baseline clears with it, so a following import
+   * reads clean. */
+  const clearLibrary = () => {
+    if (
+      !window.confirm(
+        `Remove all ${tools.length} tools from the library? Ops pointing at any tool will fail until you import or re-add tools — "Restore Makera presets" brings the factory set back.`,
+      )
+    ) {
+      return;
+    }
+    onChange([]);
+    onBaseline([]);
+    setDraft(null);
+    setIsNew(false);
+    pushToast('Library cleared');
   };
 
   const finishImport = (msg: string) => {
@@ -385,7 +415,10 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
                         </span>
                       </span>
                       <span className="tool-row-state">
-                        <StateBadge state={toolState(t, BUILT_IN_TOOLS)} />
+                        {(() => {
+                          const st = toolState(t, baseline, PRESET_IDS);
+                          return st ? <StateBadge state={st} /> : null;
+                        })()}
                       </span>
                     </button>
                   ))}
@@ -410,6 +443,14 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
           <button
             type="button"
             className="secondary"
+            title="Empty the whole library — the fresh start for a clean import (the import dialog's Replace does the same with a file in hand)"
+            onClick={clearLibrary}
+          >
+            Clear…
+          </button>
+          <button
+            type="button"
+            className="secondary"
             title="Save the whole library as the same CSV format the import reads — your tweaks backed up"
             onClick={exportLibrary}
           >
@@ -424,7 +465,10 @@ export function ToolPanel({ tools, selectedId, materialId, onSelect, onChange, o
         <section className="tool-editor">
         <h2 className="panel-head">
           {isNew ? 'New Tool' : 'Edit Tool'}
-          {!isNew && selected && <StateBadge state={toolState(selected, BUILT_IN_TOOLS)} />}
+          {!isNew && selected && (() => {
+            const st = toolState(selected, baseline, PRESET_IDS);
+            return st ? <StateBadge state={st} /> : null;
+          })()}
           <button
             type="button"
             className="icon-btn"

@@ -27,6 +27,7 @@ import type {
   Vec2,
 } from '../core/types';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
+import { deriveBaseline } from './toolNames';
 import { decodeBitmapFile, type GrayBitmap } from '../core/bitmapImport';
 import { planeExtents, transformFn } from './featureOverlays';
 import { opEdgeSource, resolveFeature, sourcesFor, splitSelection, stockAxisInModelSpace } from './featureSources';
@@ -110,15 +111,24 @@ const DETECTION_DECIMATE_TARGET = 50_000;
  * halftone artwork) — before the STL fallback, by extension or MIME. */
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif)$/i;
 
-function loadToolLibrary(): Tool[] {
+function loadToolLibrary(): { tools: Tool[]; baseline: Tool[] } {
   try {
     const raw = localStorage.getItem(TOOL_STORAGE_KEY);
-    const parsed = raw ? (JSON.parse(raw) as { tools?: Tool[] }) : null;
-    if (parsed?.tools && Array.isArray(parsed.tools) && parsed.tools.length > 0) return parsed.tools;
+    const parsed = raw ? (JSON.parse(raw) as { tools?: Tool[]; baseline?: Tool[] }) : null;
+    if (parsed?.tools && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+      const tools = parsed.tools;
+      // v2 carries the badge-baseline snapshot; a v1 library (no snapshot)
+      // derives one — imported entries baseline as themselves, Makera
+      // presets stay measured against the shipped versions
+      const baseline = Array.isArray(parsed.baseline)
+        ? parsed.baseline
+        : deriveBaseline(parsed.tools, BUILT_IN_TOOLS);
+      return { tools, baseline };
+    }
   } catch {
     // corrupt or unavailable storage — fall back to presets
   }
-  return BUILT_IN_TOOLS;
+  return { tools: BUILT_IN_TOOLS, baseline: [...BUILT_IN_TOOLS] };
 }
 
 /** Sensible default selection for the demo job: a Ø6 flat cutter. */
@@ -161,8 +171,10 @@ export function App() {
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
   const [tab, setTab] = useState<Tab>('stock');
-  const [tools, setTools] = useState<Tool[]>(loadToolLibrary);
-  const [toolId, setToolId] = useState<string>(() => defaultToolId(loadToolLibrary()));
+  const [library] = useState(loadToolLibrary); // loaded once — tools + badge baseline
+  const [tools, setTools] = useState<Tool[]>(library.tools);
+  const [toolBaseline, setToolBaseline] = useState<Tool[]>(library.baseline);
+  const [toolId, setToolId] = useState<string>(() => defaultToolId(library.tools));
   const [measureMode, setMeasureMode] = useState(false);
   /** viewport display layers (Alice's 2026-10-25 consolidation): the
    *  top-right Layers dropdown is the ONE place visibility is controlled
@@ -1380,11 +1392,14 @@ export function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(TOOL_STORAGE_KEY, JSON.stringify({ v: 1, tools }));
+      localStorage.setItem(
+        TOOL_STORAGE_KEY,
+        JSON.stringify({ v: 2, tools, baseline: toolBaseline }),
+      );
     } catch {
       // storage unavailable — edits live for the session only
     }
-  }, [tools]);
+  }, [tools, toolBaseline]);
 
   const tool = tools.find((t) => t.id === toolId) ?? tools[0];
 
@@ -1858,12 +1873,15 @@ export function App() {
           {tab === 'tools' && (
             <ToolPanel
               tools={tools}
+              baseline={toolBaseline}
               selectedId={tool.id}
               materialId={stock.materialId}
               onSelect={setToolId}
               onChange={setTools}
+              onBaseline={setToolBaseline}
               onRestorePresets={() => {
                 setTools(BUILT_IN_TOOLS);
+                setToolBaseline([...BUILT_IN_TOOLS]);
                 setToolId(defaultToolId(BUILT_IN_TOOLS));
               }}
             />
