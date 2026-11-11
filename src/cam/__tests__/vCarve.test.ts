@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { developChain, vCarve } from '../vCarve';
-import { ROTARY_FEED_DEG_MIN } from '../faceCylinder';
 
 const axisZ = 40; // stock axis height, arbitrary
 
