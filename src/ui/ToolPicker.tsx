@@ -27,12 +27,35 @@ interface Props {
   onChange: (toolId: string) => void;
 }
 
+/** keep in sync with .tool-popup's width */
+const POPUP_WIDTH = 320;
+
 export function ToolPicker(props: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  /** the popup is position:FIXED, anchored to the trigger and clamped to
+   *  the viewport — the ops sidebar (overflow-y: auto) and the op panel
+   *  (overflow: hidden) both clip an absolutely-positioned popup, which
+   *  sheared it at the pane edge; fixed escapes every overflow container */
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  const place = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) {
+      setPos({
+        top: r.bottom + 3,
+        left: Math.max(8, Math.min(r.right - POPUP_WIDTH, window.innerWidth - POPUP_WIDTH - 8)),
+      });
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
+    place();
+    // the sidebar scrolls the trigger — the popup follows it live
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
     const close = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -42,9 +65,12 @@ export function ToolPicker(props: Props) {
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', esc);
     return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', esc);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const current = props.tools.find((t) => t.id === props.currentId);
@@ -83,6 +109,7 @@ export function ToolPicker(props: Props) {
     <div className="tool-picker" ref={rootRef}>
       <button
         type="button"
+        ref={btnRef}
         className="tool-picker-btn"
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -104,8 +131,13 @@ export function ToolPicker(props: Props) {
         )}
         <span className="tool-picker-caret">▾</span>
       </button>
-      {open && (
-        <div className="tool-popup" role="listbox" aria-label="Tools">
+      {open && pos && (
+        <div
+          className="tool-popup"
+          role="listbox"
+          aria-label="Tools"
+          style={{ top: pos.top, left: pos.left }}
+        >
           {props.inUse.length > 0 && (
             <div className="tool-popup-head in-use">
               In use — assigned to operations

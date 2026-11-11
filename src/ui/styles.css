@@ -96,7 +96,7 @@ main { display: flex; flex: 1; min-height: 0; }
   pointer-events: none;
 }
 aside {
-  width: 340px;
+  width: 380px;
   overflow-y: auto;
   border-left: 1px solid #262b30;
   padding: 12px;
@@ -295,10 +295,11 @@ button.secondary:disabled:hover { background: #31373e; }
 .tool-picker-meta { flex: none; color: #7d8891; font-size: 10px; }
 .tool-picker-caret { flex: none; color: #7d8891; font-size: 10px; }
 .tool-popup {
-  position: absolute;
+  /* fixed + clamped: positioned by ToolPicker from the trigger's rect so
+   * it never clips at the ops pane's edge (position:fixed escapes the
+   * sidebar's and op-panel's overflow containers) */
+  position: fixed;
   z-index: 60;
-  top: calc(100% + 3px);
-  right: 0;
   width: 320px;
   max-height: 320px;
   overflow-y: auto;
