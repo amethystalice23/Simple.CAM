@@ -333,6 +333,12 @@ button.secondary:disabled:hover { background: #31373e; }
   line-height: 1.2;
 }
 .info-tip:hover { color: #7fdfff; }
+/* the urgent variant — a live constraint the user must see */
+.info-tip.warn { color: #e0785a; font-weight: 700; }
+.info-tip.warn:hover { color: #ffb08a; }
+/* the op ⓘ help popup */
+.op-help-modal { width: 480px; }
+.op-help-text { font-size: 12px; line-height: 1.55; color: #b8c0c8; margin: 8px 0 4px; }
 /* the merge-or-replace import dialog */
 .import-choice { width: 430px; }
 .import-warn { max-height: 120px; overflow-y: auto; }
@@ -433,7 +439,7 @@ button.secondary:disabled:hover { background: #31373e; }
   font-size: 12px;
   font-weight: 600;
   flex: none;
-  max-width: 110px;
+  max-width: 150px;
 }
 /* the spacer that shoves the line-1 icon cluster right */
 .op-title-gap { flex: 1; }

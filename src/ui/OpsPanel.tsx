@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   isDepthBearingJobOp,
   rotaryCalibrationOf,
@@ -22,7 +22,42 @@ import {
 } from './jobGeneration';
 import { panelToolNumbers } from './toolAssignment';
 import { OP_KIND_COLORS } from './opColors';
+import { OP_HELP, opHelpLabel } from './opHelp';
 import { ToolPicker } from './ToolPicker';
+
+/** the ⓘ affordance — help lives behind it, never as dropped paragraphs
+ * (2026-11-11); the warn variant marks URGENT live constraints */
+function InfoTip({ text, warn }: { text: string; warn?: boolean }) {
+  return (
+    <button type="button" className={`info-tip${warn ? ' warn' : ''}`} title={text}>
+      {warn ? '⚠' : 'ⓘ'}
+    </button>
+  );
+}
+
+/** the op's ⓘ popup: what this op does and what its knobs mean */
+function OpHelpPopup({ kind, onClose }: { kind: JobOp['kind']; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="modal-overlay">
+      <div className="modal op-help-modal" role="dialog" aria-modal="true" aria-label={`${opHelpLabel(kind)} — what it does`}>
+        <h2>
+          {opHelpLabel(kind)} — what it does
+          <button type="button" className="icon-btn" title="Close (Esc)" onClick={onClose}>
+            ✕
+          </button>
+        </h2>
+        <p className="op-help-text">{OP_HELP[kind]}</p>
+      </div>
+    </div>
+  );
+}
 import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
 import { isMultiTooth } from '../cam/threadMill';
@@ -169,12 +204,7 @@ function DepthFields(props: {
           onCommit={(v) => upd({ allowance: v })}
         />
       )}
-      <p className="hint">
-        depths are below the stock top · start = end → single finishing pass · allowance = stock
-        left for finishing
-        {op.floorFeatureId !== null &&
-          ` · floor: ${props.floorLabel ?? 'linked feature'} (moves with the model)`}
-      </p>
+      <InfoTip text="depths are below the stock top · start = end → single finishing pass · allowance = stock left for finishing" />
     </>
   );
 }
@@ -189,7 +219,7 @@ function IndexFields(props: {
 }) {
   const { op } = props;
   if (props.axisMode !== '4-axis') {
-    return <p className="hint">indexing needs 4-axis mode (Stock tab)</p>;
+    return <InfoTip warn text="indexing needs 4-axis mode (Stock tab)" />;
   }
   return (
     <>
@@ -212,9 +242,7 @@ function IndexFields(props: {
           ⇩
         </button>
       </div>
-      <p className="hint">
-        the stock freezes at this A — every op below runs in the rotated frame
-      </p>
+      <InfoTip text="the stock freezes at this A — every op below runs in the rotated frame" />
     </>
   );
 }
@@ -245,7 +273,7 @@ function RatesPopup(props: {
 }) {
   const { op, tool } = props;
   if (!tool) {
-    return <p className="hint">tool missing from the library — fix the Tool select first</p>;
+    return <InfoTip warn text="tool missing from the library — fix the Tool select first" />;
   }
   const defaults = presetRates(op.kind, tool, props.materialId);
   const rates = op.rates ?? {};
@@ -272,14 +300,9 @@ function RatesPopup(props: {
         : 'hint warn';
   return (
     <div className="op-rates">
-      <p className="hint">
-        defaults for {materialName}
-        {preset ? ` — tool’s Makera “${preset.material}” preset` : ' — simple.cam fallback table'}
-      </p>
-      <p className="hint">
-        edit only what this one op needs; an edited box overrides the
-        default until reset
-      </p>
+      <InfoTip
+        text={`defaults for ${materialName}${preset ? ` — tool’s Makera “${preset.material}” preset` : ' — simple.cam fallback table'} · edit only what this one op needs; an edited box overrides the default until reset`}
+      />
       <NumberField
         label="Feed (mm/min)"
         value={rates.feed ?? defaults.feed}
@@ -325,7 +348,7 @@ function RatesPopup(props: {
        * explanatory line rather than an unexplained absence — the rpm slot
        * is beam power there, so no chip load exists to advise on. */}
       {advice.verdict === 'unknown' && tool.type === 'laser' && (
-        <p className="hint">no chip-load advice for a laser — its “rpm” slot is beam power %</p>
+        <InfoTip text="no chip-load advice for a laser — its “rpm” slot is beam power %" />
       )}
       {advice.verdict !== 'unknown' && (
         <p className={chipCls} title={advice.note}>
@@ -582,14 +605,6 @@ function ParamFields(props: {
             />
             <span>allow tail stock cut-over</span>
           </label>
-          <p className="hint">
-            X range and target Ø default from the stock — narrow the X range to avoid vice jaws;
-            target Ø starts at a 0.5mm skim, set it to your finished size. Step over defaults to
-            0.5·tool Ø — the radius, a conservative radial engagement (shown until you set it) —
-            and spaces rings, passes, or per-rev advance. Off (default): every level opens and
-            closes with a full 360° edge ring — both end walls cut sharp and flush (a rotary
-            pocket). On: the spiral may cut past the end faces.
-          </p>
         </>
       );
     case 'pocket':
@@ -673,12 +688,6 @@ function ParamFields(props: {
             <NumberField label="Step down (mm)" value={op.stepDown} min={0.1} step={0.1} onCommit={(v) => upd({ stepDown: v } as Partial<JobOp>)} />
           )}
           <NumberField label="Step over (mm)" value={op.stepOver} min={0.1} step={0.1} onCommit={(v) => upd({ stepOver: v } as Partial<JobOp>)} />
-          <p className="hint">
-            the region is the cross-section at the slice depth — put it where the body is
-            clean, away from rounded or chamfered tops (the violet plane in the viewport
-            drags). The cut runs start → end depth over that one shape; features that
-            change inside the band keep their slice's silhouette
-          </p>
         </>
       );
     case 'waterline':
@@ -730,26 +739,7 @@ function ParamFields(props: {
             allowanceKey="allowance"
             title="Scrub only where the tool TOUCHES the model — the contour band around every section ring (walls, islands, interior contours) plus the flats exposed to the next slice (horizontal surfaces between levels, touched from below within one step-down); free space the rough already cleared is skipped. Waste is cleared only at the level where the ladder bottoms out (the floor, for the cut-out profile to ride in). A flat is scrubbed at the level plane above its surface — a sub-step-down skin can remain unless a plane lands on it (the raster, or a finer step-down, finishes it)"
           />
-          <p className="hint">
-            roughs the whole model in constant-Z waterline levels from the stock crown down to
-            the model floor — or the max depth, if set. No selection needed; works in 4-axis
-            indexed mode too (the op follows the datum rotation — run several with index
-            rotations between them to rough around a part). Each level clears everything the
-            tool can reach around the model's section, minus the union of every cross-section
-            ABOVE the level's cut plane — overhangs are keep-out, nothing is ever programmed
-            underneath them. Allowance is BOTH-axis roughing stock for a finishing op: every
-            level's cut plane rises by it and its clearing region insets from the model contour.
-            Follow with a finishing op (allowance 0)
-          </p>
-          <p className="hint detail">
-            the ladder ends at the model's own floor and at its widest section — whichever
-            comes first (the max-depth box only throttles it for short tools) — so the stock
-            below the part (its holder, in 4-axis mode) is never cleared, and the rough never
-            cuts the part free: that is the profile op's job, tabs and all. The boundary margin
-            (default: tool Ø + allowance + step over) keeps the moat two tool passes wide, so
-            mesh noise on the model's wall cannot pinch the perimeter pass into
-            plunge-per-sliver arcs
-          </p>
+          <InfoTip text="the ladder ends at the model's own floor and at its widest section — whichever comes first (the max-depth box only throttles it for short tools) — so the stock below the part (its holder, in 4-axis mode) is never cleared, and the rough never cuts the part free: that is the profile op's job, tabs and all. The boundary margin (default: tool Ø + allowance + step over) keeps the moat two tool passes wide, so mesh noise on the model's wall cannot pinch the perimeter pass into plunge-per-sliver arcs" />
         </>
       );
     case 'contour4d':
@@ -788,13 +778,6 @@ function ParamFields(props: {
             allowanceKey="allowance"
             title="Per-orientation finishing scrub only — passed through to each chosen angle's rough"
           />
-          <p className="hint">
-            plans its own index angles: no hand-tuned orientation stacks. The planner maps which
-            surface cells each candidate angle can clear, greedily picks the minimal set that
-            covers the model, and emits a rough at every chosen angle — the chosen angles, the
-            coverage, and the honest unreachable set (deep undercuts no angle reaches) all report
-            in the summary. The roughing fields apply to each chosen angle's pass.
-          </p>
         </>
       );
     case 'rasterContour':
@@ -845,19 +828,6 @@ function ParamFields(props: {
             />
             <span>allow tail stock cut-over</span>
           </label>
-          <p className="hint">
-            the paired SURFACE pass to the waterline contour: a heightmap of the model is taken by
-            downward raycasts, dilated with the tool's kernel (flat disc / ball hemisphere) so every
-            sweep clears to the tool-compensated surface, and cut in serpentine rows at this step
-            over — cutting only where material sits above the surface (no air cutting). No
-            selection, no depth boxes: the stock crown is the ceiling, the model's surface sets
-            every z. Run it after a waterline contour with allowance (the rough): this op's
-            allowance is the only rough-vs-finish knob — 0 cuts to the model surface. Assumes bulk
-            stock is already cleared; warns when a plunge would run deeper than a surface pass
-            should. Works in 4-axis indexed mode like the waterline op. Row angle 0 = rows run
-            along X; 90 = along Y; any angle works, and a 0° + 90° pair gives the cross-hatch
-            "both directions" finish
-          </p>
         </>
       );
     case 'rotaryCarve':
@@ -893,16 +863,6 @@ function ParamFields(props: {
               <option value="spiralWrap">spiral wrap — one helix per sweep</option>
             </select>
           </label>
-          <p className="hint">
-            the raster core in the unwrapped (x, θ) frame: a dexel map of the model's OUTER surface
-            radius is taken by radial raycasts, dilated with the tool's kernel, and ONE op roughs and
-            finishes — a complete full-wrap sweep at each depth level before descending the ladder,
-            ending at the first level with nothing left to cut, then the finishing pass follows the
-            compensated surface itself. No selection: the whole model on the stock's rotation axis is
-            the target. A accumulates across wraps (the post keeps the counter small); material behind
-            an air gap along a ray is reported, never left as a silent mystery. Cylinder stock, model on
-            its axis, 4-axis mode
-          </p>
         </>
       );
     case 'swarfFinish': {
@@ -927,22 +887,7 @@ function ParamFields(props: {
               onCommit={(v) => upd({ glancingFloor: v } as Partial<JobOp>)}
             />
           )}
-          <p className="hint">
-            the true 4D finish: the tool hugs the surface with ALL FOUR AXES moving — every surface
-            cell rotates to its own contact attitude, whole patches swept as one long monotone-A
-            pass at G93 inverse time. Not fixed angles: the attitude follows the surface everywhere
-            it bends. Kernel by tool: a flat or corn endmill presents the FLANK (the normal against
-            the flute's side); a ball endmill presents the glancing WINDOW (the normal up, the
-            general-coverage pass that cleans what the side cannot hug). Assumes a rough ran ahead —
-            run a 4D contour or rotary contour at allowance first. The summary reports every cell
-            the envelope cannot reach (twin-blade clips, unreachable normals) — left standing,
-            never silently skipped
-          </p>
-          <p className="hint detail">
-            honest time: a full-wrap patch is rotary-ceiling clamped (≥9s per revolution) — the long
-            slow sweeps are the cut, not a bug. Multiple patches retract and re-approach between
-            them; A only ever advances
-          </p>
+          <InfoTip text="honest time: a full-wrap patch is rotary-ceiling clamped (≥9s per revolution) — the long slow sweeps are the cut, not a bug. Multiple patches retract and re-approach between them; A only ever advances" />
         </>
       );
     }
@@ -994,19 +939,19 @@ function ParamFields(props: {
           <NumberField label="Depth (mm)" value={op.depth} min={0.1} step={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
           <NumberField label="Width (mm)" title="0 = just follow the lines — no width fan, the groove is the tool's own cut (V-bit knurling)" value={op.width} min={0} step={0.1} onCommit={(v) => upd({ width: v } as Partial<JobOp>)} />
           {props.tool && op.width > 0 && op.width < props.tool.diameter - 1e-9 && (
-            <p className="hint warn">
-              a {round2(props.tool.diameter)}mm tool can't follow a {round2(op.width)}mm line —
-              the groove comes out ~{round2(props.tool.diameter)}mm wide. Set 0 if you mean to
-              just follow the lines
-            </p>
+            <InfoTip
+              warn
+              text={`a ${round2(props.tool.diameter)}mm tool can't follow a ${round2(op.width)}mm line — the groove comes out ~${round2(props.tool.diameter)}mm wide. Set 0 if you mean to just follow the lines`}
+            />
           )}
           {op.width === 0 && (
-            <p className="hint">
-              width 0: just following the lines —{' '}
-              {props.tool?.type === 'vbit'
-                ? 'the groove width comes from the depth and the bit angle'
-                : `the groove is the tool's own ${round2(props.tool?.diameter ?? 0)}mm width`}
-            </p>
+            <InfoTip
+              text={`width 0: just following the lines — ${
+                props.tool?.type === 'vbit'
+                  ? 'the groove width comes from the depth and the bit angle'
+                  : `the groove is the tool's own ${round2(props.tool?.diameter ?? 0)}mm width`
+              }`}
+            />
           )}
           <FinishingOnlyCheck op={op} upd={upd} />
           {!op.finishingOnly && (
@@ -1019,14 +964,6 @@ function ParamFields(props: {
               <option value="ccw">ccw</option>
             </select>
           </label>
-          <p className="hint">
-            helical grooves about the stock axis — angle off the circumferential direction
-            (90° = axial lines), strands evenly around 360° — spin is where strand 1
-            starts around the cylinder — depth per step-down ladder whose
-            levels retrace the same groove. Width wider than the tool Ø fans parallel passes;
-            width 0 just follows the lines (the tool cuts its own width — knurling).
-            Defaults from the stock; the ⇩ picks fill the area off the model
-          </p>
         </>
       );
     case 'thread':
@@ -1108,12 +1045,6 @@ function ParamFields(props: {
               Add facing toolpath
             </button>
           </div>
-          <p className="hint">
-            external V-bit thread — groove depth derives from pitch, the bit's angle, and
-            tolerance (crest Ø = nominal − 2·tolerance; grooves cut deeper by it). Editing
-            the nominal Ø fills the standard coarse pitch (M6 → 1.0, M4 → 0.7…); override
-            it freely. Fit is empirical — cut a test coupon before committing the part
-          </p>
         </>
       );
     case 'threadMill':
@@ -1195,15 +1126,6 @@ function ParamFields(props: {
               Add prep toolpath
             </button>
           </div>
-          <p className="hint">
-            single-profile thread mill, cut bottom-up in one helix per start (a full second
-            spring pass, like Makera's own 14×1 example). The fit is radial: tolerance shifts
-            the helix, the tool cuts its own full form. Step over 0 = the full form in one
-            pass; set it to split the form into radial steps for tough materials. Internal
-            retract picks itself — pull aside and lift when the cleared bore has room, follow
-            the spiral out when it doesn't. Rotation names the thread like the 4-axis Thread
-            op does (their 14ccw example is a ccw thread)
-          </p>
         </>
       );
     case 'drill':
@@ -1328,13 +1250,6 @@ function ParamFields(props: {
             step={0.1}
             onCommit={(v) => upd({ depth: v })}
           />
-          <p className="hint">
-            add cuts a new chamfer through the selected edge (direction = which way the wall
-            extends); existing rides a chamfer already in the model — direction selects which end
-            you clicked: the bottom edge (up) traces that circle exactly, the top edge (down)
-            traces down-and-in by depth. Select circles, or a face to chamfer its outline; width
-            follows the bit's angle
-          </p>
         </>
       );
     case 'cylChamfer':
@@ -1370,30 +1285,13 @@ function ParamFields(props: {
               <option value="ccw">ccw</option>
             </select>
           </label>
-          <p className="hint">
-            chamfers edge circles around the stock axis — one full A revolution at the circle's
-            exact X, the V-bit flank through it, no side to pick (the cone cuts whichever side of
-            X carries material). Depth 0 anchors on the circle and peels the wall above it level by
-            level from the stock surface; a depth slides below the circle from an already-clear rim
-            (width = depth × tan(half the bit angle), the chamfer angle = 90° − half-angle). Face
-            cylinder ops publish their step edges at their target Ø, and the stock its end rims, as
-            selectable green circles; a rod-end chamfer = the end rim + a depth.
-            A BALL-NOSE tool cuts rounded profiles instead: depth 0 anchors on the circle and the
-            upper hemisphere shears a FILLET up-and-to-the-side (the ball analogue of the
-            chamfer); a depth plunges a U-shaped channel — depth ≤ the ball's radius is the true
-            U (depth = radius = full semicircle, width = tool Ø); deeper goes past the equator
-            and the shank flattens the channel walls (warned)
-          </p>
         </>
       );
     case 'engrave':
       return (
         <>
           {props.tool?.type === 'laser' ? (
-            <p className="hint">
-              laser: a single pass at the tool's focus height — depth is ignored, power comes from
-              the tool (or the ⚡ override) and lands as the S word on the cut lines
-            </p>
+            <InfoTip text="laser: a single pass at the tool's focus height — depth is ignored, power comes from the tool (or the ⚡ override) and lands as the S word on the cut lines" />
           ) : (
             <>
               <NumberField
@@ -1444,19 +1342,7 @@ function ParamFields(props: {
               onCommit={(v) => upd({ fillStepOver: v })}
             />
           )}
-          <p className="hint">
-            follows the selected artwork paths at depth — no tool offset, the centerline IS the
-            path. The frame comes from the artwork itself: flat artwork cuts in its plane, wrapped
-            artwork cuts around its own Ø (point that at the faced surface — the Model tab). Drop
-            an SVG on the viewport to add artwork; a V-bit or small flat bit is usual
-          </p>
-          <p className="hint detail">
-            fill: the raster clears the selected closed painted regions — scanlines along
-            the machine's fast X (axial on a wrapped logo), a hole inside a filled loop stays
-            untouched (the ankh's counter), the same depth ladder per scanline, laser as ever a
-            single pass. 'fill then outline' runs the raster FIRST with the outlines traced on
-            top; 'fill only' skips them. Closed-but-unpainted paths (fill="none") outline only
-          </p>
+          <InfoTip text="fill: the raster clears the selected closed painted regions — scanlines along the machine's fast X (axial on a wrapped logo), a hole inside a filled loop stays untouched (the ankh's counter), the same depth ladder per scanline, laser as ever a single pass. 'fill then outline' runs the raster FIRST with the outlines traced on top; 'fill only' skips them. Closed-but-unpainted paths (fill=none) outline only" />
         </>
       );
   }
@@ -1466,6 +1352,8 @@ export function OpsPanel(props: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   /** the op whose feeds & speeds popup is open (one at a time) */
   const [ratesOpenId, setRatesOpenId] = useState<string | null>(null);
+  /** the op whose ⓘ help popup is open (one at a time) */
+  const [helpOpId, setHelpOpId] = useState<string | null>(null);
 
   /** tool change re-derives the step defaults for the new cutter */
   const changeTool = (op: JobOp, toolId: string) => {
@@ -1548,6 +1436,9 @@ export function OpsPanel(props: Props) {
 
   return (
     <section className="ops">
+      {helpOpId && (
+        <OpHelpPopup kind={props.ops.find((o) => o.id === helpOpId)!.kind} onClose={() => setHelpOpId(null)} />
+      )}
       <div className="buttons">
         <button type="button" onClick={props.onAddOp}>
           + Add toolpath
@@ -1627,6 +1518,17 @@ export function OpsPanel(props: Props) {
                     </option>,
                   ])}
                 </select>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title={`What this op does — ${OP_HELP[op.kind].slice(0, 60)}…`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setHelpOpId(helpOpId === op.id ? null : op.id);
+                  }}
+                >
+                  ⓘ
+                </button>
                 {gen?.error && <span className="op-status" title={gen.error}>⚠</span>}
                 <span className="op-title-gap" />
                 <button
@@ -1774,14 +1676,23 @@ export function OpsPanel(props: Props) {
                   {gen?.summary && <p className="hint">{gen.summary}</p>}
                   {!gen && <p className="hint">not calculated yet</p>}
                   {(op.kind === 'slicePocket' || op.kind === 'waterline' || op.kind === 'rasterContour' || op.kind === 'rotaryCarve') && !props.hasModel && (
-                    <p className="hint">needs a model — the geometry comes from the loaded STL</p>
-                  )}
-                  {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && op.kind !== 'waterline' && op.kind !== 'rasterContour' && op.kind !== 'rotaryCarve' && (
-                    <p className="hint">needs a model or a primitive to select from</p>
-                  )}
-                  {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread' || op.kind === 'cylChamfer' || op.kind === 'rotaryCarve') && props.axisMode !== '4-axis' && (
-                    <p className="hint">needs 4-axis mode (Stock tab)</p>
-                  )}
+                  <InfoTip
+                    text={`needs a model — the geometry comes from the loaded STL`}
+                    warn
+                  />
+                )}
+                {!props.hasModel && props.primitives.length === 0 && op.kind !== 'faceCylinder' && op.kind !== 'slicePocket' && op.kind !== 'waterline' && op.kind !== 'rasterContour' && op.kind !== 'rotaryCarve' && (
+                  <InfoTip
+                    text="needs a model or a primitive to select from"
+                    warn
+                  />
+                )}
+                {(op.kind === 'faceCylinder' || op.kind === 'spiralCarve' || op.kind === 'thread' || op.kind === 'cylChamfer' || op.kind === 'rotaryCarve') && props.axisMode !== '4-axis' && (
+                  <InfoTip
+                    text="needs 4-axis mode (Stock tab)"
+                    warn
+                  />
+                )}
                 </div>
               )}
             </div>
