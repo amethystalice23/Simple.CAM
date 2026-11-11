@@ -235,31 +235,54 @@ button.secondary:disabled:hover { background: #31373e; }
   border-color: #6b5842;
 }
 
-.op-panel { border: 1px solid #31373e; border-radius: 6px; margin: 6px 0; overflow: hidden; }
+.op-panel { border: 1px solid #31373e; border-left: 3px solid var(--kind-color, #31373e); border-radius: 6px; margin: 6px 0; overflow: hidden; }
 .op-panel.dragging { opacity: 0.45; }
 .op-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  padding: 5px 8px 6px 5px;
   background: #1b1f24;
   cursor: pointer;
   user-select: none;
 }
+.op-title:hover { background: #20252b; }
+.op-line1 { display: flex; align-items: center; gap: 6px; }
+.op-line2 { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding-left: 20px; }
 .op-title .grip { color: #7d8891; cursor: grab; font-size: 14px; line-height: 1; }
 .op-title .op-seq { color: #d8dde2; font-size: 12px; font-weight: 600; min-width: 24px; }
 .op-title select.op-kind {
   background: transparent;
   border: none;
-  color: #d8dde2;
+  color: var(--kind-color, #d8dde2);
   font-size: 12px;
   font-weight: 600;
   flex: none;
   max-width: 110px;
 }
-.op-snippet {
+/* the spacer that shoves the line-1 icon cluster right */
+.op-title-gap { flex: 1; }
+/* the controller tool number chip (ZCam-style): warm amber, dark text */
+.tool-chip {
+  flex: none;
+  background: #e08a2e;
+  color: #17191d;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.op-summary {
   flex: 1;
   min-width: 0;
+  font-size: 10px;
+  color: #aeb7bf;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.op-summary.err { color: #ff8a8a; }
+.op-snippet {
+  flex: none;
+  max-width: 40%;
   font-size: 10px;
   color: #7d8891;
   overflow: hidden;

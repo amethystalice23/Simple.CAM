@@ -21,6 +21,8 @@ import {
   toolPresetFor,
 } from './jobGeneration';
 import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
+import { panelToolNumbers } from './toolAssignment';
+import { OP_KIND_COLORS } from './opColors';
 import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
 import { isMultiTooth } from '../cam/threadMill';
@@ -1555,14 +1557,27 @@ export function OpsPanel(props: Props) {
         <p className="hint">add a toolpath, then select features on the Model tab</p>
       )}
       <div>
-        {props.ops.map((op, index) => {
+        {(() => {
+          // PANEL-SIDE TOOL NUMBERS (Alice, 2026-11-11): derived from the
+          // ops list order — the export dialog prefills from the same rule,
+          // so the T1 the panel shows IS the tool number the file carries.
+          const toolNums = panelToolNumbers(props.ops);
+          const inUse = [...toolNums.entries()]
+            .map(([id, n]) => ({ tool: props.tools.find((t) => t.id === id), n }))
+            .filter((e): e is { tool: Tool; n: number } => e.tool !== undefined)
+            .sort((a, b) => a.n - b.n);
+          const numOf = (id: string): number | null => toolNums.get(id) ?? null;
+          return props.ops.map((op, index) => {
           const gen = props.generated[op.id];
           const expanded = props.expandedOpId === op.id;
           const editing = props.editingOpId === op.id;
+          const tnum = op.kind === 'index' ? null : numOf(op.toolId);
           return (
             <div
               key={op.id}
               className={`op-panel${dragId === op.id ? ' dragging' : ''}`}
+              // the kind's accent color drives the row's left bar + kind text
+              style={{ ['--kind-color' as string]: OP_KIND_COLORS[op.kind] }}
             >
               <div
                 className="op-title"
@@ -1575,6 +1590,7 @@ export function OpsPanel(props: Props) {
                 onDragEnd={() => setDragId(null)}
                 onClick={() => props.onToggleExpanded(op.id)}
               >
+                <div className="op-line1">
                 <span className="grip" title="Drag to reorder">
                   ⠿
                 </span>
@@ -1611,9 +1627,8 @@ export function OpsPanel(props: Props) {
                     </option>,
                   ])}
                 </select>
-                <span className="op-snippet" title={selectionSnippet(op, props.featureLabels)}>
-                  {selectionSnippet(op, props.featureLabels)}
-                </span>
+                {gen?.error && <span className="op-status" title={gen.error}>⚠</span>}
+                <span className="op-title-gap" />
                 <button
                   type="button"
                   className={`icon-btn${props.hiddenOps.has(op.id) ? ' dim' : ''}`}
@@ -1629,7 +1644,6 @@ export function OpsPanel(props: Props) {
                 >
                   {props.hiddenOps.has(op.id) ? '⊘' : '👁'}
                 </button>
-                {gen?.error && <span className="op-status" title={gen.error}>⚠</span>}
                 <button
                   type="button"
                   className="icon-btn"
@@ -1653,6 +1667,26 @@ export function OpsPanel(props: Props) {
                 >
                   ✕
                 </button>
+                </div>
+                <div className="op-line2">
+                  {tnum !== null && (
+                    <span
+                      className="tool-chip"
+                      title={`Controller tool number T${tnum} — assigned by first use in the ops list; the export emits this number`}
+                    >
+                      T{tnum}
+                    </span>
+                  )}
+                  <span
+                    className={gen?.error ? 'op-summary err' : 'op-summary'}
+                    title={gen?.error ?? gen?.summary ?? 'not calculated yet'}
+                  >
+                    {gen?.error ? 'calculation failed' : (gen?.summary ?? 'not calculated yet')}
+                  </span>
+                  <span className="op-snippet" title={selectionSnippet(op, props.featureLabels)}>
+                    {selectionSnippet(op, props.featureLabels)}
+                  </span>
+                </div>
               </div>
               {expanded && (
                 <div className="op-body">
@@ -1711,13 +1745,31 @@ export function OpsPanel(props: Props) {
                     <label className="field">
                       <span>Tool</span>
                       <select value={op.toolId} onChange={(e) => changeTool(op, e.target.value)}>
-                        {groupToolsBySubtype(props.tools).map((g) => (
-                          <optgroup key={g.label} label={g.label}>
-                            {g.tools.map((t) => (
+                        {/* IN USE (Alice, 2026-11-11): every tool the ops
+                         * already carry, T-numbered, at the top of the
+                         * list — they also stay in their usual grouped
+                         * slots below, T-numbered there too. Native
+                         * <option>s cannot render chips, so the tag is
+                         * text; the colorful chip lives on the row. */}
+                        {inUse.length > 0 && (
+                          <optgroup label="In use">
+                            {inUse.map(({ tool: t, n }) => (
                               <option key={t.id} value={t.id}>
-                                {toolOptionLabel(t)}
+                                {`T${n} · ${toolOptionLabel(t)}`}
                               </option>
                             ))}
+                          </optgroup>
+                        )}
+                        {groupToolsBySubtype(props.tools).map((g) => (
+                          <optgroup key={g.label} label={g.label}>
+                            {g.tools.map((t) => {
+                              const n = numOf(t.id);
+                              return (
+                                <option key={t.id} value={t.id}>
+                                  {n !== null ? `T${n} · ${toolOptionLabel(t)}` : toolOptionLabel(t)}
+                                </option>
+                              );
+                            })}
                           </optgroup>
                         ))}
                       </select>
@@ -1757,7 +1809,8 @@ export function OpsPanel(props: Props) {
               )}
             </div>
           );
-        })}
+          });
+        })()}
       </div>
       {props.ops.length > 0 && (
         <div className="buttons">
