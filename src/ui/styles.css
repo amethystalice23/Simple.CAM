@@ -260,11 +260,12 @@ button.secondary:disabled:hover { background: #31373e; }
 .tool-state.preset { background: #262b30; color: #9aa4ad; }
 .tool-state.edited { background: rgba(240, 176, 78, 0.15); color: #f0b04e; }
 .tool-state.new { background: rgba(78, 207, 122, 0.15); color: #4ecf7a; }
-/* the editor card */
+/* the editor card — the same background as the selected tool row's
+ * highlight, tying "this card edits that row" together (2026-11-11) */
 .tool-editor {
   border: 1px solid #31373e;
   border-radius: 6px;
-  background: #171a1f;
+  background: #1f2b36;
   padding: 8px 10px 10px;
   margin-top: 12px;
 }
