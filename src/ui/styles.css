@@ -336,9 +336,22 @@ button.secondary:disabled:hover { background: #31373e; }
 /* the urgent variant — a live constraint the user must see */
 .info-tip.warn { color: #e0785a; font-weight: 700; }
 .info-tip.warn:hover { color: #ffb08a; }
-/* the op ⓘ help popup */
+/* the op ⓘ help popup — an intro line, then spaced beats, never a wall */
 .op-help-modal { width: 480px; }
-.op-help-text { font-size: 12px; line-height: 1.55; color: #b8c0c8; margin: 8px 0 4px; }
+.op-help-text { font-size: 12px; line-height: 1.5; color: #b8c0c8; margin: 8px 0 6px; }
+.op-help-points {
+  margin: 0;
+  padding: 0 0 4px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.op-help-points li {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b8c0c8;
+}
+.op-help-points li::marker { color: var(--kind-color, #4d94c9); }
 /* the merge-or-replace import dialog */
 .import-choice { width: 430px; }
 .import-warn { max-height: 120px; overflow-y: auto; }

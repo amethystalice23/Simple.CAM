@@ -53,7 +53,12 @@ function OpHelpPopup({ kind, onClose }: { kind: JobOp['kind']; onClose: () => vo
             ✕
           </button>
         </h2>
-        <p className="op-help-text">{OP_HELP[kind]}</p>
+        <p className="op-help-text">{OP_HELP[kind].what}</p>
+        <ul className="op-help-points">
+          {OP_HELP[kind].points.map((pt, i) => (
+            <li key={i}>{pt}</li>
+          ))}
+        </ul>
       </div>
     </div>
   );
@@ -1521,7 +1526,7 @@ export function OpsPanel(props: Props) {
                 <button
                   type="button"
                   className="icon-btn"
-                  title={`What this op does — ${OP_HELP[op.kind].slice(0, 60)}…`}
+                  title={`What this op does — ${OP_HELP[op.kind].what}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     setHelpOpId(helpOpId === op.id ? null : op.id);
