@@ -655,7 +655,10 @@ export function App() {
         );
         return;
       }
-      const p = artworkFromImport(art, stock);
+      const p = artworkFromImport(art, stock, {
+        name: f.name,
+        kind: /\.dxf$/i.test(f.name) ? 'dxf' : 'svg',
+      });
       setPrimitives((prev) => [...prev, p]);
       setSelectedObjectId(p.id);
     } catch (e) {
@@ -689,7 +692,10 @@ export function App() {
       setTab('model');
       return;
     }
-    const p = artworkFromImport(result.art, stock);
+    const p = artworkFromImport(result.art, stock, {
+      name: result.name,
+      kind: 'halftone',
+    });
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
   };

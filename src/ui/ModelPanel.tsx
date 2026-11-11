@@ -138,20 +138,36 @@ export function ModelPanel(props: Props) {
   const selKind: ObjKind = isModel
     ? 'model'
     : ((selectedPrimitive?.kind as ObjKind | undefined) ?? 'box');
+  const artworkKind = (p: Extract<Primitive, { kind: 'artwork' }>): string =>
+    p.sourceKind === 'svg' ? 'SVG Artwork' : p.sourceKind === 'dxf' ? 'DXF Artwork' : p.sourceKind === 'halftone' ? 'Halftone Artwork' : 'Artwork';
+  /** the model's file type from its name's extension — the meta line's
+   * first word ('loaded' told nobody anything) */
+  const modelType = (() => {
+    const m = /\.([a-z0-9]+)$/i.exec(props.modelName);
+    return m ? m[1].toUpperCase() : 'STL';
+  })();
   const selLabel = isModel
     ? props.modelName
     : selectedPrimitive &&
       (selectedPrimitive.kind === 'cylinder'
         ? `cylinder Ø${selectedPrimitive.diameter.toFixed(1)} × ${selectedPrimitive.length.toFixed(1)}`
         : selectedPrimitive.kind === 'artwork'
-          ? `artwork · ${selectedPrimitive.paths.length} path(s)`
+          ? `${artworkKind(selectedPrimitive)} · ${selectedPrimitive.paths.length} path(s)`
           : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
   const rowLabel = (p: Primitive) =>
     p.kind === 'cylinder'
       ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
       : p.kind === 'artwork'
-        ? `artwork · ${p.paths.length} path(s)`
+        ? `${artworkKind(p)} · ${p.paths.length} path(s)`
         : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
+  /** the row's SECOND line: type + size, mirroring the model row's shape
+   * (filename on top, file type + dims under) */
+  const rowMeta = (p: Primitive) =>
+    p.kind === 'artwork'
+      ? `${(p.width * p.transform.scale.x).toFixed(1)} × ${(p.height * p.transform.scale.y).toFixed(1)} mm`
+      : null;
+  const rowName = (p: Primitive) =>
+    p.kind === 'artwork' ? (p.sourceName ?? 'Artwork') : rowLabel(p);
 
   const setPosition = (axis: Axis, v: number) =>
     setActive({ ...active, position: { ...active.position, [axis]: v } });
@@ -194,7 +210,7 @@ export function ModelPanel(props: Props) {
               >
                 <span className="tool-name">{props.modelName}</span>
                 <span className="tool-meta">
-                  loaded · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
+                  {modelType} · {displayed!.x.toFixed(1)} × {displayed!.y.toFixed(1)} ×{' '}
                   {displayed!.z.toFixed(1)} mm
                 </span>
               </button>
@@ -215,7 +231,10 @@ export function ModelPanel(props: Props) {
                 className="tool-row-main"
                 onClick={() => props.onSelectObject(p.id)}
               >
-                <span className="tool-name">{rowLabel(p)}</span>
+                <span className="tool-name">{rowName(p)}</span>
+                <span className="tool-meta">
+                  {p.kind === 'artwork' ? `${rowLabel(p)} · ${rowMeta(p)}` : rowLabel(p)}
+                </span>
               </button>
               <button
                 type="button"

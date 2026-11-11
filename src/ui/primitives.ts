@@ -177,7 +177,12 @@ export function defaultCylinder(stock: Stock): Primitive {
  * survives later Ø edits — the wrap angle is the invariant, mm/unit
  * derives.
  */
-export function artworkFromImport(art: ImportedArtwork, stock: Stock): Primitive {
+export function artworkFromImport(
+  art: ImportedArtwork,
+  stock: Stock,
+  /** the file it came from — the objects list labels the row with it */
+  source?: { name: string; kind: 'svg' | 'dxf' | 'halftone' },
+): Primitive {
   const [x0, x1] = stockSpan(stock, 'x');
   const [y0, y1] = stockSpan(stock, 'y');
   const [z0, z1] = stockSpan(stock, 'z');
@@ -191,6 +196,8 @@ export function artworkFromImport(art: ImportedArtwork, stock: Stock): Primitive
   return {
     kind: 'artwork',
     id: nextPrimitiveId(),
+    sourceName: source?.name,
+    sourceKind: source?.kind,
     paths: art.paths,
     pathMeta: art.meta,
     width: art.width || 1,

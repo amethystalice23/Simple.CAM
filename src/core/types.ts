@@ -571,6 +571,10 @@ export type Primitive =
   | {
       kind: 'artwork';
       id: string;
+      /** the file it came from — the objects list labels the row with it
+       * (name on top, type + size under); absent on old saves */
+      sourceName?: string;
+      sourceKind?: 'svg' | 'dxf' | 'halftone';
       /** flattened line work, user units, SVG orientation (u right, v
        * DOWN) — the import parse output, kept raw so the scale knob
        * stays live */
