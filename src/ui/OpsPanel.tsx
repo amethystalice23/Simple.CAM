@@ -1748,7 +1748,6 @@ export function OpsPanel(props: Props) {
                         tools={props.tools}
                         currentId={op.toolId}
                         inUse={inUse}
-                        materialId={props.materialId}
                         onChange={(toolId) => changeTool(op, toolId)}
                       />
                     </label>

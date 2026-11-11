@@ -64,3 +64,20 @@ export function toolOptionLabel(tool: Tool): string {
   const base = shortToolName(tool);
   return tool.shaftDiameter !== undefined ? `${base} · shank ${tool.shaftDiameter}` : base;
 }
+
+/**
+ * The picker row's meta line (Alice, 2026-11-11): what matters when
+ * SELECTING a tool is type, Ø, cutting length, cutting angle, shank —
+ * rates and everything else are clutter (they live in the ⚡ popup). The
+ * cutting angle shows only for V-bits whose name doesn't already carry it.
+ */
+export function toolMetaLine(tool: Tool): string {
+  const parts: string[] = [tool.type];
+  parts.push(`Ø${tool.diameter}`);
+  if (tool.fluteLength !== undefined) parts.push(`cut ${tool.fluteLength}mm`);
+  if (tool.type === 'vbit' && tool.vAngle !== undefined && !tool.name.includes(`${tool.vAngle}`)) {
+    parts.push(`${tool.vAngle}°`);
+  }
+  if (tool.shaftDiameter !== undefined) parts.push(`shank ${tool.shaftDiameter}`);
+  return parts.join(' · ');
+}

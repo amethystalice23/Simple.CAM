@@ -5,16 +5,14 @@
  * ruling: the T-number chip sits LEFT of the name in a fixed slot, so tool
  * names align in one column whether or not a tool is numbered. Sections:
  * "In use" (every tool the ops carry, T-numbered, ordered T1→Tn) at the
- * top, then the usual subtype groups — a tool appears in BOTH places. Each
- * row adds a type dot + Ø/flutes/shank and the material's preset rates,
- * so the machining-relevant facts read before the click.
+ * top, then the usual subtype groups — a tool appears in BOTH places. The
+ * meta line carries what matters when selecting: type, Ø, cutting length,
+ * cutting angle, shank (toolMetaLine — rates are the ⚡ popup's business).
  */
 
 import { useEffect, useRef, useState } from 'react';
 import type { Tool } from '../core/types';
-import { groupToolsBySubtype, shortToolName, toolOptionLabel } from './toolNames';
-import { toolPresetFor } from './jobGeneration';
-import { getMaterial } from '../core/materials';
+import { groupToolsBySubtype, shortToolName, toolMetaLine, toolOptionLabel } from './toolNames';
 
 export interface ToolInUse {
   tool: Tool;
@@ -26,8 +24,6 @@ interface Props {
   currentId: string;
   /** tools the ops already carry, T-numbered, in T order */
   inUse: ToolInUse[];
-  /** the stock material — preset rates shown per row */
-  materialId: string;
   onChange: (toolId: string) => void;
 }
 
@@ -53,12 +49,10 @@ export function ToolPicker(props: Props) {
 
   const current = props.tools.find((t) => t.id === props.currentId);
   const numOf = new Map(props.inUse.map(({ tool, n }) => [tool.id, n]));
-  const material = getMaterial(props.materialId);
 
   const row = (t: Tool) => {
     const n = numOf.get(t.id);
     const inUse = n !== undefined;
-    const preset = toolPresetFor(t, material.id);
     return (
       <button
         type="button"
@@ -79,14 +73,7 @@ export function ToolPicker(props: Props) {
         <span className="tool-row-name" title={toolOptionLabel(t)}>
           {shortToolName(t)}
         </span>
-        <span className="tool-row-meta">
-          {`Ø${t.diameter} · ${t.flutes ?? '?'}FL${t.shaftDiameter !== undefined ? ` · shank ${t.shaftDiameter}` : ''}`}
-        </span>
-        {preset && (
-          <span className="tool-row-rates" title={`${preset.material} preset`}>
-            {`S${preset.spindleRpm} F${preset.feed}`}
-          </span>
-        )}
+        <span className="tool-row-meta">{toolMetaLine(t)}</span>
         {t.id === props.currentId && <span className="tool-row-check">✓</span>}
       </button>
     );

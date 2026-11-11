@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '../../core/types';
-import { groupToolsBySubtype, shortToolName, toolOptionLabel } from '../toolNames';
+import { groupToolsBySubtype, shortToolName, toolMetaLine, toolOptionLabel } from '../toolNames';
 
 function tool(name: string, subtype: string | undefined, diameter: number): Tool {
   return { id: name, name, subtype, type: 'flat', diameter, spindleRpm: 18000 };
@@ -65,5 +65,33 @@ describe('toolOptionLabel', () => {
 
   it('omits the suffix when the shank is unknown', () => {
     expect(toolOptionLabel(tool('My custom shape', undefined, 5))).toBe('My custom shape');
+  });
+});
+
+describe('toolMetaLine', () => {
+  it('carries what matters when selecting: type, Ø, cut length, shank', () => {
+    const spiral: Tool = {
+      ...tool('Spiral O Metal 6*25mm DLC', 'Spiral O · Metal', 6),
+      fluteLength: 25,
+      shaftDiameter: 6,
+    };
+    expect(toolMetaLine(spiral)).toBe('flat · Ø6 · cut 25mm · shank 6');
+  });
+
+  it('shows the cutting angle for V-bits unless the name already carries it', () => {
+    const vbit: Tool = {
+      ...tool('V-Bit Engraving 0.2mm', 'Engraving · V', 0.2),
+      type: 'vbit',
+      vAngle: 60,
+      tipDiameter: 0.2,
+      fluteLength: 8,
+    };
+    expect(toolMetaLine(vbit)).toBe('vbit · Ø0.2 · cut 8mm · 60°');
+    const named: Tool = { ...vbit, name: 'V-Bit 60° 0.2mm' };
+    expect(toolMetaLine(named)).toBe('vbit · Ø0.2 · cut 8mm');
+  });
+
+  it('omits the unknowns quietly — no placeholder clutter', () => {
+    expect(toolMetaLine(tool('Custom shape', undefined, 5))).toBe('flat · Ø5');
   });
 });
