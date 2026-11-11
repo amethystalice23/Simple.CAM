@@ -259,6 +259,103 @@ button.secondary:disabled:hover { background: #31373e; }
 }
 /* the spacer that shoves the line-1 icon cluster right */
 .op-title-gap { flex: 1; }
+/* the fixed T-chip slot left of an aligned name column (picker + rows) */
+.tool-chip-slot {
+  flex: none;
+  width: 26px;
+  display: inline-flex;
+  justify-content: flex-start;
+}
+
+/* ---- the custom tool picker popup (replaces the native <select>) ---- */
+.tool-picker { position: relative; width: 200px; }
+.tool-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 4px;
+  color: #d8dde2;
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.tool-picker-btn:hover { border-color: #2e6f9e; }
+.tool-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.tool-picker-meta { flex: none; color: #7d8891; font-size: 10px; }
+.tool-picker-caret { flex: none; color: #7d8891; font-size: 10px; }
+.tool-popup {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 3px);
+  right: 0;
+  width: 290px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #171a1f;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  padding: 4px;
+}
+.tool-popup-head {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d8891;
+  padding: 5px 6px 3px;
+}
+.tool-popup-head.in-use { color: #f0b04e; }
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #d8dde2;
+  padding: 5px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+}
+.tool-row:hover { background: #262c33; }
+.tool-row.current { background: #21303d; }
+.tool-row-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.tool-row-meta { flex: 1; min-width: 0; color: #7d8891; font-size: 10px; white-space: nowrap; }
+.tool-row-rates { flex: none; color: #aeb7bf; font-size: 10px; }
+.tool-row-check { flex: none; color: #7fdfff; font-size: 11px; }
+/* the cutter-type dot: flat green, ball sky, vbit amber, laser red */
+.tool-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7d8891;
+}
+.tool-dot-flat { background: #4ecf7a; }
+.tool-dot-ball { background: #4fc3f7; }
+.tool-dot-vbit { background: #e08a2e; }
+.tool-dot-laser { background: #f05c5c; }
 /* the controller tool number chip (ZCam-style): warm amber, dark text */
 .tool-chip {
   flex: none;

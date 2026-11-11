@@ -20,9 +20,9 @@ import {
   presetRates,
   toolPresetFor,
 } from './jobGeneration';
-import { groupToolsBySubtype, toolOptionLabel } from './toolNames';
 import { panelToolNumbers } from './toolAssignment';
 import { OP_KIND_COLORS } from './opColors';
+import { ToolPicker } from './ToolPicker';
 import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
 import { isMultiTooth } from '../cam/threadMill';
@@ -1744,35 +1744,13 @@ export function OpsPanel(props: Props) {
                   {op.kind !== 'index' && (
                     <label className="field">
                       <span>Tool</span>
-                      <select value={op.toolId} onChange={(e) => changeTool(op, e.target.value)}>
-                        {/* IN USE (Alice, 2026-11-11): every tool the ops
-                         * already carry, T-numbered, at the top of the
-                         * list — they also stay in their usual grouped
-                         * slots below, T-numbered there too. Native
-                         * <option>s cannot render chips, so the tag is
-                         * text; the colorful chip lives on the row. */}
-                        {inUse.length > 0 && (
-                          <optgroup label="In use">
-                            {inUse.map(({ tool: t, n }) => (
-                              <option key={t.id} value={t.id}>
-                                {`T${n} · ${toolOptionLabel(t)}`}
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                        {groupToolsBySubtype(props.tools).map((g) => (
-                          <optgroup key={g.label} label={g.label}>
-                            {g.tools.map((t) => {
-                              const n = numOf(t.id);
-                              return (
-                                <option key={t.id} value={t.id}>
-                                  {n !== null ? `T${n} · ${toolOptionLabel(t)}` : toolOptionLabel(t)}
-                                </option>
-                              );
-                            })}
-                          </optgroup>
-                        ))}
-                      </select>
+                      <ToolPicker
+                        tools={props.tools}
+                        currentId={op.toolId}
+                        inUse={inUse}
+                        materialId={props.materialId}
+                        onChange={(toolId) => changeTool(op, toolId)}
+                      />
                     </label>
                   )}
                   <ParamFields
