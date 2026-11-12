@@ -352,6 +352,93 @@ button.secondary:disabled:hover { background: #31373e; }
   color: #b8c0c8;
 }
 .op-help-points li::marker { color: var(--kind-color, #4d94c9); }
+
+/* ---- suggest ops (round 1: the picker button + the knowledge sheet) ---- */
+/* a sibling of + Add toolpath: blue like it, one hue off so the pair
+   reads as two entries of one list (Alice: "make it blue, or a slightly
+   different colour, but style it similar") */
+.suggest-btn { background: #3a5fa8; }
+.suggest-btn:hover { background: #466db8; }
+.suggest-btn.armed { background: #234254; color: #7fd4ff; }
+.suggest-btn.armed:hover { background: #2a4d61; }
+.suggest-modal { width: 440px; }
+.suggest-title { display: flex; align-items: center; gap: 8px; }
+.suggest-kind-chip {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #0d1114;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.suggest-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7d8891;
+  margin: 10px 0 4px;
+}
+.suggest-facts { display: flex; flex-direction: column; gap: 3px; }
+.suggest-fact { display: flex; gap: 10px; font-size: 12px; line-height: 1.45; }
+.suggest-fact-label { color: #7d8891; min-width: 76px; flex: none; }
+.suggest-fact-value { color: #c8d0d8; }
+.suggest-candidates {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* one tickable suggestion: checkbox + accent bar + name + reason */
+.suggest-cand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+  background: #14171a;
+  border: 1px solid #262b30;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.suggest-cand:hover { border-color: #31373e; }
+.suggest-cand input { margin: 0; flex: none; }
+.suggest-cand-bar { width: 3px; align-self: stretch; border-radius: 2px; flex: none; }
+.suggest-cand-name { font-weight: 600; flex: none; }
+.suggest-cand-why { color: #b8c0c8; }
+/* the tool chip rides the row's right edge: in-use tools read muted, a
+   fresh-from-library tool reads lit so the "new T number" is visible */
+.suggest-cand-tool {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: #9aa4ad;
+  background: #1b2026;
+  border: 1px solid #262b30;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.suggest-cand-tool.new { color: #7fd4ff; border-color: #234254; }
+.suggest-add { background: #2e6f9e; }
+.suggest-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #e0a05a;
+  background: rgba(224, 160, 90, 0.07);
+  border: 1px solid rgba(224, 160, 90, 0.22);
+  border-radius: 6px;
+  padding: 6px 9px;
+  margin: 8px 0 0;
+}
+.suggest-actions { display: flex; gap: 6px; justify-content: flex-start; margin-top: 12px; }
+/* the decline pair rides the right edge — visual separation from the
+   accept button on the left (their meaning is "not accepting") */
+.suggest-actions-decline { margin-left: auto; display: flex; gap: 6px; }
+.suggest-actions button { font-size: 12px; padding: 5px 12px; }
 /* the merge-or-replace import dialog */
 .import-choice { width: 430px; }
 .import-warn { max-height: 120px; overflow-y: auto; }

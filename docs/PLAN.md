@@ -1126,6 +1126,58 @@ coupon, 2026-11-01); rest machining (manual knobs cover it,
 entry-safety + G0 Y0 work already covers the dangerous travel,
 2026-11-01).
 
+**14. Suggest ops — selection-driven auto-suggest** (Alice's 2026-11-11
+design ruling, after weighing whole-object scan vs selection-driven):
+**selection-driven first**. A "Suggest ops…" button beside "+ Add
+toolpath" arms a picker (measure mode + status-strip prompt); the NEXT
+viewport feature click opens a sheet showing what the detector measured
+about that ONE feature and which operations could drive it — a proposal
+sheet, not instant ops (she rules: nothing is added to the ops list
+unreviewed). Round-1 families, all reusing existing target machinery
+(src/ui/opTargets.ts): flat face → Pocket (+ Chamfer on its outline);
+vertical hole rim → Drill + Thread mill (internal; external on a boss
+rim — metricPitch rides the offer) + Chamfer; circle around the stock
+axis → Rotary chamfer / Rotary face; radial chain → 4D Contour +
+Raster Contour; artwork path → Engrave. The ENGINE is pure
+(`describePickedFeature` / round 2 `suggestOps` in src/ui/opSuggest.ts)
+and its acceptance gates MIRROR opTargets.ts's own tolerances — a
+suggested op must be one its op would accept, pinned by tests. Round 2
+(the todo's "auto" completion): a whole-model scan is the SAME engine
+looped over every detected feature, sheet grouped by tool — a
+composition, not a second design. Deliberately excluded (her round-1
+scope): auto-facing, auto-waterline, tool assignment changes, any
+auto-accept path. Landed 2026-11-11: the picker + knowledge sheet
+(round 1). Landed 2026-11-12 (round 2, her index ruling): the sheet is
+TICKABLE — "+ Add N ops" appends the checked suggestions as real ops,
+feature selected + prefilled; a feature that needs rotating gets its
+INDEX OP SUGGESTED AT THE HEAD (the exact A computed,
+indexToAlignDirection's rule — a far-side face → Index 180°, a radial
+bore → Index 90°; a tilt along the stock axis that NO datum removes is
+refused with the reason), with the sheet note that the ops after it cut
+in the rotated frame. The created ops prefill through the same datum
+machinery (createSuggestedOp walks the growing list, so the pocket
+behind a suggested Index reads its depth in the rotated frame). The
+whole-model scan remains the round-3 composition of the same engine.
+Two same-day rulings folded in (2026-11-12): (a) the sheet also picks
+the TOOL each suggestion would run with — tools already assigned to the
+job's ops are preferred (most appropriate fit among them), then the
+same fit rule over the library: a drill must fit the bore (real drill
+bits preferred over flats), an internal thread mill must clear the
+minor Ø, a pocket takes the largest flat that manoeuvres inside the
+region, the chamfer family (flat AND rotary) gets V-bits — the chamfer
+bit is the DEFAULT choice for chamfer ops, and a thread mill must be a
+real thread-mill-type tool; the type lists mirror the generators' own
+type gates (cylChamfer accepts V-bit/ball only, threadMill a thread
+mill only, chamfer a V-bit only) so a suggested tool is always one its
+op accepts; a 4D contour a ball nose; the row's
+chip shows the T number the new op would carry (the panel's own
+assignment extended), reused tools keep theirs, and Add creates each
+op with its suggested tool; (b) a machining-order invariant: whenever
+a Rotary face op is suggested it floats to the head of the list — a
+chamfer rides the FINISHED Ø, never the raw stock ("when rotary face
+is in the suggested ops list, it really should pretty much always go
+first").
+
 **13. Simulate the POSTED g-code, not the generator IR** (Alice's
 2026-11-06 call, after the op-7 chamfer ghost): the machine executes
 the nc; the sim/estimate execute the Move[] IR — everything the post

@@ -77,6 +77,9 @@ import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
 import { OpsPanel } from './OpsPanel';
+import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from './opSuggest';
+import { panelToolNumbers } from './toolAssignment';
+import { SuggestPopup } from './SuggestPopup';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
 import { Viewport, type ResolvedSelection } from './Viewport';
@@ -193,6 +196,13 @@ export function App() {
   const [showModel, setShowModel] = useState(true);
   const [showSim, setShowSim] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
+  /** suggest-ops picker (docs/PLAN.md "Suggest ops", round 1): armed by the
+   *  ops panel's "Suggest ops…" button — the NEXT picked feature opens the
+   *  knowledge popup instead of toggling the selection. suggestPickId holds
+   *  the popup's feature while it's open (highlighted green in the viewport
+   *  via activeFeatureIds, so the popup ties to what was clicked). */
+  const [suggestArmed, setSuggestArmed] = useState(false);
+  const [suggestPickId, setSuggestPickId] = useState<string | null>(null);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>('model');
   const [modelName, setModelName] = useState('Loaded model');
@@ -324,7 +334,9 @@ export function App() {
     ? (ops.find((o) => o.id === editingOpId)?.featureIds ?? [])
     : expandedOpId
       ? (ops.find((o) => o.id === expandedOpId)?.featureIds ?? [])
-      : selection;
+      : suggestPickId !== null
+        ? [suggestPickId]
+        : selection;
   const resolvedSelection: ResolvedSelection[] = useMemo(() => {
     const out: ResolvedSelection[] = [];
     for (const id of activeFeatureIds) {
@@ -570,7 +582,113 @@ export function App() {
   };
 
 
+  // ---- suggest-ops picker (docs/PLAN.md "Suggest ops", round 1) ----
+  /** arm: the "Suggest ops…" button. Measure mode is forced on (the viewport
+   *  only routes feature clicks there) and the status strip carries the
+   *  prompt; the NEXT picked feature opens the knowledge popup. */
+  const armSuggest = () => {
+    setFeaturePick(null); // a one-shot pick banner and the picker compete for the same clicks
+    setSuggestPickId(null);
+    setSuggestArmed(true);
+    setMeasureMode(true);
+    setStatusNote('suggest ops — click a feature in the viewport (Esc cancels)');
+  };
+  /** disarm without picking: the button toggles off, Esc, or right-click */
+  const disarmSuggest = () => {
+    setSuggestArmed(false);
+    setMeasureMode(false);
+    setStatusNote(null);
+  };
+  useEffect(() => {
+    if (!suggestArmed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') disarmSuggest();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestArmed]);
+  /** the popup's knowledge of its picked feature, recomputed as the sources
+   *  rebuild — a resolved id keeps describing its feature, a vanished one
+   *  (model swapped mid-popup) closes the popup via the render guard */
+  const suggestKnowledge = useMemo(() => {
+    if (suggestPickId === null) return null;
+    const r = resolveFeature(sources, suggestPickId);
+    return r ? describePickedFeature(r, stock) : null;
+  }, [suggestPickId, sources, stock]);
+  /** per-candidate tool suggestion + the T number the new op would carry
+   *  (Alice, 2026-11-12): tools already in use by the job's ops are
+   *  preferred, then the library by fit against the feature. The preview
+   *  numbers extend the panel's own assignment (panelToolNumbers), so
+   *  the chip shows what the export would actually emit — a reused tool
+   *  keeps its T, a fresh one takes the next number. */
+  const suggestTools = useMemo(() => {
+    if (suggestKnowledge === null || suggestPickId === null) return null;
+    const r = resolveFeature(sources, suggestPickId);
+    if (!r) return null;
+    const nums = panelToolNumbers(ops);
+    const inUse: Tool[] = [];
+    for (const [id] of nums) {
+      const t = tools.find((x) => x.id === id);
+      if (t) inUse.push(t);
+    }
+    let nextNum = nums.size > 0 ? Math.max(...nums.values()) + 1 : 1;
+    const preview = new Map<string, number>();
+    return suggestKnowledge.candidates.map((c) => {
+      const s = suggestToolFor(c, r, inUse, tools);
+      if (!s) return null;
+      let tNum = nums.get(s.tool.id) ?? preview.get(s.tool.id);
+      if (tNum === undefined) {
+        tNum = nextNum++;
+        preview.set(s.tool.id, tNum);
+      }
+      return { ...s, tNum };
+    });
+  }, [suggestKnowledge, suggestPickId, sources, ops, tools]);
+  // smoke-driver hook (the __scene pattern): the raw per-candidate tool
+  // suggestions, for probes/suggest-add-smoke.mjs
+  (window as unknown as { __suggestTools?: unknown }).__suggestTools = suggestTools;
+  (window as unknown as { __suggestKnowledge?: unknown }).__suggestKnowledge = suggestKnowledge;
+  /** add the CHECKED suggestions (round 2, docs/PLAN.md item 14): each
+   *  becomes a real op appended to the list — an Index suggestion first
+   *  (the sheet orders it at the head), the cutting ops after it with
+   *  feature selected + prefills computed in the datum frame the new
+   *  Index establishes (createSuggestedOp walks the growing list). */
+  const addSuggestedOps = (cands: SuggestCandidate[]) => {
+    if (cands.length === 0) return;
+    const r = suggestPickId !== null ? resolveFeature(sources, suggestPickId) : null;
+    if (!r) return;
+    const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
+    let next = [...ops];
+    for (const c of cands) {
+      // the candidate's OWN suggested tool (same rule the sheet displays),
+      // the current default only as the no-better-idea fallback
+      const idx = suggestKnowledge?.candidates.indexOf(c) ?? -1;
+      const chosen = (idx >= 0 ? suggestTools?.[idx] : null) ?? null;
+      const opTool = chosen?.tool ?? defaultTool;
+      next = [...next, createSuggestedOp(c, r, sources, stock, opTool, stock.materialId, next)];
+    }
+    setOps(next);
+    setLastToolId(defaultTool.id);
+    setExpandedOpId(next[next.length - 1].id);
+    const names = cands.map((c) => OP_KINDS.find((k) => k.kind === c.kind)?.label ?? c.kind);
+    setStatusNote(
+      `added ${cands.length} op${cands.length === 1 ? '' : 's'} — ${names.join(' + ')}`,
+    );
+    setSuggestPickId(null);
+  };
+
   const toggleSelect = (id: string) => {
+    if (suggestArmed) {
+      // the picker consumes the click: ONE feature → the knowledge popup,
+      // never the selection (the popup ties to it by description + the
+      // green highlight, so the selection is left untouched)
+      setSuggestArmed(false);
+      setMeasureMode(false);
+      setSuggestPickId(id);
+      setStatusNote(null);
+      return;
+    }
     if (featurePick) {
       if (applyFeaturePick(featurePick, id)) return;
       // the pick canceled itself (its op wasn't ready) — the click falls
@@ -611,6 +729,10 @@ export function App() {
   };
 
   const clearSelection = () => {
+    if (suggestArmed) {
+      disarmSuggest();
+      return;
+    }
     if (editingOpId) {
       setOps((prev) => prev.map((o) => (o.id === editingOpId ? { ...o, featureIds: [] } : o)));
       return;
@@ -1933,6 +2055,8 @@ export function App() {
               primitives={primitives}
               featureLabels={featureLabels}
               onAddOp={addOp}
+              onSuggestOps={armSuggest}
+              suggestArmed={suggestArmed}
               onChangeOp={(op) => {
                 setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)));
                 const before = ops.find((o) => o.id === op.id);
@@ -1986,6 +2110,18 @@ export function App() {
         </aside>
       </main>
       {showAbout && <AboutBox onClose={() => setShowAbout(false)} />}
+      {suggestKnowledge && (
+        <SuggestPopup
+          knowledge={suggestKnowledge}
+          toolInfo={suggestTools}
+          onClose={() => setSuggestPickId(null)}
+          onPickAnother={() => {
+            setSuggestPickId(null);
+            armSuggest();
+          }}
+          onAdd={addSuggestedOps}
+        />
+      )}
       {showExport && (
         <ExportDialog
           ops={ops}
