@@ -20,9 +20,14 @@ export interface SuggestToolInfo {
   tNum: number;
 }
 
-/** compact chip label: cutting Ø for mills, the tip angle for V-bits */
+/** compact chip label: cutting Ø for mills, the tip angle for V-bits —
+ *  and for thread mills the PITCH they cut, which is what you actually
+ *  select on (the M6-form mill reads "1.0mm pitch", not "Ø4.8";
+ *  Alice, 2026-11-12) */
 function toolChip(t: Tool): string {
-  return t.type === 'vbit' ? `${t.vAngle ?? 60}° vbit` : `Ø${t.diameter} ${t.type}`;
+  if (t.type === 'vbit') return `${t.vAngle ?? 60}° vbit`;
+  if (t.type === 'threadmill') return `${t.pitch ?? '—'}mm pitch`;
+  return `Ø${t.diameter} ${t.type}`;
 }
 
 /** per-kind accents for the popup title chip (feature kinds, not ops) */

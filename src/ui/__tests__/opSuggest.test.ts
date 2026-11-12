@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { DetectedFeatures } from '../../cam/features';
-import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFeature, Stock, Tool } from '../../core/types';
+import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFeature, Stock, ThreadFeature, Tool } from '../../core/types';
 import { MAKERA_TOOLS } from '../../core/makeraTools.generated';
 import type { FeatureSource } from '../featureSources';
 import type { ResolvedFeature } from '../featureSources';
@@ -66,6 +66,7 @@ function resolved(
     kind === 'circle' ? f.circles[index] :
     kind === 'edge' ? f.edges[index] :
     kind === 'path' ? f.paths[index] :
+    kind === 'thread' ? f.threads[index] :
     f.radialChains[index]
   ) as ResolvedFeature['feature'];
   return { source, kind, index, feature };
@@ -687,4 +688,51 @@ describe('suggestToolFor — the tool each suggestion would run with', () => {
     const k = describePickedFeature(r, stock4);
     expect(suggestToolFor(k.candidates[0], r, [], library)).toBeNull();
   });
+});
+
+describe('describePickedFeature — threads (Pass 5)', () => {
+  const thread = (axisPoint: { x: number; y: number; z: number }, axisDir: { x: number; y: number; z: number }): ThreadFeature => ({
+    kind: 'thread',
+    id: 't1',
+    nominalDiameter: 14.05,
+    rootDiameter: 12.95,
+    pitch: 1,
+    rotation: 'ccw',
+    xStart: 10.9,
+    xEnd: 18.5,
+    internal: false,
+    axisPoint,
+    axisDir,
+    basisU: { x: 0, y: 1, z: 0 },
+    basisV: { x: 0, y: 0, z: 1 },
+    phase0: 0,
+    bandRadius: 7.0,
+  });
+
+  it('a thread ON the stock axis (4-axis) offers the ROTARY thread op, not a thread mill', () => {
+    const t = thread({ x: 0, y: 0, z: 20 }, { x: 1, y: 0, z: 0 });
+    const s = source({ threads: [t] });
+    const k = describePickedFeature(resolved('thread', s, 0), stock4);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['thread']);
+    expect(k.candidates[0].why).toContain('A axis');
+    const vbitTool = suggestToolFor(k.candidates[0], resolved('thread', s, 0), [], [v60()]);
+    expect(vbitTool?.tool.type).toBe('vbit');
+  });
+
+  it('a thread OFF the stock axis keeps the thread mill offer', () => {
+    const t = thread({ x: 0, y: 8, z: 20 }, { x: 1, y: 0, z: 0 });
+    const s = source({ threads: [t] });
+    const k = describePickedFeature(resolved('thread', s, 0), stock4);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['threadMill']);
+  });
+
+  it('a 3-axis job never offers the rotary thread op', () => {
+    const stock3: Stock = { ...stock4, axisMode: '3-axis' };
+    const t = thread({ x: 0, y: 0, z: 20 }, { x: 1, y: 0, z: 0 });
+    const s = source({ threads: [t] });
+    const k = describePickedFeature(resolved('thread', s, 0), stock3);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['threadMill']);
+  });
+
+  const v60 = (): Tool => ({ id: 'v60', name: 'v60', type: 'vbit', diameter: 3.175, vAngle: 60 }) as Tool;
 });

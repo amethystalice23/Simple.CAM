@@ -177,7 +177,8 @@ export function describePickedFeature(r: ResolvedFeature, stock: Stock): Feature
     );
   }
   if (r.kind === 'radialChain') return describeChain(r, xf, axisZ);
-  if (r.kind === 'thread') return describeThread(r.feature as ThreadFeature);
+  if (r.kind === 'thread')
+    return describeThread(r.feature as ThreadFeature, rotary, axisZ);
   if (r.kind === 'path') return describePath(r);
   return orderCandidates(describeEdge(r, xf, rotary));
 }
@@ -515,7 +516,11 @@ function describeChain(
  * measured Ø/pitch/hand. The pitch/Ø/hand ARE the sheet's promise:
  * they are what the threadMill op would be prefilled with.
  */
-function describeThread(t: ThreadFeature): FeatureKnowledge {
+function describeThread(
+  t: ThreadFeature,
+  rotary: boolean,
+  axisZ: number | null,
+): FeatureKnowledge {
   const turns = Math.max(1, Math.round((t.xEnd - t.xStart) / t.pitch));
   const facts: SuggestFact[] = [
     { label: 'nominal Ø', value: `Ø${f1(t.nominalDiameter)} mm` },
@@ -525,17 +530,39 @@ function describeThread(t: ThreadFeature): FeatureKnowledge {
     { label: 'length', value: `${f1(t.xEnd - t.xStart)} mm (${turns} turns)` },
     { label: 'form depth', value: `${f1((t.nominalDiameter - t.rootDiameter) / 2)} mm` },
   ];
+  // the thread rides the STOCK axis when its own axis is the machine X
+  // line through the stock's axis (radial offset of the thread axis ≈ 0)
+  const onStockAxis =
+    rotary &&
+    Math.abs(t.axisDir.x) >= 0.99 &&
+    Math.hypot(t.axisPoint.y, t.axisPoint.z - (axisZ ?? t.axisPoint.z)) <= 0.3;
+  if (onStockAxis) {
+    facts.push({ label: 'axis', value: 'on the stock axis (A/X)' });
+  }
   return {
     kind: 'thread',
     title: `M${f1(t.nominalDiameter)}×${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'} thread`,
     facts,
-    candidates: [
-      {
-        kind: 'threadMill',
-        internal: false,
-        why: `cut this thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}`,
-      },
-    ],
+    candidates: onStockAxis
+      ? [
+          {
+            // the ROTARY thread op (kind 'thread'): a 4-axis helical
+            // groove cut with the A axis turning under G93 — the right
+            // op for a thread centered on the rotation axis. The 3-axis
+            // thread mill is for threads the A axis cannot spin about
+            // (Alice, 2026-11-12: "you should be offering a rotary
+            // thread op not a thread mill").
+            kind: 'thread',
+            why: `cut this thread with the A axis — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'} over its ${f1(t.xEnd - t.xStart)} mm span`,
+          },
+        ]
+      : [
+          {
+            kind: 'threadMill',
+            internal: false,
+            why: `cut this thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}`,
+          },
+        ],
     notes: [
       {
         text: 'the model already carries the finished thread form — these parameters are measured from it.',
@@ -657,10 +684,22 @@ export function createSuggestedOp(
   const withFeature = { ...op, featureIds: [featureId] } as JobOp;
   const crown = stockTopZ(stock);
   const datum = datumAngleBefore([...ops, withFeature], withFeature.id);
-  // a picked THREAD prefills the threadMill op with the measured
-  // parameters directly — prefillThreadMill resolves rims, not threads
-  if (cand.kind === 'threadMill' && r.kind === 'thread') {
+  // a picked THREAD prefills the thread ops with the measured
+  // parameters directly — the prefill helpers resolve rims, not threads
+  if ((cand.kind === 'threadMill' || cand.kind === 'thread') && r.kind === 'thread') {
     const t = r.feature as ThreadFeature;
+    if (cand.kind === 'thread') {
+      // the ROTARY thread op (A-axis helical groove): Ø/pitch/hand and
+      // the thread's own axial span, all measured from the mesh
+      return {
+        ...(withFeature as Extract<JobOp, { kind: 'thread' }>),
+        nominalDiameter: t.nominalDiameter,
+        pitch: t.pitch,
+        rotation: t.rotation,
+        xStart: t.xStart,
+        xEnd: t.xEnd,
+      } as JobOp;
+    }
     return {
       ...(withFeature as Extract<JobOp, { kind: 'threadMill' }>),
       nominalDiameter: t.nominalDiameter,
@@ -703,6 +742,10 @@ export function createSuggestedOp(
 const TOOL_TYPES: Partial<Record<JobOp['kind'], Tool['type'][]>> = {
   drill: ['drill', 'flat'],
   threadMill: ['threadmill'],
+  // the ROTARY thread is a V-groove swept around the A axis: a 60°
+  // engraving bit (Alice, 2026-11-12: "for a rotary thread we of course
+  // want the 60° engraving bit")
+  thread: ['vbit'],
   pocket: ['flat'],
   profile: ['flat'],
   chamfer: ['vbit'],
