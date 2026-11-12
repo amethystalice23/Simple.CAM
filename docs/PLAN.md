@@ -1158,6 +1158,20 @@ in the rotated frame. The created ops prefill through the same datum
 machinery (createSuggestedOp walks the growing list, so the pocket
 behind a suggested Index reads its depth in the rotated frame). The
 whole-model scan remains the round-3 composition of the same engine.
+Two same-day rulings folded in (2026-11-12): (a) the sheet also picks
+the TOOL each suggestion would run with — tools already assigned to the
+job's ops are preferred (most appropriate fit among them), then the
+same fit rule over the library: a drill must fit the bore (real drill
+bits preferred over flats), an internal thread mill must clear the
+minor Ø, a pocket takes the largest flat that manoeuvres inside the
+region, chamfer/engrave get V-bits, a 4D contour a ball nose; the row's
+chip shows the T number the new op would carry (the panel's own
+assignment extended), reused tools keep theirs, and Add creates each
+op with its suggested tool; (b) a machining-order invariant: whenever
+a Rotary face op is suggested it floats to the head of the list — a
+chamfer rides the FINISHED Ø, never the raw stock ("when rotary face
+is in the suggested ops list, it really should pretty much always go
+first").
 
 **13. Simulate the POSTED g-code, not the generator IR** (Alice's
 2026-11-06 call, after the op-7 chamfer ghost): the machine executes
