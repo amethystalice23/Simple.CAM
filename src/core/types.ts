@@ -565,6 +565,36 @@ export interface ThreadFeature {
   xEnd: number;
   /** internal = groove ridge inside a bore; external = on the outside */
   internal: boolean;
+  /**
+   * The thread's own axis in model space — the line Pass 5 measured
+   * against (the stock axis inverse-mapped into the source's frame),
+   * NOT assumed to be raw +X through the origin: the overlay and any
+   * op must reconstruct the helix about THIS line, coincident with
+   * the rotation axis, never offset onto the model surface.
+   */
+  axisPoint: Vec3;
+  axisDir: Vec3;
+  /**
+   * Perpendicular-plane basis of the detection frame (Pass 5's own
+   * u/v): θ of a vertex p is atan2(dot(p−axisPoint, v), dot(p−axisPoint,
+   * u)). The helix reconstruction must use the SAME basis the hand
+   * sign was measured in, or the drawn helix mirrors.
+   */
+  basisU: Vec3;
+  basisV: Vec3;
+  /**
+   * The measured helix's phase at x=0, radians, in the detection basis:
+   * the circular center of the dominant collapsed phase mode. The
+   * drawn/analytic helix is θ(x) = phase0 + s·k·x with s the hand sign.
+   */
+  phase0: number;
+  /**
+   * The radius of the band the phase collapse measured (root OR crest
+   * — whichever band collapsed), mm. The overlay draws the helix at
+   * THIS radius with phase0, so the drawn line sits exactly on the
+   * measured helix, on the mesh.
+   */
+  bandRadius: number;
 }
 
 /** Artwork line work: one flattened polyline from an imported SVG, in

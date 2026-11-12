@@ -570,32 +570,45 @@ export function buildFeatureOverlayData(
   const threadMid: THREE.Vector3[] = [];
   const threadText: string[] = [];
   for (const t of features.threads) {
-    // helix in MODEL space along the detection axis (+X through the
-    // model-space origin, the axis Pass 5 measured against), then each
-    // sample mapped through xf to machine space — a rotated model
-    // draws its thread correctly, same as every other feature
+    // Helix reconstructed from the MEASUREMENT frame Pass 5 recorded:
+    // the thread's own axis line, its detection basis (u,v), its hand,
+    // and the anchor vertex the collapsed mode passes through. The
+    // helix lives in the (u,v) plane about axisPoint/axisDir — NOT raw
+    // +X through the model origin (the axis is coincident with the
+    // rotation axis, and the phase comes from the real groove, so the
+    // drawn helix lands ON the groove with the correct handedness).
     const length = t.xEnd - t.xStart;
     const turns = Math.max(1, length / t.pitch);
     const rootR = t.rootDiameter / 2;
     const steps = Math.min(600, Math.max(96, Math.ceil(turns * 64)));
+    const A = new THREE.Vector3(t.axisPoint.x, t.axisPoint.y, t.axisPoint.z);
+    const D = new THREE.Vector3(t.axisDir.x, t.axisDir.y, t.axisDir.z).normalize();
+    const U = new THREE.Vector3(t.basisU.x, t.basisU.y, t.basisU.z);
+    const V = new THREE.Vector3(t.basisV.x, t.basisV.y, t.basisV.z);
+    // the measured helix: θ(x) = phase0 + s·k·x in the detection
+    // basis, at the radius of the band the phase collapse measured
+    const handSign = t.rotation === 'ccw' ? -1 : 1;
+    const k = (2 * Math.PI * handSign) / t.pitch;
+    // drawn at the band the collapse measured, at its measured phase —
+    // the line lands exactly on the measured helix, on the mesh
+    const drawR = t.bandRadius;
     const pts: THREE.Vector3[] = [];
     for (let i = 0; i <= steps; i++) {
       const f = i / steps;
-      const ang = (t.rotation === 'ccw' ? -1 : 1) * f * turns * 2 * Math.PI;
-      pts.push(
-        xf({
-          x: t.xStart + f * length,
-          y: Math.cos(ang) * rootR,
-          z: Math.sin(ang) * rootR,
-        }),
+      const axial = t.xStart + f * length;
+      const th = t.phase0 + k * axial;
+      const radial = U.clone().multiplyScalar(Math.cos(th) * drawR).add(
+        V.clone().multiplyScalar(Math.sin(th) * drawR),
       );
+      const p = A.clone().addScaledVector(D, axial).add(radial);
+      pts.push(xf({ x: p.x, y: p.y, z: p.z }));
     }
     for (let i = 0; i < steps; i++) {
       threadPos.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
     }
     threads.push({
       center: pts[Math.floor(pts.length / 2)].clone(),
-      dir: pts[pts.length - 1].clone().sub(pts[0]).normalize(),
+      dir: D.clone(),
       rootR,
       pitch: t.pitch,
       turns,

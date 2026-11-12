@@ -1542,6 +1542,29 @@ export function detectFeatures(
         if (inliers.length >= 200) {
           const xs = inliers.map((o) => bandX[o.i]).sort((a, b2) => a - b2);
           const q = (f: number) => xs[Math.min(xs.length - 1, Math.floor(f * (xs.length - 1)))];
+          // the measured helix's phase at x=0: the inlier phases are
+          // MULTI-modal (one mode per tessellation profile station), so
+          // a global circular mean lands between modes. Take the
+          // DOMINANT mode's members and circular-mean those alone.
+          let bi = 0;
+          for (let b2 = 1; b2 < B; b2++) if (bins2[b2] > bins2[bi]) bi = b2;
+          let cMeanX = 0;
+          let cMeanY = 0;
+          let modeN = 0;
+          for (const o of inliers) {
+            if (Math.min(B - 1, Math.floor((inlierPhase[o.i] / TWO_PI) * B)) !== bi) continue;
+            cMeanX += Math.cos(inlierPhase[o.i]);
+            cMeanY += Math.sin(inlierPhase[o.i]);
+            modeN++;
+          }
+          // fallback: no dominant mode (all equal) — mean of everything
+          if (modeN === 0) {
+            for (const o of inliers) {
+              cMeanX += Math.cos(inlierPhase[o.i]);
+              cMeanY += Math.sin(inlierPhase[o.i]);
+            }
+          }
+          const phase0 = Math.atan2(cMeanY, cMeanX);
           threads.push({
             kind: 'thread',
             id: featureId('thread', [rootR, crestR, pitch, handSign]),
@@ -1552,6 +1575,12 @@ export function detectFeatures(
             xStart: round2(q(0.01)),
             xEnd: round2(q(0.99)),
             internal: false,
+            axisPoint: axis.point,
+            axisDir: axis.dir,
+            basisU: u,
+            basisV: v,
+            phase0,
+            bandRadius: round2(best.rootR),
           });
         }
       }
