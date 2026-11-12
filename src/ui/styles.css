@@ -394,6 +394,7 @@ button.secondary:disabled:hover { background: #31373e; }
 /* one tickable suggestion: checkbox + accent bar + name + reason */
 .suggest-cand {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   font-size: 12px;
@@ -409,6 +410,19 @@ button.secondary:disabled:hover { background: #31373e; }
 .suggest-cand-bar { width: 3px; align-self: stretch; border-radius: 2px; flex: none; }
 .suggest-cand-name { font-weight: 600; flex: none; }
 .suggest-cand-why { color: #b8c0c8; }
+/* the tool chip rides the row's right edge: in-use tools read muted, a
+   fresh-from-library tool reads lit so the "new T number" is visible */
+.suggest-cand-tool {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: #9aa4ad;
+  background: #1b2026;
+  border: 1px solid #262b30;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.suggest-cand-tool.new { color: #7fd4ff; border-color: #234254; }
 .suggest-add { background: #2e6f9e; }
 .suggest-note {
   font-size: 12px;

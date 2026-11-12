@@ -7,10 +7,23 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { JobOp } from '../core/types';
+import type { JobOp, Tool } from '../core/types';
 import { OP_KIND_COLORS } from './opColors';
 import type { FeatureKnowledge, SuggestCandidate } from './opSuggest';
 import { OP_KINDS } from './jobGeneration';
+
+/** one candidate's tool: what it would run with + the T number the new op
+ *  would carry (inUse = the tool keeps its existing assignment) */
+export interface SuggestToolInfo {
+  tool: Tool;
+  inUse: boolean;
+  tNum: number;
+}
+
+/** compact chip label: cutting Ø for mills, the tip angle for V-bits */
+function toolChip(t: Tool): string {
+  return t.type === 'vbit' ? `${t.vAngle ?? 60}° vbit` : `Ø${t.diameter} ${t.type}`;
+}
 
 /** per-kind accents for the popup title chip (feature kinds, not ops) */
 const KIND_COLORS: Record<FeatureKnowledge['kind'], string> = {
@@ -35,11 +48,15 @@ export function opKindLabel(kind: JobOp['kind']): string {
 
 export function SuggestPopup({
   knowledge,
+  toolInfo,
   onClose,
   onPickAnother,
   onAdd,
 }: {
   knowledge: FeatureKnowledge;
+  /** per-candidate tool suggestion (parallel to knowledge.candidates),
+   *  null entries keep the default tool silently */
+  toolInfo?: (SuggestToolInfo | null)[] | null;
   onClose: () => void;
   /** re-arm the picker for another feature (round 2: "suggest for this too") */
   onPickAnother: () => void;
@@ -120,6 +137,18 @@ export function SuggestPopup({
                       {opKindLabel(c.kind)}
                     </span>
                     <span className="suggest-cand-why">{c.why}</span>
+                    {toolInfo?.[i] && (
+                      <span
+                        className={`suggest-cand-tool${toolInfo[i]!.inUse ? '' : ' new'}`}
+                        title={`${toolInfo[i]!.tool.name} — ${
+                          toolInfo[i]!.inUse
+                            ? 'already in use by this job'
+                            : 'a new tool for this job'
+                        }`}
+                      >
+                        T{toolInfo[i]!.tNum} · {toolChip(toolInfo[i]!.tool)}
+                      </span>
+                    )}
                   </label>
                 </li>
               ))}

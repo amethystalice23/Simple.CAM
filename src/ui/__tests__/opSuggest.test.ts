@@ -9,11 +9,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { DetectedFeatures } from '../../cam/features';
-import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFeature, Stock } from '../../core/types';
+import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFeature, Stock, Tool } from '../../core/types';
 import { MAKERA_TOOLS } from '../../core/makeraTools.generated';
 import type { FeatureSource } from '../featureSources';
 import type { ResolvedFeature } from '../featureSources';
-import { createSuggestedOp, describePickedFeature } from '../opSuggest';
+import { createSuggestedOp, describePickedFeature, suggestToolFor } from '../opSuggest';
 
 const IDENTITY: ModelTransform = {
   position: { x: 0, y: 0, z: 0 },
@@ -422,5 +422,136 @@ describe('createSuggestedOp — the op each ticked suggestion becomes', () => {
     const k = describePickedFeature(r, stock4);
     const face = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', []);
     expect((face as Extract<JobOp, { kind: 'faceCylinder' }>).targetDiameter).toBe(16);
+  });
+});
+
+describe('suggestToolFor — the tool each suggestion would run with', () => {
+  const tool = (id: string, type: string, diameter: number): Tool =>
+    ({ id, name: id, type: type as Tool['type'], diameter }) as Tool;
+  const flat6 = tool('f6', 'flat', 6);
+  const flat3 = tool('f3', 'flat', 3.175);
+  const flat1 = tool('f1', 'flat', 1.5);
+  const drill3 = tool('d3', 'drill', 3.175);
+  const vbit = tool('v1', 'vbit', 3.175);
+  const ball3 = tool('b3', 'ball', 3);
+  const library = [flat6, flat3, flat1, drill3, vbit, ball3];
+
+  const rim6 = (): { r: ResolvedFeature; k: ReturnType<typeof describePickedFeature> } => {
+    const c: CircleFeature = {
+      kind: 'circle',
+      id: 'c1',
+      center: { x: 0, y: 0, z: 28 },
+      axis: { x: 0, y: 0, z: 1 },
+      radius: 3,
+      inner: true,
+    };
+    const s = source({ circles: [c] });
+    const r = resolved('circle', s, 0);
+    return { r, k: describePickedFeature(r, stock4) };
+  };
+
+  it('an in-use tool that fits wins over a better library fit', () => {
+    const { r, k } = rim6(); // Ø6 bore → drill bound 6
+    // in-use flat 3.175 fits; the library drill 3.175 also fits — the
+    // IN-USE preference takes it (her ruling), even over the drill type
+    const s = suggestToolFor(k.candidates[0], r, [flat3], library);
+    expect(s?.tool.id).toBe('f3');
+    expect(s?.inUse).toBe(true);
+  });
+
+  it('a bore wants an actual drill bit when the in-use tools do not fit', () => {
+    const c: CircleFeature = {
+      kind: 'circle',
+      id: 'c2',
+      center: { x: 0, y: 0, z: 28 },
+      axis: { x: 0, y: 0, z: 1 },
+      radius: 1.75, // Ø3.5 bore: flat 3.175 still fits
+      inner: true,
+    };
+    const s2 = source({ circles: [c] });
+    const r2 = resolved('circle', s2, 0);
+    const k2 = describePickedFeature(r2, stock4);
+    const s = suggestToolFor(k2.candidates[0], r2, [flat6], library);
+    // flat6 (Ø6) does not fit the Ø3.5 bore → library: drill preferred
+    expect(s?.tool.id).toBe('d3');
+    expect(s?.inUse).toBe(false);
+  });
+
+  it('an internal thread mill must clear the minor Ø', () => {
+    const { r, k } = rim6(); // M6 × 1 → minor ≈ 4.9, bound ≈ 4.4
+    const tm = k.candidates[1];
+    expect(tm.kind).toBe('threadMill');
+    expect(tm.internal).toBe(true);
+    // a Ø5 thread mill cannot tilt inside the bore; the in-use pool
+    // having nothing else, the library's largest fitting CUTTER wins —
+    // a Ø3.175 flat (thread milling with a flat is the app's default)
+    const wide = suggestToolFor(tm, r, [tool('tm5', 'threadmill', 5)], library);
+    expect(wide?.tool.id).toBe('f3');
+    expect(wide?.inUse).toBe(false);
+    // a fitting thread mill in use beats everything
+    const narrow = suggestToolFor(tm, r, [tool('tm3', 'threadmill', 3)], library);
+    expect(narrow?.tool.id).toBe('tm3');
+    expect(narrow?.inUse).toBe(true);
+  });
+
+  it('chamfer wants a V-bit even when flats are in use', () => {
+    const { r, k } = rim6();
+    const s = suggestToolFor(k.candidates[2], r, [flat3], library);
+    expect(s?.tool.id).toBe('v1');
+    expect(s?.inUse).toBe(false);
+  });
+
+  it('a pocket takes the largest flat that manoeuvres inside the region', () => {
+    const plane: PlaneFeature = {
+      kind: 'plane',
+      id: 'p1',
+      point: { x: 0, y: 0, z: 5 },
+      normal: { x: 0, y: 0, z: 1 },
+    };
+    const s = source({ planes: [plane] });
+    const r = resolved('plane', s, 0);
+    const k = describePickedFeature(r, stock4);
+    // the plane has no measured extents (empty geometry) → no bound: the
+    // largest flat wins
+    const s1 = suggestToolFor(k.candidates[0], r, [], library);
+    expect(s1?.tool.id).toBe('f6');
+  });
+
+  it('a 4D contour: an in-use flat is acceptable, else the ball nose', () => {
+    const ch: RadialChainFeature = {
+      kind: 'radialChain',
+      id: 'ch1',
+      points: [
+        { x: 0, y: 10, z: 20 },
+        { x: 5, y: 0, z: 20 },
+        { x: 0, y: -10, z: 20 },
+      ],
+      meanRadius: 10,
+    };
+    const s = source({ radialChains: [ch] });
+    const r = resolved('radialChain', s, 0);
+    const k = describePickedFeature(r, stock4);
+    // in-use preference (her ruling): a flat already in the job runs the
+    // contour even though a ball would finish better
+    const inUseFlat = suggestToolFor(k.candidates[0], r, [flat3], library);
+    expect(inUseFlat?.tool.id).toBe('f3');
+    expect(inUseFlat?.inUse).toBe(true);
+    // nothing in use → the library's ball nose
+    const fresh = suggestToolFor(k.candidates[0], r, [], library);
+    expect(fresh?.tool.id).toBe('b3');
+    expect(fresh?.inUse).toBe(false);
+  });
+
+  it('the Index op carries no cutter', () => {
+    const plane: PlaneFeature = {
+      kind: 'plane',
+      id: 'p1',
+      point: { x: 0, y: 0, z: 5 },
+      normal: { x: 0, y: 0, z: -1 }, // far side → index at head
+    };
+    const s = source({ planes: [plane] });
+    const r = resolved('plane', s, 0);
+    const k = describePickedFeature(r, stock4);
+    expect(suggestToolFor(k.candidates[0], r, [], library)).toBeNull();
   });
 });

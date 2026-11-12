@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import type { CircleFeature, JobOp, PlaneFeature, Stock, Tool, Vec3 } from '../core/types';
 import { rotaryCalibrationOf, round2 } from '../core/types';
 import { indexedPointRotation } from '../cam/indexing';
+import { internalMinorDiameter } from '../cam/threadMill';
 import { planeExtents, transformFn } from './featureOverlays';
 import type { FeatureSource, ResolvedFeature } from './featureSources';
 import { datumAngleBefore, metricPitch, newJobOp, prefillDepths, prefillThreadMill } from './jobGeneration';
@@ -41,6 +42,9 @@ export interface SuggestCandidate {
   /** the datum angle (kind 'index' only): the A that brings the feature
    *  level/vertical — carried so the created op cuts in the right frame */
   angle?: number;
+  /** true for an INTERNAL thread suggestion (kind 'threadMill' only):
+   *  the tool must clear the thread's minor Ø */
+  internal?: boolean;
 }
 
 export interface FeatureKnowledge {
@@ -210,12 +214,14 @@ function describeCircle(
       candidates.push({ kind: 'drill', why: `drill this bore straight down from the rim${suffix}` });
       candidates.push({
         kind: 'threadMill',
+        internal: true,
         why: `cut an internal thread${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
       });
       candidates.push({ kind: 'chamfer', why: 'break this hole’s rim with a V-bit' });
     } else {
       candidates.push({
         kind: 'threadMill',
+        internal: false,
         why: `cut an external thread on this boss${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
       });
       candidates.push({ kind: 'chamfer', why: 'run a V-bit around this boss to break its rim' });
@@ -444,4 +450,106 @@ export function createSuggestedOp(
   const p = suggestDatumPoint(r, datum, stock);
   if (p) return prefillDepths(withFeature, p.z, crown);
   return withFeature;
+}
+
+// ------------------------------------------------- tool suggestion (round 2)
+
+/** What kind of cutter each suggested op wants, in preference order —
+ *  a bore wants an actual drill bit first; chamfer/engrave want the tip
+ *  of a V-bit. (Alice, 2026-11-12: "they are only suggestions so dont
+ *  have to be perfect" — the rules below are honest fits, not optimums.) */
+const TOOL_TYPES: Partial<Record<JobOp['kind'], Tool['type'][]>> = {
+  drill: ['drill', 'flat'],
+  threadMill: ['threadmill', 'flat'],
+  pocket: ['flat'],
+  chamfer: ['vbit'],
+  engrave: ['vbit', 'laser'],
+  faceCylinder: ['flat'],
+  cylChamfer: ['flat', 'ball'],
+  contour4d: ['ball', 'flat'],
+  rasterContour: ['ball', 'flat'],
+};
+
+/** true when the kind prefers the LARGEST fitting cutter (holes and
+ *  pockets clear faster with rigidity); false = smallest (edge/tip work
+ *  — chamfers, engraving, the fine finishing passes). */
+const WANTS_LARGEST = new Set<JobOp['kind']>([
+  'drill',
+  'threadMill',
+  'pocket',
+  'faceCylinder',
+]);
+
+/** the cutting-Ø ceiling a candidate's tool must respect for THIS
+ *  feature: a drill must fit the bore; an internal thread mill must fit
+ *  the minor Ø with tilt clearance; a pocket must manoeuvre inside its
+ *  region (half the smallest extent). Infinity = no Ø constraint. */
+function toolBound(cand: SuggestCandidate, r: ResolvedFeature): number {
+  const circleDia = r.kind === 'circle' ? (r.feature as CircleFeature).radius * 2 : null;
+  if (cand.kind === 'drill') return circleDia ?? Infinity;
+  if (cand.kind === 'threadMill') {
+    if (circleDia === null || !cand.internal) return circleDia ?? Infinity;
+    const pitch = metricPitch(circleDia) ?? 1;
+    return internalMinorDiameter(circleDia, pitch) * 0.9;
+  }
+  if (cand.kind === 'pocket') {
+    if (circleDia !== null) return circleDia / 2;
+    if (r.kind === 'plane') {
+      const ext = planeExtents(r.source.geometry, r.source.features, r.source.transform)[r.index];
+      return ext ? Math.min(ext.w, ext.h) / 2 : Infinity;
+    }
+    return Infinity;
+  }
+  return Infinity;
+}
+
+/** the best tool of one pool (in-use, then library) for a candidate, or
+ *  null when the pool holds nothing of the wanted type that fits. */
+function pickFromPool(
+  cand: SuggestCandidate,
+  r: ResolvedFeature,
+  pool: Tool[],
+): Tool | null {
+  const types = TOOL_TYPES[cand.kind];
+  if (!types) return null; // index (no cutter), kinds never suggested
+  const bound = toolBound(cand, r);
+  const largest = WANTS_LARGEST.has(cand.kind);
+  for (const type of types) {
+    // type preference order: a drill bit beats a flat for a bore even
+    // when the flat is bigger
+    const fits = pool.filter((t) => t.type === type && t.diameter <= bound + 1e-9);
+    if (fits.length === 0) continue;
+    fits.sort((a, b) => (largest ? b.diameter - a.diameter : a.diameter - b.diameter));
+    return fits[0];
+  }
+  return null;
+}
+
+export interface ToolSuggestion {
+  tool: Tool;
+  /** true when the tool is already assigned to an op in the job (the
+   *  "in use" preference — its T number stays what it is) */
+  inUse: boolean;
+}
+
+/**
+ * The tool a suggested op would run with (Alice, 2026-11-12): prefer the
+ * MOST APPROPRIATE of the tools already in use by the job's ops; when
+ * none of those fits, the same fit rule over the whole library. Null =
+ * no better idea (index ops carry no cutter; an exotic kind with no
+ * fitting tool falls back to the current default).
+ */
+export function suggestToolFor(
+  cand: SuggestCandidate,
+  r: ResolvedFeature,
+  /** tools already assigned to ops, in T-number order */
+  inUse: Tool[],
+  library: Tool[],
+): ToolSuggestion | null {
+  if (cand.kind === 'index') return null;
+  const inUsePick = pickFromPool(cand, r, inUse);
+  if (inUsePick) return { tool: inUsePick, inUse: true };
+  const libPick = pickFromPool(cand, r, library);
+  if (libPick) return { tool: libPick, inUse: false };
+  return null;
 }

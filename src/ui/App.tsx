@@ -77,7 +77,8 @@ import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
 import { OpsPanel } from './OpsPanel';
-import { createSuggestedOp, describePickedFeature, type SuggestCandidate } from './opSuggest';
+import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from './opSuggest';
+import { panelToolNumbers } from './toolAssignment';
 import { SuggestPopup } from './SuggestPopup';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -615,6 +616,39 @@ export function App() {
     const r = resolveFeature(sources, suggestPickId);
     return r ? describePickedFeature(r, stock) : null;
   }, [suggestPickId, sources, stock]);
+  /** per-candidate tool suggestion + the T number the new op would carry
+   *  (Alice, 2026-11-12): tools already in use by the job's ops are
+   *  preferred, then the library by fit against the feature. The preview
+   *  numbers extend the panel's own assignment (panelToolNumbers), so
+   *  the chip shows what the export would actually emit — a reused tool
+   *  keeps its T, a fresh one takes the next number. */
+  const suggestTools = useMemo(() => {
+    if (suggestKnowledge === null || suggestPickId === null) return null;
+    const r = resolveFeature(sources, suggestPickId);
+    if (!r) return null;
+    const nums = panelToolNumbers(ops);
+    const inUse: Tool[] = [];
+    for (const [id] of nums) {
+      const t = tools.find((x) => x.id === id);
+      if (t) inUse.push(t);
+    }
+    let nextNum = nums.size > 0 ? Math.max(...nums.values()) + 1 : 1;
+    const preview = new Map<string, number>();
+    return suggestKnowledge.candidates.map((c) => {
+      const s = suggestToolFor(c, r, inUse, tools);
+      if (!s) return null;
+      let tNum = nums.get(s.tool.id) ?? preview.get(s.tool.id);
+      if (tNum === undefined) {
+        tNum = nextNum++;
+        preview.set(s.tool.id, tNum);
+      }
+      return { ...s, tNum };
+    });
+  }, [suggestKnowledge, suggestPickId, sources, ops, tools]);
+  // smoke-driver hook (the __scene pattern): the raw per-candidate tool
+  // suggestions, for probes/suggest-add-smoke.mjs
+  (window as unknown as { __suggestTools?: unknown }).__suggestTools = suggestTools;
+  (window as unknown as { __suggestKnowledge?: unknown }).__suggestKnowledge = suggestKnowledge;
   /** add the CHECKED suggestions (round 2, docs/PLAN.md item 14): each
    *  becomes a real op appended to the list — an Index suggestion first
    *  (the sheet orders it at the head), the cutting ops after it with
@@ -627,7 +661,12 @@ export function App() {
     const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
     let next = [...ops];
     for (const c of cands) {
-      next = [...next, createSuggestedOp(c, r, sources, stock, defaultTool, stock.materialId, next)];
+      // the candidate's OWN suggested tool (same rule the sheet displays),
+      // the current default only as the no-better-idea fallback
+      const idx = suggestKnowledge?.candidates.indexOf(c) ?? -1;
+      const chosen = (idx >= 0 ? suggestTools?.[idx] : null) ?? null;
+      const opTool = chosen?.tool ?? defaultTool;
+      next = [...next, createSuggestedOp(c, r, sources, stock, opTool, stock.materialId, next)];
     }
     setOps(next);
     setLastToolId(defaultTool.id);
@@ -2074,6 +2113,7 @@ export function App() {
       {suggestKnowledge && (
         <SuggestPopup
           knowledge={suggestKnowledge}
+          toolInfo={suggestTools}
           onClose={() => setSuggestPickId(null)}
           onPickAnother={() => {
             setSuggestPickId(null);
