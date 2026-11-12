@@ -286,9 +286,9 @@ describe('movesToSegments — Move.arc tessellation (2026-11-12)', () => {
       { words: { x: 10, y: 0 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
     ];
     const segs = movesToSegmentMoves(moves, null);
-    // SAGITTA PITCH (Alice, 2026-11-12: "enough that it looks smooth"): r10
-    // at 0.05mm sagitta → 11.46°/chord → 32 segments (finer than the old 15° cap)
-    expect(segs.feed.length / 6).toBe(32);
+    // ANGULAR FLOOR (Alice, 2026-11-12: "can still see segments in the
+    // spiral"): 5°/chord → 72 segments per revolution, regardless of radius
+    expect(segs.feed.length / 6).toBe(72);
     // every segment belongs to the arc move (index 1)
     for (const mi of segs.feedMoves) expect(mi).toBe(1);
     // total drawn length ≈ circumference — the unmodified code drew 0
@@ -320,6 +320,22 @@ describe('movesToSegments — Move.arc tessellation (2026-11-12)', () => {
     expect(arcEnd[0]).toBeCloseTo(linEnd[0], 9);
     expect(arcEnd[1]).toBeCloseTo(linEnd[1], 9);
     expect(arcEnd[2]).toBeCloseTo(linEnd[2], 9);
+  });
+
+  it('SMALL-RADIUS arcs keep the 72-chords-per-revolution floor (the spiral-pocket report)', () => {
+    // Alice, 2026-11-12: a 15° sagitta-capped arc drew a small spiral
+    // pocket as a 24-gon — COARSER than the 64-vertex polygon path the
+    // arc replaced. The angular floor is radius-independent: r=1 draws
+    // the same 72 chords as r=10.
+    const moves: Move[] = [
+      { words: { x: 1, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 1, y: 0 }, feed: 100, arc: { i: -1, j: 0, cw: false } },
+    ];
+    const segs = movesToSegmentMoves(moves, null);
+    expect(segs.feed.length / 6).toBe(72);
+    for (let i = 0; i < segs.feed.length; i += 6) {
+      expect(Math.hypot(segs.feed[i], segs.feed[i + 1])).toBeCloseTo(1, 6);
+    }
   });
 
   it('arc vertices stay on the circle — the chord path does not', () => {

@@ -106,8 +106,15 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
   /** Max degrees of rotation per drawn chord — finer would only cost
    * geometry for no visible gain on a 25mm-scale cylinder. */
   const ROT_STEP_DEG = 15;
-  /** Arc preview sagitta tolerance (Alice, 2026-11-12): chord deviation
-   * from the true arc, mm — 0.05 is invisible at preview scale. */
+  /** ARC CHORD ANGULAR FLOOR (Alice, 2026-11-12: "can still see segments
+   * in the preview path for a pocket that is cutting in a spiral"): the
+   * eye reads the ANGULAR step, not the sagitta — a 15° cap drew a small
+   * spiral as a 24-gon, COARSER than the 64-vertex polygon path it
+   * replaced. Arcs floor at 5°/chord (72 per revolution — smooth at any
+   * zoom); the sagitta rule refines further for large radii. */
+  const ARC_MAX_STEP_DEG = 5;
+  /** Arc preview sagitta tolerance: chord deviation from the true arc,
+   * mm — refines big-radius arcs beyond the angular floor. */
   const ARC_SAGITTA_MM = 0.05;
 
   for (const m of moves) {
@@ -174,7 +181,7 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
         const dir = m.arc.cw ? -1 : 1;
         const sweep = closed ? dir * 2 * Math.PI : shortestSweep(startA, endA, dir);
         const sagStep = 2 * Math.acos(Math.max(-1, 1 - ARC_SAGITTA_MM / r)) * (180 / Math.PI);
-        const step = Math.min(ROT_STEP_DEG, sagStep);
+        const step = Math.min(ARC_MAX_STEP_DEG, sagStep);
         const n = Math.max(1, Math.ceil((Math.abs(sweep) * 180) / Math.PI / step));
         for (let k = 1; k <= n; k++) {
           const t = k / n;
