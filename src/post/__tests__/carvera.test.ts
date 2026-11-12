@@ -255,4 +255,89 @@ describe('carvera post-processor', () => {
     const shortLine = short.split('\n').find((l) => l.startsWith('G0 X5'))!;
     expect(shortLine).toBe('G0 X5 ; level 1/2');
   });
+
+  // ---- arcs (G2/G3) ----
+  // The dialect facts pinned here come from the community firmware source
+  // (reference/community-firmware Robot.cpp), not corpus files — the corpus
+  // has ZERO G2/G3. I/J offset form only (Robot.cpp:1292); a G2 without
+  // I/J silently no-ops (radius 0 bail, Robot.cpp:2146, no error printed),
+  // so violations are refused at emission, never mis-emitted.
+
+  it('emits arc moves as G2/G3 with I/J offsets, never R', () => {
+    const out = postCarvera({
+      // quarter circle ccw from (10,0) around (0,0) to (0,10)
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+        { words: { x: 10, y: 0, z: -1 }, feed: 200 },
+        { words: { x: 0, y: 10, z: -1 }, feed: 300, arc: { i: -10, j: 0, cw: false } },
+        // and back cw around the same center
+        { words: { x: 10, y: 0, z: -1 }, feed: 300, arc: { i: 0, j: -10, cw: true } },
+      ],
+      tools: [tool],
+      options: { jobName: 'arc-test' },
+    });
+    expect(out).toContain('G17'); // explicit plane select when arcs present
+    expect(out).toContain('G3 X0 Y10 Z-1 I-10 J0 F300');
+    // F is modal on arcs like G1 — emitted on change, not repeated
+    expect(out).toContain('G2 X10 Y0 Z-1 I0 J-10');
+    expect(out).not.toMatch(/ R-?\d/); // never the R form
+  });
+
+  it('emits a full circle as start==end with I/J (firmware forces ±2π)', () => {
+    const out = postCarvera({
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+        { words: { x: 10, y: 0, z: -1 }, feed: 200 },
+        { words: { x: 10, y: 0, z: -1 }, feed: 300, arc: { i: -10, j: 0, cw: false } },
+      ],
+      tools: [tool],
+      options: { jobName: 'full-circle' },
+    });
+    // start==end byte-identical coordinates: the firmware's full-circle
+    // detection is an EXACT float equality on the previous target
+    // (Robot.cpp:2123) — the emitted X/Y must round identically
+    expect(out).toContain('G3 X10 Y0 Z-1 I-10 J0 F300');
+  });
+
+  it('emits helical arcs with a Z word (firmware interpolates plane_axis_2 linearly)', () => {
+    const out = postCarvera({
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+        { words: { x: 10, y: 0, z: -0.5 }, feed: 100 },
+        // one full turn descending to Z-2 — the ramp entry form
+        { words: { x: 10, y: 0, z: -2 }, feed: 200, arc: { i: -10, j: 0, cw: false } },
+      ],
+      tools: [tool],
+      options: { jobName: 'helical' },
+    });
+    expect(out).toContain('G3 X10 Y0 Z-2 I-10 J0 F200');
+  });
+
+  it('refuses structurally-unsafe arc moves instead of silently no-opping on the machine', () => {
+    const expectRefused = (moves: Move[]) =>
+      expect(() =>
+        postCarvera({ moves, tools: [tool], options: { jobName: 'arc-refuse' } }),
+      ).toThrow();
+    // zero I/J: radius-0 arc — the firmware would drop it without a word
+    expectRefused([{ words: { x: 10, y: 0 }, feed: 200, arc: { i: 0, j: 0, cw: true } }]);
+    // missing endpoint words: full circle must be explicit start==end
+    expectRefused([{ words: { z: -1 }, feed: 200, arc: { i: -10, j: 0, cw: true } }]);
+    // A-coordinated arc: G93 has no arc form
+    expectRefused([
+      { words: { x: 10, y: 0, a: 30 }, feed: 200, arc: { i: -10, j: 0, cw: true } },
+    ]);
+    // laser power on an arc: untested combination, refuse
+    expectRefused([
+      { words: { x: 10, y: 0 }, feed: 200, power: 0.5, arc: { i: -10, j: 0, cw: true } },
+    ]);
+  });
+
+  it('omits G17 when the job has no arcs (dialect stays byte-identical for existing goldens)', () => {
+    const out = postCarvera({
+      moves: [{ words: { x: 0, y: 0, z: -1 }, feed: 200 }],
+      tools: [tool],
+      options: { jobName: 'no-arcs' },
+    });
+    expect(out).not.toContain('G17');
+  });
 });

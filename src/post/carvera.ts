@@ -180,6 +180,8 @@ export function postCarvera(input: PostInput): string {
       m.rapid && m.words.x === undefined && m.words.y === undefined && m.words.z === undefined;
     return !pureARapid;
   });
+  // any arc in the job gates the explicit G17 header line
+  const hasArcs = input.moves.some((m) => m.arc !== undefined);
 
   // ---- header ----
   lines.push(`; simple.cam v0.0.1 — job "${opts.jobName}"`);
@@ -193,6 +195,10 @@ export function postCarvera(input: PostInput): string {
   }
   // TODO: Emit ;@MKR|TOOLPATH_START markers and per-op boundaries when IR supports them.
   lines.push('G90 G21');
+  // Plane select for G2/G3: the firmware boots XY-plane (Robot.cpp:131),
+  // but explicit G17 costs one line and removes any dependence on the
+  // controller's start-cycle state — the arc form has no corpus coverage.
+  if (hasArcs) lines.push('G17');
   if (anyA) {
     lines.push('G92.4 A0 R0');
     // Position the rotary centerline EXPLICITLY — never trust ambient Y.
@@ -340,6 +346,12 @@ export function postCarvera(input: PostInput): string {
     }
 
     const simultaneous = isSimultaneous(m);
+    // arcs have no G93 form: the IR forbids `a` on an arc move, and the
+    // emission path below hardcodes G94 for them — a violation here is a
+    // generator bug, caught rather than mis-emitted
+    if (m.arc && simultaneous) {
+      throw new Error('arc move coordinating A — arcs are G94-only, no G93 arc form exists');
+    }
 
     // the pre-shrink position — the anchor check must compare against
     // where the axis IS, not where the anchor targets (st.lastA is
@@ -444,11 +456,49 @@ export function postCarvera(input: PostInput): string {
         st.lastPower = m.power;
       }
       setMode(simultaneous ? 'G93' : 'G94');
-      // In G93 the firmware REQUIRES F on every feed line — always emit it
-      // there; in G94 emit on change for readability (harmless either way).
-      const withFeed = st.mode === 'G93' || m.feed !== st.lastFeed;
-      if (withFeed) st.lastFeed = m.feed;
-      lines.push(emitMotion(`G1 ${wordsLine(m, withFeed, sWord)}`, m.comment));
+      // ARC (G2/G3): the firmware parses I/J/K offsets only (Robot.cpp
+      // 1292-1296) — never the R form. A G2/G3 missing I and J computes
+      // radius 0, hits the <1e-6 travel bail, and RETURNS FALSE WITHOUT
+      // PRINTING ANYTHING (Robot.cpp:2146) — a silently dropped move, so
+      // the IR constraints are enforced HERE, at emission, as refusals.
+      // `simultaneous` is impossible for an arc (refused above), so this
+      // branch always runs in G94.
+      if (m.arc) {
+        if (m.arc.i === 0 && m.arc.j === 0) {
+          throw new Error('arc move with zero I/J offset — zero-radius arc would silently no-op on the machine');
+        }
+        if (m.words.x === undefined || m.words.y === undefined) {
+          throw new Error('arc move without explicit X/Y endpoint — the full-circle form relies on exact start==end, never modal omission');
+        }
+        if (m.power !== undefined) {
+          throw new Error('arc move with laser power — arcs are untested with the laser; refuse rather than guess');
+        }
+        const g = m.arc.cw ? 'G2' : 'G3';
+        const parts = [
+          `X${fmt(m.words.x, 2)}`,
+          `Y${fmt(m.words.y, 2)}`,
+        ];
+        if (m.words.z !== undefined) parts.push(`Z${fmt(m.words.z, 2)}`);
+        parts.push(`I${fmt(m.arc.i, 2)}`, `J${fmt(m.arc.j, 2)}`);
+        if (sWord) parts.push(sWord);
+        // G94 arcs take F like G1: emit on change (G93 has no arc form —
+        // isSimultaneous must be false for an arc move, enforced above).
+        // NON-FINITE FEED REFUSED like a G1 (the FInfinity field bug).
+        if (!Number.isFinite(m.feed)) {
+          throw new Error(`non-finite feed (${m.feed}) on an arc move — generator bug`);
+        }
+        if (m.feed !== st.lastFeed) {
+          st.lastFeed = m.feed;
+          parts.push(`F${fmt(Math.max(m.feed, 0.01), 2)}`);
+        }
+        lines.push(emitMotion(`${g} ${parts.join(' ')}`, m.comment));
+      } else {
+        // In G93 the firmware REQUIRES F on every feed line — always emit it
+        // there; in G94 emit on change for readability (harmless either way).
+        const withFeed = st.mode === 'G93' || m.feed !== st.lastFeed;
+        if (withFeed) st.lastFeed = m.feed;
+        lines.push(emitMotion(`G1 ${wordsLine(m, withFeed, sWord)}`, m.comment));
+      }
     }
     // the beam enables only once the head is AT focus height: after the
     // op's first Z-bearing move (the focus descent — which now FOLLOWS
