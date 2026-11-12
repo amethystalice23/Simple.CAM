@@ -258,21 +258,21 @@ function describePlane(
         why: 'run a V-bit around this face’s boundary to break its edges',
       });
       notes.push({
-        text: 'this face is not level here — keep the suggested Index op checked so it rotates first.',
+        text: 'an Index op is suggested to turn this face level first — keep it checked.',
         detail:
           'the pocket and chamfer cut in the rotated frame: with the Index op ahead of them ' +
           '(it is added first), the face comes level and they cut it squarely.',
       });
     } else {
       notes.push({
-        text: 'this face is not level here — a pocket or chamfer needs it flat. Re-orient the model, or machine a different face.',
+        text: 'this face is not level in the cutting frame. Re-orient the model, or machine a different face.',
       });
     }
   } else {
     notes.push({
       text: rotary
-        ? `this face is tilted ${f1(residual)}° along the stock axis (X) — rotating the stock cannot remove that tilt. Re-orient the model to machine it.`
-        : `this face is tilted ${f1(residual)}° — it can never face the cutter squarely. Re-orient the model, or machine a different face.`,
+        ? `this face is tilted ${f1(residual)}° along the stock axis (X). Re-orient the model to machine it.`
+        : `this face is tilted ${f1(residual)}°. Re-orient the model, or machine a different face.`,
       detail: rotary
         ? 'the tilt runs along the rotation axis, so no Index angle squares the face to the cutter.'
         : undefined,
@@ -339,10 +339,10 @@ function describeCircle(
   const pushBoreCands = (suffix: string) => {
     if (partial) {
       notes.push({
-        text: 'this rim is broken by other features, so the hole operations are left out — its diameter is still listed above.',
+        text: 'this rim is broken by other features, so its diameter is the reliable measurement here.',
         detail:
-          'the circle survives only as arcs (cut by flats or flutes), and a partial rim bounds ' +
-          'neither a bore to drill nor a full 360° path to thread or chamfer.',
+          'the circle survives only as arcs (cut by flats or flutes): the size is accurate, ' +
+          'but a partial rim bounds no hole to drill and no full 360° path to thread or chamfer.',
       });
       return;
     }
@@ -354,10 +354,10 @@ function describeCircle(
       });
       candidates.push({ kind: 'chamfer', why: 'break this indent’s rim with a V-bit' });
       notes.push({
-        text: 'this is the bottom of a recess, not the mouth of a hole — drill and thread are left out on purpose.',
+        text: 'this rim is the bottom of a stepped recess.',
         detail:
-          `the rim sits under a coaxial Ø${f1(comp.radius * 2)} opening whose wall closes at this ` +
-          'rim’s plane, so nothing continues below: a drilled hole would cut into the floor the pocket is meant to leave.',
+          `the Ø${f1(comp.radius * 2)} opening above narrows to this rim and closes here — the ` +
+          'solid bottom makes it a recess to pocket, not a hole to drill.',
       });
       return;
     }
@@ -373,12 +373,19 @@ function describeCircle(
         why: `clear this stepped opening (Ø${f1(dia)} mouth, Ø${f1(comp.radius * 2)} floor below)${suffix}`,
       });
       candidates.push({ kind: 'chamfer', why: 'cut the angled wall under this rim with a V-bit' });
+      // cone geometry for the positive suggestion: the included angle
+      // 2·atan(Δr / Δh) between the two rims
+      const dr = dia - comp.radius * 2;
+      const dh = xf(c.center).distanceTo(xf(comp.center));
+      const coneDeg = dh > 1e-6 ? (2 * Math.atan(dr / 2 / dh) * 180) / Math.PI : null;
       notes.push({
-        text: 'the wall below this edge slopes inward — drill and thread are left out on purpose.',
-        detail:
-          `the wall narrows from Ø${f1(dia)} here to Ø${f1(comp.radius * 2)} at the bottom: a ` +
-          'thread needs a straight wall of one size to ride, and a drill at the mouth’s size would ' +
-          'cut away the slope. Pick the smaller rim at the bottom for the pocket that reaches the floor.',
+        text: 'this rim opens a stepped recess.',
+        detail: coneDeg
+          ? `the wall narrows from Ø${f1(dia)} here to Ø${f1(comp.radius * 2)} at the bottom ` +
+            `(${f1(coneDeg)}° included angle): the narrowing diameter suits a pocket, and the ` +
+            `angled wall suits a chamfer op with a ~${Math.round(coneDeg / 2)}° V-bit.`
+          : `the opening narrows from Ø${f1(dia)} here to Ø${f1(comp.radius * 2)} at the bottom — ` +
+            'the narrowing diameter suits a pocket, the angled wall a chamfer op.',
       });
       return;
     }
@@ -417,7 +424,7 @@ function describeCircle(
       });
     } else {
       notes.push({
-        text: 'this circle runs around the stock axis but sits off its centre — the rotary edge operations are left out.',
+        text: 'this circle sits off the stock axis — the rotary ring operations do not fit it.',
         detail:
           'spinning the stock would trace an ellipse rather than this circle, so an A-axis sweep cannot follow it.',
       });
@@ -447,16 +454,16 @@ function describeCircle(
       });
       pushBoreCands(' — in the rotated frame');
       notes.push({
-        text: 'this rim is not vertical here — keep the suggested Index op checked so it rotates first.',
+        text: 'an Index op is suggested to turn this rim vertical first — keep it checked.',
         detail:
           'the drill and thread ops cut in the rotated frame: with the Index op ahead of them ' +
           '(it is added first), the rim comes vertical and they cut it squarely.',
       });
     } else {
       notes.push({
-        text: 'this rim is tilted along the stock axis (X) — rotating the stock cannot align it with the drill. Re-orient the model to machine it.',
+        text: 'this rim is tilted along the stock axis (X). Re-orient the model to machine it.',
         detail:
-          'the tilt survives every Index angle, so it can never be bored or threaded on this machine as the model sits.',
+          'the tilt survives every Index angle, so the rim cannot be bored or threaded as the model sits.',
       });
     }
   }

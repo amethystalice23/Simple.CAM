@@ -424,29 +424,35 @@ button.secondary:disabled:hover { background: #31373e; }
 }
 .suggest-cand-tool.new { color: #7fd4ff; border-color: #234254; }
 .suggest-add { background: #2e6f9e; }
-.suggest-note {
+.suggest-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
   font-size: 12px;
   line-height: 1.5;
-  color: #e0a05a;
-  background: rgba(224, 160, 90, 0.07);
-  border: 1px solid rgba(224, 160, 90, 0.22);
-  border-radius: 6px;
-  padding: 6px 9px;
+  color: #8d99a3;
   margin: 8px 0 0;
 }
-/* the "why?" pop-open behind a note's one-line guidance: unobtrusive in
-   the note's own colour, the geometry detail indented below it */
-.suggest-note-why {
-  font-size: 11px;
-  padding: 0 4px;
-  margin-left: 2px;
-  color: inherit;
-  border: 1px solid rgba(224, 160, 90, 0.35);
+/* subtle round "i" info button — informational, never an alert */
+.suggest-info-btn {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  padding: 0;
+  border: 1px solid #3a4148;
+  border-radius: 50%;
   background: transparent;
-  border-radius: 4px;
+  color: #8d99a3;
+  font-size: 10px;
+  font-style: italic;
+  font-weight: 600;
+  line-height: 1;
   cursor: pointer;
 }
-.suggest-note-detail { display: block; margin-top: 4px; color: #b98d5c; font-style: italic; }
+.suggest-info-btn:hover { border-color: #5a636c; color: #b7c0c8; }
+.suggest-info-text { flex: 1; }
+.suggest-info-detail { display: block; margin-top: 2px; color: #6a737c; font-style: italic; }
 .suggest-actions { display: flex; gap: 6px; justify-content: flex-start; margin-top: 12px; }
 /* the decline pair rides the right edge — visual separation from the
    accept button on the left (their meaning is "not accepting") */

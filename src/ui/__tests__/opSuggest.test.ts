@@ -148,7 +148,7 @@ describe('describePickedFeature — circles', () => {
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0].text).toContain('off its centre');
+    expect(k.notes[0].text).toContain('off the stock axis');
     expect(k.notes[0].detail).toContain('ellipse');
   });
 
@@ -184,7 +184,7 @@ describe('describePickedFeature — circles', () => {
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
     expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'drill', 'threadMill', 'chamfer']);
     expect(k.candidates[0].angle).toBe(90);
-    expect(k.notes[0].text).toContain('keep the suggested Index op checked');
+    expect(k.notes[0].text).toContain('keep it checked');
   });
 
   it('a bore tilted ALONG the stock axis is refused — no datum aligns it', () => {
@@ -363,7 +363,7 @@ describe('describePickedFeature — planes', () => {
     // with the pocket/chamfer behind it in the rotated frame
     expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'pocket', 'chamfer']);
     expect(k.candidates[0].angle).toBe(180);
-    expect(k.notes[0].text).toContain('keep the suggested Index op checked');
+    expect(k.notes[0].text).toContain('keep it checked');
   });
 
   it('a sideways face is rescued by a suggested Index at its own angle', () => {
@@ -390,7 +390,7 @@ describe('describePickedFeature — planes', () => {
     };
     const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0].text).toContain('cannot remove that tilt');
+    expect(k.notes[0].text).toContain('Re-orient the model');
   });
 
   it('a face parallel to the stock axis is refused the same way', () => {
@@ -402,7 +402,7 @@ describe('describePickedFeature — planes', () => {
     };
     const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0].text).toContain('cannot remove that tilt');
+    expect(k.notes[0].text).toContain('Re-orient the model');
   });
 });
 

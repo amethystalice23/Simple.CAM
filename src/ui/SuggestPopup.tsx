@@ -161,30 +161,31 @@ export function SuggestPopup({
         )}
 
         {knowledge.notes.map((n, i) => (
-          <p key={i} className="suggest-note">
-            ⚠ {n.text}
-            {n.detail && (
-              <>
-                {' '}
-                <button
-                  type="button"
-                  className="suggest-note-why"
-                  aria-expanded={openNotes.has(i)}
-                  onClick={() =>
-                    setOpenNotes((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(i)) next.delete(i);
-                      else next.add(i);
-                      return next;
-                    })
-                  }
-                >
-                  {openNotes.has(i) ? 'hide why' : 'why?'}
-                </button>
-                {openNotes.has(i) && <span className="suggest-note-detail"> {n.detail}</span>}
-              </>
-            )}
-          </p>
+          <div key={i} className="suggest-info">
+            <button
+              type="button"
+              className="suggest-info-btn"
+              aria-expanded={openNotes.has(i)}
+              aria-label="More information"
+              title="More information"
+              onClick={() =>
+                setOpenNotes((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(i)) next.delete(i);
+                  else next.add(i);
+                  return next;
+                })
+              }
+            >
+              i
+            </button>
+            <span className="suggest-info-text">
+              {n.text}
+              {openNotes.has(i) && n.detail && (
+                <span className="suggest-info-detail">{n.detail}</span>
+              )}
+            </span>
+          </div>
         ))}
 
         {/* accept on the LEFT edge, decline on the RIGHT (Alice,
