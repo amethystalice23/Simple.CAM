@@ -1336,6 +1336,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (error) return fail(error);
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const regions: Vec2[][] = [];
+        const circles: { cx: number; cy: number; r: number }[] = [];
         let sawHole = false;
         let sawFace = false;
         for (const part of parts) {
@@ -1358,6 +1359,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           if (allCircles) sawHole = true;
           if (allPlanes) sawFace = true;
           regions.push(...src.regions);
+          // analytic circles ride along in region order (2026-11-12, G2/G3)
+          if (src.circles) circles.push(...src.circles);
         }
         if (sawHole && sawFace) {
           return fail('select either faces or holes for this operation, not both');
@@ -1375,6 +1378,21 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           op.allowance > 0 ? offsetInward(regions, op.allowance) : regions;
         if (cutRegions.length === 0) {
           return fail('the side allowance exceeds the selected region — nothing left to cut');
+        }
+        // the same mutations applied to the analytic circle annotations
+        // (2026-11-12): both are radial on a circle — inset shrinks the
+        // radius, cut-over dilation grows it — so the region stays
+        // circular and the annotation tracks it. The generator verifies
+        // its own offsets against the annotation and falls back to the
+        // polygon silently when they diverge.
+        let cutCircles = circles;
+        if (op.allowance > 0) {
+          cutCircles = circles
+            .map((c) => ({ ...c, r: c.r - op.allowance }))
+            .filter((c) => c.r > 1e-6);
+        }
+        if (op.cutBeyondStock !== false) {
+          cutCircles = cutCircles.map((c) => ({ ...c, r: c.r + op.stepOver }));
         }
         // Tail stock cut-over ON = a DELIBERATE step-over perimeter around
         // the defined area (Alice, 2026-10-28): the region grows by one
@@ -1399,6 +1417,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             id: op.id,
             toolId: tool.id,
             regions: cutRegions,
+            circles: cutCircles.length > 0 ? cutCircles : undefined,
             topZ: range.topZ,
             floorZ: range.floorZ,
             stepDown: finStep,

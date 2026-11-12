@@ -151,6 +151,43 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
     const isRotary = rotary && m.words.a !== undefined;
     const da = isRotary && prevM ? pos.a - prevM.a : 0;
 
+    if (m.arc && prevM) {
+      // Move.arc (2026-11-12): XY-plane arc, I/J center offset from the
+      // move's START (machine prevM), endpoint = pos.x/y, helical Z rides
+      // along. Arcs are flat-frame moves (never an A word) — each sampled
+      // point un-rotates by the running accumulated A exactly like the
+      // flat branch below. Chorded at ROT_STEP_DEG, the same pitch the
+      // long rotary sweep subdivides at.
+      const cx = prevM.x + m.arc.i;
+      const cy = prevM.y + m.arc.j;
+      const r = Math.hypot(prevM.x - cx, prevM.y - cy);
+      if (r > 0) {
+        const startA = Math.atan2(prevM.y - cy, prevM.x - cx);
+        const endA = Math.atan2(pos.y - cy, pos.x - cx);
+        const closed = Math.hypot(pos.x - prevM.x, pos.y - prevM.y) < 1e-9;
+        const dir = m.arc.cw ? -1 : 1;
+        const sweep = closed ? dir * 2 * Math.PI : shortestSweep(startA, endA, dir);
+        const n = Math.max(1, Math.ceil((Math.abs(sweep) * 180) / Math.PI / ROT_STEP_DEG));
+        for (let k = 1; k <= n; k++) {
+          const t = k / n;
+          const ang = startA + sweep * t;
+          const mx = cx + r * Math.cos(ang);
+          const my = cy + r * Math.sin(ang);
+          const mz = prevM.z + (pos.z - prevM.z) * t;
+          let [dy, dz] = [my, mz];
+          if (rotary) {
+            [dy, dz] = toDisplay((pos.a * Math.PI) / 180, my, mz);
+          }
+          if (prev) {
+            emit(target, targetMoves, mi, prev.x, prev.y, prev.z, mx, dy, dz);
+          }
+          prev = { x: mx, y: dy, z: dz };
+        }
+      }
+      prevM = { ...pos };
+      continue;
+    }
+
     if (isRotary && prev && prevM && Math.abs(da) > ROT_STEP_DEG) {
       // a long rotary sweep (a facing pass is thousands of degrees in one
       // move): interpolate in machine space and map each step, so the
@@ -189,4 +226,16 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
   }
 
   return { feed, rapid, feedMoves, rapidMoves };
+}
+
+/**
+ * Signed angular travel from a to b in direction `dir` (−1 cw / +1 ccw),
+ * wrapped to the shortest travel in that direction — magnitude < 2π; the
+ * ±2π FULL CIRCLE is the caller's closed-endpoint case. Shared math with
+ * src/sim/poses.ts (kept local: no sim → ui import beyond SIM_PARK_CLEARANCE).
+ */
+function shortestSweep(a: number, b: number, dir: number): number {
+  const TAU = 2 * Math.PI;
+  if (dir > 0) return (((b - a) % TAU) + TAU) % TAU;
+  return -((((a - b) % TAU) + TAU) % TAU);
 }

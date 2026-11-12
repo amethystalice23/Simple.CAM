@@ -91,6 +91,30 @@ export interface AxisWords {
  */
 export interface Move {
   words: AxisWords;
+  /**
+   * XY-plane ARC (post emits G2 cw / G3 ccw): center as an OFFSET FROM
+   * THE MOVE'S START POINT in machine mm — exactly the G-code I/J form,
+   * never the R form (the Carvera firmware parses I/J/K only; R is never
+   * read as an arc radius — Robot.cpp:1292). `words` carries the arc's
+   * ENDPOINT; start == endpoint is a FULL CIRCLE (the firmware detects
+   * exact in-plane equality and forces ±2π travel, Robot.cpp:2123-2128 —
+   * but generators must emit byte-identical coordinates for start and
+   * end so the equality holds after 2-decimal formatting).
+   *
+   * CONSTRAINTS (the post REFUSES violations — a G2/G3 without I/J
+   * silently no-ops on the machine, radius 0, no error printed, so these
+   * are structural, not advisory):
+   *  - `rapid` must NOT be set: the firmware has no rapid arc form.
+   *  - `words.a` must NOT be set: arcs are G94-only; A-coordinated motion
+   *    is G93 and has no arc representation.
+   *  - `words.x`/`words.y` must both be present (explicit endpoint; a
+   *    full circle relies on exact start==end, never on modal omission).
+   *  - Z MAY ride along (helical descent — the firmware interpolates the
+   *    linear axis along the arc, Robot.cpp:2183).
+   * The sim and the toolpath preview tessellate from I/J directly and
+   * never rely on the firmware's full-circle detection.
+   */
+  arc?: { i: number; j: number; cw: boolean };
   /** F word (unit per the G93/G94 rule above) */
   feed: number;
   /** G0 rapid (ignores feed) */
@@ -630,6 +654,19 @@ export interface PocketOp {
   travelZ?: number;
   /** machine Z of the pocket floor */
   floorZ: number;
+  /**
+   * Analytic circles annotating the regions (2026-11-12, G2/G3 arcs):
+   * entry k describes a region that is EXACTLY the disc (cx, cy, r) —
+   * the machine-space reading of a selected circle feature. The region
+   * polygon is still authoritative for geometry; the annotation lets
+   * the generator emit true circular orbits (G2/G3) instead of the
+   * 64-gon when the offsets stay circular. A dilation (allowance,
+   * cut-over) SHRINKS/GROWS the radius but keeps the circle a circle;
+   * offsets that would break circularity fall back to polygons
+   * silently. Absent = no circular regions. FUTURE: general arcs
+   * (thread helices are the target consumer — Alice, 2026-11-12).
+   */
+  circles?: { cx: number; cy: number; r: number }[];
   /** axial depth per level, mm */
   stepDown: number;
   /** radial step-over between clearing passes, mm */

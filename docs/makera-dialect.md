@@ -344,6 +344,44 @@ code copied). Two versions matter:
   match commanded surface speed. This is the mechanism PLAN.md's
   "radius-aware G94 surface-speed compensation" refers to.
 
+### G2/G3 arcs (`Robot.cpp:613-614, 1292, 2087-2265`) — firmware-read 2026-11-12, MACHINE-VERIFIED 2026-11-12
+
+Corpus has zero G2/G3; this section was written from the firmware source
+and then **verified on the machine** (Alice, 2026-11-12: the community
+controller's preview rendered partial arcs, both full-circle directions,
+and a G91 helical correctly, and the machine traced them — tool head
+describing the same arcs, circles and spiral; test file
+probes/arc-aircut-test.nc, run with the z-probe's red pointer at park
+height).
+
+- **I/J/K offset form ONLY.** `process_move` reads I/J/K into the arc
+  offset (Robot.cpp:1292-1296); R is never parsed as an arc radius (its
+  other uses are G10 L2 and G92.4). Emit I/J, never R.
+- **A G2/G3 missing I and J silently no-ops**: radius computes 0, the
+  travel check bails (< 1e-6, Robot.cpp:2146), `return false` — NO error
+  printed, NO halt. A dropped move, not a diagnosable one. Our post
+  therefore REFUSES unsafe arc forms at emission (zero I/J, missing
+  explicit X/Y, A-coordinated, laser power).
+- **Full circles**: start==target in-plane is an EXACT float equality
+  test (Robot.cpp:2123) → angular travel forced to ±2π. The equality
+  compares the PREVIOUS move's parsed target, so start and endpoint must
+  be byte-identical after formatting.
+- **The machine tessellates arcs too** — grbl-class: vector-rotation
+  with small-angle approximation, corrected exactly every
+  `arc_correction` = 5 segments (Robot.cpp:2229-2243). Segment length
+  adapts to radius from `mm_max_arc_error` (default **0.002 mm**,
+  config.default:29) — a Ø20 orbit ≈ 157 segments, ≤2µm chord error,
+  ~6× finer than a hand-emitted 64-gon. The planner blends the segment
+  joints with junction deviation.
+- **Helical works**: the linear axis (Z under G17) interpolates along
+  the arc (Robot.cpp:2183, 2249) — a full-circle G2/G3 with a Z word is
+  a helix, the ramp-entry form.
+- **G17 default at boot** (Robot.cpp:131); G17/18/19 all implemented.
+  Our post emits an explicit G17 when a job contains arcs.
+- **G93**: F mandatory on G2/G3 (same halt as G1); inverse-time handled
+  per-segment correctly (rate × segments, Robot.cpp:2173). We forbid
+  A-coordinated arcs in the IR anyway.
+
 ### Rotary limits
 
 - C1 (`config.default:431`): A max rate 1800 °/min = **5 RPM**,

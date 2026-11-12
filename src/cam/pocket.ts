@@ -114,6 +114,71 @@ export function bandOf(loop: Vec2[], toolR: number): Vec2[][] {
   return offsetOutward([signedArea(loop) < 0 ? [...loop].reverse() : loop], toolR);
 }
 
+/**
+ * ARC ORBIT MATCH (2026-11-12, the G2/G3 circle pocket): true when a
+ * Clipper-offset loop is the 64-gon approximation of the analytic circle
+ * (cx, cy, r) — every vertex within `ARC_MATCH_TOL` of the circumference,
+ * the polygon centroid at the center. The 64-gon's vertices sit
+ * r·cos(π/64) ≈ 0.9988·r from the center (µm-scale flat sides), so the
+ * tolerance is generous against that but small against any real Clipper
+ * clip — a trimmed loop fails the match and the generator silently falls
+ * back to the polygon it always emitted. The emitted arc (EXACT radius r)
+ * is MORE correct than the 64-gon it replaces: the intended tool-center
+ * path is the analytic circle; the polygon was the approximation.
+ */
+const ARC_MATCH_TOL = 0.05; // mm
+export function isCircularLoop(
+  loop: Vec2[],
+  c: { cx: number; cy: number; r: number },
+): boolean {
+  if (loop.length < 8) return false; // a real offset of a 64-gon keeps ~dozens of vertices
+  // centroid
+  let sx = 0;
+  let sy = 0;
+  for (const p of loop) {
+    sx += p.x;
+    sy += p.y;
+  }
+  const cx = sx / loop.length;
+  const cy = sy / loop.length;
+  if (Math.hypot(cx - c.cx, cy - c.cy) > ARC_MATCH_TOL) return false;
+  for (let i = 0; i < loop.length; i++) {
+    const p = loop[i];
+    if (Math.abs(Math.hypot(p.x - c.cx, p.y - c.cy) - c.r) > ARC_MATCH_TOL) return false;
+    // EDGE MIDPOINTS TOO (the clipped-circle hole, caught by the golden
+    // discipline 2026-11-12): a footprint-chopped loop's vertices can all
+    // still sit ON the circle — the clip's intersection points land there
+    // — while its chord edges cut across the disc. Vertices alone would
+    // match a truncated loop and emit a full-circle arc for it.
+    const q = loop[(i + 1) % loop.length];
+    const mx = (p.x + q.x) / 2;
+    const my = (p.y + q.y) / 2;
+    if (Math.abs(Math.hypot(mx - c.cx, my - c.cy) - c.r) > ARC_MATCH_TOL) return false;
+  }
+  return true;
+}
+
+/**
+ * The circle a loop's offset family implies, or null: orbit `k` of circle
+ * `c` is the concentric circle at `c.r − toolR − k·stepOver` (the same
+ * arithmetic Clipper performed on the 64-gon). Null = polygon emission.
+ */
+function orbitCircleOf(
+  loop: Vec2[],
+  circles: { cx: number; cy: number; r: number }[] | undefined,
+  toolR: number,
+  k: number,
+  stepOver: number,
+): { cx: number; cy: number; r: number } | null {
+  if (!circles) return null;
+  for (const c of circles) {
+    const r = c.r - toolR - k * stepOver;
+    if (r <= ARC_MATCH_TOL) continue;
+    if (isCircularLoop(loop, { cx: c.cx, cy: c.cy, r })) return { cx: c.cx, cy: c.cy, r };
+  }
+  return null;
+}
+
 export interface PocketOptions {
   /**
    * Drop closed clearing passes whose perimeter is below this, mm. A pass
@@ -254,6 +319,8 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     const start = loop[0];
     const cum = arcTable(loop);
     const approach = op.topZ + APPROACH_CLEARANCE;
+    // the analytic circle this single orbit offsets (2026-11-12): k=0
+    const circ = orbitCircleOf(loop, op.circles, toolR, 0, op.stepOver);
     moves.push({
       words: { x: start.x, y: start.y },
       feed: 0,
@@ -274,18 +341,34 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
       stepDown: op.stepDown,
       feed: op.plungeFeed,
       bore: true,
+      // arc form: each revolution becomes one full-circle G2/G3 with
+      // descending Z — the exact helix the polyline approximated
+      circle: circ ?? undefined,
+      loopCw: signedArea(loop) < 0,
     });
     moves.push(...entry.moves);
     minutes += entry.minutes;
     entries[entry.mode]++;
     // the floor lap — the orbit's final full pass, exactly the lap the
     // stepped ladder would have finished on
-    let prev = start;
-    for (let i = 1; i <= loop.length; i++) {
-      const p = loop[i % loop.length];
-      moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
-      minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
-      prev = p;
+    if (circ) {
+      const sx = start.x - circ.cx;
+      const sy = start.y - circ.cy;
+      moves.push({
+        words: { x: start.x, y: start.y },
+        feed: op.feed,
+        arc: { i: -sx, j: -sy, cw: signedArea(loop) < 0 },
+        comment: 'floor lap — circular orbit r' + circ.r.toFixed(2),
+      });
+      minutes += (2 * Math.PI * Math.hypot(sx, sy)) / op.feed;
+    } else {
+      let prev = start;
+      for (let i = 1; i <= loop.length; i++) {
+        const p = loop[i % loop.length];
+        moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+        minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
+        prev = p;
+      }
     }
     moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
     return {
@@ -354,6 +437,9 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
             toZ: levelZ,
             stepDown: op.stepDown,
             feed: op.plungeFeed,
+            // arc form when this orbit is an annotated circle (2026-11-12)
+            circle: orbitCircleOf(loop, op.circles, toolR, k, op.stepOver) ?? undefined,
+            loopCw: signedArea(loop) < 0,
           });
           moves.push(...entry.moves);
           minutes += entry.minutes;
@@ -442,12 +528,34 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
           emitRaisedEntry(false);
         }
 
-        let prev = start;
-        for (let i = 1; i <= loop.length; i++) {
-          const p = loop[i % loop.length];
-          moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
-          minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
-          prev = p;
+        // ARC ORBIT EMISSION (2026-11-12, G2/G3): a loop that provably IS
+        // an annotated circle's k-th offset emits ONE full-circle arc
+        // instead of the 64-vertex chain — the exact tool-center circle,
+        // not the polygon approximation. The loop was already reversed
+        // for climb milling, so its winding names the travel direction:
+        // signedArea < 0 (CW) around the tool-center circle puts the wall
+        // on the LEFT — climb, unchanged from the polygon path. Start
+        // point and endpoint are the SAME coordinates (the full-circle
+        // G-code form: the firmware detects exact equality, sweeps ±2π).
+        const circ = orbitCircleOf(loop, op.circles, toolR, k, op.stepOver);
+        if (circ) {
+          const sx = start.x - circ.cx;
+          const sy = start.y - circ.cy;
+          moves.push({
+            words: { x: start.x, y: start.y },
+            feed: op.feed,
+            arc: { i: -sx, j: -sy, cw: signedArea(loop) < 0 },
+            comment: `level z${levelZ.toFixed(2)} pass ${k + 1} — circular orbit r${circ.r.toFixed(2)}`,
+          });
+          minutes += (2 * Math.PI * Math.hypot(sx, sy)) / op.feed;
+        } else {
+          let prev = start;
+          for (let i = 1; i <= loop.length; i++) {
+            const p = loop[i % loop.length];
+            moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+            minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
+            prev = p;
+          }
         }
 
         cur = start;
