@@ -391,10 +391,25 @@ button.secondary:disabled:hover { background: #31373e; }
   flex-direction: column;
   gap: 5px;
 }
-.suggest-candidate { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.45; }
+/* one tickable suggestion: checkbox + accent bar + name + reason */
+.suggest-cand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+  background: #14171a;
+  border: 1px solid #262b30;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.suggest-cand:hover { border-color: #31373e; }
+.suggest-cand input { margin: 0; flex: none; }
 .suggest-cand-bar { width: 3px; align-self: stretch; border-radius: 2px; flex: none; }
 .suggest-cand-name { font-weight: 600; flex: none; }
 .suggest-cand-why { color: #b8c0c8; }
+.suggest-add { background: #2e6f9e; }
 .suggest-note {
   font-size: 12px;
   line-height: 1.5;

@@ -77,7 +77,7 @@ import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
 import { OpsPanel } from './OpsPanel';
-import { describePickedFeature } from './opSuggest';
+import { createSuggestedOp, describePickedFeature, type SuggestCandidate } from './opSuggest';
 import { SuggestPopup } from './SuggestPopup';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -615,6 +615,29 @@ export function App() {
     const r = resolveFeature(sources, suggestPickId);
     return r ? describePickedFeature(r, stock) : null;
   }, [suggestPickId, sources, stock]);
+  /** add the CHECKED suggestions (round 2, docs/PLAN.md item 14): each
+   *  becomes a real op appended to the list — an Index suggestion first
+   *  (the sheet orders it at the head), the cutting ops after it with
+   *  feature selected + prefills computed in the datum frame the new
+   *  Index establishes (createSuggestedOp walks the growing list). */
+  const addSuggestedOps = (cands: SuggestCandidate[]) => {
+    if (cands.length === 0) return;
+    const r = suggestPickId !== null ? resolveFeature(sources, suggestPickId) : null;
+    if (!r) return;
+    const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
+    let next = [...ops];
+    for (const c of cands) {
+      next = [...next, createSuggestedOp(c, r, sources, stock, defaultTool, stock.materialId, next)];
+    }
+    setOps(next);
+    setLastToolId(defaultTool.id);
+    setExpandedOpId(next[next.length - 1].id);
+    const names = cands.map((c) => OP_KINDS.find((k) => k.kind === c.kind)?.label ?? c.kind);
+    setStatusNote(
+      `added ${cands.length} op${cands.length === 1 ? '' : 's'} — ${names.join(' + ')}`,
+    );
+    setSuggestPickId(null);
+  };
 
   const toggleSelect = (id: string) => {
     if (suggestArmed) {
@@ -2056,6 +2079,7 @@ export function App() {
             setSuggestPickId(null);
             armSuggest();
           }}
+          onAdd={addSuggestedOps}
         />
       )}
       {showExport && (

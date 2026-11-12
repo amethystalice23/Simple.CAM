@@ -1147,7 +1147,17 @@ looped over every detected feature, sheet grouped by tool — a
 composition, not a second design. Deliberately excluded (her round-1
 scope): auto-facing, auto-waterline, tool assignment changes, any
 auto-accept path. Landed 2026-11-11: the picker + knowledge sheet
-(round 1); the proposal → op-creation checkboxes are round 2.
+(round 1). Landed 2026-11-12 (round 2, her index ruling): the sheet is
+TICKABLE — "+ Add N ops" appends the checked suggestions as real ops,
+feature selected + prefilled; a feature that needs rotating gets its
+INDEX OP SUGGESTED AT THE HEAD (the exact A computed,
+indexToAlignDirection's rule — a far-side face → Index 180°, a radial
+bore → Index 90°; a tilt along the stock axis that NO datum removes is
+refused with the reason), with the sheet note that the ops after it cut
+in the rotated frame. The created ops prefill through the same datum
+machinery (createSuggestedOp walks the growing list, so the pocket
+behind a suggested Index reads its depth in the rotated frame). The
+whole-model scan remains the round-3 composition of the same engine.
 
 **13. Simulate the POSTED g-code, not the generator IR** (Alice's
 2026-11-06 call, after the op-7 chamfer ghost): the machine executes

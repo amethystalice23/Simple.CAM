@@ -9,10 +9,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { DetectedFeatures } from '../../cam/features';
-import type { CircleFeature, ModelTransform, PlaneFeature, RadialChainFeature, Stock } from '../../core/types';
+import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFeature, Stock } from '../../core/types';
+import { MAKERA_TOOLS } from '../../core/makeraTools.generated';
 import type { FeatureSource } from '../featureSources';
 import type { ResolvedFeature } from '../featureSources';
-import { describePickedFeature } from '../opSuggest';
+import { createSuggestedOp, describePickedFeature } from '../opSuggest';
 
 const IDENTITY: ModelTransform = {
   position: { x: 0, y: 0, z: 0 },
@@ -158,7 +159,42 @@ describe('describePickedFeature — circles', () => {
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock3);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('not vertical');
+    expect(k.notes[0]).toContain('cannot align');
+  });
+
+  it('a RADIAL bore (sideways rim) is rescued by a SUGGESTED INDEX at the head', () => {
+    // a hole drilled sideways into the stock: rim axis points +Y at A=0.
+    // A=90 turns it up; the drill/thread/chamfer follow in the rotated
+    // frame. (A vertical far-side rim is NOT this case — the up-facing
+    // re-anchor reads a real through-bore at its top mouth, so vertical
+    // rims never need an Index.)
+    const c: CircleFeature = {
+      kind: 'circle',
+      id: 'c1',
+      center: { x: 0, y: 10, z: 20 },
+      axis: { x: 0, y: 1, z: 0 },
+      radius: 3,
+      inner: true,
+    };
+    const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
+    expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'drill', 'threadMill', 'chamfer']);
+    expect(k.candidates[0].angle).toBe(90);
+    expect(k.notes[0]).toContain('rotated first');
+  });
+
+  it('a bore tilted ALONG the stock axis is refused — no datum aligns it', () => {
+    // axis 30° off Z toward X: the X component survives every rotation
+    const c: CircleFeature = {
+      kind: 'circle',
+      id: 'c1',
+      center: { x: 0, y: 0, z: 28 },
+      axis: { x: 0.5, y: 0, z: Math.cos(Math.PI / 6) },
+      radius: 3,
+      inner: true,
+    };
+    const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
+    expect(k.candidates).toEqual([]);
+    expect(k.notes[0]).toContain('cannot align');
   });
 });
 
@@ -206,7 +242,7 @@ describe('describePickedFeature — planes', () => {
     expect(size?.value).toBe('10.0 × 6.0 mm');
   });
 
-  it('a face pointing AWAY (far side) names the Index angle that rescues it', () => {
+  it('a face pointing AWAY (far side) is rescued by a SUGGESTED INDEX at the head', () => {
     // normal straight down at A=0 — the bottom of a part. Rotation about
     // the stock axis brings it level at A=180°
     const plane: PlaneFeature = {
@@ -217,13 +253,14 @@ describe('describePickedFeature — planes', () => {
     };
     const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
     // the SIGN gate (opTargets pocketRegions gates the same way): a
-    // down-face is NOT level-up — nothing is offered without the Index
-    expect(k.candidates).toEqual([]);
-    expect(k.facts.find((f) => f.label === 'faces')?.value).toContain('tilted');
-    expect(k.notes[0]).toContain('Index op at A 180');
+    // down-face is NOT level-up — the INDEX is what's offered first,
+    // with the pocket/chamfer behind it in the rotated frame
+    expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'pocket', 'chamfer']);
+    expect(k.candidates[0].angle).toBe(180);
+    expect(k.notes[0]).toContain('rotated first');
   });
 
-  it('a sideways face names its rescuing Index angle too', () => {
+  it('a sideways face is rescued by a suggested Index at its own angle', () => {
     // 30° tilt in the YZ plane — the rotatable kind: A=30 brings it level
     const plane: PlaneFeature = {
       kind: 'plane',
@@ -232,8 +269,8 @@ describe('describePickedFeature — planes', () => {
       normal: { x: 0, y: 0.5, z: Math.cos(Math.PI / 6) },
     };
     const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
-    expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('Index op at A 30');
+    expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'pocket', 'chamfer']);
+    expect(k.candidates[0].angle).toBeCloseTo(30, 5);
   });
 
   it('a tilt ALONG the stock axis is refused — no datum angle removes it', () => {
@@ -311,5 +348,79 @@ describe('describePickedFeature — chains, paths, edges', () => {
     const stock3: Stock = { ...stock4, axisMode: '3-axis' };
     const k3 = describePickedFeature(resolved('edge', source({ edges: [e] }), 0), stock3);
     expect(k3.candidates).toEqual([]);
+  });
+});
+describe('createSuggestedOp — the op each ticked suggestion becomes', () => {
+  const flat = MAKERA_TOOLS.find((t) => t.id === 'makera-o-flute-bits-spiral-o-metal-3-175-12mm')!;
+
+  it('a far-side face: index first, then the pocket prefilled in the ROTATED frame', () => {
+    const plane: PlaneFeature = {
+      kind: 'plane',
+      id: 'p1',
+      point: { x: 0, y: 0, z: 25 },
+      normal: { x: 0, y: 0, z: -1 },
+    };
+    const s = source({ planes: [plane] });
+    const r = resolved('plane', s, 0);
+    const k = describePickedFeature(r, stock4);
+    const index = createSuggestedOp(k.candidates[0], r, [s], stock4, flat, 'delrin', []);
+    expect(index.kind).toBe('index');
+    expect((index as Extract<JobOp, { kind: 'index' }>).angle).toBe(180);
+    expect(index.featureIds).toEqual([]);
+
+    // the pocket AFTER the index prefills through the rotation: the face
+    // at machine Z25 flips to Z15 (A 180 about axis Z20) → endDepth 15
+    // below the crown (Z30). Without the index it would read 5.
+    const pocket = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', [index]);
+    expect(pocket.kind).toBe('pocket');
+    expect(pocket.featureIds).toEqual(['p1']);
+    expect((pocket as Extract<JobOp, { kind: 'pocket' }>).endDepth).toBe(15);
+    const bare = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', []);
+    expect((bare as Extract<JobOp, { kind: 'pocket' }>).endDepth).toBe(5);
+  });
+
+  it('a vertical M6 rim: the thread mill arrives fully specified', () => {
+    const c: CircleFeature = {
+      kind: 'circle',
+      id: 'c1',
+      center: { x: 3, y: 4, z: 28 },
+      axis: { x: 0, y: 0, z: 1 },
+      radius: 3,
+      inner: true,
+    };
+    const s = source({ circles: [c] });
+    const r = resolved('circle', s, 0);
+    const k = describePickedFeature(r, stock4);
+    const tm = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', []);
+    expect(tm.kind).toBe('threadMill');
+    const t = tm as Extract<JobOp, { kind: 'threadMill' }>;
+    expect(t.featureIds).toEqual(['c1']);
+    expect(t.internal).toBe(true);
+    expect(t.nominalDiameter).toBe(6);
+    expect(t.pitch).toBe(1);
+    expect(t.startDepth).toBe(2); // crown 30 − rim 28
+    // drill keeps its defaults (not depth-bearing): first-click parity
+    const drill = createSuggestedOp(k.candidates[0], r, [s], stock4, flat, 'delrin', []) as Extract<
+      JobOp,
+      { kind: 'drill' }
+    >;
+    expect(drill.featureIds).toEqual(['c1']);
+    expect(drill.depth).toBe(5);
+  });
+
+  it('an around-axis rim prefills the rotary face target Ø', () => {
+    const c: CircleFeature = {
+      kind: 'circle',
+      id: 'c1',
+      center: { x: 10, y: 0, z: 20 },
+      axis: { x: 1, y: 0, z: 0 },
+      radius: 8,
+      inner: false,
+    };
+    const s = source({ circles: [c] });
+    const r = resolved('circle', s, 0);
+    const k = describePickedFeature(r, stock4);
+    const face = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', []);
+    expect((face as Extract<JobOp, { kind: 'faceCylinder' }>).targetDiameter).toBe(16);
   });
 });

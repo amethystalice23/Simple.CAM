@@ -9,11 +9,12 @@
  */
 
 import * as THREE from 'three';
-import type { CircleFeature, JobOp, Stock, Vec3 } from '../core/types';
-import { rotaryCalibrationOf } from '../core/types';
+import type { CircleFeature, JobOp, PlaneFeature, Stock, Tool, Vec3 } from '../core/types';
+import { rotaryCalibrationOf, round2 } from '../core/types';
+import { indexedPointRotation } from '../cam/indexing';
 import { planeExtents, transformFn } from './featureOverlays';
-import type { ResolvedFeature } from './featureSources';
-import { metricPitch } from './jobGeneration';
+import type { FeatureSource, ResolvedFeature } from './featureSources';
+import { datumAngleBefore, metricPitch, newJobOp, prefillDepths, prefillThreadMill } from './jobGeneration';
 import { stockTopZ } from './placement';
 
 /** "usable as a pocket/profile floor" — within ~10° of level
@@ -37,6 +38,9 @@ export interface SuggestCandidate {
   kind: JobOp['kind'];
   /** feature-specific reason this op is offered for THIS feature */
   why: string;
+  /** the datum angle (kind 'index' only): the A that brings the feature
+   *  level/vertical — carried so the created op cuts in the right frame */
+  angle?: number;
 }
 
 export interface FeatureKnowledge {
@@ -50,24 +54,6 @@ export interface FeatureKnowledge {
 }
 
 const f1 = (n: number) => n.toFixed(1);
-
-/** machine-frame Z component of a model-space direction */
-function dirZ(v: Vec3, xf: (p: Vec3) => THREE.Vector3): number {
-  const zero = xf({ x: 0, y: 0, z: 0 });
-  return xf(v).sub(zero).normalize().z;
-}
-
-/** machine-frame X component of a model-space direction — 1 = parallel
- * to the rotation axis */
-function dirX(v: Vec3, xf: (p: Vec3) => THREE.Vector3): number {
-  const zero = xf({ x: 0, y: 0, z: 0 });
-  return xf(v).sub(zero).normalize().x;
-}
-
-/** degrees a direction is off the machine Z axis (0 = straight up/down) */
-function tiltDeg(v: Vec3, xf: (p: Vec3) => THREE.Vector3): number {
-  return (Math.acos(Math.min(Math.abs(dirZ(v, xf)), 1)) * 180) / Math.PI;
-}
 
 /**
  * What the detector knows about one picked feature, and the ops it
@@ -147,11 +133,28 @@ function describePlane(
       why: 'run a V-bit around this face’s boundary to break its edges',
     });
   } else if (residual <= 10) {
-    // the tilt lives in the YZ plane — one Index datum removes it
+    // the tilt lives in the YZ plane — one Index datum removes it. The
+    // datum op is SUGGESTED AT THE HEAD (Alice, 2026-11-12): the pocket
+    // and chamfer after it cut in the rotated frame, and their prefills
+    // are computed through the same rotation (createSuggestedOp).
     if (rotary) {
+      candidates.push({
+        kind: 'index',
+        angle: indexA,
+        why: `rotate the face level (A ${f1(indexA)}°) — it is added before the ops that need it`,
+      });
+      candidates.push({
+        kind: 'pocket',
+        why: 'clear this level down to its own height, following the outline you selected',
+      });
+      candidates.push({
+        kind: 'chamfer',
+        why: 'run a V-bit around this face’s boundary to break its edges',
+      });
       notes.push(
-        `this face is not level in the cutting frame — an Index op at A ${f1(indexA)}° ` +
-          'rotates it level first, then a pocket or chamfer can cut it',
+        'this face is not level at the current datum — the pocket and chamfer need the stock ' +
+          'rotated first: keep the suggested Index op checked and ahead of them (they cut in ' +
+          'the rotated frame)',
       );
     } else {
       notes.push(
@@ -181,8 +184,8 @@ function describeCircle(
 ): FeatureKnowledge {
   const center = xf(c.center);
   const dia = c.radius * 2;
-  const az = dirZ(c.axis, xf);
-  const ax = dirX(c.axis, xf);
+  const zero = xf({ x: 0, y: 0, z: 0 });
+  const n = xf(c.axis).sub(zero).normalize();
   const partial = !!c.arcs;
   const title = `Ø${f1(dia)} ${c.inner ? 'hole rim' : 'boss rim'}${partial ? ' (partial)' : ''}`;
   const facts: SuggestFact[] = [
@@ -192,8 +195,35 @@ function describeCircle(
   const candidates: SuggestCandidate[] = [];
   const notes: string[] = [];
 
-  const vertical = Math.abs(az) >= DRILL_Z_TOL;
-  const aroundStockAxis = rotary && Math.abs(ax) >= X_TOL;
+  /** the bore/boss candidates a VERTICAL rim offers — shared by the level
+   *  pick and the rotated pick (which prepends its Index) */
+  const pushBoreCands = (suffix: string) => {
+    if (partial) {
+      notes.push(
+        'a partial rim (broken by flats or flutes) bounds neither a bore nor a 360° path — ' +
+          'drilling, threading and chamfering it are refused; use its Ø where a diameter is read',
+      );
+      return;
+    }
+    const pitch = metricPitch(dia);
+    if (c.inner) {
+      candidates.push({ kind: 'drill', why: `drill this bore straight down from the rim${suffix}` });
+      candidates.push({
+        kind: 'threadMill',
+        why: `cut an internal thread${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
+      });
+      candidates.push({ kind: 'chamfer', why: 'break this hole’s rim with a V-bit' });
+    } else {
+      candidates.push({
+        kind: 'threadMill',
+        why: `cut an external thread on this boss${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
+      });
+      candidates.push({ kind: 'chamfer', why: 'run a V-bit around this boss to break its rim' });
+    }
+  };
+
+  const vertical = Math.abs(n.z) >= DRILL_Z_TOL;
+  const aroundStockAxis = rotary && Math.abs(n.x) >= X_TOL;
   if (aroundStockAxis && axisZ !== null) {
     facts.push({ label: 'axis', value: 'around the stock axis (X)' });
     if (Math.hypot(center.y, center.z - axisZ) <= ON_AXIS_TOL_MM) {
@@ -217,39 +247,36 @@ function describeCircle(
       value: `${f1(Math.max(crown - center.z, 0))} mm below the stock top`,
     });
     facts.push({ label: 'axis', value: 'vertical (Z)' });
-    if (partial) {
-      notes.push(
-        'a partial rim (broken by flats or flutes) bounds neither a bore nor a 360° path — ' +
-          'drilling, threading and chamfering it are refused; use its Ø where a diameter is read',
-      );
-    } else if (c.inner) {
-      candidates.push({ kind: 'drill', why: 'drill this bore straight down from the rim' });
-      const pitch = metricPitch(dia);
-      candidates.push({
-        kind: 'threadMill',
-        why: `cut an internal thread${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
-      });
-      candidates.push({ kind: 'chamfer', why: 'break this hole’s rim with a V-bit' });
-    } else {
-      const pitch = metricPitch(dia);
-      candidates.push({
-        kind: 'threadMill',
-        why: `cut an external thread on this boss${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
-      });
-      candidates.push({
-        kind: 'chamfer',
-        why: 'run a V-bit around this boss to break its rim',
-      });
-    }
+    pushBoreCands('');
   } else {
-    facts.push({ label: 'axis', value: `tilted ${f1(tiltDeg(c.axis, xf))}° off vertical` });
-    notes.push(
-      'this rim is not vertical in the cutting frame — drills and thread helixes cut straight ' +
-        'down; ' +
-        (rotary
-          ? 'an Index op can rotate it up if the feature itself is reachable'
-          : 're-orient the model to machine it'),
-    );
+    // not vertical — but what SURVIVES rotation? The axis's X component
+    // is untouched by the A sweep; ≤10° and ONE datum aligns the bore or
+    // boss with Z (a rim on the far side flips up at A+180).
+    const residual = (Math.atan2(Math.abs(n.x), Math.hypot(n.y, n.z)) * 180) / Math.PI;
+    const indexA = ((((Math.atan2(n.y, n.z) * 180) / Math.PI) % 360) + 360) % 360;
+    const tilt = (Math.acos(Math.min(Math.abs(n.z), 1)) * 180) / Math.PI;
+    facts.push({ label: 'axis', value: `tilted ${f1(tilt)}° off vertical` });
+    if (rotary && residual <= 10) {
+      // the rotatable rim: the datum op is SUGGESTED AT THE HEAD so the
+      // bore ops after it cut in the rotated frame (Alice, 2026-11-12)
+      candidates.push({
+        kind: 'index',
+        angle: indexA,
+        why: `rotate the rim vertical (A ${f1(indexA)}°) — it is added before the ops that need it`,
+      });
+      pushBoreCands(' — in the rotated frame');
+      notes.push(
+        'this rim is not vertical at the current datum — the drill and thread ops need the ' +
+          'stock rotated first: keep the suggested Index op checked and ahead of them (they ' +
+          'cut in the rotated frame)',
+      );
+    } else {
+      notes.push(
+        'this rim is tilted along the stock axis (X) — rotating the stock cannot align it ' +
+          'with the drill, so it can never be bored or threaded on this machine; re-orient ' +
+          'the model to machine it',
+      );
+    }
   }
   return { kind: 'circle', title, facts, candidates, notes };
 }
@@ -347,4 +374,74 @@ function describeEdge(
         'select the faces around it instead',
     ],
   };
+}
+// ------------------------------------------------- op creation (round 2)
+
+/** the feature's reference point in the DATUM frame the new op cuts in
+ *  (planes: the facing point; circles: the rim center), rotated by the
+ *  index ops preceding it. Null for kinds without a point (chains,
+ *  artwork, edges — they carry no depth prefill). */
+function suggestDatumPoint(
+  r: ResolvedFeature,
+  datum: number,
+  stock: Stock,
+): THREE.Vector3 | null {
+  if (r.kind !== 'plane' && r.kind !== 'circle') return null;
+  const xf = transformFn(r.source.transform);
+  const p =
+    r.kind === 'circle'
+      ? xf((r.feature as CircleFeature).center)
+      : xf((r.feature as PlaneFeature).point);
+  if (stock.axisMode === '4-axis' && datum !== 0) {
+    return indexedPointRotation(datum, rotaryCalibrationOf(stock).axisZ)(p);
+  }
+  return p;
+}
+
+/**
+ * Build the op one checked suggestion becomes (docs/PLAN.md item 14,
+ * round 2): newJobOp defaults + the picked feature selected + the same
+ * prefills a first feature click applies (prefillDepths /
+ * prefillThreadMill) — computed in the DATUM frame the op will run in,
+ * i.e. with the suggested Index op already ahead of it (`ops` carries
+ * everything created before this one, index included). Nothing here
+ * gates: the candidate was offered because its op accepts this feature.
+ */
+export function createSuggestedOp(
+  cand: SuggestCandidate,
+  r: ResolvedFeature,
+  sources: FeatureSource[],
+  stock: Stock,
+  tool: Tool,
+  materialId: string,
+  /** the ops list BEFORE this op — index ops already appended precede it */
+  ops: JobOp[],
+): JobOp {
+  const op = newJobOp(cand.kind, tool, materialId, stock);
+  if (cand.kind === 'index') {
+    return { ...op, angle: cand.angle ?? 90 } as JobOp;
+  }
+  const featureId = r.feature.id;
+  const withFeature = { ...op, featureIds: [featureId] } as JobOp;
+  const crown = stockTopZ(stock);
+  const datum = datumAngleBefore([...ops, withFeature], withFeature.id);
+  if (cand.kind === 'threadMill') {
+    return prefillThreadMill(
+      withFeature as Extract<JobOp, { kind: 'threadMill' }>,
+      sources,
+      featureId,
+      crown,
+      datum,
+      stock,
+    );
+  }
+  if (cand.kind === 'faceCylinder' && r.kind === 'circle') {
+    return {
+      ...withFeature,
+      targetDiameter: round2((r.feature as CircleFeature).radius * 2),
+    } as JobOp;
+  }
+  const p = suggestDatumPoint(r, datum, stock);
+  if (p) return prefillDepths(withFeature, p.z, crown);
+  return withFeature;
 }

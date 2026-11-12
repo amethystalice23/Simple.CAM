@@ -6,10 +6,10 @@
  * the ops.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { JobOp } from '../core/types';
 import { OP_KIND_COLORS } from './opColors';
-import type { FeatureKnowledge } from './opSuggest';
+import type { FeatureKnowledge, SuggestCandidate } from './opSuggest';
 import { OP_KINDS } from './jobGeneration';
 
 /** per-kind accents for the popup title chip (feature kinds, not ops) */
@@ -37,12 +37,30 @@ export function SuggestPopup({
   knowledge,
   onClose,
   onPickAnother,
+  onAdd,
 }: {
   knowledge: FeatureKnowledge;
   onClose: () => void;
   /** re-arm the picker for another feature (round 2: "suggest for this too") */
   onPickAnother: () => void;
+  /** add the CHECKED suggestions as real ops (round 2) — App creates them
+   *  in list order (any Index op first) and closes the popup */
+  onAdd: (checked: SuggestCandidate[]) => void;
 }) {
+  /** every suggestion checked by default (Alice's sheet ruling: the
+   *  obvious ones are one Add away; untick what you don't want) */
+  const [checked, setChecked] = useState<Set<number>>(
+    () => new Set(knowledge.candidates.map((_, i) => i)),
+  );
+  const toggle = (i: number) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  const checkedList = knowledge.candidates.filter((_, i) => checked.has(i));
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -83,15 +101,26 @@ export function SuggestPopup({
 
         {knowledge.candidates.length > 0 && (
           <>
-            <p className="suggest-section-label">operations this could drive</p>
+            <p className="suggest-section-label">suggested toolpaths — untick any you don’t want</p>
             <ul className="suggest-candidates">
               {knowledge.candidates.map((c, i) => (
-                <li key={i} className="suggest-candidate">
-                  <span className="suggest-cand-bar" style={{ background: OP_KIND_COLORS[c.kind] }} />
-                  <span className="suggest-cand-name" style={{ color: OP_KIND_COLORS[c.kind] }}>
-                    {opKindLabel(c.kind)}
-                  </span>
-                  <span className="suggest-cand-why">{c.why}</span>
+                <li key={i}>
+                  <label className="suggest-cand">
+                    <input
+                      type="checkbox"
+                      checked={checked.has(i)}
+                      onChange={() => toggle(i)}
+                      style={{ accentColor: OP_KIND_COLORS[c.kind] }}
+                    />
+                    <span
+                      className="suggest-cand-bar"
+                      style={{ background: OP_KIND_COLORS[c.kind] }}
+                    />
+                    <span className="suggest-cand-name" style={{ color: OP_KIND_COLORS[c.kind] }}>
+                      {opKindLabel(c.kind)}
+                    </span>
+                    <span className="suggest-cand-why">{c.why}</span>
+                  </label>
                 </li>
               ))}
             </ul>
@@ -108,6 +137,11 @@ export function SuggestPopup({
           <button type="button" onClick={onPickAnother}>
             Pick another feature
           </button>
+          {checkedList.length > 0 && (
+            <button type="button" className="suggest-add" onClick={() => onAdd(checkedList)}>
+              + Add {checkedList.length} op{checkedList.length === 1 ? '' : 's'}
+            </button>
+          )}
           <button type="button" onClick={onClose}>
             Done
           </button>
