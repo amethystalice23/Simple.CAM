@@ -347,6 +347,26 @@ function describeCircle(
       );
       return;
     }
+    if (stepped === 'mouth' && comp) {
+      // the opening edge of an indent that CLOSES below: the wall under
+      // this rim is the chamfer/counterbore cone, not a constant-Ø bore
+      // wall — a thread has nothing to ride, and a drill at the mouth's
+      // Ø would plough the cone. Pocket the opening, chamfer its edge
+      // (Alice, 2026-11-12: the drill + internal-thread offer here was
+      // "an even wilder suggestion").
+      candidates.push({
+        kind: 'pocket',
+        why: `clear this stepped opening (Ø${f1(dia)} mouth, Ø${f1(comp.radius * 2)} floor below)${suffix}`,
+      });
+      candidates.push({ kind: 'chamfer', why: 'cut the angled wall under this rim with a V-bit' });
+      notes.push(
+        `the wall below this rim narrows toward the Ø${f1(comp.radius * 2)} floor — it is an ` +
+          'angled chamfer wall, not a bore: threading has no constant Ø to ride and a drill at ' +
+          `the mouth's Ø would cut the cone; pocket the opening (or pick the Ø${f1(comp.radius * 2)} ` +
+          'floor rim for the pocket that reaches the bottom) and chamfer the edge',
+      );
+      return;
+    }
     if (c.inner) {
       candidates.push({ kind: 'drill', why: `drill this bore straight down from the rim${suffix}` });
       candidates.push({

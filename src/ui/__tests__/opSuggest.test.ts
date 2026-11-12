@@ -263,12 +263,15 @@ describe('describePickedFeature — stepped rims (indent vs chamfered bore)', ()
     expect(k.candidates[0].why).toContain('Ø6.0 under the Ø10.0 mouth');
   });
 
-  it('the indent MOUTH rim keeps the bore candidates (it opens onto the floor, and a tool can still enter)', () => {
+  it('the indent MOUTH rim (angled chamfer wall below, indent closes) offers pocket + chamfer, never drill/thread', () => {
     const { geometry, circles } = indentBar();
     const s = source({ circles });
     s.geometry = geometry;
     const k = describePickedFeature(resolved('circle', s, 0), stock4);
-    expect(k.candidates.map((x) => x.kind)).toEqual(['drill', 'threadMill', 'chamfer']);
+    // the wall under the mouth is the chamfer cone — no constant Ø for a
+    // thread, and a drill at the mouth's Ø would plough the cone
+    expect(k.candidates.map((x) => x.kind)).toEqual(['pocket', 'chamfer']);
+    expect(k.title).toContain('indent mouth');
   });
 
   it('a chamfered BORE floor — hole continues past the rim — keeps drill + thread (indentRole raycast)', () => {
