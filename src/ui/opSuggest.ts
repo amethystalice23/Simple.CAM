@@ -178,7 +178,7 @@ export function describePickedFeature(r: ResolvedFeature, stock: Stock): Feature
   }
   if (r.kind === 'radialChain') return describeChain(r, xf, axisZ);
   if (r.kind === 'thread')
-    return describeThread(r.feature as ThreadFeature, rotary, axisZ);
+    return orderCandidates(describeThread(r.feature as ThreadFeature, rotary, axisZ));
   if (r.kind === 'path') return describePath(r);
   return orderCandidates(describeEdge(r, xf, rotary));
 }
@@ -546,6 +546,14 @@ function describeThread(
     candidates: onStockAxis
       ? [
           {
+            // the thread panel's own recipe inserts a facing pass first
+            // ("Add facing toolpath"): the crest rides the FINISHED Ø.
+            // The sheet offers the same prefilled face op ahead of the
+            // thread (Alice, 2026-11-12).
+            kind: 'faceCylinder',
+            why: `face the crest Ø${f1(t.nominalDiameter)} over the thread's span first — the thread rides the finished surface`,
+          },
+          {
             // the ROTARY thread op (kind 'thread'): a 4-axis helical
             // groove cut with the A axis turning under G93 — the right
             // op for a thread centered on the rotation axis. The 3-axis
@@ -717,6 +725,19 @@ export function createSuggestedOp(
       datum,
       stock,
     );
+  }
+  if (cand.kind === 'faceCylinder' && r.kind === 'thread') {
+    // the same face op the thread panel's "Add facing toolpath" button
+    // inserts (App insertFacingOp): crest Ø, the thread's x span and
+    // rotation, its own tool/feeds
+    const t = r.feature as ThreadFeature;
+    return {
+      ...withFeature,
+      targetDiameter: round2(t.nominalDiameter),
+      xStart: t.xStart,
+      xEnd: t.xEnd,
+      rotation: t.rotation,
+    } as JobOp;
   }
   if (cand.kind === 'faceCylinder' && r.kind === 'circle') {
     return {

@@ -713,9 +713,12 @@ describe('describePickedFeature — threads (Pass 5)', () => {
     const t = thread({ x: 0, y: 0, z: 20 }, { x: 1, y: 0, z: 0 });
     const s = source({ threads: [t] });
     const k = describePickedFeature(resolved('thread', s, 0), stock4);
-    expect(k.candidates.map((c) => c.kind)).toEqual(['thread']);
-    expect(k.candidates[0].why).toContain('A axis');
-    const vbitTool = suggestToolFor(k.candidates[0], resolved('thread', s, 0), [], [v60()]);
+    // the panel's recipe: the facing pass rides ahead of the thread
+    // (orderCandidates floats faceCylinder to the head)
+    expect(k.candidates.map((c) => c.kind)).toEqual(['faceCylinder', 'thread']);
+    expect(k.candidates[0].why).toContain('crest');
+    expect(k.candidates[1].why).toContain('A axis');
+    const vbitTool = suggestToolFor(k.candidates[1], resolved('thread', s, 0), [], [v60()]);
     expect(vbitTool?.tool.type).toBe('vbit');
   });
 
