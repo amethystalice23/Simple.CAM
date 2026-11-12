@@ -434,7 +434,7 @@ button.secondary:disabled:hover { background: #31373e; }
   padding: 6px 9px;
   margin: 8px 0 0;
 }
-.suggest-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 12px; }
+.suggest-actions { display: flex; gap: 6px; justify-content: flex-start; margin-top: 12px; }
 .suggest-actions button { font-size: 12px; padding: 5px 12px; }
 /* the merge-or-replace import dialog */
 .import-choice { width: 430px; }

@@ -162,17 +162,20 @@ export function SuggestPopup({
           </p>
         ))}
 
+        {/* the doing button leads the row (Alice, 2026-11-12): Add first
+            on the left, then the secondary actions — Done relabelled
+            Cancel, as a dismiss is a no-op */}
         <div className="suggest-actions">
-          <button type="button" onClick={onPickAnother}>
-            Pick another feature
-          </button>
           {checkedList.length > 0 && (
             <button type="button" className="suggest-add" onClick={() => onAdd(checkedList)}>
               + Add {checkedList.length} op{checkedList.length === 1 ? '' : 's'}
             </button>
           )}
+          <button type="button" onClick={onPickAnother}>
+            Pick another feature
+          </button>
           <button type="button" onClick={onClose}>
-            Done
+            Cancel
           </button>
         </div>
       </div>
