@@ -30,6 +30,20 @@ const X_TOL = 0.985;
  * trace it (opTargets ON_AXIS_TOL_MM). */
 const ON_AXIS_TOL_MM = 0.2;
 
+/** Order the machining-sequence invariants (Alice, 2026-11-12): a Rotary
+ *  face op ALWAYS precedes what finishes it — a chamfer rides the
+ *  FINISHED Ø, not the raw stock ("when rotary face is in the suggested
+ *  ops list, it really should pretty much always go first"). Stable sort,
+ *  so every other suggestion keeps its built order. */
+function orderCandidates(k: FeatureKnowledge): FeatureKnowledge {
+  if (k.candidates.some((c) => c.kind === 'faceCylinder')) {
+    k.candidates.sort((a, b) =>
+      a.kind === 'faceCylinder' ? -1 : b.kind === 'faceCylinder' ? 1 : 0,
+    );
+  }
+  return k;
+}
+
 export interface SuggestFact {
   label: string;
   value: string;
@@ -72,11 +86,13 @@ export function describePickedFeature(r: ResolvedFeature, stock: Stock): Feature
 
   if (r.kind === 'plane') return describePlane(r, xf, rotary, axisZ, crown);
   if (r.kind === 'circle') {
-    return describeCircle(r.feature as CircleFeature, xf, rotary, axisZ, crown);
+    return orderCandidates(
+      describeCircle(r.feature as CircleFeature, xf, rotary, axisZ, crown),
+    );
   }
   if (r.kind === 'radialChain') return describeChain(r, xf, axisZ);
   if (r.kind === 'path') return describePath(r);
-  return describeEdge(r, xf, rotary);
+  return orderCandidates(describeEdge(r, xf, rotary));
 }
 
 function describePlane(

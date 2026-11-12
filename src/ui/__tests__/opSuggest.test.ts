@@ -130,7 +130,8 @@ describe('describePickedFeature — circles', () => {
       inner: false,
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
-    expect(k.candidates.map((x) => x.kind)).toEqual(['cylChamfer', 'faceCylinder']);
+    // face FIRST (her 2026-11-12 ruling): the chamfer rides the finished Ø
+    expect(k.candidates.map((x) => x.kind)).toEqual(['faceCylinder', 'cylChamfer']);
   });
 
   it('an around-X circle OFF the stock axis is refused with the ellipse reason', () => {
@@ -420,7 +421,7 @@ describe('createSuggestedOp — the op each ticked suggestion becomes', () => {
     const s = source({ circles: [c] });
     const r = resolved('circle', s, 0);
     const k = describePickedFeature(r, stock4);
-    const face = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', []);
+    const face = createSuggestedOp(k.candidates[0], r, [s], stock4, flat, 'delrin', []);
     expect((face as Extract<JobOp, { kind: 'faceCylinder' }>).targetDiameter).toBe(16);
   });
 });
