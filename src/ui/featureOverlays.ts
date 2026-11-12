@@ -909,28 +909,14 @@ export function hoverLineGeometry(
       positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
     }
   } else if (kind === 'thread') {
-    // the thread's helical root line: one full revolution at each end
-    // plus a connecting helix segment — a sketch of the groove
-    const t = data.threads[index];
-    if (t) {
-      const { center, dir, rootR, pitch, turns } = t;
-      const steps = 96;
-      for (let i = 0; i < steps; i++) {
-        const f0 = i / steps;
-        const f1 = (i + 1) / steps;
-        const ang = f0 * turns * 2 * Math.PI;
-        const ang1 = f1 * turns * 2 * Math.PI;
-        const p0 = {
-          x: center.x + dir.x * (f0 * turns * pitch),
-          y: center.y + Math.cos(ang) * rootR,
-          z: center.z + Math.sin(ang) * rootR,
-        };
-        const p1 = {
-          x: center.x + dir.x * (f1 * turns * pitch),
-          y: center.y + Math.cos(ang1) * rootR,
-          z: center.z + Math.sin(ang1) * rootR,
-        };
-        positions.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z);
+    // the thread's helix: reuse the overlay's OWN samples — they are
+    // the measured helix (axis, phase, hand from the detection frame).
+    // Re-deriving a helix here was the twice-bitten bug: a highlight
+    // that reconstructed its own axis around a surface midpoint.
+    const s = data.threadSamples[index];
+    if (s) {
+      for (let i = 0; i < s.length - 1; i++) {
+        positions.push(s[i].x, s[i].y, s[i].z, s[i + 1].x, s[i + 1].y, s[i + 1].z);
       }
     }
   } else {
