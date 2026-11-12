@@ -434,6 +434,19 @@ button.secondary:disabled:hover { background: #31373e; }
   padding: 6px 9px;
   margin: 8px 0 0;
 }
+/* the "why?" pop-open behind a note's one-line guidance: unobtrusive in
+   the note's own colour, the geometry detail indented below it */
+.suggest-note-why {
+  font-size: 11px;
+  padding: 0 4px;
+  margin-left: 2px;
+  color: inherit;
+  border: 1px solid rgba(224, 160, 90, 0.35);
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.suggest-note-detail { display: block; margin-top: 4px; color: #b98d5c; font-style: italic; }
 .suggest-actions { display: flex; gap: 6px; justify-content: flex-start; margin-top: 12px; }
 /* the decline pair rides the right edge — visual separation from the
    accept button on the left (their meaning is "not accepting") */

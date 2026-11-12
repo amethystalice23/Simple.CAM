@@ -49,6 +49,17 @@ export interface SuggestFact {
   value: string;
 }
 
+/** A note the sheet shows under the suggestions: `text` is always shown,
+ *  one plain sentence a novice can act on. `detail` (optional) is the
+ *  geometry behind it — kept out of the default view because it reads
+ *  like engineering commentary, not guidance; the sheet shows it
+ *  behind a small "why?" toggle (Alice, 2026-11-12: the reasoning is
+ *  useful, the wall of text was not). */
+export interface SuggestNote {
+  text: string;
+  detail?: string;
+}
+
 export interface SuggestCandidate {
   kind: JobOp['kind'];
   /** feature-specific reason this op is offered for THIS feature */
@@ -68,7 +79,7 @@ export interface FeatureKnowledge {
   /** ops this feature could drive, most-relevant first */
   candidates: SuggestCandidate[];
   /** cautions / refusals worth saying out loud */
-  notes: string[];
+  notes: SuggestNote[];
 }
 
 const f1 = (n: number) => n.toFixed(1);
@@ -217,7 +228,7 @@ function describePlane(
     });
   }
   const candidates: SuggestCandidate[] = [];
-  const notes: string[] = [];
+  const notes: SuggestNote[] = [];
   if (level) {
     candidates.push({
       kind: 'pocket',
@@ -246,26 +257,26 @@ function describePlane(
         kind: 'chamfer',
         why: 'run a V-bit around this face’s boundary to break its edges',
       });
-      notes.push(
-        'this face is not level at the current datum — the pocket and chamfer need the stock ' +
-          'rotated first: keep the suggested Index op checked and ahead of them (they cut in ' +
-          'the rotated frame)',
-      );
+      notes.push({
+        text: 'this face is not level here — keep the suggested Index op checked so it rotates first.',
+        detail:
+          'the pocket and chamfer cut in the rotated frame: with the Index op ahead of them ' +
+          '(it is added first), the face comes level and they cut it squarely.',
+      });
     } else {
-      notes.push(
-        'this face is not level in the cutting frame — a pocket or chamfer needs it flat; ' +
-          're-orient the model, or machine a different face',
-      );
+      notes.push({
+        text: 'this face is not level here — a pocket or chamfer needs it flat. Re-orient the model, or machine a different face.',
+      });
     }
   } else {
-    notes.push(
-      rotary
-        ? `this face is tilted ${f1(residual)}° along the stock axis (X) — rotating the stock ` +
-            'cannot remove that tilt, so it can never face the cutter squarely; re-orient the ' +
-            'model to machine it'
-        : `this face is tilted ${f1(residual)}° — it can never face the cutter squarely; ` +
-            're-orient the model, or machine a different face',
-    );
+    notes.push({
+      text: rotary
+        ? `this face is tilted ${f1(residual)}° along the stock axis (X) — rotating the stock cannot remove that tilt. Re-orient the model to machine it.`
+        : `this face is tilted ${f1(residual)}° — it can never face the cutter squarely. Re-orient the model, or machine a different face.`,
+      detail: rotary
+        ? 'the tilt runs along the rotation axis, so no Index angle squares the face to the cutter.'
+        : undefined,
+    });
   }
   return { kind: 'plane', title: 'Flat face', facts, candidates, notes };
 }
@@ -315,7 +326,7 @@ function describeCircle(
     });
   }
   const candidates: SuggestCandidate[] = [];
-  const notes: string[] = [];
+  const notes: SuggestNote[] = [];
 
   /** the bore/boss candidates a VERTICAL rim offers — shared by the level
    *  pick and the rotated pick (which prepends its Index). An inner rim
@@ -327,10 +338,12 @@ function describeCircle(
    *  offers a profile, not an automatic thread. */
   const pushBoreCands = (suffix: string) => {
     if (partial) {
-      notes.push(
-        'a partial rim (broken by flats or flutes) bounds neither a bore nor a 360° path — ' +
-          'drilling, threading and chamfering it are refused; use its Ø where a diameter is read',
-      );
+      notes.push({
+        text: 'this rim is broken by other features, so the hole operations are left out — its diameter is still listed above.',
+        detail:
+          'the circle survives only as arcs (cut by flats or flutes), and a partial rim bounds ' +
+          'neither a bore to drill nor a full 360° path to thread or chamfer.',
+      });
       return;
     }
     const pitch = metricPitch(dia);
@@ -340,11 +353,12 @@ function describeCircle(
         why: `clear this indent floor (Ø${f1(dia)} under the Ø${f1(comp.radius * 2)} mouth above it)${suffix}`,
       });
       candidates.push({ kind: 'chamfer', why: 'break this indent’s rim with a V-bit' });
-      notes.push(
-        `this rim sits under a coaxial Ø${f1(comp.radius * 2)} opening — it reads as the ` +
-          'floor of a stepped indent, not a bore mouth: pocket and chamfer it; drill it only if ' +
-          'you really mean a hole here',
-      );
+      notes.push({
+        text: 'this is the bottom of a recess, not the mouth of a hole — drill and thread are left out on purpose.',
+        detail:
+          `the rim sits under a coaxial Ø${f1(comp.radius * 2)} opening whose wall closes at this ` +
+          'rim’s plane, so nothing continues below: a drilled hole would cut into the floor the pocket is meant to leave.',
+      });
       return;
     }
     if (stepped === 'mouth' && comp) {
@@ -359,12 +373,13 @@ function describeCircle(
         why: `clear this stepped opening (Ø${f1(dia)} mouth, Ø${f1(comp.radius * 2)} floor below)${suffix}`,
       });
       candidates.push({ kind: 'chamfer', why: 'cut the angled wall under this rim with a V-bit' });
-      notes.push(
-        `the wall below this rim narrows toward the Ø${f1(comp.radius * 2)} floor — it is an ` +
-          'angled chamfer wall, not a bore: threading has no constant Ø to ride and a drill at ' +
-          `the mouth's Ø would cut the cone; pocket the opening (or pick the Ø${f1(comp.radius * 2)} ` +
-          'floor rim for the pocket that reaches the bottom) and chamfer the edge',
-      );
+      notes.push({
+        text: 'the wall below this edge slopes inward — drill and thread are left out on purpose.',
+        detail:
+          `the wall narrows from Ø${f1(dia)} here to Ø${f1(comp.radius * 2)} at the bottom: a ` +
+          'thread needs a straight wall of one size to ride, and a drill at the mouth’s size would ' +
+          'cut away the slope. Pick the smaller rim at the bottom for the pocket that reaches the floor.',
+      });
       return;
     }
     if (c.inner) {
@@ -401,10 +416,11 @@ function describeCircle(
         why: 'turn the stock down to this Ø over the rim’s X range',
       });
     } else {
-      notes.push(
-        'this circle runs around X but sits off the stock axis — an A sweep would trace ' +
-          'an ellipse, not the circle',
-      );
+      notes.push({
+        text: 'this circle runs around the stock axis but sits off its centre — the rotary edge operations are left out.',
+        detail:
+          'spinning the stock would trace an ellipse rather than this circle, so an A-axis sweep cannot follow it.',
+      });
     }
   } else if (vertical) {
     facts.push({
@@ -430,17 +446,18 @@ function describeCircle(
         why: `rotate the rim vertical (A ${f1(indexA)}°) — it is added before the ops that need it`,
       });
       pushBoreCands(' — in the rotated frame');
-      notes.push(
-        'this rim is not vertical at the current datum — the drill and thread ops need the ' +
-          'stock rotated first: keep the suggested Index op checked and ahead of them (they ' +
-          'cut in the rotated frame)',
-      );
+      notes.push({
+        text: 'this rim is not vertical here — keep the suggested Index op checked so it rotates first.',
+        detail:
+          'the drill and thread ops cut in the rotated frame: with the Index op ahead of them ' +
+          '(it is added first), the rim comes vertical and they cut it squarely.',
+      });
     } else {
-      notes.push(
-        'this rim is tilted along the stock axis (X) — rotating the stock cannot align it ' +
-          'with the drill, so it can never be bored or threaded on this machine; re-orient ' +
-          'the model to machine it',
-      );
+      notes.push({
+        text: 'this rim is tilted along the stock axis (X) — rotating the stock cannot align it with the drill. Re-orient the model to machine it.',
+        detail:
+          'the tilt survives every Index angle, so it can never be bored or threaded on this machine as the model sits.',
+      });
     }
   }
   return { kind: 'circle', title, facts, candidates, notes };
@@ -535,8 +552,12 @@ function describeEdge(
     ],
     candidates,
     notes: [
-      'a detected edge is a measurement datum, not a cut path — no op drives it directly; ' +
-        'select the faces around it instead',
+      {
+        text: 'an edge is for measuring, not cutting — no operation follows it directly. Select the faces around it instead.',
+        detail:
+          'a detected edge is a measurement datum (lengths, angles, aiming an Index); the ops ' +
+          'cut the faces and circles that meet along it.',
+      },
     ],
   };
 }

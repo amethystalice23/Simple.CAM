@@ -119,7 +119,7 @@ describe('describePickedFeature — circles', () => {
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
     expect(k.title).toContain('partial');
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('partial rim');
+    expect(k.notes[0].text).toContain('broken by other features');
   });
 
   it('a circle around the stock axis offers the rotary ring ops', () => {
@@ -148,7 +148,8 @@ describe('describePickedFeature — circles', () => {
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('ellipse');
+    expect(k.notes[0].text).toContain('off its centre');
+    expect(k.notes[0].detail).toContain('ellipse');
   });
 
   it('a 3-axis stock never offers the rotary ops', () => {
@@ -163,7 +164,7 @@ describe('describePickedFeature — circles', () => {
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock3);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('cannot align');
+    expect(k.notes[0].text).toContain('Re-orient the model');
   });
 
   it('a RADIAL bore (sideways rim) is rescued by a SUGGESTED INDEX at the head', () => {
@@ -183,7 +184,7 @@ describe('describePickedFeature — circles', () => {
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
     expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'drill', 'threadMill', 'chamfer']);
     expect(k.candidates[0].angle).toBe(90);
-    expect(k.notes[0]).toContain('rotated first');
+    expect(k.notes[0].text).toContain('keep the suggested Index op checked');
   });
 
   it('a bore tilted ALONG the stock axis is refused — no datum aligns it', () => {
@@ -198,7 +199,7 @@ describe('describePickedFeature — circles', () => {
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('cannot align');
+    expect(k.notes[0].text).toContain('Re-orient the model');
   });
 });
 
@@ -362,7 +363,7 @@ describe('describePickedFeature — planes', () => {
     // with the pocket/chamfer behind it in the rotated frame
     expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'pocket', 'chamfer']);
     expect(k.candidates[0].angle).toBe(180);
-    expect(k.notes[0]).toContain('rotated first');
+    expect(k.notes[0].text).toContain('keep the suggested Index op checked');
   });
 
   it('a sideways face is rescued by a suggested Index at its own angle', () => {
@@ -389,7 +390,7 @@ describe('describePickedFeature — planes', () => {
     };
     const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('cannot remove that tilt');
+    expect(k.notes[0].text).toContain('cannot remove that tilt');
   });
 
   it('a face parallel to the stock axis is refused the same way', () => {
@@ -401,7 +402,7 @@ describe('describePickedFeature — planes', () => {
     };
     const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('cannot remove that tilt');
+    expect(k.notes[0].text).toContain('cannot remove that tilt');
   });
 });
 
@@ -449,7 +450,7 @@ describe('describePickedFeature — chains, paths, edges', () => {
     };
     const k4 = describePickedFeature(resolved('edge', source({ edges: [e] }), 0), stock4);
     expect(k4.candidates.map((x) => x.kind)).toEqual(['index']);
-    expect(k4.notes[0]).toContain('datum');
+    expect(k4.notes[0].text).toContain('measuring');
     const stock3: Stock = { ...stock4, axisMode: '3-axis' };
     const k3 = describePickedFeature(resolved('edge', source({ edges: [e] }), 0), stock3);
     expect(k3.candidates).toEqual([]);

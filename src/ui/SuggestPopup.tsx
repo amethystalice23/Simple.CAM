@@ -78,6 +78,10 @@ export function SuggestPopup({
     });
   const checkedList = knowledge.candidates.filter((_, i) => checked.has(i));
 
+  /** which notes have their "why?" detail expanded (each opens alone —
+   * the sheet reads as short guidance first, geometry on request) */
+  const [openNotes, setOpenNotes] = useState<Set<number>>(() => new Set());
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -158,7 +162,28 @@ export function SuggestPopup({
 
         {knowledge.notes.map((n, i) => (
           <p key={i} className="suggest-note">
-            ⚠ {n}
+            ⚠ {n.text}
+            {n.detail && (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  className="suggest-note-why"
+                  aria-expanded={openNotes.has(i)}
+                  onClick={() =>
+                    setOpenNotes((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(i)) next.delete(i);
+                      else next.add(i);
+                      return next;
+                    })
+                  }
+                >
+                  {openNotes.has(i) ? 'hide why' : 'why?'}
+                </button>
+                {openNotes.has(i) && <span className="suggest-note-detail"> {n.detail}</span>}
+              </>
+            )}
           </p>
         ))}
 
