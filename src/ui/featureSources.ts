@@ -70,6 +70,7 @@ import type {
   PlaneFeature,
   Primitive,
   RadialChainFeature,
+  ThreadFeature,
   Stock,
   Vec3,
 } from '../core/types';
@@ -187,6 +188,7 @@ function namespaceIds(features: DetectedFeatures, primId: string): DetectedFeatu
     circles: features.circles.map((f: CircleFeature) => ({ ...f, id: ns(f.id) })),
     edges: features.edges.map((f: EdgeFeature) => ({ ...f, id: ns(f.id) })),
     radialChains: features.radialChains.map((f: RadialChainFeature) => ({ ...f, id: ns(f.id) })),
+    threads: features.threads,
     paths: features.paths.map((f: PathFeature) => ({ ...f, id: ns(f.id) })),
     planeLoops: features.planeLoops,
     faceToPlane: features.faceToPlane,
@@ -260,6 +262,7 @@ function artworkFeatures(p: Extract<Primitive, { kind: 'artwork' }>): DetectedFe
         : { closed: p.pathMeta?.[i]?.closed, filled: p.pathMeta?.[i]?.filled }),
     })),
     radialChains: [],
+      threads: [],
     faceToPlane: new Int32Array(0),
     planeLoops: [],
   };
@@ -357,6 +360,7 @@ export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
       circles,
       edges: [],
       radialChains: [],
+      threads: [],
       paths: [],
       faceToPlane: new Int32Array(0),
       planeLoops: [],
@@ -369,9 +373,9 @@ export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
  * resolution, labels, depth prefills, and generation. */
 export interface ResolvedFeature {
   source: FeatureSource;
-  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain';
+  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain' | 'thread';
   index: number;
-  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature | RadialChainFeature;
+  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature | RadialChainFeature | ThreadFeature;
 }
 
 export function resolveFeature(
@@ -399,6 +403,8 @@ export function resolveFeature(
   if (pa >= 0) return { source, kind: 'path', index: pa, feature: source.features.paths[pa] };
   const ri = source.features.radialChains.findIndex((f) => f.id === id);
   if (ri >= 0) return { source, kind: 'radialChain', index: ri, feature: source.features.radialChains[ri] };
+  const ti = source.features.threads.findIndex((f) => f.id === id);
+  if (ti >= 0) return { source, kind: 'thread', index: ti, feature: source.features.threads[ti] };
   return null;
 }
 

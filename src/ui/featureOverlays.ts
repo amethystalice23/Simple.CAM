@@ -360,6 +360,8 @@ export interface FeatureOverlayData {
   pathLines: THREE.LineSegments; // artwork line work in amber
   /** constant-radius chains: closed silhouette outlines (slot walls) */
   chainLines: THREE.LineSegments;
+  /** threads: one helical root line per detected thread (amber) */
+  threadLines: THREE.LineSegments;
   /** machine-space hover samples, parallel to the feature arrays */
   edgeSamples: THREE.Vector3[][];
   circleSamples: THREE.Vector3[][];
@@ -374,6 +376,15 @@ export interface FeatureOverlayData {
   pathText: string[];
   chainText: string[];
   circleInner: boolean[];
+  /** threads (features.ts Pass 5): one entry per detected thread — the
+   *  root-band helix parameters for hover drawing */
+  threads: {
+    center: THREE.Vector3;
+    dir: THREE.Vector3;
+    rootR: number;
+    pitch: number;
+    turns: number;
+  }[];
 }
 
 /** Model-space point → machine-space point under a transform. */
@@ -534,6 +545,42 @@ export function buildFeatureOverlayData(
     chainText.push(`chain · ${c.meanRadius.toFixed(2)} mm`);
   }
 
+  // threads: the Pass-5 detections. Drawn as one helical root line per
+  // thread (x-ray overlay like the chains); hover draws the same helix.
+  const threadPos: number[] = [];
+  const threads: FeatureOverlayData['threads'] = [];
+  for (const t of features.threads) {
+    // helix in MODEL space along the detection axis (+X through the
+    // model-space origin, the axis Pass 5 measured against), then each
+    // sample mapped through xf to machine space — a rotated model
+    // draws its thread correctly, same as every other feature
+    const length = t.xEnd - t.xStart;
+    const turns = Math.max(1, length / t.pitch);
+    const rootR = t.rootDiameter / 2;
+    const steps = Math.min(600, Math.max(96, Math.ceil(turns * 64)));
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const f = i / steps;
+      const ang = (t.rotation === 'ccw' ? -1 : 1) * f * turns * 2 * Math.PI;
+      pts.push(
+        xf({
+          x: t.xStart + f * length,
+          y: Math.cos(ang) * rootR,
+          z: Math.sin(ang) * rootR,
+        }),
+      );
+    }
+    for (let i = 0; i < steps; i++) {
+      threadPos.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
+    }
+    threads.push({
+      center: pts[Math.floor(pts.length / 2)].clone(),
+      dir: pts[pts.length - 1].clone().sub(pts[0]).normalize(),
+      rootR,
+      pitch: t.pitch,
+      turns,
+    });
+  }
   const mk = (positions: number[], color: number) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -554,6 +601,7 @@ export function buildFeatureOverlayData(
     holeLines: mk(holePos, HOLE_COLOR),
     pathLines: mk(pathPos, PATH_COLOR),
     chainLines: mk(chainPos, CHAIN_COLOR),
+    threadLines: mk(threadPos, 0xe0a05a),
     edgeSamples,
     circleSamples,
     pathSamples,
@@ -567,6 +615,7 @@ export function buildFeatureOverlayData(
     pathText,
     chainText,
     circleInner,
+    threads,
   };
 }
 
@@ -783,7 +832,7 @@ export function findNearestFeatures(
 /** A crisp single-feature outline for the hovered feature. */
 export function hoverLineGeometry(
   data: FeatureOverlayData,
-  kind: 'edge' | 'circle' | 'path' | 'radialChain',
+  kind: 'edge' | 'circle' | 'path' | 'radialChain' | 'thread',
   index: number,
 ): THREE.BufferGeometry {
   const positions: number[] = [];
@@ -803,6 +852,31 @@ export function hoverLineGeometry(
       const a = s[i];
       const b = s[(i + 1) % s.length];
       positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+  } else if (kind === 'thread') {
+    // the thread's helical root line: one full revolution at each end
+    // plus a connecting helix segment — a sketch of the groove
+    const t = data.threads[index];
+    if (t) {
+      const { center, dir, rootR, pitch, turns } = t;
+      const steps = 96;
+      for (let i = 0; i < steps; i++) {
+        const f0 = i / steps;
+        const f1 = (i + 1) / steps;
+        const ang = f0 * turns * 2 * Math.PI;
+        const ang1 = f1 * turns * 2 * Math.PI;
+        const p0 = {
+          x: center.x + dir.x * (f0 * turns * pitch),
+          y: center.y + Math.cos(ang) * rootR,
+          z: center.z + Math.sin(ang) * rootR,
+        };
+        const p1 = {
+          x: center.x + dir.x * (f1 * turns * pitch),
+          y: center.y + Math.cos(ang1) * rootR,
+          z: center.z + Math.sin(ang1) * rootR,
+        };
+        positions.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z);
+      }
     }
   } else {
     const s = data.circleSamples[index];

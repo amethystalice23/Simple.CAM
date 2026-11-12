@@ -66,7 +66,7 @@ function disposeGroup(g: THREE.Group): void {
 export interface ResolvedSelection {
   /** owning feature source: 'model' or a primitive id */
   sourceId: string;
-  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain';
+  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain' | 'thread';
   index: number;
 }
 

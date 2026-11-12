@@ -1027,3 +1027,61 @@ describe('fitCircle revalidates at the final radius (the column-phantom session)
     expect(phantom.length).toBe(0);
   });
 });
+
+describe('detectFeatures: threads (Pass 5)', () => {
+  /** ground-truth helical mesh: cylinder with a V-groove whose phase
+   *  advances with angle (a true helix, not rings) — external, about Z. */
+  function threadedBar(nominalDia = 10, pitch = 1.5, turns = 6): THREE.BufferGeometry {
+    // A TRUE helical mesh: rings of vertices at (θ, z) on a grid, with
+    // the groove phase at u = θ/2π − z/pitch, radius from the V-profile
+    // at that phase. The grid must NOT advance θ and z in lockstep —
+    // each ring samples several profile stations.
+    const R = nominalDia / 2;
+    const depth = 0.61 * pitch;
+    const rOfU = (u: number) => {
+      const w = ((u % 1) + 1) % 1;
+      return R - depth * (1 - Math.abs(2 * w - 1));
+    };
+    const rings = turns * 24; // rings along z
+    const segs = 96; // angular steps
+    const pts: number[] = [];
+    const quad = (a: [number, number, number], b: [number, number, number], c: [number, number, number], d: [number, number, number]) => {
+      pts.push(...a, ...b, ...c, ...a, ...c, ...d);
+    };
+    const vert = (i: number, k: number): [number, number, number] => {
+      const th = (i * 2 * Math.PI) / segs;
+      const z = (k * turns * pitch) / rings;
+      const r = rOfU(th / (2 * Math.PI) - z / pitch);
+      return [Math.cos(th) * r, Math.sin(th) * r, z];
+    };
+    for (let k = 0; k < rings; k++) {
+      for (let i = 0; i < segs; i++) {
+        quad(vert(i, k), vert(i + 1, k), vert(i + 1, k + 1), vert(i, k + 1));
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+    return g;
+  }
+
+  it('detects an M10x1.5 right-hand thread on a helical-groove mesh', { timeout: 60_000 }, () => {
+    const geo = threadedBar(10, 1.5, 6);
+    const f = detectFeatures(geo, { point: { x: 0, y: 0, z: 0 }, dir: { x: 0, y: 0, z: 1 } });
+    expect(f.threads).toHaveLength(1);
+    const t = f.threads[0];
+    expect(t.pitch).toBeCloseTo(1.5, 1);
+    expect(t.nominalDiameter).toBeCloseTo(10, 0);
+    expect(t.rootDiameter).toBeLessThan(t.nominalDiameter);
+    expect([t.rotation]).toContain(t.rotation); // hand present
+    expect(t.xEnd - t.xStart).toBeGreaterThan(5); // ~6 turns × 1.5
+  });
+
+  it('a plain cylinder and a cube carry no threads', () => {
+    const cyl = new THREE.CylinderGeometry(5, 5, 10, 48).toNonIndexed();
+    const f1 = detectFeatures(cyl, { point: { x: 0, y: 0, z: 0 }, dir: { x: 0, y: 0, z: 1 } });
+    expect(f1.threads).toHaveLength(0);
+    const cube = box();
+    const f2 = detectFeatures(cube, { point: { x: 0, y: 0, z: 0 }, dir: { x: 0, y: 0, z: 1 } });
+    expect(f2.threads).toHaveLength(0);
+  });
+});

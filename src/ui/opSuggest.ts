@@ -9,7 +9,7 @@
  */
 
 import * as THREE from 'three';
-import type { CircleFeature, JobOp, PlaneFeature, Stock, Tool, Vec3 } from '../core/types';
+import type { CircleFeature, JobOp, PlaneFeature, Stock, ThreadFeature, Tool, Vec3 } from '../core/types';
 import { rotaryCalibrationOf, round2 } from '../core/types';
 import { indexedPointRotation } from '../cam/indexing';
 import { internalMinorDiameter } from '../cam/threadMill';
@@ -177,6 +177,7 @@ export function describePickedFeature(r: ResolvedFeature, stock: Stock): Feature
     );
   }
   if (r.kind === 'radialChain') return describeChain(r, xf, axisZ);
+  if (r.kind === 'thread') return describeThread(r.feature as ThreadFeature);
   if (r.kind === 'path') return describePath(r);
   return orderCandidates(describeEdge(r, xf, rotary));
 }
@@ -507,6 +508,44 @@ function describeChain(
   };
 }
 
+/**
+ * A detected thread (features.ts Pass 5): the mesh already carries the
+ * finished form, so the knowledge sheet reports what was measured and
+ * offers the op that reproduces the thread — a thread mill cut to the
+ * measured Ø/pitch/hand. The pitch/Ø/hand ARE the sheet's promise:
+ * they are what the threadMill op would be prefilled with.
+ */
+function describeThread(t: ThreadFeature): FeatureKnowledge {
+  const turns = Math.max(1, Math.round((t.xEnd - t.xStart) / t.pitch));
+  const facts: SuggestFact[] = [
+    { label: 'nominal Ø', value: `Ø${f1(t.nominalDiameter)} mm` },
+    { label: 'root Ø', value: `Ø${f1(t.rootDiameter)} mm` },
+    { label: 'pitch', value: `${f1(t.pitch)} mm` },
+    { label: 'hand', value: t.rotation === 'ccw' ? 'left-hand (ccw)' : 'right-hand (cw)' },
+    { label: 'length', value: `${f1(t.xEnd - t.xStart)} mm (${turns} turns)` },
+    { label: 'form depth', value: `${f1((t.nominalDiameter - t.rootDiameter) / 2)} mm` },
+  ];
+  return {
+    kind: 'thread',
+    title: `M${f1(t.nominalDiameter)}×${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'} thread`,
+    facts,
+    candidates: [
+      {
+        kind: 'threadMill',
+        internal: false,
+        why: `cut this thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}`,
+      },
+    ],
+    notes: [
+      {
+        text: 'the model already carries the finished thread form — these parameters are measured from it.',
+        detail:
+          'the crest and root diameters, pitch and hand are read from the mesh: the root-band vertices collapse onto a helix at the measured pitch, which only a real thread does.',
+      },
+    ],
+  };
+}
+
 function describePath(r: ResolvedFeature): FeatureKnowledge {
   const path = r.feature as { points: Vec3[]; closed?: boolean; filled?: boolean };
   let len = 0;
@@ -618,6 +657,18 @@ export function createSuggestedOp(
   const withFeature = { ...op, featureIds: [featureId] } as JobOp;
   const crown = stockTopZ(stock);
   const datum = datumAngleBefore([...ops, withFeature], withFeature.id);
+  // a picked THREAD prefills the threadMill op with the measured
+  // parameters directly — prefillThreadMill resolves rims, not threads
+  if (cand.kind === 'threadMill' && r.kind === 'thread') {
+    const t = r.feature as ThreadFeature;
+    return {
+      ...(withFeature as Extract<JobOp, { kind: 'threadMill' }>),
+      nominalDiameter: t.nominalDiameter,
+      pitch: t.pitch,
+      rotation: t.rotation,
+      internal: false,
+    } as JobOp;
+  }
   if (cand.kind === 'threadMill') {
     return prefillThreadMill(
       withFeature as Extract<JobOp, { kind: 'threadMill' }>,
@@ -681,6 +732,13 @@ function toolBound(cand: SuggestCandidate, r: ResolvedFeature): number {
   const circleDia = r.kind === 'circle' ? (r.feature as CircleFeature).radius * 2 : null;
   if (cand.kind === 'drill') return circleDia ?? Infinity;
   if (cand.kind === 'threadMill') {
+    // a detected THREAD feature: the mill's pitch must match the
+    // thread's measured pitch (picked by TOOL_TYPES order), and for an
+    // external thread the mill Ø must clear the root
+    if (r.kind === 'thread') {
+      const t = r.feature as ThreadFeature;
+      return t.rootDiameter;
+    }
     if (circleDia === null || !cand.internal) return circleDia ?? Infinity;
     const pitch = metricPitch(circleDia) ?? 1;
     return internalMinorDiameter(circleDia, pitch) * 0.9;

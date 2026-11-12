@@ -544,6 +544,29 @@ export interface RadialChainFeature {
   meanRadius: number;
 }
 
+/** A CAD-modelled thread detected on the mesh (features.ts Pass 5):
+ *  a helical groove (external) or ridge (internal) around an axis. All
+ *  quantities are measured from the mesh — the radius histogram's modes
+ *  give the crest/root radii, the phase-collapse pitch scan gives the
+ *  pitch, and the unwrap line fit's slope sign gives the hand. */
+export interface ThreadFeature {
+  kind: 'thread';
+  id: string;
+  /** crest (major) Ø, mm — the radius histogram's OUTER mode ×2 */
+  nominalDiameter: number;
+  /** root Ø, mm — the INNER mode ×2 */
+  rootDiameter: number;
+  /** pitch, mm — recovered by the phase-collapse scan */
+  pitch: number;
+  /** rotation direction: 'ccw' = left-hand */
+  rotation: 'cw' | 'ccw';
+  /** axial extent along the thread axis (model space), mm */
+  xStart: number;
+  xEnd: number;
+  /** internal = groove ridge inside a bore; external = on the outside */
+  internal: boolean;
+}
+
 /** Artwork line work: one flattened polyline from an imported SVG, in
  * the SOURCE's local space like every other feature kind. */
 export interface PathFeature {

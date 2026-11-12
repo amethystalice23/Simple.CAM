@@ -436,6 +436,7 @@ describe('buildFeatureOverlayData — wrapped outline densify (round 5)', () => 
     circles: [],
     edges: [],
     radialChains: [],
+      threads: [],
     paths: [wrappedPath],
     faceToPlane: new Int32Array(0),
     planeLoops: [],

@@ -32,6 +32,7 @@ const KIND_COLORS: Record<FeatureKnowledge['kind'], string> = {
   edge: '#8d99a3', // gray
   path: '#b48cff', // lavender
   radialChain: '#35d0ba', // teal
+  thread: '#e0a05a', // amber
 };
 
 const KIND_LABELS: Record<FeatureKnowledge['kind'], string> = {
@@ -40,6 +41,7 @@ const KIND_LABELS: Record<FeatureKnowledge['kind'], string> = {
   edge: 'Edge',
   path: 'Artwork',
   radialChain: 'Curved edge',
+  thread: 'Thread',
 };
 
 export function opKindLabel(kind: JobOp['kind']): string {
