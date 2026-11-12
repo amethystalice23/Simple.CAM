@@ -290,6 +290,64 @@ describe('holesFromCircles', () => {
     }
     expect(holesFromCircles(f.circles, identityTransform())).toHaveLength(0);
   });
+
+  it('flags an INDENT FLOOR rim inner — the enclosing-cone lesson (2026-11-12)', () => {
+    // Alice's outer_barrel_adapter, parametrically: a round bar with a
+    // flat-bottomed indent under a chamfer mouth. The floor rim's loop
+    // is the OUTER boundary of the floor plane — the old loop-winding
+    // rule read it as a boss; the adjacent-surface vote must read the
+    // enclosing chamfer cone and call it inner (a bore-side rim).
+    // Closed cross-section profile, outer-wall-down:
+    // top edge (r10, z20) → bottom (r0, z0) → indent floor (r3, z17) →
+    // chamfer cone up to the mouth (r5, z20)
+    // the profile is a CLOSED loop: repeat the first point so the wrap
+    // segment (the top annulus [5,20]→[10,20]) gets revolved too
+    const base: [number, number][] = [
+      [10, 20], [10, 0], [0, 0], [0, 17], [3, 17], [5, 20],
+    ];
+    const profile = [...base, base[0]];
+    const segments = 48;
+    const pts: number[] = [];
+    for (let i = 0; i < segments; i++) {
+      const a0 = (i / segments) * Math.PI * 2;
+      const a1 = ((i + 1) / segments) * Math.PI * 2;
+      const x0 = Math.cos(a0), y0 = Math.sin(a0);
+      const x1 = Math.cos(a1), y1 = Math.sin(a1);
+      for (let k = 0; k < profile.length - 1; k++) {
+        const [r0, z0] = profile[k];
+        const [r1, z1] = profile[k + 1];
+        if (r0 === r1 && z0 === z1) continue;
+        // outward-facing winding: the ring runs CCW seen from +Z and the
+        // profile runs outer-wall-down, so the quad's triangles wind
+        // A,C,B / A,D,C (verified by cross product on the outer wall)
+        pts.push(
+          x0 * r0, y0 * r0, z0, x1 * r1, y1 * r1, z1, x1 * r0, y1 * r0, z0,
+          x0 * r0, y0 * r0, z0, x0 * r1, y0 * r1, z1, x1 * r1, y1 * r1, z1,
+        );
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+    const f = detectFeatures(geo);
+    // the floor rim: Ø6 (r3) at z=17 — must be inner
+    const floor = f.circles.filter(
+      (c) => Math.abs(c.radius - 3) < 0.05 && Math.abs(c.center.z - 17) < 0.05,
+    );
+    expect(floor.length).toBeGreaterThanOrEqual(1);
+    for (const c of floor) expect(c.inner).toBe(true);
+    // the mouth rim: Ø10 (r5) at z=20 — also inner (the opening's edge)
+    const mouth = f.circles.filter(
+      (c) => Math.abs(c.radius - 5) < 0.05 && Math.abs(c.center.z - 20) < 0.05,
+    );
+    expect(mouth.length).toBeGreaterThanOrEqual(1);
+    for (const c of mouth) expect(c.inner).toBe(true);
+    // and the bar's outer silhouette circles (Ø20) must stay bosses
+    const outer = f.circles.filter(
+      (c) => Math.abs(c.radius - 10) < 0.05 && c.center.z > 5,
+    );
+    expect(outer.length).toBeGreaterThanOrEqual(1);
+    for (const c of outer) expect(c.inner).toBe(false);
+  });
 });
 
 describe('detectFeatures: partial circles (broken rims)', () => {

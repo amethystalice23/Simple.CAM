@@ -89,7 +89,7 @@ describe('describePickedFeature — circles', () => {
     expect(k.notes).toEqual([]);
   });
 
-  it('a boss rim offers an EXTERNAL thread, never a drill', () => {
+  it('a boss rim offers a PROFILE, never a drill or an auto-thread (Alice, 2026-11-12)', () => {
     const c: CircleFeature = {
       kind: 'circle',
       id: 'c1',
@@ -99,8 +99,11 @@ describe('describePickedFeature — circles', () => {
       inner: false,
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
-    expect(k.candidates.map((x) => x.kind)).toEqual(['threadMill', 'chamfer']);
-    expect(k.candidates[0].why).toContain('external');
+    // the 2026-11-12 ruling: threading a plain boss rim was an unusual
+    // suggestion — a boss is a contour to turn down (profile), the thread
+    // is a deliberate choice, not an automatic offer
+    expect(k.candidates.map((x) => x.kind)).toEqual(['profile', 'chamfer']);
+    expect(k.candidates[0].why).toContain('boss');
   });
 
   it('a partial rim refuses the bore ops and says so', () => {
@@ -196,6 +199,104 @@ describe('describePickedFeature — circles', () => {
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
     expect(k.candidates).toEqual([]);
     expect(k.notes[0]).toContain('cannot align');
+  });
+});
+
+describe('describePickedFeature — stepped rims (indent vs chamfered bore)', () => {
+  /** Solid-of-revolution meshes about Z, from a CLOSED cross-section
+   *  profile of (radius, z) points run outer-wall-down (winding
+   *  verified outward by cross product on the outer wall). The caller
+   *  closes the loop by repeating the first point. */
+  function revolve(profile: [number, number][], segments = 32): THREE.BufferGeometry {
+    const pts: number[] = [];
+    for (let i = 0; i < segments; i++) {
+      const a0 = (i / segments) * Math.PI * 2;
+      const a1 = ((i + 1) / segments) * Math.PI * 2;
+      const x0 = Math.cos(a0), y0 = Math.sin(a0);
+      const x1 = Math.cos(a1), y1 = Math.sin(a1);
+      for (let k = 0; k < profile.length - 1; k++) {
+        const [r0, z0] = profile[k];
+        const [r1, z1] = profile[k + 1];
+        if (r0 === r1 && z0 === z1) continue;
+        pts.push(
+          x0 * r0, y0 * r0, z0, x1 * r1, y1 * r1, z1, x1 * r0, y1 * r0, z0,
+          x0 * r0, y0 * r0, z0, x0 * r1, y0 * r1, z1, x1 * r1, y1 * r1, z1,
+        );
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+    return g;
+  }
+
+  /** a round bar, top at Z=20, with a flat-bottomed Ø6 indent sunk to
+   *  Z=17 under a Ø10 chamfer mouth (rim at Z=20, floor rim at Z=17) —
+   *  the shape of Alice's outer_barrel_adapter indent. The closed
+   *  cross-section profile, outer-wall-down: top edge → outer wall →
+   *  bottom → up the axis → the indent floor → the chamfer cone → back
+   *  to the top edge. */
+  function indentBar(): { geometry: THREE.BufferGeometry; circles: CircleFeature[] } {
+    const base: [number, number][] = [
+      [10, 20], [10, 0], [0, 0], [0, 17], [3, 17], [5, 20],
+    ];
+    const geometry = revolve([...base, base[0]]);
+    const circles: CircleFeature[] = [
+      {
+        kind: 'circle', id: 'mouth', center: { x: 0, y: 0, z: 20 },
+        axis: { x: 0, y: 0, z: -1 }, radius: 5, inner: true,
+      },
+      {
+        kind: 'circle', id: 'floor', center: { x: 0, y: 0, z: 17 },
+        axis: { x: 0, y: 0, z: 1 }, radius: 3, inner: true,
+      },
+    ];
+    return { geometry, circles };
+  }
+
+  it('an indent FLOOR rim (under a larger coaxial mouth) offers pocket + chamfer, not drill/thread', () => {
+    const { geometry, circles } = indentBar();
+    const s = source({ circles });
+    s.geometry = geometry;
+    const k = describePickedFeature(resolved('circle', s, 1), stock4);
+    expect(k.title).toContain('indent floor');
+    expect(k.candidates.map((x) => x.kind)).toEqual(['pocket', 'chamfer']);
+    expect(k.candidates[0].why).toContain('Ø6.0 under the Ø10.0 mouth');
+  });
+
+  it('the indent MOUTH rim keeps the bore candidates (it opens onto the floor, and a tool can still enter)', () => {
+    const { geometry, circles } = indentBar();
+    const s = source({ circles });
+    s.geometry = geometry;
+    const k = describePickedFeature(resolved('circle', s, 0), stock4);
+    expect(k.candidates.map((x) => x.kind)).toEqual(['drill', 'threadMill', 'chamfer']);
+  });
+
+  it('a chamfered BORE floor — hole continues past the rim — keeps drill + thread (indentRole raycast)', () => {
+    // a Ø10 bar with a Ø6 THROUGH hole and a Ø10 chamfer at the top:
+    // the Ø3-radius bore rim at the chamfer cone's base must NOT read
+    // as an indent floor (the ray down the axis flies through)
+    // closed cross-section: outer wall down → bottom annulus in to the
+    // bore → bore wall up → chamfer cone out → top annulus closed
+    const base: [number, number][] = [
+      [10, 20], [10, -20], [3, -20], [3, 17], [5, 20],
+    ];
+    const geometry = revolve([...base, base[0]]);
+    // circle at the bore rim under the chamfer mouth (Ø6 bore under
+    // Ø10 mouth, hole continues to -20)
+    const circles: CircleFeature[] = [
+      {
+        kind: 'circle', id: 'mouth', center: { x: 0, y: 0, z: 20 },
+        axis: { x: 0, y: 0, z: -1 }, radius: 5, inner: true,
+      },
+      {
+        kind: 'circle', id: 'bore', center: { x: 0, y: 0, z: 17 },
+        axis: { x: 0, y: 0, z: 1 }, radius: 3, inner: true,
+      },
+    ];
+    const s = source({ circles });
+    s.geometry = geometry;
+    const k = describePickedFeature(resolved('circle', s, 1), stock4);
+    expect(k.candidates.map((x) => x.kind)).toEqual(['drill', 'threadMill', 'chamfer']);
   });
 });
 

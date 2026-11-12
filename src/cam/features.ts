@@ -105,6 +105,50 @@ function normalize(a: Vec3): Vec3 {
   return { x: a.x / l, y: a.y / l, z: a.z / l };
 }
 
+/**
+ * Bore-vs-boss verdict from the surfaces adjacent to a rim's edges: for
+ * every rim edge, the mean of its two face normals dotted with the
+ * outward radial (edge midpoint − circle center). Material facing back
+ * toward the center (a negative sum) means the surfaces CONTAIN the
+ * circle — a bore. Surfaces pointing away (positive) mean the loop is
+ * the outer edge of material — a boss/outer rim. Passes 1, 3 and 3b all
+ * classify with this ONE rule (2026-11-12, Alice's indent rim): the
+ * loop-winding test Pass 1 used before could only tell "hole in a
+ * plane" from "the plane's own outer boundary" — it read the outer rim
+ * of an indent FLOOR (a disc enclosed by a rising chamfer cone) as a
+ * boss, and downstream a chamfer picked materialOutside from the same
+ * flag. Radial adjacency reads the enclosing cone and gets it right.
+ */
+function radialInnerVote(
+  topo: Topo,
+  verts: Vec3[],
+  /** rim vertex indices, in loop order — consecutive pairs are edges */
+  loop: number[],
+  center: Vec3,
+): boolean {
+  let vote = 0;
+  let voted = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const ea = loop[i];
+    const eb = loop[(i + 1) % loop.length];
+    const faces = topo.edgeFaces.get(ea < eb ? `${ea}_${eb}` : `${eb}_${ea}`) ?? [];
+    if (faces.length < 2) continue;
+    const m = norm({
+      x: topo.faceNormal[faces[0]].x + topo.faceNormal[faces[1]].x,
+      y: topo.faceNormal[faces[0]].y + topo.faceNormal[faces[1]].y,
+      z: topo.faceNormal[faces[0]].z + topo.faceNormal[faces[1]].z,
+    });
+    const mid = {
+      x: (verts[ea].x + verts[eb].x) / 2,
+      y: (verts[ea].y + verts[eb].y) / 2,
+      z: (verts[ea].z + verts[eb].z) / 2,
+    };
+    vote += dot(m, norm(sub(mid, center)));
+    voted++;
+  }
+  return voted > 0 ? vote < 0 : false;
+}
+
 /** Perpendicular distance from `p` to the axis line (a chain candidate's
  * radius — the seam rides the enclosing cylinder about this axis). */
 function radialDistanceToAxis(p: Vec3, axis: DetectAxis): number {
@@ -878,7 +922,12 @@ export function detectFeatures(
           center,
           axis: lp.normal,
           radius: circ.r,
-          inner: dot(lp.normal, normals[p]) < 0,
+          // bore-vs-boss by adjacent surfaces, NOT loop winding: the old
+          // winding rule read an indent floor's outer rim as a boss (the
+          // floor disc's own boundary winds as an outer boundary even
+          // though a chamfer cone encloses it — a bore). Same vote as
+          // Passes 3/3b (radialInnerVote).
+          inner: radialInnerVote(topo, verts, loop, center),
         });
         for (let i = 0; i < loop.length; i++) {
           const a = loop[i];
@@ -1088,28 +1137,9 @@ export function detectFeatures(
       y: u.y * circ.cx + v.y * circ.cy + lp.normal.y * h,
       z: u.z * circ.cx + v.z * circ.cy + lp.normal.z * h,
     };
-    // Hole test: vote on the radial component of the adjacent surface
-    // normals at each ring edge — surfaces facing back toward the circle's
-    // axis mean material outside the loop (a bore).
-    let vote = 0;
-    for (let i = 0; i < loop.length; i++) {
-      const ea = loop[i];
-      const eb = loop[(i + 1) % loop.length];
-      const faces = topo.edgeFaces.get(ea < eb ? `${ea}_${eb}` : `${eb}_${ea}`) ?? [];
-      if (faces.length < 2) continue;
-      const m = norm({
-        x: topo.faceNormal[faces[0]].x + topo.faceNormal[faces[1]].x,
-        y: topo.faceNormal[faces[0]].y + topo.faceNormal[faces[1]].y,
-        z: topo.faceNormal[faces[0]].z + topo.faceNormal[faces[1]].z,
-      });
-      const mid = {
-        x: (verts[ea].x + verts[eb].x) / 2,
-        y: (verts[ea].y + verts[eb].y) / 2,
-        z: (verts[ea].z + verts[eb].z) / 2,
-      };
-      vote += dot(m, norm(sub(mid, center)));
-    }
-
+    // Hole test: the shared radial adjacent-surface vote (see
+    // radialInnerVote) — surfaces facing back toward the circle's axis
+    // mean material outside the loop (a bore).
     const circle: CircleFeature = {
       kind: 'circle',
       id: featureId('circle', [
@@ -1124,7 +1154,7 @@ export function detectFeatures(
       center,
       axis: lp.normal,
       radius: circ.r,
-      inner: vote < 0,
+      inner: radialInnerVote(topo, verts, loop, center),
     };
     if (!circles.some((c) => sameCircle(c, circle))) circles.push(circle);
   }

@@ -73,6 +73,73 @@ export interface FeatureKnowledge {
 
 const f1 = (n: number) => n.toFixed(1);
 
+/** true when two circles share one axis line (parallel axes, each center
+ *  on the other's axis within COMPANION_TOL) — same-Ø companions are one
+ *  bore's two mouths; different-Ø companions mark a stepped feature
+ *  (indent floor under a chamfer/counterbore mouth). Local space — both
+ *  circles come from one source, so one transform puts them in common
+ *  frame. */
+const COMPANION_TOL_MM = 0.2;
+function coaxialCompanion(a: CircleFeature, b: CircleFeature): boolean {
+  const d = { x: b.center.x - a.center.x, y: b.center.y - a.center.y, z: b.center.z - a.center.z };
+  const al = Math.hypot(a.axis.x, a.axis.y, a.axis.z) || 1;
+  const ax = { x: a.axis.x / al, y: a.axis.y / al, z: a.axis.z / al };
+  const bl = Math.hypot(b.axis.x, b.axis.y, b.axis.z) || 1;
+  const bx = { x: b.axis.x / bl, y: b.axis.y / bl, z: b.axis.z / bl };
+  // axes parallel (either sign — a bore's two mouths face opposite ways)
+  if (Math.hypot(ax.x - bx.x, ax.y - bx.y, ax.z - bx.z) > 1e-3 &&
+      Math.hypot(ax.x + bx.x, ax.y + bx.y, ax.z + bx.z) > 1e-3) return false;
+  // each center on the other's axis
+  const along = d.x * ax.x + d.y * ax.y + d.z * ax.z;
+  const off = {
+    x: d.x - ax.x * along,
+    y: d.y - ax.y * along,
+    z: d.z - ax.z * along,
+  };
+  return Math.hypot(off.x, off.y, off.z) <= COMPANION_TOL_MM;
+}
+
+/**
+ * The role `a` plays in a coaxial different-Ø pair when the pair bounds
+ * an INDENT (a stepped opening with material at its bottom): 'floor'
+ * when `a` is the smaller rim whose disc is that material, 'mouth' when
+ * `a` is the larger rim at the opening — null when the opening
+ * CONTINUES past the smaller rim (a chamfered or counterbored BORE:
+ * drill/thread candidates, not a pocket). One raycast decides: from
+ * 2 mm outside the LARGER rim, along the shared axis toward the
+ * smaller — material sitting at the smaller rim's plane means the
+ * opening closes there (an indent floor); a hit much deeper, or no
+ * hit at all, means the hole continues (Alice, 2026-11-12: her Ø3.5
+ * indent floor under a Ø5 chamfer mouth must read pocket, a Ø10 bore
+ * rim under a Ø11.5 chamfer mouth must keep drill + thread).
+ * Local space — `geometry` is the circles' own source mesh.
+ */
+function indentRole(
+  geometry: THREE.BufferGeometry,
+  a: CircleFeature,
+  b: CircleFeature,
+): 'floor' | 'mouth' | null {
+  const outer = a.radius > b.radius ? a : b;
+  const inner = a.radius > b.radius ? b : a;
+  const oc = new THREE.Vector3(outer.center.x, outer.center.y, outer.center.z);
+  const ic = new THREE.Vector3(inner.center.x, inner.center.y, inner.center.z);
+  const dir = ic.clone().sub(oc);
+  const gap = dir.length();
+  if (gap < 1e-6) return null; // concentric — no direction to cast
+  dir.normalize();
+  const origin = oc.clone().addScaledVector(dir, -2); // 2 mm outside the mouth
+  const raycaster = new THREE.Raycaster(origin, dir);
+  // DoubleSide: STLs and test meshes carry either winding, and a
+  // classification ray must hit regardless of which way the wall faces
+  const hits = raycaster.intersectObject(
+    new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })),
+    false,
+  );
+  if (hits.length === 0) return null; // the ray left the part — a through opening
+  if (Math.abs(hits[0].distance - (gap + 2)) > 0.3) return null; // it flew past the inner rim's plane
+  return a === inner ? 'floor' : 'mouth';
+}
+
 /**
  * What the detector knows about one picked feature, and the ops it
  * suggests for it. Every resolved kind answers something, even if only
@@ -87,7 +154,15 @@ export function describePickedFeature(r: ResolvedFeature, stock: Stock): Feature
   if (r.kind === 'plane') return describePlane(r, xf, rotary, axisZ, crown);
   if (r.kind === 'circle') {
     return orderCandidates(
-      describeCircle(r.feature as CircleFeature, xf, rotary, axisZ, crown),
+      describeCircle(
+        r.feature as CircleFeature,
+        r.source.features.circles,
+        r.source.geometry,
+        xf,
+        rotary,
+        axisZ,
+        crown,
+      ),
     );
   }
   if (r.kind === 'radialChain') return describeChain(r, xf, axisZ);
@@ -197,6 +272,8 @@ function describePlane(
 
 function describeCircle(
   c: CircleFeature,
+  allCircles: CircleFeature[],
+  geometry: THREE.BufferGeometry,
   xf: (p: Vec3) => THREE.Vector3,
   rotary: boolean,
   axisZ: number | null,
@@ -207,16 +284,47 @@ function describeCircle(
   const zero = xf({ x: 0, y: 0, z: 0 });
   const n = xf(c.axis).sub(zero).normalize();
   const partial = !!c.arcs;
-  const title = `Ø${f1(dia)} ${c.inner ? 'hole rim' : 'boss rim'}${partial ? ' (partial)' : ''}`;
+  // coaxial companion of DIFFERENT Ø marks a stepped opening. Its role
+  // comes from the mesh (indentRole): material at the smaller rim's
+  // plane = indent floor (pocket candidate); the opening continuing
+  // below it = a chamfered/counterbored BORE (drill + thread stay).
+  const companion = allCircles.find(
+    (o) =>
+      o.id !== c.id &&
+      !o.arcs &&
+      Math.abs(o.radius * 2 - dia) > 0.05 &&
+      coaxialCompanion(c, o),
+  );
+  const role = companion && c.inner ? indentRole(geometry, c, companion) : null;
+  const stepped: 'floor' | 'mouth' | null =
+    role === 'floor' || role === 'mouth' ? role : null;
+  const comp = companion as CircleFeature | null;
+  const title = `Ø${f1(dia)} ${
+    c.inner ? (stepped === 'floor' ? 'indent floor rim' : stepped === 'mouth' ? 'indent mouth rim' : 'hole rim') : 'boss rim'
+  }${partial ? ' (partial)' : ''}`;
   const facts: SuggestFact[] = [
     { label: 'diameter', value: `Ø${f1(dia)} mm` },
     { label: 'position', value: `X ${f1(center.x)} · Y ${f1(center.y)} · Z ${f1(center.z)}` },
   ];
+  if (stepped && comp) {
+    facts.push({
+      label: 'coaxial with',
+      value: `Ø${f1(comp.radius * 2)} — a stepped opening (this rim is its ${
+        stepped === 'floor' ? 'floor' : 'opening edge'
+      })`,
+    });
+  }
   const candidates: SuggestCandidate[] = [];
   const notes: string[] = [];
 
   /** the bore/boss candidates a VERTICAL rim offers — shared by the level
-   *  pick and the rotated pick (which prepends its Index) */
+   *  pick and the rotated pick (which prepends its Index). An inner rim
+   *  the mesh says closes at its own plane (stepped === 'floor', the
+   *  indentRole raycast) is an indent floor, not a bore mouth: pocket +
+   *  chamfer, never drill/thread (Alice, 2026-11-12 — her Ø3.5 rim under
+   *  a Ø5 chamfer mouth). A chamfered/counterbored BORE (the raycast
+   *  flies past the rim) keeps the drill + thread offers. A BOSS rim
+   *  offers a profile, not an automatic thread. */
   const pushBoreCands = (suffix: string) => {
     if (partial) {
       notes.push(
@@ -226,6 +334,19 @@ function describeCircle(
       return;
     }
     const pitch = metricPitch(dia);
+    if (stepped === 'floor' && comp) {
+      candidates.push({
+        kind: 'pocket',
+        why: `clear this indent floor (Ø${f1(dia)} under the Ø${f1(comp.radius * 2)} mouth above it)${suffix}`,
+      });
+      candidates.push({ kind: 'chamfer', why: 'break this indent’s rim with a V-bit' });
+      notes.push(
+        `this rim sits under a coaxial Ø${f1(comp.radius * 2)} opening — it reads as the ` +
+          'floor of a stepped indent, not a bore mouth: pocket and chamfer it; drill it only if ' +
+          'you really mean a hole here',
+      );
+      return;
+    }
     if (c.inner) {
       candidates.push({ kind: 'drill', why: `drill this bore straight down from the rim${suffix}` });
       candidates.push({
@@ -235,10 +356,12 @@ function describeCircle(
       });
       candidates.push({ kind: 'chamfer', why: 'break this hole’s rim with a V-bit' });
     } else {
+      // an outer rim is a boss/round-stock edge: profile it (Alice,
+      // 2026-11-12: don't auto-offer threading — that was an unusual
+      // suggestion for what is really a contour to turn down)
       candidates.push({
-        kind: 'threadMill',
-        internal: false,
-        why: `cut an external thread on this boss${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
+        kind: 'profile',
+        why: `cut around this boss (Ø${f1(dia)}) to size it${suffix}`,
       });
       candidates.push({ kind: 'chamfer', why: 'run a V-bit around this boss to break its rim' });
     }
@@ -482,6 +605,7 @@ const TOOL_TYPES: Partial<Record<JobOp['kind'], Tool['type'][]>> = {
   drill: ['drill', 'flat'],
   threadMill: ['threadmill'],
   pocket: ['flat'],
+  profile: ['flat'],
   chamfer: ['vbit'],
   engrave: ['vbit', 'laser'],
   faceCylinder: ['flat'],
@@ -497,6 +621,7 @@ const WANTS_LARGEST = new Set<JobOp['kind']>([
   'drill',
   'threadMill',
   'pocket',
+  'profile',
   'faceCylinder',
 ]);
 
