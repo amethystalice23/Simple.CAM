@@ -1164,7 +1164,12 @@ job's ops are preferred (most appropriate fit among them), then the
 same fit rule over the library: a drill must fit the bore (real drill
 bits preferred over flats), an internal thread mill must clear the
 minor Ø, a pocket takes the largest flat that manoeuvres inside the
-region, chamfer/engrave get V-bits, a 4D contour a ball nose; the row's
+region, the chamfer family (flat AND rotary) gets V-bits — the chamfer
+bit is the DEFAULT choice for chamfer ops, and a thread mill must be a
+real thread-mill-type tool; the type lists mirror the generators' own
+type gates (cylChamfer accepts V-bit/ball only, threadMill a thread
+mill only, chamfer a V-bit only) so a suggested tool is always one its
+op accepts; a 4D contour a ball nose; the row's
 chip shows the T number the new op would carry (the panel's own
 assignment extended), reused tools keep theirs, and Add creates each
 op with its suggested tool; (b) a machining-order invariant: whenever

@@ -471,17 +471,21 @@ export function createSuggestedOp(
 // ------------------------------------------------- tool suggestion (round 2)
 
 /** What kind of cutter each suggested op wants, in preference order —
- *  a bore wants an actual drill bit first; chamfer/engrave want the tip
- *  of a V-bit. (Alice, 2026-11-12: "they are only suggestions so dont
- *  have to be perfect" — the rules below are honest fits, not optimums.) */
+ *  a bore wants an actual drill bit first; the chamfer family wants the
+ *  tip of a V-bit (Alice, 2026-11-12: the chamfer bit is the default
+ *  choice for chamfer ops). The lists MIRROR THE GENERATORS' OWN TYPE
+ *  GATES — cylChamfer throws on anything but a V-bit or ball-nose
+ *  (cylChamfer.ts), threadMill on anything but a thread mill
+ *  (threadMill.ts), chamfer on anything but a V-bit (chamfer.ts) — so
+ *  a suggested tool is always one its op accepts. */
 const TOOL_TYPES: Partial<Record<JobOp['kind'], Tool['type'][]>> = {
   drill: ['drill', 'flat'],
-  threadMill: ['threadmill', 'flat'],
+  threadMill: ['threadmill'],
   pocket: ['flat'],
   chamfer: ['vbit'],
   engrave: ['vbit', 'laser'],
   faceCylinder: ['flat'],
-  cylChamfer: ['flat', 'ball'],
+  cylChamfer: ['vbit', 'ball'],
   contour4d: ['ball', 'flat'],
   rasterContour: ['ball', 'flat'],
 };

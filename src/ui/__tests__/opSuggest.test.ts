@@ -478,21 +478,46 @@ describe('suggestToolFor — the tool each suggestion would run with', () => {
     expect(s?.inUse).toBe(false);
   });
 
-  it('an internal thread mill must clear the minor Ø', () => {
+  it('an internal thread mill must clear the minor Ø — and be a thread mill', () => {
     const { r, k } = rim6(); // M6 × 1 → minor ≈ 4.9, bound ≈ 4.4
     const tm = k.candidates[1];
     expect(tm.kind).toBe('threadMill');
     expect(tm.internal).toBe(true);
-    // a Ø5 thread mill cannot tilt inside the bore; the in-use pool
-    // having nothing else, the library's largest fitting CUTTER wins —
-    // a Ø3.175 flat (thread milling with a flat is the app's default)
+    // threadMill generation requires a real thread-mill type tool: a Ø5
+    // one in use that cannot tilt inside the bore, and no fitting thread
+    // mill anywhere → NO suggestion (the generator's own gate, mirrored)
     const wide = suggestToolFor(tm, r, [tool('tm5', 'threadmill', 5)], library);
-    expect(wide?.tool.id).toBe('f3');
-    expect(wide?.inUse).toBe(false);
+    expect(wide).toBeNull();
     // a fitting thread mill in use beats everything
     const narrow = suggestToolFor(tm, r, [tool('tm3', 'threadmill', 3)], library);
     expect(narrow?.tool.id).toBe('tm3');
     expect(narrow?.inUse).toBe(true);
+  });
+
+  it('the rotary chamfer takes the in-use chamfer bit, never a flat (her report)', () => {
+    // her live case: T1 flat in use + T2 90° chamfer bit in use — the
+    // around-axis ring offered Rotary chamfer with the FLAT. cylChamfer
+    // generation accepts V-bits and ball-noses ONLY; the chamfer bit is
+    // the default choice for chamfer ops (Alice, 2026-11-12)
+    const c: CircleFeature = {
+      kind: 'circle',
+      id: 'c1',
+      center: { x: 10, y: 0, z: 20 },
+      axis: { x: 1, y: 0, z: 0 },
+      radius: 8,
+      inner: false,
+    };
+    const s = source({ circles: [c] });
+    const r = resolved('circle', s, 0);
+    const k = describePickedFeature(r, stock4);
+    const chamferBit = { ...tool('ch90', 'vbit', 3.175), vAngle: 90 };
+    const pick = suggestToolFor(k.candidates[1], r, [flat3, chamferBit], library);
+    expect(pick?.tool.id).toBe('ch90');
+    expect(pick?.inUse).toBe(true);
+    // nothing in use → the library's V-bit (ball is the U-channel case,
+    // never the default)
+    const fresh = suggestToolFor(k.candidates[1], r, [], [flat3, ...library]);
+    expect(fresh?.tool.id).toBe('v1');
   });
 
   it('chamfer wants a V-bit even when flats are in use', () => {
