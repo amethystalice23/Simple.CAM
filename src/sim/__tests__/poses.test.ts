@@ -196,6 +196,24 @@ describe('moveDurations', () => {
     expect(t[1]).toBeCloseTo(0.1); // 10mm @ 100mm/min
   });
 
+  it('full-circle arc: 2πr / feed — the zero chord must not time as zero', () => {
+    // start==end around (0,0) at r=10 — the endpoint chord is 0, the
+    // true path is 2π·10 ≈ 62.83mm (the chord-based duration was 0)
+    const t = moveDurations([
+      { words: { x: 10, y: 0, z: -1 }, feed: 100 },
+      { words: { x: 10, y: 0, z: -1 }, feed: 100, arc: { i: -10, j: 0, cw: true } },
+    ]);
+    expect(t[1]).toBeCloseTo((2 * Math.PI * 10) / 100, 6);
+  });
+
+  it('partial arc: quadrant arc times as (π/2)·r / feed', () => {
+    const t = moveDurations([
+      { words: { x: 10, y: 0, z: -1 }, feed: 100 },
+      { words: { x: 0, y: 10, z: -1 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ]);
+    expect(t[1]).toBeCloseTo((Math.PI / 2) * 10 / 100, 6);
+  });
+
   it('A-only G94 feed move: |ΔA| deg/min (ROTARY_FEED_DEG_MIN pattern)', () => {
     const t = moveDurations([
       { words: { a: 0 }, feed: 1 },
@@ -225,5 +243,97 @@ describe('moveDurations', () => {
   it('zero-motion moves → 0 even with feed stamped', () => {
     const t = moveDurations([{ words: { x: 5 }, feed: 100 }, { words: { x: 5 }, feed: 100 }]);
     expect(t[1]).toBe(0);
+  });
+});
+
+describe('movesToPoses — Move.arc tessellation (2026-11-12)', () => {
+  it('FULL CIRCLE (start==end) yields a nonzero-length path, not zero samples', () => {
+    // unmodified endpoint-to-endpoint code saw a zero-length move here —
+    // the whole point of the arc branch
+    const moves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 100 }, // positions at the circle's start
+      { words: { x: 10, y: 0 }, feed: 100, arc: { i: -10, j: 0, cw: false } }, // full ccw circle r=10
+    ];
+    const poses = movesToPoses(moves, flatStock, () => 0, 0.5);
+    const arc = poses.filter((p) => p.moveIndex === 1);
+    expect(arc.length).toBeGreaterThan(1);
+    // path length ≈ circumference
+    let len = 0;
+    let last = { x: 10, y: 0, z: 5 };
+    for (const p of arc) {
+      len += Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z);
+      last = p;
+    }
+    expect(len).toBeCloseTo(2 * Math.PI * 10, 0);
+    // ends where it started
+    expect(arc[arc.length - 1].x).toBeCloseTo(10);
+    expect(arc[arc.length - 1].y).toBeCloseTo(0);
+    // every sample sits on the circle about (0,0)
+    for (const p of arc) expect(Math.hypot(p.x, p.y)).toBeCloseTo(10, 6);
+  });
+
+  it('QUARTER arc reaches the same endpoint as the linear equivalent', () => {
+    // ccw 90°: start (10,0), center (0,0) → end (0,10)
+    const arcMoves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 100 },
+      { words: { x: 0, y: 10 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ];
+    const linMoves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 100 },
+      { words: { x: 0, y: 10 }, feed: 100 },
+    ];
+    const arcPoses = movesToPoses(arcMoves, flatStock, () => 0, 0.5);
+    const linPoses = movesToPoses(linMoves, flatStock, () => 0, 0.5);
+    const arcEnd = arcPoses[arcPoses.length - 1];
+    const linEnd = linPoses[linPoses.length - 1];
+    expect(arcEnd.x).toBeCloseTo(linEnd.x, 9);
+    expect(arcEnd.y).toBeCloseTo(linEnd.y, 9);
+    expect(arcEnd.z).toBeCloseTo(linEnd.z, 9);
+    // and the arc stays on its circle mid-flight while the line does not
+    const arcMid = arcPoses.filter((p) => p.moveIndex === 1)[
+      Math.floor(arcPoses.filter((p) => p.moveIndex === 1).length / 2)
+    ];
+    expect(Math.hypot(arcMid.x, arcMid.y)).toBeCloseTo(10, 6);
+  });
+
+  it('CW vs CCW take opposite semicircles between the same endpoints', () => {
+    // start (10,0), end (−10,0), center (0,0): cw goes via (0,−10), ccw via (0,10)
+    const mk = (cw: boolean): Move[] => [
+      { words: { x: 10, y: 0, z: 5 }, feed: 100 },
+      { words: { x: -10, y: 0 }, feed: 100, arc: { i: -10, j: 0, cw } },
+    ];
+    const cwMid = movesToPoses(mk(true), flatStock, () => 0, 0.5).filter((p) => p.moveIndex === 1);
+    const ccwMid = movesToPoses(mk(false), flatStock, () => 0, 0.5).filter((p) => p.moveIndex === 1);
+    const cwHalf = cwMid[Math.floor(cwMid.length / 2)];
+    const ccwHalf = ccwMid[Math.floor(ccwMid.length / 2)];
+    expect(cwHalf.y).toBeLessThan(0);
+    expect(ccwHalf.y).toBeGreaterThan(0);
+  });
+
+  it('helical Z interpolates linearly along the arc', () => {
+    const moves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 100 },
+      { words: { x: 0, y: 10, z: -5 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ];
+    const poses = movesToPoses(moves, flatStock, () => 0, 0.5);
+    const arc = poses.filter((p) => p.moveIndex === 1);
+    expect(arc.length).toBeGreaterThan(1);
+    const n = arc.length;
+    for (let k = 0; k < n; k++) {
+      const t = (k + 1) / n;
+      expect(arc[k].z).toBeCloseTo(5 + (-5 - 5) * t, 9);
+    }
+  });
+
+  it('arc moves are never rapid and carry tool + moveIndex like the linear path', () => {
+    const moves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 100 },
+      { words: { x: 0, y: 10 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ];
+    const poses = movesToPoses(moves, flatStock, () => 3, 0.5);
+    for (const p of poses.filter((q) => q.moveIndex === 1)) {
+      expect(p.rapid).toBe(false);
+      expect(p.tool).toBe(3);
+    }
   });
 });

@@ -154,6 +154,17 @@ export interface RampParams {
    * IS the ladder's level count. Only meaningful on closed loops.
    */
   bore?: boolean;
+  /**
+   * ARC FORM (2026-11-12, G2/G3): the analytic circle the loop
+   * approximates, when it approximates one. Present → each helical
+   * revolution is ONE full-circle arc move with descending Z (the
+   * firmware interpolates the linear axis along the arc, Robot.cpp
+   * 2183 — the exact helix the per-vertex polyline approximated).
+   * Absent → today's per-vertex emission, byte-identically.
+   */
+  circle?: { cx: number; cy: number; r: number };
+  /** the loop's travel winding (post-reversal for climb) — arc cw */
+  loopCw?: boolean;
 }
 
 /** Straight plunge — the fallback and the pure-air case. */
@@ -182,6 +193,30 @@ export function rampEntry(p: RampParams): EntryResult {
     const perRev = p.bore ? p.stepDown : Math.min(p.stepDown, P * tanA);
     const revs = Math.max(1, Math.ceil(descent / perRev));
     if (!p.bore && revs > MAX_RAMP_TRAVERSALS) return plungeEntry(p, 'loop too short to ramp');
+
+    // ARC FORM (2026-11-12): a loop that approximates an analytic circle
+    // ramps as whole-revolution arcs — one full-circle G2/G3 per turn,
+    // Z riding the arc word. The I/J center offset is constant (start is
+    // the same point every revolution); each arc's endpoint repeats the
+    // start XY byte-identically (the firmware's full-circle detection is
+    // an exact float equality, Robot.cpp:2123).
+    if (p.circle && p.loopCw !== undefined) {
+      const startPt = pointAtArc(p.loop, p.cum, p.sStart);
+      const i = p.circle.cx - startPt.x;
+      const j = p.circle.cy - startPt.y;
+      const moves: Move[] = [];
+      for (let k = 0; k < revs; k++) {
+        const z =
+          k + 1 === revs ? p.toZ : p.fromZ - (descent * (k + 1)) / revs;
+        moves.push({
+          words: { x: startPt.x, y: startPt.y, z },
+          feed: p.feed,
+          arc: { i, j, cw: p.loopCw },
+        });
+      }
+      moves[0].comment = `ramp entry — helical arc, ${revs} turn${revs > 1 ? 's' : ''}`;
+      return { moves, minutes: (revs * Math.hypot(2 * Math.PI * p.circle.r, descent / revs)) / p.feed, mode: 'helical' };
+    }
 
     const moves: Move[] = [];
     for (let k = 0; k < revs; k++) {

@@ -75,6 +75,38 @@ export function movesToPoses(
   const poses: Pose[] = [];
   let prevM: { x: number; y: number; z: number; a: number } | null = null;
 
+  // one push, both sample paths: machine-space (mx,my,mz,ma) → stock-frame
+  // pose (the rotary un-rotation is the toolpathPreview toDisplay rule)
+  const pushPose = (
+    mx: number,
+    my: number,
+    mz: number,
+    ma: number,
+    tool: number,
+    mi: number,
+    rapid: boolean,
+  ) => {
+    if (rotary) {
+      const th = (ma * Math.PI) / 180;
+      const cos = Math.cos(th);
+      const sin = Math.sin(th);
+      const zrel = mz - axisZ;
+      poses.push({
+        x: mx,
+        y: my * cos + zrel * sin,
+        z: -my * sin + zrel * cos + axisZ,
+        ax: 0,
+        ay: -sin,
+        az: -cos,
+        tool,
+        moveIndex: mi,
+        rapid,
+      });
+    } else {
+      poses.push({ x: mx, y: my, z: mz, ax: 0, ay: 0, az: -1, tool, moveIndex: mi, rapid });
+    }
+  };
+
   for (let mi = 0; mi < moves.length; mi++) {
     const m = moves[mi];
     pos.x = m.words.x ?? pos.x;
@@ -95,48 +127,52 @@ export function movesToPoses(
     }
 
     if (prevM !== null) {
-      const dx = pos.x - prevM.x;
-      const dy = pos.y - prevM.y;
-      const dz = pos.z - prevM.z;
-      const dTheta = rotary ? ((pos.a - prevM.a) * Math.PI) / 180 : 0;
-      const nLin = Math.ceil(Math.hypot(dx, dy, dz) / maxStep);
-      const nRot = rotary ? Math.ceil(Math.abs(dTheta) / maxDTheta) : 0;
-      const n = Math.max(1, nLin, nRot);
       const tool = toolOf(mi);
-      for (let k = 1; k <= n; k++) {
-        const t = k / n;
-        const mx = prevM.x + dx * t;
-        const my = prevM.y + dy * t;
-        const mz = prevM.z + dz * t;
-        const ma = prevM.a + (pos.a - prevM.a) * t;
-        if (rotary) {
-          const th = (ma * Math.PI) / 180;
-          const cos = Math.cos(th);
-          const sin = Math.sin(th);
-          const zrel = mz - axisZ;
-          poses.push({
-            x: mx,
-            y: my * cos + zrel * sin,
-            z: -my * sin + zrel * cos + axisZ,
-            ax: 0,
-            ay: -sin,
-            az: -cos,
-            tool,
-            moveIndex: mi,
-            rapid: !!m.rapid,
-          });
-        } else {
-          poses.push({
-            x: mx,
-            y: my,
-            z: mz,
-            ax: 0,
-            ay: 0,
-            az: -1,
-            tool,
-            moveIndex: mi,
-            rapid: !!m.rapid,
-          });
+      const rapid = !!m.rapid;
+      if (m.arc) {
+        // Move.arc (2026-11-12): XY-plane arc, I/J center offset from the
+        // START point, endpoint = (pos.x,pos.y), helical Z rides along.
+        // Sweep: shortest signed travel for start≠end, ±2π for the exact
+        // start==end full circle (the sim never relies on the firmware's
+        // full-circle detection — the Move.arc doc rule). Sample count is
+        // arc-arc-length driven (|sweep|·r / maxStep), floored by the
+        // linear nLin so a helix's Z still subdivides at the pitch bound.
+        const cx = prevM.x + m.arc.i;
+        const cy = prevM.y + m.arc.j;
+        const r = Math.hypot(prevM.x - cx, prevM.y - cy);
+        const startA = Math.atan2(prevM.y - cy, prevM.x - cx);
+        const endA = Math.atan2(pos.y - cy, pos.x - cx);
+        const closed = Math.hypot(pos.x - prevM.x, pos.y - prevM.y) < 1e-9;
+        const dir = m.arc.cw ? -1 : 1;
+        let sweep = closed ? dir * 2 * Math.PI : shortestSweep(startA, endA, dir);
+        const nArc = r > 0 ? Math.ceil((Math.abs(sweep) * r) / maxStep) : 0;
+        const dxz = Math.hypot(pos.x - prevM.x, pos.y - prevM.y, pos.z - prevM.z);
+        const nLin = Math.ceil(dxz / maxStep);
+        const n = Math.max(1, nArc, nLin);
+        for (let k = 1; k <= n; k++) {
+          const t = k / n;
+          const ang = startA + sweep * t;
+          const mx = cx + r * Math.cos(ang);
+          const my = cy + r * Math.sin(ang);
+          const mz = prevM.z + (pos.z - prevM.z) * t;
+          const ma = prevM.a + (pos.a - prevM.a) * t;
+          pushPose(mx, my, mz, ma, tool, mi, rapid);
+        }
+      } else {
+        const dx = pos.x - prevM.x;
+        const dy = pos.y - prevM.y;
+        const dz = pos.z - prevM.z;
+        const dTheta = rotary ? ((pos.a - prevM.a) * Math.PI) / 180 : 0;
+        const nLin = Math.ceil(Math.hypot(dx, dy, dz) / maxStep);
+        const nRot = rotary ? Math.ceil(Math.abs(dTheta) / maxDTheta) : 0;
+        const n = Math.max(1, nLin, nRot);
+        for (let k = 1; k <= n; k++) {
+          const t = k / n;
+          const mx = prevM.x + dx * t;
+          const my = prevM.y + dy * t;
+          const mz = prevM.z + dz * t;
+          const ma = prevM.a + (pos.a - prevM.a) * t;
+          pushPose(mx, my, mz, ma, tool, mi, rapid);
         }
       }
     }
@@ -144,6 +180,18 @@ export function movesToPoses(
   }
 
   return poses;
+}
+
+/**
+ * Signed angular travel from a to b in direction `dir` (−1 cw / +1 ccw),
+ * wrapped to the shortest travel in that direction: ccw → (b−a mod 2π),
+ * cw → −((a−b) mod 2π). Result magnitude < 2π — the ±2π FULL CIRCLE is
+ * the caller's closed-endpoint special case, never this helper's.
+ */
+function shortestSweep(a: number, b: number, dir: number): number {
+  const TAU = 2 * Math.PI;
+  if (dir > 0) return (((b - a) % TAU) + TAU) % TAU;
+  return -((((a - b) % TAU) + TAU) % TAU);
 }
 
 /**
@@ -171,7 +219,21 @@ export function moveDurations(moves: Move[]): number[] {
     const da = na - pos.a;
 
     let t = 0;
-    if (dx === 0 && dy === 0 && dz === 0 && da === 0) {
+    if (m.arc) {
+      // ARC DURATION (2026-11-12): the endpoint chord of a full-circle
+      // arc is ZERO — chord-based timing would zip a circular orbit
+      // through the sim instantly. Time the true path: the arc length
+      // (|sweep|·r) hypotenused with any helical Z, over the G94 feed.
+      const r = Math.hypot(m.arc.i, m.arc.j);
+      const cx = pos.x + m.arc.i;
+      const cy = pos.y + m.arc.j;
+      const a0 = Math.atan2(-m.arc.j, -m.arc.i); // start, center-relative
+      const a1 = Math.atan2(ny - cy, nx - cx); // end, center-relative
+      let sweep = m.arc.cw ? a0 - a1 : a1 - a0;
+      sweep = ((sweep % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); // [0, 2π)
+      if (sweep < 1e-9) sweep = 2 * Math.PI; // coincident XY endpoints = the IR's full-circle form
+      t = m.feed > 0 ? Math.hypot(sweep * r, dz) / m.feed : 0;
+    } else if (dx === 0 && dy === 0 && dz === 0 && da === 0) {
       t = 0; // zero-motion moves cost nothing, even when feed is stamped
     } else if (m.rapid) {
       t = Math.max(Math.abs(dx) / 1200, Math.abs(dy) / 1200, Math.abs(dz) / 600, Math.abs(da) / 3600);

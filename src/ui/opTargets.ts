@@ -44,6 +44,18 @@ export interface PocketSource {
    * a hole bottom, so this stays pure geometry.
    */
   selectionZ: number;
+  /**
+   * The analytic circles behind `regions`, machine space (2026-11-12,
+   * the G2/G3 arc feature): one entry per circle-derived region, in the
+   * SAME order as those regions were pushed. Absent = no circle regions
+   * (a face selection), and a consumer that ignores it keeps today's
+   * polygon behavior byte-identically. The polygon region is STILL
+   * emitted alongside — the circle is an annotation the pocket generator
+   * may use to emit true G2/G3 orbits instead of the 64-gon, not a
+   * replacement. FUTURE (Alice, 2026-11-12): expand to general arcs —
+   * thread helices are the target consumer.
+   */
+  circles?: { cx: number; cy: number; r: number }[];
 }
 
 function machineAxisZ(v: THREE.Vector3, xf: (p: { x: number; y: number; z: number }) => THREE.Vector3): number {
@@ -157,6 +169,7 @@ export function pocketRegionsFromSelection(
     ? (p: { x: number; y: number; z: number }) => indexRotation(xf0(p))
     : xf0;
   const circleRegions: Vec2[][] = [];
+  const circles: { cx: number; cy: number; r: number }[] = [];
   let rimZ = -Infinity;
   /** a selected partial circle doesn't bound a disc — say so instead of
    * falling through to the misleading frame-gate error */
@@ -183,6 +196,7 @@ export function pocketRegionsFromSelection(
       contour.push({ x: center.x + Math.cos(a) * up.radius, y: center.y + Math.sin(a) * up.radius });
     }
     circleRegions.push(contour);
+    circles.push({ cx: center.x, cy: center.y, r: up.radius });
     rimZ = Math.max(rimZ, center.z);
   }
 
@@ -263,7 +277,7 @@ export function pocketRegionsFromSelection(
     return { regions: chainRegions, selectionZ: chainZ };
   }
   if (circleRegions.length > 0) {
-    return { regions: circleRegions, selectionZ: rimZ };
+    return { regions: circleRegions, selectionZ: rimZ, circles };
   }
   if (sawPartial) {
     throw new Error(

@@ -535,4 +535,134 @@ describe('pocket2d', () => {
     expect(loopArea(big)).toBeLessThan(0); // outer-wall orbit → CW
     void hole;
   });
+
+  // ---- ARC ORBITS (2026-11-12, G2/G3 circle pockets) ----
+  /** CCW 64-gon of a circle — the region opTargets emits for a circle feature. */
+  function circle64(cx: number, cy: number, r: number): Vec2[] {
+    const out: Vec2[] = [];
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      out.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+    }
+    return out;
+  }
+
+  it('an annotated circle region cuts full-circle arcs — one G2/G3 per orbit, exact radius', () => {
+    const R = 10;
+    const res = pocket2d(
+      op({
+        regions: [circle64(0, 0, R)],
+        circles: [{ cx: 0, cy: 0, r: R }],
+        topZ: 0,
+        floorZ: -1,
+        stepOver: 2,
+      }),
+      tool,
+    );
+    const arcs = res.moves.filter((m) => m.arc);
+    expect(arcs.length).toBeGreaterThan(0);
+    for (const m of arcs) {
+      // full-circle form: explicit XY, endpoint == start (byte-identical
+      // numbers — the firmware's full-circle detection is exact equality)
+      expect(m.words.x).toBeDefined();
+      expect(m.words.y).toBeDefined();
+      expect(m.rapid).toBeFalsy();
+      // climb on the outer wall: CW around the tool-center circle
+      expect(m.arc!.cw).toBe(true);
+    }
+    // the orbit arcs' radii: the arc must pass through the tool's actual
+    // position (the offset polygon's vertex), which sits µm inside the
+    // analytic inset radius — Clipper's apothem loss, inherited equally by
+    // the polygon path. Precision 1 = ±0.05mm covers it.
+    const orbitArcs = arcs.filter((m) => m.words.z === undefined);
+    const radii = orbitArcs.map((m) => Math.hypot(m.arc!.i, m.arc!.j)).sort((a, b) => b - a);
+    expect(radii[0]).toBeCloseTo(R - 1, 1); // 2mm tool → toolR 1
+    expect(radii.some((r) => Math.abs(r - 7) < 0.05)).toBe(true); // k=1
+    // each orbit's arc starts exactly where the previous XY-bearing move left the tool
+    for (const m of orbitArcs) {
+      const idx = res.moves.indexOf(m);
+      const prevXy = res.moves
+        .slice(0, idx)
+        .reverse()
+        .find((q) => q.words.x !== undefined && q.words.y !== undefined);
+      expect(m.words.x).toBe(prevXy?.words.x);
+      expect(m.words.y).toBe(prevXy?.words.y);
+    }
+    // and the estimate uses the arc lengths (2πr per orbit)
+    let orbitMinutes = 0;
+    for (const m of orbitArcs) orbitMinutes += (2 * Math.PI * Math.hypot(m.arc!.i, m.arc!.j)) / m.feed;
+    expect(res.estimatedMinutes).toBeGreaterThan(orbitMinutes - 1e-9); // entries add more
+  });
+
+  it('an unannotated circle region keeps the polygon emission (no arcs, silent fallback)', () => {
+    const res = pocket2d(op({ regions: [circle64(0, 0, 10)], stepOver: 2 }), tool);
+    expect(res.moves.some((m) => m.arc)).toBe(false);
+  });
+
+  it('a footprint-clipped circle falls back per-orbit: clipped orbit polygon, inner circles arc', () => {
+    // the x=16 stock edge cuts the k=0 orbit (r7 circle reaches x17)
+    // into a lens — that orbit emits its polygon, while the k≥1 orbits
+    // (r5/3/1, all inside the footprint) are genuine circles and arc.
+    // The fallback is per-orbit, not all-or-nothing — pinned by the
+    // pass numbers on the arc comments (pass 1 = the clipped orbit).
+    const res = pocket2d(
+      op({
+        regions: [circle64(10, 10, 8)],
+        circles: [{ cx: 10, cy: 10, r: 8 }],
+        footprint: [square(0, 16)],
+        stepOver: 2,
+      }),
+      tool,
+    );
+    const arcs = res.moves.filter((m) => m.arc);
+    expect(arcs.length).toBeGreaterThan(0);
+    for (const m of arcs) {
+      expect(m.comment ?? '').toMatch(/pass [2-9] — circular orbit/);
+    }
+    // the clipped outer loop is a polygon (46 vertices, not 64) and
+    // cut with per-vertex G1s — an arc for it would appear in `arcs`
+    expect(res.orbits[0].length).toBeLessThan(60);
+  });
+
+  it('continuous descent on a circle: helical ARC entry (one arc per revolution) + arc floor lap', () => {
+    // Ø8 tool in a Ø8 circle → single orbit at r=1; bore mode collapses
+    // the ladder into one continuous helical descent
+    const bigTool: Tool = { ...tool, diameter: 6 };
+    // R=4 with Ø6 tool: first inset r = 4 − 3 = 1; next offset 1 − stepOver < 0 → single orbit
+    const R = 4;
+    const res = pocket2d(
+      op({
+        regions: [circle64(0, 0, R)],
+        circles: [{ cx: 0, cy: 0, r: R }],
+        topZ: 0,
+        floorZ: -2,
+        stepDown: 1,
+        stepOver: 1.5,
+      }),
+      bigTool,
+    );
+    expect(res.continuous).toBe(1);
+    const arcs = res.moves.filter((m) => m.arc);
+    expect(arcs.length).toBeGreaterThanOrEqual(4); // 3 helical revs + floor lap
+    // the entry arcs all carry z words, strictly descending, landing on the floor
+    const entryArcs = arcs.filter((m) => m.words.z !== undefined);
+    expect(entryArcs.length).toBeGreaterThanOrEqual(3);
+    for (let k = 1; k < entryArcs.length; k++) {
+      expect(entryArcs[k].words.z!).toBeLessThan(entryArcs[k - 1].words.z!);
+    }
+    expect(entryArcs[entryArcs.length - 1].words.z).toBeCloseTo(-2, 9);
+    // every entry arc starts and ends at the SAME XY with a constant I/J
+    const start = { x: entryArcs[0].words.x!, y: entryArcs[0].words.y! };
+    for (const m of entryArcs) {
+      expect(m.words.x).toBe(start.x);
+      expect(m.words.y).toBe(start.y);
+      expect(m.arc!.i).toBe(entryArcs[0].arc!.i);
+      expect(m.arc!.j).toBe(entryArcs[0].arc!.j);
+    }
+    // the floor lap is the last arc, at the floor with no z word; its
+    // radius is the start-vertex distance (µm inside the analytic 1mm)
+    const lap = arcs[arcs.length - 1];
+    expect(lap.words.z).toBeUndefined();
+    expect(Math.hypot(lap.arc!.i, lap.arc!.j)).toBeCloseTo(R - 3, 1);
+  });
 });

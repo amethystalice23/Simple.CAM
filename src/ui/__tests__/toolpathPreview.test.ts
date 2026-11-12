@@ -279,3 +279,73 @@ describe('movesToSegments', () => {
     expect(entry).toEqual([20, 0, 30, 20, 0, 30]);
   });
 });
+describe('movesToSegments — Move.arc tessellation (2026-11-12)', () => {
+  it('FULL CIRCLE (start==end) draws chords, not a degenerate zero-length segment', () => {
+    const moves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 10, y: 0 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ];
+    const segs = movesToSegmentMoves(moves, null);
+    // 360° at the 15° chord pitch → 24 segments
+    expect(segs.feed.length / 6).toBe(24);
+    // every segment belongs to the arc move (index 1)
+    for (const mi of segs.feedMoves) expect(mi).toBe(1);
+    // total drawn length ≈ circumference — the unmodified code drew 0
+    let len = 0;
+    for (let i = 0; i < segs.feed.length; i += 6) {
+      len += Math.hypot(segs.feed[i + 3] - segs.feed[i], segs.feed[i + 4] - segs.feed[i + 1]);
+    }
+    expect(len).toBeCloseTo(2 * Math.PI * 10, 0);
+    // every chord endpoint on the circle about (0,0)
+    for (let i = 0; i < segs.feed.length; i += 6) {
+      expect(Math.hypot(segs.feed[i], segs.feed[i + 1])).toBeCloseTo(10, 6);
+      expect(Math.hypot(segs.feed[i + 3], segs.feed[i + 4])).toBeCloseTo(10, 6);
+    }
+  });
+
+  it('QUARTER arc draws to the same endpoint as the linear equivalent', () => {
+    const arcMoves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 0, y: 10 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ];
+    const linMoves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 0, y: 10 }, feed: 100 },
+    ];
+    const arcSegs = movesToSegmentMoves(arcMoves, null);
+    const linSegs = movesToSegmentMoves(linMoves, null);
+    const arcEnd = arcSegs.feed.slice(-3);
+    const linEnd = linSegs.feed.slice(-3);
+    expect(arcEnd[0]).toBeCloseTo(linEnd[0], 9);
+    expect(arcEnd[1]).toBeCloseTo(linEnd[1], 9);
+    expect(arcEnd[2]).toBeCloseTo(linEnd[2], 9);
+  });
+
+  it('arc vertices stay on the circle — the chord path does not', () => {
+    const moves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 0, y: 10 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ];
+    const segs = movesToSegmentMoves(moves, null);
+    for (let i = 0; i < segs.feed.length; i += 6) {
+      expect(Math.hypot(segs.feed[i], segs.feed[i + 1])).toBeCloseTo(10, 6);
+      expect(Math.hypot(segs.feed[i + 3], segs.feed[i + 4])).toBeCloseTo(10, 6);
+    }
+  });
+
+  it('helical Z interpolates along the arc chords', () => {
+    const moves: Move[] = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 0, y: 10, z: -5 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
+    ];
+    const segs = movesToSegmentMoves(moves, null);
+    const n = segs.feed.length / 6;
+    const last = segs.feed.slice(-3);
+    expect(last[2]).toBeCloseTo(-5, 9);
+    // mid-flight z strictly between the ends
+    const mid = segs.feed.slice(3 * 6 + 3, 3 * 6 + 6);
+    expect(mid[2]).toBeGreaterThan(-5);
+    expect(mid[2]).toBeLessThan(5);
+    expect(n).toBeGreaterThan(1);
+  });
+});

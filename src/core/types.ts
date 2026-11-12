@@ -654,6 +654,19 @@ export interface PocketOp {
   travelZ?: number;
   /** machine Z of the pocket floor */
   floorZ: number;
+  /**
+   * Analytic circles annotating the regions (2026-11-12, G2/G3 arcs):
+   * entry k describes a region that is EXACTLY the disc (cx, cy, r) —
+   * the machine-space reading of a selected circle feature. The region
+   * polygon is still authoritative for geometry; the annotation lets
+   * the generator emit true circular orbits (G2/G3) instead of the
+   * 64-gon when the offsets stay circular. A dilation (allowance,
+   * cut-over) SHRINKS/GROWS the radius but keeps the circle a circle;
+   * offsets that would break circularity fall back to polygons
+   * silently. Absent = no circular regions. FUTURE: general arcs
+   * (thread helices are the target consumer — Alice, 2026-11-12).
+   */
+  circles?: { cx: number; cy: number; r: number }[];
   /** axial depth per level, mm */
   stepDown: number;
   /** radial step-over between clearing passes, mm */
