@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
-import type { CircleFeature, RotaryCalibration } from '../../core/types';
+import type { CircleFeature, RotaryCalibration, ThreadFeature } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import type { DetectedFeatures } from '../../cam/features';
 import { indexedPointRotation } from '../../cam/indexing';
@@ -753,5 +753,96 @@ describe('threadTargetsFromSelection', () => {
     expect(() =>
       threadTargetsFromSelection(f, [yFace.id], identityTransform()),
     ).toThrowError(/not vertical in the cutting frame.*add an Index op/s);
+  });
+});
+
+describe('thread keep-out and thread contours (2026-11-12)', () => {
+  /** a plate top face (z=4) whose planeLoops carry a void around a
+   *  threaded stud at the origin: the traced junction loop follows the
+   *  GROOVE (r = thread root), but the keep-out the pocket must honour
+   *  is the CREST — material between root and crest is the thread form
+   *  (Alice: "pocketing up to the minor diameter... is going to dig
+   *  into the area the external thread needs"). */
+  const thread: ThreadFeature = {
+    kind: 'thread',
+    id: 'th1',
+    nominalDiameter: 4,
+    rootDiameter: 3.24,
+    pitch: 0.7,
+    rotation: 'cw',
+    xStart: 0,
+    xEnd: 6,
+    internal: false,
+    axisPoint: { x: 0, y: 0, z: 4 },
+    axisDir: { x: 0, y: 0, z: 1 },
+    basisU: { x: 1, y: 0, z: 0 },
+    basisV: { x: 0, y: 1, z: 0 },
+    phase0: 0,
+    bandRadius: 1.62,
+  };
+  const features = (): DetectedFeatures => ({
+    planes: [
+      { kind: 'plane', id: 'p1', normal: { x: 0, y: 0, z: 1 }, point: { x: 0, y: 0, z: 4 } },
+    ],
+    circles: [],
+    edges: [],
+    radialChains: [],
+    threads: [thread],
+    paths: [],
+    faceToPlane: new Int32Array(0),
+    planeLoops: [
+      // the plate outline (outer)
+      { plane: 0, points: [{ x: -10, y: -10, z: 4 }, { x: 10, y: -10, z: 4 }, { x: 10, y: 10, z: 4 }, { x: -10, y: 10, z: 4 }] },
+      // the stud junction traced at the GROOVE radius (r = root/2)
+      {
+        plane: 0,
+        points: Array.from({ length: 16 }, (_, i) => {
+          const a = (i / 16) * Math.PI * 2;
+          return { x: Math.cos(a) * 1.62, y: Math.sin(a) * 1.62, z: 4 };
+        }),
+      },
+    ],
+  });
+
+  it('a face void loop around an external thread is clamped to the crest circle, not the groove line', () => {
+    const src = pocketRegionsFromSelection(features(), ['p1'], identityTransform());
+    expect(src).not.toBeNull();
+    // the void loop comes back as a circle at the CREST radius (Ø4/2),
+    // never at the traced groove radius (Ø3.24/2)
+    const voidLoop = src!.regions.find((r) => r.every((q) => Math.hypot(q.x, q.y) < 3))!;
+    expect(voidLoop).toBeDefined();
+    for (const q of voidLoop) expect(Math.hypot(q.x, q.y)).toBeCloseTo(2, 5);
+  });
+
+  it('the face outline itself is never rewritten (only nested voids are keep-outs)', () => {
+    const src = pocketRegionsFromSelection(features(), ['p1'], identityTransform());
+    const outer = src!.regions.find((r) => r.some((q) => Math.hypot(q.x, q.y) > 9))!;
+    expect(outer).toBeDefined();
+    expect(outer).toHaveLength(4); // the square outline, unreplaced
+  });
+
+  it('a selected EXTERNAL thread resolves to its crest-Ø contour for the profile prep', () => {
+    const src = pocketRegionsFromSelection(features(), ['th1'], identityTransform(), undefined, false, true);
+    expect(src).not.toBeNull();
+    expect(src!.circles).toEqual([{ cx: 0, cy: 0, r: 2 }]);
+    const loop = src!.regions[0];
+    for (const q of loop) expect(Math.hypot(q.x, q.y)).toBeCloseTo(2, 5);
+  });
+
+  it('a pocket never resolves a thread — the same contour would read as a disc to clear', () => {
+    expect(() =>
+      pocketRegionsFromSelection(features(), ['th1'], identityTransform()),
+    ).toThrowError(/cannot be pocketed/);
+  });
+
+  it('an INTERNAL thread resolves to no profile contour (its prep is the tap drill)', () => {
+    const f = features();
+    (f.threads[0] as ThreadFeature).internal = true;
+    // nothing resolves for the internal thread: the resolver falls
+    // through to its "cannot be pocketed" complaint rather than
+    // inventing a disc
+    expect(() =>
+      pocketRegionsFromSelection(f, ['th1'], identityTransform(), undefined, false, true),
+    ).toThrowError(/cannot be pocketed/);
   });
 });

@@ -2322,6 +2322,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             part.ids,
             part.source.transform,
             rotate,
+            // a selected EXTERNAL thread resolves to its crest-Ø contour
+            // here — the profile prep that turns the boss down to the
+            // thread's major Ø (never on for pockets: the same contour
+            // would read as a disc to clear and mill the boss away)
+            false,
+            true,
           );
           if (!src || src.regions.length === 0) continue;
           if (allCircles) sawHole = true;

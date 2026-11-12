@@ -744,3 +744,144 @@ describe('describePickedFeature — threads (Pass 5)', () => {
 
   const v60 = (): Tool => ({ id: 'v60', name: 'v60', type: 'vbit', diameter: 3.175, vAngle: 60 }) as Tool;
 });
+
+describe('thread prep, cone measurement and the angle-matched tool pick (2026-11-12)', () => {
+  const v60 = (): Tool => ({ id: 'v60', name: '60° engraver', type: 'vbit', diameter: 3.175, vAngle: 60 }) as Tool;
+  const v90 = (): Tool => ({ id: 'v90', name: '90° chamfer', type: 'vbit', diameter: 3.175, vAngle: 90 }) as Tool;
+  const v30 = (): Tool => ({ id: 'v30', name: '30° engraver', type: 'vbit', diameter: 3.175, vAngle: 30 }) as Tool;
+  const flatTool = MAKERA_TOOLS.find((t) => t.id === 'makera-o-flute-bits-spiral-o-metal-3-175-12mm')!;
+  const extThread = (): ThreadFeature => ({
+    kind: 'thread',
+    id: 't1',
+    nominalDiameter: 4,
+    rootDiameter: 3.25,
+    pitch: 0.7,
+    rotation: 'cw',
+    xStart: 0.37,
+    xEnd: 7.13,
+    internal: false,
+    axisPoint: { x: 15, y: 15, z: 10 },
+    axisDir: { x: 0, y: 0, z: 1 },
+    basisU: { x: 1, y: 0, z: 0 },
+    basisV: { x: 0, y: 1, z: 0 },
+    phase0: 0,
+    bandRadius: 2,
+  });
+  /** revolve a closed (r, z) profile into a non-indexed mesh — the same
+   *  generator the other circle suites use */
+  function revolve(profile: [number, number][], segments = 32): THREE.BufferGeometry {
+    const pts: number[] = [];
+    const ring = (r: number, z: number, k: number): [number, number, number] => {
+      const th = (k * 2 * Math.PI) / segments;
+      return [Math.cos(th) * r, Math.sin(th) * r, z];
+    };
+    for (let i = 0; i < profile.length - 1; i++) {
+      const [r0, z0] = profile[i];
+      const [r1, z1] = profile[i + 1];
+      for (let k = 0; k < segments; k++) {
+        pts.push(...ring(r0, z0, k), ...ring(r1, z1, k), ...ring(r1, z1, k + 1));
+        pts.push(...ring(r0, z0, k), ...ring(r1, z1, k + 1), ...ring(r0, z0, k + 1));
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+    return g;
+  }
+
+  it('an EXTERNAL vertical thread offers the profile prep first, prefilled over the thread span', () => {
+    // the 3-axis plate M4: a boss turned to its crest Ø before the mill
+    const s = source({ threads: [extThread()] });
+    const r = resolved('thread', s, 0);
+    const k = describePickedFeature(r, stock4);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['profile', 'threadMill']);
+    expect(k.candidates[0].why).toContain('Ø4.0');
+    const op = createSuggestedOp(k.candidates[0], r, [s], stock4, flatTool, 'delrin', []) as Extract<JobOp, { kind: 'profile' }>;
+    expect(op.kind).toBe('profile');
+    expect(op.featureIds).toEqual(['t1']);
+    expect(op.side).toBe('outside');
+    // the depths bracket the thread's axial span (crown-relative)
+    expect(op.endDepth - op.startDepth).toBeCloseTo(7.13 - 0.37, 1);
+  });
+
+  it('a thread along the rotation axis keeps the plain threadMill offer (no 2.5D profile)', () => {
+    // a 4-axis thread off the stock axis, running along X: its crest
+    // contour has no machine-XY reading — faceCylinder/rotary own it
+    const t = extThread();
+    t.axisDir = { x: 1, y: 0, z: 0 };
+    const s = source({ threads: [t] });
+    const k = describePickedFeature(resolved('thread', s, 0), stock4);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['threadMill']);
+  });
+
+  it('the rotary thread op picks the 60° engraving bit — the metric thread form', () => {
+    const t = extThread();
+    t.axisPoint = { x: 0, y: 0, z: 20 };
+    t.axisDir = { x: 1, y: 0, z: 0 };
+    const s = source({ threads: [t] });
+    const r = resolved('thread', s, 0);
+    const k = describePickedFeature(r, stock4);
+    const pick = suggestToolFor(k.candidates[1], r, [], [v30(), v60(), v90()]);
+    expect(pick?.tool.vAngle).toBe(60);
+  });
+
+  it('a chamfered bore mouth measures its cone from the wall normals and picks the matching bit', () => {
+    // Ø20 bar, Ø6 through bore, 45° chamfer at the mouth (r3@z18 → r5@z20)
+    const base: [number, number][] = [
+      [10, 20], [10, -20], [3, -20], [3, 18], [5, 20],
+    ];
+    const geometry = revolve([...base, base[0]]);
+    const circles: CircleFeature[] = [
+      { kind: 'circle', id: 'mouth', center: { x: 0, y: 0, z: 20 }, axis: { x: 0, y: 0, z: -1 }, radius: 5, inner: true },
+      { kind: 'circle', id: 'bore', center: { x: 0, y: 0, z: 18 }, axis: { x: 0, y: 0, z: 1 }, radius: 3, inner: true },
+    ];
+    const s = source({ circles });
+    s.geometry = geometry;
+    const r = resolved('circle', s, 0);
+    const k = describePickedFeature(r, stock4);
+    // the bore continues past the cone: drill + chamfer (not pocket)
+    expect(k.candidates.map((c) => c.kind)).toEqual(['drill', 'chamfer']);
+    const chamfer = k.candidates[1];
+    expect(chamfer.vAngle).toBeCloseTo(90, 0);
+    const pick = suggestToolFor(chamfer, r, [], [v30(), v60(), v90()]);
+    expect(pick?.tool.vAngle).toBe(90);
+  });
+
+  it('a flat counterbore shoulder is NOT a cone — no angle reaches the tool pick', () => {
+    // same bar, but the mouth opens by a flat 3mm counterbore step, not a cone
+    const base: [number, number][] = [
+      [10, 20], [10, -20], [3, -20], [3, 17], [5, 17], [5, 20],
+    ];
+    const geometry = revolve([...base, base[0]]);
+    const circles: CircleFeature[] = [
+      { kind: 'circle', id: 'mouth', center: { x: 0, y: 0, z: 20 }, axis: { x: 0, y: 0, z: -1 }, radius: 5, inner: true },
+      { kind: 'circle', id: 'bore', center: { x: 0, y: 0, z: 17 }, axis: { x: 0, y: 0, z: 1 }, radius: 3, inner: true },
+    ];
+    const s = source({ circles });
+    s.geometry = geometry;
+    const k = describePickedFeature(resolved('circle', s, 0), stock4);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['drill', 'chamfer']);
+    // no cone testified: the 90° bit is NOT dragged in by a bogus
+    // measurement (the shoulder's axial normals reject the cone read)
+    expect(k.candidates[1].vAngle).toBeUndefined();
+  });
+
+  it('a boss rim with a chamfered tip measures the cone and matches the bit', () => {
+    // Ø20 bar with a truncated 45° tip: Ø10 wall → Ø6 tip face
+    const base: [number, number][] = [
+      [3, 20], [5, 18], [5, -20], [10, -20], [10, 20],
+    ];
+    const geometry = revolve([...base, base[0]]);
+    const circles: CircleFeature[] = [
+      { kind: 'circle', id: 'tip', center: { x: 0, y: 0, z: 20 }, axis: { x: 0, y: 0, z: 1 }, radius: 3, inner: false },
+      { kind: 'circle', id: 'shoulder', center: { x: 0, y: 0, z: 18 }, axis: { x: 0, y: 0, z: 1 }, radius: 5, inner: false },
+    ];
+    const s = source({ circles });
+    s.geometry = geometry;
+    const r = resolved('circle', s, 0);
+    const k = describePickedFeature(r, stock4);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['profile', 'chamfer']);
+    expect(k.candidates[1].vAngle).toBeCloseTo(90, 0);
+    const pick = suggestToolFor(k.candidates[1], r, [], [v30(), v60(), v90()]);
+    expect(pick?.tool.vAngle).toBe(90);
+  });
+});

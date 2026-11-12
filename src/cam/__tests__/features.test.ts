@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
-import { circleClosureDeg, detectFeatures, holesFromCircles } from '../features';
+import { circleClosureDeg, detectFeatures, holesFromCircles, scanThreadAxis } from '../features';
 import { boundingRadiusAboutX, axialExtentX } from '../features';
 import { transformedPositions } from '../slicing';
 
@@ -1166,5 +1166,56 @@ describe('detectFeatures: threads on candidate axes (3-axis)', () => {
     const geo = new THREE.BoxGeometry(20, 20, 4).toNonIndexed();
     const f = detectFeatures(geo);
     expect(f.threads).toHaveLength(0);
+  });
+
+  it('recentres a circle-fit axis offset onto the true helix centre (the M6 plate)', () => {
+    // the broken rim of a threaded hole survives only as arcs, and its
+    // circle fit runs off-centre by a fraction of the break (the real
+    // plate's M6 rim fits Ø5.38 at 0.30mm out): every radius about
+    // that axis reads inflated — on the real plate the M6's true
+    // Ø6.0/5.0 stations measured Ø6.55/5.45. The scan must recentre
+    // onto the true helix centre and read the true stations.
+    //
+    // CAD-style station-piled tessellation (vertices only AT the
+    // profile stations along the helix — the grid generator above
+    // spreads vertices across ALL radii, so about a shifted axis no
+    // radius band is a clean helix and detection itself fails; the
+    // real mesh piles stations, which is what makes the offset case
+    // detectable at all)
+    const pts: number[] = [];
+    const R_RIDGE = 2.7;
+    const R_GROOVE = 3.275;
+    const C = 5;
+    const stepsPerTurn = 256;
+    const M = 4 * stepsPerTurn; // 4 turns of pitch 1
+    const P = (r: number, i: number): [number, number, number] => {
+      const th = (i * 2 * Math.PI) / stepsPerTurn;
+      return [C + Math.cos(th) * r, C + Math.sin(th) * r, (i * 1) / stepsPerTurn];
+    };
+    for (let i = 0; i < M; i++) {
+      const a0 = P(R_RIDGE, i);
+      const a1 = P(R_RIDGE, i + 1);
+      const b0 = P(R_GROOVE, i);
+      const b1 = P(R_GROOVE, i + 1);
+      pts.push(...a0, ...a1, ...b1);
+      pts.push(...a0, ...b1, ...b0);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+    const pos = geo.getAttribute('position');
+    const verts: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i < pos.count; i++) {
+      verts.push({ x: pos.getX(i), y: pos.getY(i), z: pos.getZ(i) });
+    }
+    const t = scanThreadAxis(verts, { x: 5.3, y: 5, z: 0 }, { x: 0, y: 0, z: 1 });
+    expect(t).not.toBeNull();
+    // the axis lands on the true helix centre
+    expect(t!.axisPoint.x).toBeCloseTo(5.0, 1);
+    expect(t!.axisPoint.y).toBeCloseTo(5.0, 1);
+    // and the stations read true: ridge Ø5.4 (the root of an internal
+    // thread), groove Ø6.55 (the nominal)
+    expect(t!.rootDiameter).toBeCloseTo(5.4, 1);
+    expect(t!.nominalDiameter).toBeCloseTo(6.55, 1);
+    expect(t!.pitch).toBeCloseTo(1.0, 1);
   });
 });

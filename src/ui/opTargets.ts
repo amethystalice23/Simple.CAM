@@ -163,6 +163,11 @@ export function pocketRegionsFromSelection(
   /** FLATTEN: interior loops are voids to cross, not islands to keep —
    * each selected face contributes only its outer boundary. */
   flatten = false,
+  /** resolve a selected EXTERNAL thread feature into its crest-Ø
+   * contour (the profile prep that turns a boss down to the thread's
+   * major Ø). Off by default: a pocket on the same selection would
+   * read the contour as a disc to clear and mill the boss away. */
+  resolveThreads = false,
 ): PocketSource | null {
   const xf0 = transformFn(transform);
   const xf = indexRotation
@@ -200,8 +205,87 @@ export function pocketRegionsFromSelection(
     rimZ = Math.max(rimZ, center.z);
   }
 
+  // selected EXTERNAL threads resolve to their crest-Ø circle: the
+  // profile wall that turns a boss down to the thread's major Ø before
+  // the mill cuts the form (Alice, 2026-11-12: the external sheet "was
+  // missing the profiling op to set the outside diameter"). Only a
+  // machine-vertical axis maps to a 2D contour — a thread on the stock
+  // axis is a faceCylinder + rotary-thread case, never a 2.5D profile.
+  if (resolveThreads) {
+    for (const t of features.threads) {
+      if (!selection.includes(t.id) || t.internal) continue;
+      if (Math.abs(machineAxisZ(new THREE.Vector3(t.axisDir.x, t.axisDir.y, t.axisDir.z), xf)) < 0.98) {
+        continue;
+      }
+      const c = xf(t.axisPoint);
+      const r = t.nominalDiameter / 2;
+      const contour: Vec2[] = [];
+      for (let i = 0; i < CIRCLE_SEGMENTS; i++) {
+        const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
+        contour.push({ x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r });
+      }
+      circleRegions.push(contour);
+      circles.push({ cx: c.x, cy: c.y, r });
+      // the rim plane of a thread contour is the TOP of its span
+      const zTop = Math.max(
+        xf({ x: t.axisPoint.x + t.axisDir.x * t.xStart, y: t.axisPoint.y + t.axisDir.y * t.xStart, z: t.axisPoint.z + t.axisDir.z * t.xStart }).z,
+        xf({ x: t.axisPoint.x + t.axisDir.x * t.xEnd, y: t.axisPoint.y + t.axisDir.y * t.xEnd, z: t.axisPoint.z + t.axisDir.z * t.xEnd }).z,
+      );
+      rimZ = Math.max(rimZ, zTop);
+    }
+  }
+
   const planeRegions: Vec2[][] = [];
   let faceZ = -Infinity;
+
+  /** even-odd point-in-polygon (machine-XY loops) */
+  const containsPt = (loop: Vec2[], pt: Vec2): boolean => {
+    let inside = false;
+    for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+      const a = loop[i];
+      const b = loop[j];
+      if (a.y > pt.y !== b.y > pt.y && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  };
+  /** A face's void loop around a thread axis traces the GROOVE line:
+   *  at the root Ø where the face meets an external thread's stud (the
+   *  junction follows the helix), ragged between root and crest for an
+   *  internal one. Either way the honest keep-out is the crest Ø — the
+   *  material between root and crest IS the thread form, so a pocket
+   *  voiding to the traced line would mill the crests away (external,
+   *  Alice 2026-11-12) or leave face slivers overhanging the hole
+   *  (internal). Only a VOID loop (nested inside another loop of the
+   *  same face) qualifies — a face's own outer boundary is its outline,
+   *  never a keep-out. Returns the crest circle, or null to keep as-is. */
+  const threadKeepout = (loop: Vec2[], all: Vec2[][]): Vec2[] | null => {
+    for (const t of features.threads) {
+      if (Math.abs(machineAxisZ(new THREE.Vector3(t.axisDir.x, t.axisDir.y, t.axisDir.z), xf)) < 0.98) {
+        continue;
+      }
+      const c = xf(t.axisPoint);
+      const r = t.nominalDiameter / 2;
+      let within = true;
+      for (const pt of loop) {
+        if (Math.hypot(pt.x - c.x, pt.y - c.y) > r + 0.15) {
+          within = false;
+          break;
+        }
+      }
+      if (!within) continue;
+      const nested = all.some((o) => o !== loop && o.length > 2 && containsPt(o, loop[0]));
+      if (!nested) continue;
+      const out: Vec2[] = [];
+      for (let i = 0; i < CIRCLE_SEGMENTS; i++) {
+        const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
+        out.push({ x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r });
+      }
+      return out;
+    }
+    return null;
+  };
 
   for (let pi = 0; pi < features.planes.length; pi++) {
     const p = features.planes[pi];
@@ -213,7 +297,7 @@ export function pocketRegionsFromSelection(
     // the face's own border loops, projected to machine XY and oriented
     // outer-CCW / holes-CW by nesting depth (sliceAtZ's classification
     // rule) — the path follows the outline, not a box containing it
-    const faceLoops = features.planeLoops
+    const rawLoops = features.planeLoops
       .filter((l) => l.plane === pi)
       .map((l) =>
         l.points.map((pt) => {
@@ -221,7 +305,10 @@ export function pocketRegionsFromSelection(
           return { x: v.x, y: v.y };
         }),
       );
-    if (faceLoops.length === 0) continue;
+    if (rawLoops.length === 0) continue;
+    // the thread keep-out swaps groove-traced void loops for the crest
+    // circle (see threadKeepout); nesting is judged against the raw set
+    const faceLoops = rawLoops.map((loop) => threadKeepout(loop, rawLoops) ?? loop);
     if (flatten) {
       // the outer boundary alone (the largest loop), CCW — the tool
       // crosses every interior feature: indents and holes are air,

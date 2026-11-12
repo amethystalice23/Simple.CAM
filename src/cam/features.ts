@@ -889,28 +889,38 @@ export function scanThreadAxis(
       const xq = (f: number) => xsSorted[Math.min(xsSorted.length - 1, Math.floor(f * (xsSorted.length - 1)))];
       const xLo = xq(0.02);
       const xHi = xq(0.98);
-      const subHist = new Map<number, number>();
-      for (const p of verts) {
-        const x = dot(sub2(p), axis.dir);
-        if (x < xLo - 0.05 || x > xHi + 0.05) continue;
-        const r = rOf(p);
-        if (r < R_MIN) continue;
-        const b = Math.floor(r / BIN);
-        subHist.set(b, (subHist.get(b) ?? 0) + 1);
-      }
-      const bandR = best.rootR;
-      let belowBest = 0, aboveBest = 0; // largest mode below / above the band
-      let belowR = -1, aboveR = -1;
-      for (const [b, n] of subHist) {
-        const r0 = (b + 0.5) * BIN;
-        if (Math.abs(r0 - bandR) < 0.1) continue;
-        if (Math.abs(r0 - bandR) > 3) continue; // V-depth sanity
-        if (r0 < bandR && n > belowBest) { belowBest = n; belowR = r0; }
-        if (r0 > bandR && n > aboveBest) { aboveBest = n; aboveR = r0; }
-      }
-      const partnerR = belowBest >= aboveBest ? belowR : aboveR;
-      const rootR = Math.min(bandR, partnerR === -1 ? bandR : partnerR);
-      const crestR = Math.max(bandR, partnerR === -1 ? bandR : partnerR);
+      /** the partner mode: the largest-population radius mode inside
+       *  the band's x range on the OTHER side of the band, about the
+       *  axis as given (the axis is RECENTRED on the inlier helix
+       *  before the emit below, so this reads radii from the true
+       *  centre). Extremes would catch shoulder-chamfer sweeps (a step
+       *  face samples every radius up to the next Ø); modes land on
+       *  the thread's own root/crest stations. */
+      const partnerAbout = (axisPt: Vec3, bandR: number): { rootR: number; crestR: number } => {
+        const hist2 = new Map<number, number>();
+        for (const p of verts) {
+          const x = dot(sub(p, axisPt), axis.dir);
+          if (x < xLo - 0.05 || x > xHi + 0.05) continue;
+          const r = radialDistanceToAxis(p, { point: axisPt, dir: axis.dir });
+          if (r < R_MIN) continue;
+          const b = Math.floor(r / BIN);
+          hist2.set(b, (hist2.get(b) ?? 0) + 1);
+        }
+        let belowBest = 0, aboveBest = 0; // largest mode below / above the band
+        let belowR = -1, aboveR = -1;
+        for (const [b, n] of hist2) {
+          const r0 = (b + 0.5) * BIN;
+          if (Math.abs(r0 - bandR) < 0.1) continue;
+          if (Math.abs(r0 - bandR) > 3) continue; // V-depth sanity
+          if (r0 < bandR && n > belowBest) { belowBest = n; belowR = r0; }
+          if (r0 > bandR && n > aboveBest) { aboveBest = n; aboveR = r0; }
+        }
+        const partnerR = belowBest >= aboveBest ? belowR : aboveR;
+        return {
+          rootR: Math.min(bandR, partnerR === -1 ? bandR : partnerR),
+          crestR: Math.max(bandR, partnerR === -1 ? bandR : partnerR),
+        };
+      };
       // (g) hand: which sign collapsed the phases
       let handSign = 1;
       {
@@ -953,26 +963,161 @@ export function scanThreadAxis(
       if (inliers.length >= 200) {
         const xs = inliers.map((o) => bandX[o.i]).sort((a, b2) => a - b2);
         const q = (f: number) => xs[Math.min(xs.length - 1, Math.floor(f * (xs.length - 1)))];
+        // (h) axis recentring: the scan axis came from a circle FIT,
+        // and a thread-cut rim survives only as arcs — its fit runs
+        // off-centre by a fraction of the break (the M6 plate rim fits
+        // Ø5.38 at 0.30mm out, and every radius about that axis reads
+        // inflated: Ø6.55/5.45 on a Ø6.0/5.0 thread). The band filter
+        // reads radius about the CURRENT axis, so each collapsing band
+        // catches only an angular WEDGE of its station — and spread
+        // minimization cannot see the offset in a wedge (an arc fits
+        // a displaced circle to ~25µm; the linearized crawl measured
+        // −0.006mm per iteration). Instead collect every STRONGLY
+        // collapsing band (≥0.40 — flank-slice and mixed-population
+        // bands sit at ~0.26 and poison the fit) within the thread's
+        // x span and ±3mm of the band radius (distant plate features
+        // occasionally concentrate too, with huge lever arms), and
+        // solve the offset EXACTLY: each band b sits at constant
+        // radius ρ_b about the true centre, so
+        //   r_i² = |δ + ρ_b·û_i|² = 2·w_i·δ + c_b,   c_b = ρ_b² − |δ|²
+        // — linear in δ once the per-band constant is eliminated by
+        // centering. For exact station data the joint 2×2 solve lands
+        // δ in one step, wedge or not. δ is perpendicular, so the
+        // axial extent (xStart/xEnd) is untouched.
+        const W10 = (10 * Math.PI) / 180;
+        const collapseBands: Vec3[][] = [];
+        for (const [b, n] of hist) {
+          if (n < 30) continue;
+          const r0 = (b + 0.5) * BIN;
+          if (Math.abs(r0 - best.rootR) > 3) continue;
+          let band2 = verts.filter(
+            (p) =>
+              Math.abs(rOf(p) - r0) <= BAND_HALF_WIDTH &&
+              dot(sub2(p), axis.dir) >= xLo - 0.05 &&
+              dot(sub2(p), axis.dir) <= xHi + 0.05,
+          );
+          if (band2.length < 100) continue;
+          if (band2.length > 3000) {
+            const stp = Math.ceil(band2.length / 3000);
+            band2 = band2.filter((_, i2) => i2 % stp === 0);
+          }
+          const ph2 = band2.map((p) =>
+            mod2pi(mod2pi(Math.atan2(dot(sub2(p), v), dot(sub2(p), u))) - handSign * k * dot(sub2(p), axis.dir)),
+          );
+          ph2.sort((a, c) => a - c);
+          const dbl2 = [...ph2, ...ph2.map((x) => x + TWO_PI)];
+          let mx2 = 1;
+          let j2 = 0;
+          for (let i2 = 0; i2 < dbl2.length; i2++) {
+            while (dbl2[i2] - dbl2[j2] > W10) j2++;
+            mx2 = Math.max(mx2, i2 - j2 + 1);
+          }
+          if (mx2 / ph2.length >= 0.4) {
+            // single-lobe purity: an offset-radius band can FUSE two
+            // stations from opposite sides (one station's offset-max
+            // collides with another's offset-min — the ridge−x and
+            // groove+x wedges at a 0.3mm axis error), and a fused band
+            // satisfies no single-circle algebra — it vetoes the true
+            // centre. On ONE side the offset radius is monotone in the
+            // true radius, so fusion only ever happens opposite-lobe;
+            // a pure wedge's radial units cluster around one direction
+            // (|mean u| high), opposite lobes cancel toward zero.
+            let mux = 0;
+            let muy = 0;
+            for (const p of band2) {
+              const w = sub2(p);
+              const pl = Math.hypot(dot(w, u), dot(w, v)) || 1e-9;
+              mux += dot(w, u) / pl;
+              muy += dot(w, v) / pl;
+            }
+            if (Math.hypot(mux, muy) / band2.length >= 0.5) collapseBands.push(band2);
+          }
+        }
+        if (collapseBands.length === 0) collapseBands.push(best.band);
+        // the centered joint algebraic fit: per-band means of r² and w,
+        // then 2·(w−w̄)·δ = r²−r̄² stacked over all bands. For a band on
+        // the true circle every equation is an identity at δ_true, so
+        // the solution is exact; the conditioning guard rejects a
+        // near-degenerate wedge-only solve (all bands facing one way).
+        let A = axis.point;
+        {
+          let sUU = 0, sVV = 0, sUV = 0, bU = 0, bV = 0;
+          for (const band2 of collapseBands) {
+            let mR2 = 0, mWx = 0, mWy = 0;
+            for (const p of band2) {
+              const w = sub(p, axis.point);
+              const al = dot(w, axis.dir);
+              const px = w.x - axis.dir.x * al;
+              const py = w.y - axis.dir.y * al;
+              const pz = w.z - axis.dir.z * al;
+              mR2 += px * px + py * py + pz * pz;
+              mWx += px * u.x + py * u.y + pz * u.z;
+              mWy += px * v.x + py * v.y + pz * v.z;
+            }
+            mR2 /= band2.length;
+            mWx /= band2.length;
+            mWy /= band2.length;
+            for (const p of band2) {
+              const w = sub(p, axis.point);
+              const al = dot(w, axis.dir);
+              const px = w.x - axis.dir.x * al;
+              const py = w.y - axis.dir.y * al;
+              const pz = w.z - axis.dir.z * al;
+              const wx = px * u.x + py * u.y + pz * u.z - mWx;
+              const wy = px * v.x + py * v.y + pz * v.z - mWy;
+              const e = px * px + py * py + pz * pz - mR2;
+              sUU += wx * wx; sVV += wy * wy; sUV += wx * wy;
+              bU += e * wx; bV += e * wy;
+            }
+          }
+          const det = sUU * sVV - sUV * sUV;
+          if (Math.abs(det) > 1e-6 * (sUU + sVV) * (sUU + sVV)) {
+            const dU = (bU * sVV - bV * sUV) / (2 * det);
+            const dV = (bV * sUU - bU * sUV) / (2 * det);
+            A = {
+              x: A.x + dU * u.x + dV * v.x,
+              y: A.y + dU * u.y + dV * v.y,
+              z: A.z + dU * u.z + dV * v.z,
+            };
+          }
+        }
+        // re-measure about the recentred axis: the band radius (median
+        // inlier radius), the partner mode and the helix phases all
+        // move with it — the inflated Ø6.55 deflates to the true Ø6.0
+        const inPts = inliers.map((o) => best.band[o.i]);
+        const bandRF = inPts
+          .map((p) => radialDistanceToAxis(p, { point: A, dir: axis.dir }))
+          .sort((a, b2) => a - b2);
+        const bandR = bandRF[bandRF.length >> 1];
+        const { rootR, crestR } = partnerAbout(A, bandR);
         // the measured helix's phase at x=0: the inlier phases are
         // MULTI-modal (one mode per tessellation profile station), so
         // a global circular mean lands between modes. Take the
         // DOMINANT mode's members and circular-mean those alone.
+        const inlierPhaseF = inliers.map((o) =>
+          mod2pi(
+            mod2pi(Math.atan2(dot(sub(best.band[o.i], A), v), dot(sub(best.band[o.i], A), u))) -
+              handSign * k * bandX[o.i],
+          ),
+        );
+        const binsF = new Array(B).fill(0);
+        for (const ph of inlierPhaseF) binsF[Math.min(B - 1, Math.floor((ph / TWO_PI) * B))]++;
         let bi = 0;
-        for (let b2 = 1; b2 < B; b2++) if (bins2[b2] > bins2[bi]) bi = b2;
+        for (let b2 = 1; b2 < B; b2++) if (binsF[b2] > binsF[bi]) bi = b2;
         let cMeanX = 0;
         let cMeanY = 0;
         let modeN = 0;
-        for (const o of inliers) {
-          if (Math.min(B - 1, Math.floor((inlierPhase[o.i] / TWO_PI) * B)) !== bi) continue;
-          cMeanX += Math.cos(inlierPhase[o.i]);
-          cMeanY += Math.sin(inlierPhase[o.i]);
+        for (let i2 = 0; i2 < inliers.length; i2++) {
+          if (Math.min(B - 1, Math.floor((inlierPhaseF[i2] / TWO_PI) * B)) !== bi) continue;
+          cMeanX += Math.cos(inlierPhaseF[i2]);
+          cMeanY += Math.sin(inlierPhaseF[i2]);
           modeN++;
         }
         // fallback: no dominant mode (all equal) — mean of everything
         if (modeN === 0) {
-          for (const o of inliers) {
-            cMeanX += Math.cos(inlierPhase[o.i]);
-            cMeanY += Math.sin(inlierPhase[o.i]);
+          for (const ph of inlierPhaseF) {
+            cMeanX += Math.cos(ph);
+            cMeanY += Math.sin(ph);
           }
         }
         const phase0 = Math.atan2(cMeanY, cMeanX);
@@ -986,12 +1131,12 @@ export function scanThreadAxis(
           xStart: round2(q(0.01)),
           xEnd: round2(q(0.99)),
           internal: false,
-          axisPoint: axis.point,
+          axisPoint: A,
           axisDir: axis.dir,
           basisU: u,
           basisV: v,
           phase0,
-          bandRadius: round2(best.rootR),
+          bandRadius: round2(bandR),
         };
       }
     }

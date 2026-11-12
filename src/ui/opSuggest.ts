@@ -70,6 +70,13 @@ export interface SuggestCandidate {
   /** true for an INTERNAL thread suggestion (kind 'threadMill' only):
    *  the tool must clear the thread's minor Ø */
   internal?: boolean;
+  /** the MEASURED included cone angle under a rim (chamfer candidates):
+   *  the tool pick matches a V-bit's vAngle to it — a 90° chamfer bit
+   *  for a modelled 45° chamfer, not the 60° engraver (Alice,
+   *  2026-11-12: "your tool choice for the chamfers is clearly not
+   *  based on a measurement of the chamfer angle"). Absent = the rim
+   *  has no measurable cone; the default pick stands. */
+  vAngle?: number;
 }
 
 export interface FeatureKnowledge {
@@ -123,6 +130,73 @@ function coaxialCompanion(a: CircleFeature, b: CircleFeature): boolean {
     z: d.z - ax.z * along,
   };
   return Math.hypot(off.x, off.y, off.z) <= COMPANION_TOL_MM;
+}
+
+/** Read the CONE angle of the wall band between two coaxial rims, from
+ *  the band triangles' own normals. A chamfer is often a single
+ *  tessellation band — vertices sit only AT the two rims (measured on
+ *  the plate: zero intermediate vertices), so positions cannot
+ *  testify, normals can: a cone's normal tilts off the axis by
+ *  (90° − wall angle) — |n·axis| = cos(tilt) = sin(included/2); a flat
+ *  shoulder's normal is axial, a plain wall's radial, and both are
+ *  rejected. Returns the median included angle over the band's tilted
+ *  triangles (≥3), or null when the band is not a cone. Local space —
+ *  geometry is the circles' own source mesh. */
+function coneAngleFromMesh(
+  geometry: THREE.BufferGeometry,
+  outer: CircleFeature,
+  inner: CircleFeature,
+): number | null {
+  const pos = geometry.getAttribute('position');
+  if (!pos) return null;
+  const zA = outer.center.z;
+  const zB = inner.center.z;
+  const zLo = Math.min(zA, zB) - 0.02;
+  const zHi = Math.max(zA, zB) + 0.02;
+  const rLo = Math.min(outer.radius, inner.radius) - 0.1;
+  const rHi = Math.max(outer.radius, inner.radius) + 0.1;
+  const al = Math.hypot(outer.axis.x, outer.axis.y, outer.axis.z) || 1;
+  const ax = { x: outer.axis.x / al, y: outer.axis.y / al, z: outer.axis.z / al };
+  const cx = outer.center.x;
+  const cy = outer.center.y;
+  const idx = geometry.index;
+  const nTri = idx ? idx.count / 3 : pos.count / 3;
+  const angles: number[] = [];
+  for (let t = 0; t < nTri; t++) {
+    const i0 = idx ? idx.getX(t * 3) : t * 3;
+    const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+    const vs = [i0, i1, i2].map((i) => ({ x: pos.getX(i), y: pos.getY(i), z: pos.getZ(i) }));
+    // the whole triangle inside the rim-pair band
+    let inBand = true;
+    for (const v of vs) {
+      if (v.z < zLo || v.z > zHi) {
+        inBand = false;
+        break;
+      }
+      if (Math.hypot(v.x - cx, v.y - cy) < rLo || Math.hypot(v.x - cx, v.y - cy) > rHi) {
+        inBand = false;
+        break;
+      }
+    }
+    if (!inBand) continue;
+    // face normal
+    const e1 = { x: vs[1].x - vs[0].x, y: vs[1].y - vs[0].y, z: vs[1].z - vs[0].z };
+    const e2 = { x: vs[2].x - vs[0].x, y: vs[2].y - vs[0].y, z: vs[2].z - vs[0].z };
+    const n = {
+      x: e1.y * e2.z - e1.z * e2.y,
+      y: e1.z * e2.x - e1.x * e2.z,
+      z: e1.x * e2.y - e1.y * e2.x,
+    };
+    const nl = Math.hypot(n.x, n.y, n.z);
+    if (nl < 1e-12) continue;
+    const na = Math.abs((n.x * ax.x + n.y * ax.y + n.z * ax.z) / nl);
+    if (na < 0.05 || na > 0.95) continue; // shoulder (axial) or wall (radial) — not a cone
+    angles.push((2 * Math.asin(Math.min(1, na)) * 180) / Math.PI);
+  }
+  if (angles.length < 3) return null;
+  angles.sort((a, b) => a - b);
+  return angles[angles.length >> 1];
 }
 
 /**
@@ -329,6 +403,37 @@ function describeCircle(
   const stepped: 'floor' | 'mouth' | null =
     role === 'floor' || role === 'mouth' ? role : null;
   const comp = companion as CircleFeature | null;
+  /** the NEAREST coaxial companion of different Ø — the rim that
+   *  bounds the cone at this rim (a chamfered mouth/boss tip), used to
+   *  MEASURE the cone's included angle. `companion` above stays
+   *  first-found: the stepped-role machinery is built around it. */
+  const coneComp =
+    allCircles
+      .filter(
+        (o) =>
+          o.id !== c.id && !o.arcs && Math.abs(o.radius * 2 - dia) > 0.05 && coaxialCompanion(c, o),
+      )
+      .sort(
+        (a, b) =>
+          xf(c.center).distanceTo(xf(a.center)) - xf(c.center).distanceTo(xf(b.center)),
+      )[0] ?? null;
+  /** the cone's included angle at this rim, MEASURED from the wall
+   *  band's own triangle normals (coneAngleFromMesh) with the nearest
+   *  coaxial companion bounding the band. null = no cone at this rim
+   *  (a flat shoulder or plain wall keeps the default tool pick). */
+  const coneAtRim = (): number | null => {
+    if (!coneComp) return null;
+    const gap = Math.hypot(
+      coneComp.center.x - c.center.x,
+      coneComp.center.y - c.center.y,
+      coneComp.center.z - c.center.z,
+    );
+    if (gap <= 1e-6 || gap > 5) return null;
+    const outerC = c.radius > coneComp.radius ? c : coneComp;
+    const innerC = c.radius > coneComp.radius ? coneComp : c;
+    const a = coneAngleFromMesh(geometry, outerC, innerC);
+    return a !== null && a >= 25 && a <= 155 ? a : null;
+  };
   const title = `Ø${f1(dia)} ${
     c.inner ? (stepped === 'floor' ? 'indent floor rim' : stepped === 'mouth' ? 'indent mouth rim' : 'hole rim') : 'boss rim'
   }${partial ? ' (partial)' : ''}`;
@@ -381,11 +486,19 @@ function describeCircle(
       return;
     }
     if (stepped === 'floor' && comp) {
+      // the cone ABOVE this floor rim (the recess wall to the mouth):
+      // its included angle picks the chamfer tool
+      const dhF = xf(c.center).distanceTo(xf(comp.center));
+      const coneF = dhF > 1e-6 ? (2 * Math.atan((comp.radius * 2 - dia) / 2 / dhF) * 180) / Math.PI : null;
       candidates.push({
         kind: 'pocket',
         why: `clear this indent floor (Ø${f1(dia)} under the Ø${f1(comp.radius * 2)} mouth above it)${suffix}`,
       });
-      candidates.push({ kind: 'chamfer', why: 'break this indent’s rim with a V-bit' });
+      candidates.push({
+        kind: 'chamfer',
+        vAngle: coneF ?? undefined,
+        why: 'break this indent’s rim with a V-bit',
+      });
       notes.push({
         text: 'this rim is the bottom of a stepped recess.',
         detail:
@@ -405,18 +518,23 @@ function describeCircle(
         kind: 'pocket',
         why: `clear this stepped opening (Ø${f1(dia)} mouth, Ø${f1(comp.radius * 2)} floor below)${suffix}`,
       });
-      candidates.push({ kind: 'chamfer', why: 'cut the angled wall under this rim with a V-bit' });
-      // cone geometry for the positive suggestion: the included angle
-      // 2·atan(Δr / Δh) between the two rims
+      // cone geometry: the included angle 2·atan(Δr / Δh) between the
+      // two rims — measured, it picks the chamfer tool (90° chamfer bit
+      // for a modelled 45° wall, not the 60° engraver)
       const dr = dia - comp.radius * 2;
       const dh = xf(c.center).distanceTo(xf(comp.center));
-      const coneDeg = dh > 1e-6 ? (2 * Math.atan(dr / 2 / dh) * 180) / Math.PI : null;
+      const coneDeg = dh > 1e-6 ? (2 * Math.atan(Math.abs(dr) / 2 / dh) * 180) / Math.PI : null;
+      candidates.push({
+        kind: 'chamfer',
+        vAngle: coneDeg ?? undefined,
+        why: 'cut the angled wall under this rim with a V-bit',
+      });
       notes.push({
         text: 'this rim opens a stepped recess.',
         detail: coneDeg
           ? `the wall narrows from Ø${f1(dia)} here to Ø${f1(comp.radius * 2)} at the bottom ` +
-            `(${f1(coneDeg)}° included angle): the narrowing diameter suits a pocket, and the ` +
-            `angled wall suits a chamfer op with a ~${Math.round(coneDeg / 2)}° V-bit.`
+            `(${f1(coneDeg)}° included): the narrowing diameter suits a pocket, and the ` +
+            `angled wall suits a chamfer op — the ${Math.round(coneDeg)}° chamfer bit cuts this ${Math.round(coneDeg / 2)}° wall.`
           : `the opening narrows from Ø${f1(dia)} here to Ø${f1(comp.radius * 2)} at the bottom — ` +
             'the narrowing diameter suits a pocket, the angled wall a chamfer op.',
       });
@@ -428,7 +546,14 @@ function describeCircle(
       // isn't a thread there"): a plain bore rim offers drill + chamfer
       // only; a modelled thread is picked as its own feature
       candidates.push({ kind: 'drill', why: `drill this bore straight down from the rim${suffix}` });
-      candidates.push({ kind: 'chamfer', why: 'break this hole’s rim with a V-bit' });
+      // a nearby coaxial smaller rim bounds the chamfer cone under this
+      // mouth (the Ø8 bevelled bore: Ø7 at 0.49 below) — its measured
+      // included angle picks the chamfer tool (Alice, 2026-11-12)
+      candidates.push({
+        kind: 'chamfer',
+        vAngle: coneAtRim() ?? undefined,
+        why: 'break this hole’s rim with a V-bit',
+      });
     } else {
       // an outer rim is a boss/round-stock edge: profile it (Alice,
       // 2026-11-12: don't auto-offer threading — that was an unusual
@@ -437,7 +562,17 @@ function describeCircle(
         kind: 'profile',
         why: `cut around this boss (Ø${f1(dia)}) to size it${suffix}`,
       });
-      candidates.push({ kind: 'chamfer', why: 'run a V-bit around this boss to break its rim' });
+      // the cone at a boss rim (a chamfered tip: a Ø2.24 rim over the
+      // Ø3.24 shoulder 0.5 below) — measured from the NEAREST coaxial
+      // companion, never a distant one, so its angle picks the tool
+      const bossCone = coneAtRim();
+      candidates.push({
+        kind: 'chamfer',
+        vAngle: bossCone ?? undefined,
+        why: bossCone
+          ? `break this boss’s rim — the wall runs at ${Math.round(bossCone / 2)}°, a ${Math.round(bossCone)}° chamfer bit fits it`
+          : 'run a V-bit around this boss to break its rim',
+      });
     }
   };
 
@@ -611,6 +746,23 @@ function describeThread(
             },
           ]
         : [
+            // the profile PREP: the mill cuts the FORM, but the crest
+            // needs a finished cylinder at the major Ø to ride — the
+            // same turn-down the thread panel's prep insert builds
+            // (Alice, 2026-11-12: the external sheet "doesn't give the
+            // profiling op to set the outside diameter"). Only for a
+            // VERTICAL thread axis: the contour resolves to machine-XY
+            // (pocketRegionsFromSelection's threads pass); a thread on
+            // the rotation axis takes faceCylinder, one along it has
+            // no 2.5D reading
+            ...(Math.abs(t.axisDir.z) >= 0.98
+              ? [
+                  {
+                    kind: 'profile',
+                    why: `turn this boss down to the crest Ø${f1(t.nominalDiameter)} over the thread's span first — the thread rides the finished cylinder`,
+                  } as SuggestCandidate,
+                ]
+              : []),
             {
               kind: 'threadMill',
               internal: false,
@@ -791,6 +943,38 @@ export function createSuggestedOp(
       targetDiameter: round2((r.feature as CircleFeature).radius * 2),
     } as JobOp;
   }
+  if (cand.kind === 'profile' && r.kind === 'thread') {
+    // the external-thread prep: a wall pass at the measured crest Ø over
+    // the thread's own axial span — the contour comes from the thread
+    // feature itself (pocketRegionsFromSelection's resolveThreads pass,
+    // reached through featureIds). Depths are below-crown and may go
+    // NEGATIVE when the boss stands proud of the declared stock top
+    // (cutRange reads them as plain machine Z; the thread-panel prep
+    // insert starts at 0 only because a rotary boss never does)
+    const t = r.feature as ThreadFeature;
+    const xf = transformFn(r.source.transform);
+    const zEnd = xf({
+      x: t.axisPoint.x + t.axisDir.x * t.xEnd,
+      y: t.axisPoint.y + t.axisDir.y * t.xEnd,
+      z: t.axisPoint.z + t.axisDir.z * t.xEnd,
+    }).z;
+    const zStart = xf({
+      x: t.axisPoint.x + t.axisDir.x * t.xStart,
+      y: t.axisPoint.y + t.axisDir.y * t.xStart,
+      z: t.axisPoint.z + t.axisDir.z * t.xStart,
+    }).z;
+    return {
+      ...withFeature,
+      selectionIs: 'floor',
+      side: 'outside',
+      startDepth: round2(crown - Math.max(zEnd, zStart)),
+      endDepth: round2(crown - Math.min(zEnd, zStart)),
+      sideAllowance: 0,
+      bottomAllowance: 0,
+      clearToStock: false,
+      tabs: null,
+    } as JobOp;
+  }
   const p = suggestDatumPoint(r, datum, stock);
   if (p) return prefillDepths(withFeature, p.z, crown);
   return withFeature;
@@ -882,8 +1066,21 @@ function pickFromPool(
   for (const type of types) {
     // type preference order: a drill bit beats a flat for a bore even
     // when the flat is bigger
-    const fits = pool.filter((t) => t.type === type && t.diameter <= bound + 1e-9);
+    let fits = pool.filter((t) => t.type === type && t.diameter <= bound + 1e-9);
     if (fits.length === 0) continue;
+    // a V-bit is picked by its INCLUDED angle when the feature pins one:
+    // a measured cone under a chamfer rim (90° chamfer bit for a 45°
+    // wall, never the 60° engraver), and the 60° metric thread form for
+    // the rotary thread (Alice, 2026-11-12). No match in the pool falls
+    // back to the old smallest-diameter pick rather than no tool.
+    if (type === 'vbit') {
+      const want =
+        cand.kind === 'thread' ? 60 : cand.vAngle !== undefined ? cand.vAngle : null;
+      if (want !== null) {
+        const byAngle = fits.filter((t) => t.vAngle !== undefined && Math.abs(t.vAngle - want) <= 15);
+        if (byAngle.length > 0) fits = byAngle;
+      }
+    }
     fits.sort((a, b) => (largest ? b.diameter - a.diameter : a.diameter - b.diameter));
     return fits[0];
   }
