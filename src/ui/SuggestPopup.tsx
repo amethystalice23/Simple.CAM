@@ -162,21 +162,24 @@ export function SuggestPopup({
           </p>
         ))}
 
-        {/* the doing button leads the row (Alice, 2026-11-12): Add first
-            on the left, then the secondary actions — Done relabelled
-            Cancel, as a dismiss is a no-op */}
+        {/* accept on the LEFT edge, decline on the RIGHT (Alice,
+            2026-11-12): a clear visual separation — the two right-hand
+            buttons mean "not accepting the suggestions"; Done is
+            relabelled Cancel, as a dismiss is a no-op */}
         <div className="suggest-actions">
           {checkedList.length > 0 && (
             <button type="button" className="suggest-add" onClick={() => onAdd(checkedList)}>
               + Add {checkedList.length} op{checkedList.length === 1 ? '' : 's'}
             </button>
           )}
-          <button type="button" onClick={onPickAnother}>
-            Pick another feature
-          </button>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
+          <div className="suggest-actions-decline">
+            <button type="button" onClick={onPickAnother}>
+              Pick another feature
+            </button>
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     </div>
