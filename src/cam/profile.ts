@@ -17,6 +17,31 @@ import { intersection, offsetInward, offsetOutward } from './clipper';
 import { arcTable, helicalDescentFits, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 import { extractClipIntervals, pointAtArc } from './clipUtils';
+import { isCircularLoop } from './pocket';
+
+/**
+ * The circle an offset loop provably is, or null (2026-11-12, G2/G3):
+ * candidates are the annotated region circles offset by the SAME
+ * arithmetic profile2d applied to the contour — online keeps r,
+ * outside grows by toolR + sideAllowance, inside shrinks (and may
+ * vanish). Matched → the level's full-loop pass emits one arc; the
+ * winding of the OFFSET loop (already climb-oriented by the side
+ * logic) names the arc direction.
+ */
+function profileCircleOf(
+  loop: Vec2[],
+  op: ProfileOp,
+  toolR: number,
+): { cx: number; cy: number; r: number } | null {
+  if (!op.circles) return null;
+  const off = op.side === 'online' ? 0 : toolR + op.sideAllowance;
+  for (const c of op.circles) {
+    const r = op.side === 'outside' ? c.r + off : op.side === 'inside' ? c.r - off : c.r;
+    if (r <= 1e-9) continue;
+    if (isCircularLoop(loop, { cx: c.cx, cy: c.cy, r })) return { cx: c.cx, cy: c.cy, r };
+  }
+  return null;
+}
 
 export interface ProfileResult {
   moves: Move[];
@@ -320,6 +345,11 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
         // FEED the entry along the loop (helical descent) — never a
         // straight plunge into standing material (entry.ts)
         const cum = geo.tabs ? geo.cum : arcTable(rotatedLoop);
+        // ARC (2026-11-12): a loop that provably IS an annotated circle
+        // takes the arc form for BOTH the entry (whole-revolution helical
+        // arcs) and the lap (one full-circle arc) — winding names the
+        // direction, the loop is already climb-oriented
+        const circ = profileCircleOf(rotatedLoop, op, toolR);
         const entry = rampEntry({
           loop: rotatedLoop,
           cum,
@@ -332,17 +362,29 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
           toZ: levelZ,
           stepDown: op.stepDown,
           feed: op.plungeFeed,
+          circle: circ ?? undefined,
+          loopCw: signedArea(rotatedLoop) < 0,
         });
         moves.push(...entry.moves);
         minutes += entry.minutes;
         entries[entry.mode]++;
 
-        let prev = start;
-        for (let i = 1; i <= rotatedLoop.length; i++) {
-          const p = rotatedLoop[i % rotatedLoop.length];
-          moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
-          minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
-          prev = p;
+        if (circ) {
+          moves.push({
+            words: { x: start.x, y: start.y },
+            feed: op.feed,
+            arc: { i: circ.cx - start.x, j: circ.cy - start.y, cw: signedArea(rotatedLoop) < 0 },
+            comment: `circular wall r${circ.r.toFixed(2)}`,
+          });
+          minutes += (2 * Math.PI * Math.hypot(start.x - circ.cx, start.y - circ.cy)) / op.feed;
+        } else {
+          let prev = start;
+          for (let i = 1; i <= rotatedLoop.length; i++) {
+            const p = rotatedLoop[i % rotatedLoop.length];
+            moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+            minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
+            prev = p;
+          }
         }
 
         moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
@@ -419,7 +461,9 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
     moves.push({ words: { z: approach }, feed: 0, rapid: true });
     // the whole ladder in one helical descent along the loop — the same
     // rampEntry machinery, toZ the floor (per-revolution band ≤ stepDown
-    // by construction, pinned by assertRampBands)
+    // by construction, pinned by assertRampBands). ARC (2026-11-12): a
+    // loop that provably IS an annotated circle takes the arc entry form.
+    const circ = profileCircleOf(rotatedLoop, op, toolR);
     const entry = rampEntry({
       loop: rotatedLoop,
       cum,
@@ -431,18 +475,30 @@ export function profile2d(op: ProfileOp, tool: Tool): ProfileResult {
       toZ: op.floorZ,
       stepDown: op.stepDown,
       feed: op.plungeFeed,
+      circle: circ ?? undefined,
+      loopCw: signedArea(rotatedLoop) < 0,
     });
     moves.push(...entry.moves);
     minutes += entry.minutes;
     entries[entry.mode]++;
     // the final full-depth lap — the wall's last cut, exactly the lap
     // the stepped ladder would have finished on
-    let prev = start;
-    for (let i = 1; i <= rotatedLoop.length; i++) {
-      const p = rotatedLoop[i % rotatedLoop.length];
-      moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
-      minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
-      prev = p;
+    if (circ) {
+      moves.push({
+        words: { x: start.x, y: start.y },
+        feed: op.feed,
+        arc: { i: circ.cx - start.x, j: circ.cy - start.y, cw: signedArea(rotatedLoop) < 0 },
+        comment: `circular wall r${circ.r.toFixed(2)} — full-depth lap`,
+      });
+      minutes += (2 * Math.PI * Math.hypot(start.x - circ.cx, start.y - circ.cy)) / op.feed;
+    } else {
+      let prev = start;
+      for (let i = 1; i <= rotatedLoop.length; i++) {
+        const p = rotatedLoop[i % rotatedLoop.length];
+        moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+        minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
+        prev = p;
+      }
     }
     moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
     cur = start;

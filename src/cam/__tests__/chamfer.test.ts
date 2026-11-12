@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chamfer, CIRCLE_SEGMENTS } from '../chamfer';
+import { chamfer } from '../chamfer';
 import type { ChamferOp, Move, Tool, Vec2 } from '../../core/types';
 
 const vbit = (over: Partial<Tool> = {}): Tool => ({
@@ -48,12 +48,29 @@ function radii(pts: Vec2[], cx = 0, cy = 0): number[] {
 }
 
 describe('chamfer generator', () => {
-  it('places the cone flank through the rim: path on the loop, tip depth below', () => {
+  it('places the cone flank through the rim: circular arc on the loop, tip depth below', () => {
     const res = chamfer(op(), vbit());
-    const pts = feedXY(res.moves);
-    // 90° bit, rt = 0: the tool rides exactly on the Ø10 rim circle
-    expect(pts).toHaveLength(CIRCLE_SEGMENTS); // one closed pass
-    for (const r of radii(pts)) expect(r).toBeCloseTo(5, 6);
+    // ARC EMISSION (2026-11-12): a circle loop is ONE full-circle arc —
+    // the exact tool-center circle, not the 64-gon approximation
+    const arcMove = res.moves.find((m) => m.arc);
+    expect(arcMove).toBeDefined();
+    expect(arcMove!.arc!.cw).toBe(false); // CCW, the polygon's winding
+    expect(arcMove!.words.x).toBeDefined();
+    expect(arcMove!.words.y).toBeDefined();
+    // full-circle form: endpoint == the rapid-in's start, byte-identical
+    const idx = res.moves.indexOf(arcMove!);
+    const prevXy = res.moves
+      .slice(0, idx)
+      .reverse()
+      .find((q) => q.words.x !== undefined && q.words.y !== undefined);
+    expect(arcMove!.words.x).toBe(prevXy?.words.x);
+    expect(arcMove!.words.y).toBe(prevXy?.words.y);
+    // 90° bit, rt = 0: the tool rides exactly on the Ø10 rim circle —
+    // |I/J| = the orbit radius (center offset from the start point)
+    expect(Math.hypot(arcMove!.arc!.i, arcMove!.arc!.j)).toBeCloseTo(5, 9);
+    // and exactly ONE feed move for the lap (no leftover vertex chain)
+    const lapMoves = res.moves.filter((m) => !m.rapid && m.words.x !== undefined).length;
+    expect(lapMoves).toBe(1);
     // tip one depth below the anchor plane
     const plunge = res.moves.find((m) => !m.rapid && m.words.z !== undefined);
     expect(plunge?.words.z).toBeCloseTo(-1, 9);

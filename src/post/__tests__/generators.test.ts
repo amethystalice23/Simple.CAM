@@ -8,8 +8,9 @@ import { drill } from '../../cam/drill';
 import { faceCylinder } from '../../cam/faceCylinder';
 import { pocket2d } from '../../cam/pocket';
 import { profile2d } from '../../cam/profile';
+import { threadMill } from '../../cam/threadMill';
 import { engrave } from '../../cam/engrave';
-import type { ChamferOp, CylChamferOp, DrillOp, PocketOp, ProfileOp, Tool, Vec2 } from '../../core/types';
+import type { ChamferOp, CylChamferOp, DrillOp, PocketOp, ProfileOp, ThreadMillOp, ThreadMillTarget, Tool, Vec2 } from '../../core/types';
 
 const tool: Tool = { id: 't1', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
 const drillTool: Tool = { id: 't2', name: '3mm drill', type: 'drill', diameter: 3, spindleRpm: 18000 };
@@ -285,6 +286,49 @@ describe('generator post goldens', () => {
       options: { jobName: 'chamfer-rim' },
     }),
   );
+
+  // THREAD MILLING — ARC FORM (2026-11-12): the M14×1 external cycle the
+  // unit tests replay from the mill-tested record, now as whole-turn G2s
+  // (left-hand = cw) with Z riding the arc word. Pins the thread-arc
+  // dialect end-to-end through the post.
+  {
+    const threadMillTool: Tool = {
+      id: 'tm1',
+      name: 'M6 Threadmill',
+      type: 'threadmill',
+      diameter: 4.75,
+      pitch: 1,
+      flutes: 3,
+      shaftDiameter: 6,
+      fluteLength: 18,
+      overallLength: 50,
+      spindleRpm: 12000,
+    };
+    const threadTarget: ThreadMillTarget = { center: { x: 0, y: 0 }, internal: false, topZ: 0, depth: 10 };
+    const threadOp: ThreadMillOp = {
+      kind: 'threadMill',
+      id: 'thm1',
+      toolId: 'tm1',
+      nominalDiameter: 14,
+      pitch: 1,
+      starts: 1,
+      tolerance: 0,
+      rotation: 'ccw',
+      stepOver: 0,
+      feed: 100,
+      plungeFeed: 100,
+      safeClearance: 3,
+      targets: [threadTarget],
+    };
+    checkGolden(
+      'thread-mill-arcs.nc',
+      postCarvera({
+        moves: threadMill(threadOp, threadMillTool).moves,
+        tools: [threadMillTool],
+        options: { jobName: 'thread-mill-arcs' },
+      }),
+    );
+  }
 
   // the cylinder chamfer: A-only ring sweeps in G94 (deg/min) at one
   // fixed X, Z plunges per level — depth 0 ladders from the stock surface

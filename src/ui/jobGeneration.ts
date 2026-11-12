@@ -2307,6 +2307,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (error) return fail(error);
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const contours: Vec2[][] = [];
+        const circles: { cx: number; cy: number; r: number }[] = [];
         let sawHole = false;
         let sawFace = false;
         for (const part of parts) {
@@ -2326,6 +2327,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           if (allCircles) sawHole = true;
           if (allPlanes) sawFace = true;
           contours.push(...src.regions);
+          // analytic circles ride along in contour order (2026-11-12, G2/G3)
+          if (src.circles) circles.push(...src.circles);
         }
         if (sawHole && sawFace) {
           return fail('select either faces or holes for this operation, not both');
@@ -2357,6 +2360,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             id: op.id,
             toolId: tool.id,
             contours,
+            circles: circles.length > 0 ? circles : undefined,
             side: op.side,
             sideAllowance: op.sideAllowance, // radial wall stock — signed, the path offset from the line
             bottomAllowance: 0, // unused inside profile2d — jobGeneration raised floorZ by it

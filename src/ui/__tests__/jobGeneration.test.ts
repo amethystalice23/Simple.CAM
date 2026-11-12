@@ -453,9 +453,12 @@ describe('generateJobOp', () => {
     // (entry.ts era, 2026-10-29) — one descent comment, never a span one
     expect(on.moves.some((m) => m.comment === 'continuous descent to z-2.00')).toBe(true);
     expect(on.moves.some((m) => m.comment?.includes('span '))).toBe(false);
-    // and it really does leave the stock: y reaches −5
-    const ys = on.moves.filter((m) => m.words.y !== undefined).map((m) => m.words.y!);
-    expect(Math.min(...ys)).toBeLessThanOrEqual(-5 + 1e-6);
+    // and it really does leave the stock: the online lap is ONE full-circle
+    // arc at the rim's exact radius (2026-11-12 arcs) — a r=5 loop under
+    // the ±2 stock reaches y=−5 by its own geometry, no vertex chain to sample
+    const lap = on.moves.find((m) => m.arc && m.words.z === undefined);
+    expect(lap).toBeDefined();
+    expect(Math.hypot(lap!.arc!.i, lap!.arc!.j)).toBeCloseTo(5, 1);
 
     const off = generateJobOp(
       { ...online, featureIds: [rim], cutBeyondStock: false },
@@ -2664,16 +2667,22 @@ describe('thread mill generation (3-axis, the 2026-10-28 op)', () => {
   };
   const threadCtx: GenContext = { ...ctx, tools: [...ctx.tools, threadmillTool] };
 
-  it('threads the selected bore: bottom-up helix at Rc, no error', () => {
+  it('threads the selected bore: bottom-up helix of ARCS at Rc, no error', () => {
     const res = generateJobOp(threadMillOp, threadCtx);
     expect(res.error).toBeNull();
-    expect(res.moves.length).toBeGreaterThan(50);
     expect(res.summary).toContain('internal');
     expect(res.summary).toContain('cw');
+    // ARC FORM (2026-11-12): the helix is whole-revolution G2/G3 moves
+    // with Z riding the arc — a handful of moves, not the ~hundreds of
+    // chords the move-count assertion used to pin
+    const helix = res.moves.filter((m) => m.arc && m.words.z !== undefined);
+    expect(helix.length).toBeGreaterThan(0);
+    for (const m of helix) {
+      expect(m.arc!.cw).toBe(false); // 'cw' rotation = right-hand = CCW ascent
+      expect(Math.hypot(m.arc!.i, m.arc!.j)).toBeCloseTo(1.2, 5);
+    }
     // the radial entry lands on the helix radius: nominal/2 − toolR = 1.2
-    const entry = res.moves.find(
-      (m) => !m.rapid && m.words.x !== undefined && m.words.y !== undefined && m.words.z !== undefined,
-    );
+    const entry = res.moves.find((m) => m.comment === 'radial entry');
     expect(entry).toBeDefined();
     expect(Math.hypot(entry!.words.x!, entry!.words.y!)).toBeCloseTo(1.2, 5);
   });

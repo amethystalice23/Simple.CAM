@@ -309,7 +309,6 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
 
     for (let li = 1; li <= levelCount; li++) {
       const levelRc = rcOfLevel(li);
-      const segs = segmentsPerRevolution(levelRc);
       const approach = at(levelRc + op.safeClearance, 0); // external: outside the boss at angle 0
       const grooveStart = at(levelRc, 0);
       // THE FINAL LEVEL RUNS TWICE — the spring is a full second pass at
@@ -362,42 +361,62 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
         });
         minutes += (target.internal ? levelRc : op.safeClearance) / op.feed;
 
-        // ASCENDING HELIX: revs = depth/lead (fractional ends exactly at
-        // the top), lead/rev — 'ccw' ascends CW from above, 'cw' CCW
+        // ASCENDING HELIX — ARC FORM (2026-11-12, G2/G3): the thread IS an
+        // analytic circle, so the chorded polyline becomes whole-revolution
+        // arcs with Z riding the arc word (the firmware interpolates the
+        // linear axis along the arc — the exact helix, no chord error).
+        // revs may be fractional; floor() whole turns each return to
+        // grooveStart (byte-identical XY — the full-circle form), the
+        // remainder is one partial arc ending exactly at the top.
+        // 'ccw' = left-hand ascends CW viewed from above → arc cw = dir<0.
         const revs = target.depth / lead;
-        const n = Math.max(1, Math.round(revs * segs));
+        const cw = dir < 0;
+        const iOff = target.center.x - grooveStart.x;
+        const jOff = target.center.y - grooveStart.y;
+        const wholeRevs = Math.floor(revs + 1e-9);
+        const frac = revs - wholeRevs;
         let prev = grooveStart;
-        let prevZ = startZ;
-        for (let i = 1; i <= n; i++) {
-          const frac = i / n;
-          const a = dir * 2 * Math.PI * revs * frac;
-          const z = startZ + target.depth * frac;
-          const p = at(levelRc, a);
-          moves.push({ words: { x: p.x, y: p.y, z }, feed: op.feed });
-          minutes += Math.hypot(p.x - prev.x, p.y - prev.y, z - prevZ) / op.feed;
-          prev = p;
-          prevZ = z;
+        for (let r = 1; r <= wholeRevs; r++) {
+          const z = r === wholeRevs && frac <= 1e-9 ? endZ : startZ + lead * r;
+          moves.push({
+            words: { x: grooveStart.x, y: grooveStart.y, z },
+            feed: op.feed,
+            arc: { i: iOff, j: jOff, cw },
+          });
+          minutes += Math.hypot(2 * Math.PI * levelRc, lead) / op.feed;
         }
+        if (frac > 1e-9) {
+          // partial turn: from grooveStart (the last full rev returned
+          // there) around dir·2π·frac to the exact top
+          const end = at(levelRc, dir * 2 * Math.PI * frac);
+          moves.push({
+            words: { x: end.x, y: end.y, z: endZ },
+            feed: op.feed,
+            arc: { i: iOff, j: jOff, cw },
+          });
+          minutes += Math.hypot(2 * Math.PI * levelRc * frac, target.depth - lead * wholeRevs) / op.feed;
+          prev = end;
+        }
+
 
         if (target.internal) {
           if (spiralExit) {
-            // FOLLOW THE SPIRAL OUT: keep the same hand/ascend past the
-            // mouth until the form is clear — tip pitch + 0.5mm above the
-            // face (one groove height + margin), ≤ 1 extra revolution
+            // FOLLOW THE SPIRAL OUT — ARC FORM (2026-11-12): keep the same
+            // hand/ascend past the mouth until the form is clear — tip
+            // pitch + 0.5mm above the face (one groove height + margin),
+            // ≤ 1 extra revolution = ONE arc from the helix's end.
             const extraRevs = Math.min(1, (op.pitch + 0.5) / lead);
-            const en = Math.max(1, Math.round(extraRevs * segs));
-            for (let j = 1; j <= en; j++) {
-              const frac = j / en;
-              const a = dir * 2 * Math.PI * (revs + extraRevs * frac);
-              const z = endZ + extraRevs * lead * frac;
-              const p = at(levelRc, a);
-              moves.push({ words: { x: p.x, y: p.y, z }, feed: op.feed });
-              minutes += Math.hypot(p.x - prev.x, p.y - prev.y, z - prevZ) / op.feed;
-              prev = p;
-              prevZ = z;
-            }
-            // in air above the face at the Rc orbit — straight lift is safe
+            const exitEnd = at(levelRc, dir * 2 * Math.PI * (revs + extraRevs));
             const exitZ = endZ + extraRevs * lead;
+            moves.push({
+              words: { x: exitEnd.x, y: exitEnd.y, z: exitZ },
+              feed: op.feed,
+              arc: { i: target.center.x - prev.x, j: target.center.y - prev.y, cw },
+            });
+            minutes += Math.hypot(2 * Math.PI * levelRc * extraRevs, extraRevs * lead) / op.feed;
+            prev = exitEnd;
+
+            // in air above the face at the Rc orbit — straight lift is safe
             moves.push({ words: { z: Math.max(topSafeZ, exitZ) }, feed: 0, rapid: true });
             if (!lastStart) {
               // next start re-enters from the center
