@@ -286,8 +286,9 @@ describe('movesToSegments — Move.arc tessellation (2026-11-12)', () => {
       { words: { x: 10, y: 0 }, feed: 100, arc: { i: -10, j: 0, cw: false } },
     ];
     const segs = movesToSegmentMoves(moves, null);
-    // 360° at the 15° chord pitch → 24 segments
-    expect(segs.feed.length / 6).toBe(24);
+    // SAGITTA PITCH (Alice, 2026-11-12: "enough that it looks smooth"): r10
+    // at 0.05mm sagitta → 11.46°/chord → 32 segments (finer than the old 15° cap)
+    expect(segs.feed.length / 6).toBe(32);
     // every segment belongs to the arc move (index 1)
     for (const mi of segs.feedMoves) expect(mi).toBe(1);
     // total drawn length ≈ circumference — the unmodified code drew 0

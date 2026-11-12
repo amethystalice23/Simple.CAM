@@ -106,6 +106,9 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
   /** Max degrees of rotation per drawn chord — finer would only cost
    * geometry for no visible gain on a 25mm-scale cylinder. */
   const ROT_STEP_DEG = 15;
+  /** Arc preview sagitta tolerance (Alice, 2026-11-12): chord deviation
+   * from the true arc, mm — 0.05 is invisible at preview scale. */
+  const ARC_SAGITTA_MM = 0.05;
 
   for (const m of moves) {
     // mi = the ARRAY index, 0-based — the same basis the worker's
@@ -156,8 +159,11 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
       // move's START (machine prevM), endpoint = pos.x/y, helical Z rides
       // along. Arcs are flat-frame moves (never an A word) — each sampled
       // point un-rotates by the running accumulated A exactly like the
-      // flat branch below. Chorded at ROT_STEP_DEG, the same pitch the
-      // long rotary sweep subdivides at.
+      // flat branch below. CHORD PITCH (Alice, 2026-11-12: "enough that
+      // it looks smooth"): sagitta-driven — segments sized so the chord
+      // never deviates from the true arc by more than ARC_SAGITTA_MM,
+      // capped at ROT_STEP_DEG (a small radius is already smooth at the
+      // cap; a big radius gets proportionally finer chords).
       const cx = prevM.x + m.arc.i;
       const cy = prevM.y + m.arc.j;
       const r = Math.hypot(prevM.x - cx, prevM.y - cy);
@@ -167,7 +173,9 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
         const closed = Math.hypot(pos.x - prevM.x, pos.y - prevM.y) < 1e-9;
         const dir = m.arc.cw ? -1 : 1;
         const sweep = closed ? dir * 2 * Math.PI : shortestSweep(startA, endA, dir);
-        const n = Math.max(1, Math.ceil((Math.abs(sweep) * 180) / Math.PI / ROT_STEP_DEG));
+        const sagStep = 2 * Math.acos(Math.max(-1, 1 - ARC_SAGITTA_MM / r)) * (180 / Math.PI);
+        const step = Math.min(ROT_STEP_DEG, sagStep);
+        const n = Math.max(1, Math.ceil((Math.abs(sweep) * 180) / Math.PI / step));
         for (let k = 1; k <= n; k++) {
           const t = k / n;
           const ang = startA + sweep * t;

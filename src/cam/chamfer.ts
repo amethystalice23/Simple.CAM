@@ -57,8 +57,17 @@ function signedArea2(pts: Vec2[]): number {
   return a;
 }
 
-/** Tool-center path for one loop, offset toward the cut side. */
-function toolPath(loop: ChamferLoop, side: 'inside' | 'outside', offset: number): Vec2[][] {
+/** Tool-center path for one loop, offset toward the cut side. A circle
+ *  loop returns its analytic circle alongside the sampled polygon (the
+ *  G2/G3 arc emission, 2026-11-12 — the polygon stays the fallback and
+ *  the rotate-to-nearest start source). */
+export interface ChamferPath {
+  pts: Vec2[];
+  /** present only when this path IS the circle (not an offset approximation) */
+  circle?: { cx: number; cy: number; r: number };
+}
+
+function toolPath(loop: ChamferLoop, side: 'inside' | 'outside', offset: number): ChamferPath[] {
   if (loop.kind === 'circle') {
     const r = side === 'inside' ? loop.radius - offset : loop.radius + offset;
     if (r <= 1e-9) throw new Error('chamfer loop is smaller than the tool tip');
@@ -67,16 +76,18 @@ function toolPath(loop: ChamferLoop, side: 'inside' | 'outside', offset: number)
       const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
       pts.push({ x: loop.center.x + r * Math.cos(a), y: loop.center.y + r * Math.sin(a) });
     }
-    return [pts];
+    return [
+      { pts, circle: { cx: loop.center.x, cy: loop.center.y, r } },
+    ];
   }
-  if (offset <= 0) return [loop.points];
+  if (offset <= 0) return [{ pts: loop.points }];
   // clipper's inward offset grows hole-oriented (CW) loops — normalize to
   // CCW so "inside" always means the loop's bounded region, whichever way
   // the detector stitched it
   const ccw = signedArea2(loop.points) >= 0 ? loop.points : [...loop.points].reverse();
   const off = side === 'inside' ? offsetInward([ccw], offset) : offsetOutward([ccw], offset);
   if (off.length === 0) throw new Error('chamfer loop is smaller than the tool tip');
-  return off;
+  return off.map((pts) => ({ pts }));
 }
 
 export function chamfer(op: ChamferOp, tool: Tool): ChamferResult {
@@ -144,7 +155,7 @@ export function chamfer(op: ChamferOp, tool: Tool): ChamferResult {
     const safeZ = (op.direction === 'down' ? loop.z : tipZ) + op.safeClearance;
 
     for (const raw of toolPath(loop, side, shift)) {
-      const path = rotateToNearest(raw, cur);
+      const path = rotateToNearest(raw.pts, cur);
       const start = path[0];
 
       // travel first at the machine's existing height (after a tool change
@@ -166,11 +177,26 @@ export function chamfer(op: ChamferOp, tool: Tool): ChamferResult {
       minutes += APPROACH_CLEARANCE / op.plungeFeed;
 
       let prev = start;
-      for (let i = 1; i <= path.length; i++) {
-        const p = path[i % path.length];
-        moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
-        minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
-        prev = p;
+      if (raw.circle) {
+        // ARC EMISSION (2026-11-12, G2/G3): the sampled polygon was only
+        // ever an approximation of this circle — one full-circle arc cuts
+        // the exact tool-center path. CCW matches the polygon's winding
+        // (sampled with increasing angle), keeping today's cut direction.
+        const c = raw.circle;
+        moves.push({
+          words: { x: start.x, y: start.y },
+          feed: op.feed,
+          arc: { i: c.cx - start.x, j: c.cy - start.y, cw: false },
+          comment: `circular chamfer r${c.r.toFixed(2)}`,
+        });
+        minutes += (2 * Math.PI * c.r) / op.feed;
+      } else {
+        for (let i = 1; i <= path.length; i++) {
+          const p = path[i % path.length];
+          moves.push({ words: { x: p.x, y: p.y }, feed: op.feed });
+          minutes += Math.hypot(p.x - prev.x, p.y - prev.y) / op.feed;
+          prev = p;
+        }
       }
 
       moves.push({ words: { z: safeZ }, feed: 0, rapid: true });

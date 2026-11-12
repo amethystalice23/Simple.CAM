@@ -131,19 +131,25 @@ describe('threadMill — the mill-tested ground truth, replayed', () => {
 
     const pass = pass1(res);
     const helix = pass.g1s.filter(isHelix);
-    // segments per full rev = ceil(2π·8.7616/0.15) = 368 (inside the clamp)
-    expect(helix).toHaveLength(3680); // 10 revs × 368
-    // every helix move carries x, y AND z at the cut feed
-    for (const m of helix) expect(m.feed).toBe(100);
-    // left-hand ascends CW viewed from above: first segment moves −Y
-    expect(helix[0].words.y!).toBeLessThan(0);
-    expect(helix[0].words.x!).toBeCloseTo(8.7616, 2);
-    // z spans exactly bottomZ → topZ, strictly non-decreasing
-    // (the plunge to −10 is pinned above via `plunges`; the radial entry
-    // that opens the pass carries no z)
+    // ARC FORM (2026-11-12, G2/G3): the thread IS an analytic circle, so
+    // 10 revs = 10 whole-turn arc moves — one per revolution, Z riding
+    // the arc word (the exact helix; the 368-segments/rev chord
+    // approximation is gone)
+    expect(helix).toHaveLength(10);
+    for (const m of helix) {
+      expect(m.feed).toBe(100);
+      expect(m.arc).toBeDefined();
+      // full-circle form: every rev returns to the entry point
+      expect(m.words.x).toBeCloseTo(8.7616, 3);
+      expect(m.words.y).toBeCloseTo(0, 6);
+      // |I/J| = the path radius (center offset from the start)
+      expect(Math.hypot(m.arc!.i, m.arc!.j)).toBeCloseTo(8.7616, 3);
+    }
+    // left-hand ('ccw') ascends CW viewed from above
+    expect(helix[0].arc!.cw).toBe(true);
+    // z spans exactly bottomZ → topZ, one lead per revolution
     expect(pass.g1s[0].words.z).toBeUndefined(); // radial entry, planar
-    expect(helix[0].words.z!).toBeGreaterThan(-10);
-    expect(helix[0].words.z!).toBeLessThan(-9.99);
+    expect(helix[0].words.z!).toBeCloseTo(-9, 9);
     expect(helix[helix.length - 1].words.z!).toBeCloseTo(0, 9);
     for (let i = 1; i < helix.length; i++) {
       expect(helix[i].words.z!).toBeGreaterThanOrEqual(helix[i - 1].words.z!);
@@ -164,7 +170,7 @@ describe('threadMill — the mill-tested ground truth, replayed', () => {
     const res = threadMill({ ...op, rotation: 'cw' }, mill);
     const pass = pass1(res);
     const helix = pass.g1s.filter(isHelix);
-    expect(helix[0].words.y!).toBeGreaterThan(0);
+    expect(helix[0].arc!.cw).toBe(false); // CCW ascent — the arc direction flips
     expect(helix[0].words.x!).toBeCloseTo(8.7616, 2);
   });
 });
@@ -229,7 +235,6 @@ describe('threadMill — multi-start', () => {
     const res = threadMill(multiOp, { ...mill15, fluteLength: 20, overallLength: 60, shaftDiameter: 3 });
     const Rc = pathRadius(10, 1.5, 4.75 / 2, 0, false);
     expect(Rc).toBeCloseTo(6.4549, 3);
-    const segs = segmentsPerRevolution(Rc);
 
     // 2 starts × 2 cycles
     const entries = res.moves.filter((m) => m.comment === 'radial entry');
@@ -242,16 +247,16 @@ describe('threadMill — multi-start', () => {
     expect(plungeZ).toEqual([-6, -4.5, -6, -4.5]);
 
     // each helix ascends the full depth in depth/lead = 2 revolutions
-    // (lead = starts × pitch = 3)
+    // (lead = starts × pitch = 3) — ARC FORM: 2 arc moves per helix
     const helix = res.moves.filter(isHelix);
-    expect(helix).toHaveLength(4 * 2 * segs);
+    expect(helix).toHaveLength(4 * 2);
     // start 0 spans −6 → 0, start 1 spans −4.5 → +1.5 (groove 0 shifted up)
-    const span0 = helix.slice(0, 2 * segs);
+    const span0 = helix.slice(0, 2);
     expect(span0[0].words.z!).toBeGreaterThan(-6);
-    expect(span0[2 * segs - 1].words.z!).toBeCloseTo(0, 9);
-    const span1 = helix.slice(2 * segs, 4 * segs);
+    expect(span0[1].words.z!).toBeCloseTo(0, 9);
+    const span1 = helix.slice(2, 4);
     expect(span1[0].words.z!).toBeGreaterThan(-4.5);
-    expect(span1[2 * segs - 1].words.z!).toBeCloseTo(1.5, 9);
+    expect(span1[1].words.z!).toBeCloseTo(1.5, 9);
     expect(res.passes).toBe(2);
   });
 });

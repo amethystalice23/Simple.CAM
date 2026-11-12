@@ -734,6 +734,14 @@ export interface ProfileOp {
   toolId: string;
   contours: Vec2[][];
   /**
+   * Analytic circles annotating the contours (2026-11-12, G2/G3 — the
+   * same annotation PocketOp carries): entry k is the disc behind
+   * contour k. A matched offset loop emits one full-circle arc per
+   * level (tabs/clips at a level keep that level's spans polyline).
+   * Absent = polygon emission, byte-identical to before.
+   */
+  circles?: { cx: number; cy: number; r: number }[];
+  /**
    * The declared stock's XY outer contours (CCW).
    * Present: the wall pass clamps to it — open spans at the stock edge
    * (cut-over OFF). Absent: the loop runs unclipped, kept intact even

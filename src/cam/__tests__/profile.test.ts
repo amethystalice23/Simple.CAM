@@ -539,4 +539,96 @@ describe('profile2d tabs', () => {
     expect(() => profile2d(tabOp({}, { height: 0 }), tool)).toThrowError(/height/);
     expect(() => profile2d(tabOp({}, { length: 0 }), tool)).toThrowError(/length/);
   });
+
+  // ---- ARC WALL PASSES (2026-11-12, G2/G3) ----
+  function circle64(cx: number, cy: number, r: number): Vec2[] {
+    const out: Vec2[] = [];
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      out.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+    }
+    return out;
+  }
+
+  it('an annotated circle wall collapses to continuous ARC descent + one arc lap, climb-oriented', () => {
+    const R = 5;
+    const res = profile2d(
+      op({
+        contours: [circle64(0, 0, R)],
+        circles: [{ cx: 0, cy: 0, r: R }],
+      }),
+      tool,
+    );
+    // the loop qualifies for continuous descent (no tabs/clip, ramp fits)
+    expect(res.continuous).toBe(1);
+    const arcs = res.moves.filter((m) => m.arc);
+    // the whole-revolution helical entry arcs (z-bearing, descending to
+    // the floor) + exactly ONE full-depth lap arc (no z word)
+    const lap = arcs.filter((m) => m.words.z === undefined);
+    expect(lap).toHaveLength(1);
+    const entryArcs = arcs.filter((m) => m.words.z !== undefined);
+    expect(entryArcs.length).toBeGreaterThan(0);
+    for (let k = 1; k < entryArcs.length; k++) {
+      expect(entryArcs[k].words.z!).toBeLessThan(entryArcs[k - 1].words.z!);
+    }
+    expect(entryArcs[entryArcs.length - 1].words.z).toBeCloseTo(-2, 9);
+    // outside a boss: the offset loop is CCW (climb, material on the LEFT)
+    // — the winding names every arc's direction
+    for (const m of arcs) expect(m.arc!.cw).toBe(false);
+    // |I/J| = the offset radius R + toolR (µm clipper loss allowed)
+    for (const m of arcs) expect(Math.hypot(m.arc!.i, m.arc!.j)).toBeCloseTo(R + 1, 1);
+    // no annotation → byte-identical polygon emission
+    const plain = profile2d(op({ contours: [circle64(0, 0, R)] }), tool);
+    expect(plain.moves.some((m) => m.arc)).toBe(false);
+  });
+
+  it('an annotated INSIDE circle (bore) travels CW — the reversed climb loop names the arc', () => {
+    const R = 5;
+    const res = profile2d(
+      op({
+        contours: [circle64(0, 0, R)],
+        circles: [{ cx: 0, cy: 0, r: R }],
+        side: 'inside',
+      }),
+      tool,
+    );
+    const arcs = res.moves.filter((m) => m.arc);
+    expect(arcs.length).toBeGreaterThan(0);
+    for (const m of arcs) {
+      expect(m.arc!.cw).toBe(true); // inside = CW travel, the climb reversal
+      expect(Math.hypot(m.arc!.i, m.arc!.j)).toBeCloseTo(R - 1, 1);
+    }
+  });
+
+  it('tabbed circle levels below the tab top stay polyline spans — only whole-loop levels arc', () => {
+    const R = 5;
+    const res = profile2d(
+      op({
+        contours: [circle64(0, 0, R)],
+        circles: [{ cx: 0, cy: 0, r: R }],
+        tabs: { count: 3, height: 1, length: 2 },
+      }),
+      tool,
+    );
+    // exactly ONE whole-loop level (the one at/above the tab top) arcs:
+    // its full-depth lap (no z word) + its helical arc ENTRY (z-bearing,
+    // descending to that level). The span level below the tab top emits
+    // ZERO arcs — tab spans are open, never circles.
+    const arcs = res.moves.filter((m) => m.arc);
+    const laps = arcs.filter((m) => m.words.z === undefined);
+    expect(laps).toHaveLength(1);
+    const entryArcs = arcs.filter((m) => m.words.z !== undefined);
+    expect(entryArcs.length).toBeGreaterThan(0);
+    for (let k = 1; k < entryArcs.length; k++) {
+      expect(entryArcs[k].words.z!).toBeLessThan(entryArcs[k - 1].words.z!);
+    }
+    // all at the whole-loop level's orbit radius, climb-oriented
+    for (const m of arcs) {
+      expect(m.arc!.cw).toBe(false);
+      expect(Math.hypot(m.arc!.i, m.arc!.j)).toBeCloseTo(R + 1, 1);
+    }
+    // the span level cut 3 tab spans as polylines (z at −2, no arcs)
+    const spanLevelArcs = arcs.filter((m) => m.comment?.includes('span'));
+    expect(spanLevelArcs).toHaveLength(0);
+  });
 });
