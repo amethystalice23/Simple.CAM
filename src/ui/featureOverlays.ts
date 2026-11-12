@@ -157,7 +157,7 @@ export function planeExtents(
 
 /** One manually selected item in measure mode (right-click). */
 export interface MeasurePick {
-  kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain';
+  kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain' | 'thread';
   index: number;
   /** machine-space center used for distance computation */
   center: THREE.Vector3;
@@ -196,6 +196,15 @@ export function pickFromNearest(data: FeatureOverlayData, nearest: NearestFeatur
       center: data.chainMid[nearest.index].clone(),
       color: nearest.color,
       text: data.chainText[nearest.index],
+    };
+  }
+  if (nearest.kind === 'thread') {
+    return {
+      kind: 'thread',
+      index: nearest.index,
+      center: data.threadMid[nearest.index].clone(),
+      color: nearest.color,
+      text: nearest.text,
     };
   }
   return {
@@ -385,9 +394,17 @@ export interface FeatureOverlayData {
     pitch: number;
     turns: number;
   }[];
+  /** per-thread helix samples (machine space, densified) — pickable */
+  threadSamples: THREE.Vector3[][];
+  /** thread hover label anchors */
+  threadMid: THREE.Vector3[];
+  /** thread hover label text */
+  threadText: string[];
 }
 
 /** Model-space point → machine-space point under a transform. */
+const round1 = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(1));
+
 export function transformFn(t: ModelTransform): (v: Vec3) => THREE.Vector3 {
   const rot = new THREE.Quaternion().setFromEuler(
     new THREE.Euler(
@@ -549,6 +566,9 @@ export function buildFeatureOverlayData(
   // thread (x-ray overlay like the chains); hover draws the same helix.
   const threadPos: number[] = [];
   const threads: FeatureOverlayData['threads'] = [];
+  const threadSamples: THREE.Vector3[][] = [];
+  const threadMid: THREE.Vector3[] = [];
+  const threadText: string[] = [];
   for (const t of features.threads) {
     // helix in MODEL space along the detection axis (+X through the
     // model-space origin, the axis Pass 5 measured against), then each
@@ -580,6 +600,12 @@ export function buildFeatureOverlayData(
       pitch: t.pitch,
       turns,
     });
+    threadSamples.push(pts);
+    threadMid.push(pts[Math.floor(pts.length / 2)].clone());
+    threadText.push(
+      `Thread M${round1(t.nominalDiameter)}×${round1(t.pitch)} ${t.rotation}` +
+        (t.internal ? ' internal' : ' external'),
+    );
   }
   const mk = (positions: number[], color: number) => {
     const g = new THREE.BufferGeometry();
@@ -616,11 +642,14 @@ export function buildFeatureOverlayData(
     chainText,
     circleInner,
     threads,
+    threadSamples,
+    threadMid,
+    threadText,
   };
 }
 
 export interface NearestFeature {
-  kind: 'edge' | 'circle' | 'path' | 'radialChain';
+  kind: 'edge' | 'circle' | 'path' | 'radialChain' | 'thread';
   index: number;
   text: string;
   color: number;
@@ -738,7 +767,7 @@ export function findNearestFeatures(
   // the far side and nothing ever selected. Per-sample entries let the
   // gate reach the same circle's visible arc a few entries later.
   const scan = (
-    kind: 'edge' | 'circle' | 'path' | 'radialChain',
+    kind: 'edge' | 'circle' | 'path' | 'radialChain' | 'thread',
     items: Candidate[],
     tolScale: number,
   ): (NearestFeature & { d: number })[] => {
@@ -818,6 +847,19 @@ export function findNearestFeatures(
   }));
   const chainHits = scan('radialChain', chains, 1);
   if (chainHits.length > 0) return chainHits;
+
+  // threads: like chains they ride the surface, and the thread's
+  //  tessellation chords are also edges — the thread (the closed
+  //  feature) must win the hover over its own micro-edges
+  const threadCandidates: Candidate[] = data.threadSamples.map((samples, i) => ({
+    index: i,
+    samples,
+    text: data.threadText[i],
+    color: 0xe0a05a,
+    rep: data.threadMid[i],
+  }));
+  const threadHits = scan('thread', threadCandidates, 1);
+  if (threadHits.length > 0) return threadHits;
 
   const edges: Candidate[] = data.edgeSamples.map((samples, i) => ({
     index: i,

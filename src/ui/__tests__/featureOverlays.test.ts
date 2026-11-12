@@ -604,3 +604,50 @@ describe('findNearestFeatures (the visibility gate fallthrough list)', () => {
     void farIdx;
   });
 });
+
+describe('threads are pickable targets (2026-11-12, Pass 5)', () => {
+  it('hovering the helix snaps the thread with its label', () => {
+    // minimal features object with one thread (the overlay builder reads
+    // only the arrays it draws from)
+    const features = {
+      planes: [],
+      circles: [],
+      edges: [],
+      radialChains: [],
+      threads: [
+        {
+          kind: 'thread' as const,
+          id: 't1',
+          nominalDiameter: 14.05,
+          rootDiameter: 12.9,
+          pitch: 1,
+          rotation: 'ccw' as const,
+          xStart: 10.9,
+          xEnd: 18.5,
+          internal: false,
+        },
+      ],
+      paths: [],
+      faceToPlane: new Int32Array(0),
+      planeLoops: [],
+    };
+    const data = buildFeatureOverlayData(features, identityTransform());
+    expect(data.threadSamples).toHaveLength(1);
+    expect(data.threadText[0]).toContain('M14');
+    expect(data.threadText[0]).toContain('ccw');
+
+    // camera looking at a point on the helix from outside
+    const w = 800, h = 600;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 5000);
+    const pt = data.threadSamples[0][Math.floor(data.threadSamples[0].length / 4)];
+    camera.position.set(pt.x, pt.y + 40, pt.z);
+    camera.lookAt(pt);
+    camera.updateMatrixWorld(true);
+    const ndc = pt.clone().project(camera);
+    const mx = ((ndc.x + 1) / 2) * w;
+    const my = ((1 - ndc.y) / 2) * h;
+    const nearest = findNearestFeature(data, mx, my, camera, w, h);
+    expect(nearest?.kind).toBe('thread');
+    expect(nearest?.text).toContain('ccw');
+  });
+});

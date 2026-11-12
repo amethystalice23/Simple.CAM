@@ -625,7 +625,9 @@ export function Viewport({
                   ? feats?.paths[pick.index]?.id
                   : pick.kind === 'radialChain'
                     ? feats?.radialChains[pick.index]?.id
-                    : feats?.edges[pick.index]?.id;
+                    : pick.kind === 'thread'
+                      ? feats?.threads[pick.index]?.id
+                      : feats?.edges[pick.index]?.id;
           if (id) onToggleSelectRef.current(id);
         }
       }
@@ -634,7 +636,7 @@ export function Viewport({
      * (edge-tracing §5): edges never flash (they carry no facing
      * point); the Ø pick wants circles alone — planes would flash and
      * then bounce anyway. Normal measure mode allows everything. */
-    const pickAllows = (kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain'): boolean => {
+    const pickAllows = (kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain' | 'thread'): boolean => {
       const pk = pickKindRef.current;
       if (!pk) return true;
       // the index-angle pick: every solid feature carries a direction to
