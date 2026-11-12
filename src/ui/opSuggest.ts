@@ -99,8 +99,21 @@ function describePlane(
   const plane = r.feature as { point: Vec3; normal: Vec3 };
   const loops = r.source.features.planeLoops.filter((l) => l.plane === r.index);
   const center = xf(plane.point);
-  const level = Math.abs(dirZ(plane.normal, xf)) >= Z_TOL;
-  const tilt = tiltDeg(plane.normal, xf);
+  // the SIGN gate, not the magnitude (opTargets pocketRegions gates the
+  // same way): a face pointing DOWN at this datum offers nothing — the
+  // round-1 magnitude bug read a far-side/bottom face as "level (up)".
+  const zero = xf({ x: 0, y: 0, z: 0 });
+  const n = xf(plane.normal).sub(zero).normalize();
+  const level = n.z >= Z_TOL;
+  // What rotation about the stock axis CAN fix: the YZ projection of the
+  // normal rotates level at the right A; the X component does not move.
+  // The residual is the tilt that survives EVERY datum angle — a face
+  // tilted along the stock axis can never face the cutter squarely,
+  // however you index (frameGateDiagnosis's 'parallel' is the extreme).
+  const residual = (Math.atan2(Math.abs(n.x), Math.hypot(n.y, n.z)) * 180) / Math.PI;
+  // the datum that rotates the face level (indexToAlignDirection's rule)
+  const indexA = ((((Math.atan2(n.y, n.z) * 180) / Math.PI) % 360) + 360) % 360;
+  const tilt = (Math.acos(Math.min(Math.abs(n.z), 1)) * 180) / Math.PI;
   const ext = planeExtents(r.source.geometry, r.source.features, r.source.transform)[r.index];
   const facts: SuggestFact[] = [
     { label: 'size', value: ext ? `${f1(ext.w)} × ${f1(ext.h)} mm` : 'unmeasured' },
@@ -133,12 +146,27 @@ function describePlane(
       kind: 'chamfer',
       why: 'run a V-bit around this face’s boundary to break its edges',
     });
+  } else if (residual <= 10) {
+    // the tilt lives in the YZ plane — one Index datum removes it
+    if (rotary) {
+      notes.push(
+        `this face is not level in the cutting frame — an Index op at A ${f1(indexA)}° ` +
+          'rotates it level first, then a pocket or chamfer can cut it',
+      );
+    } else {
+      notes.push(
+        'this face is not level in the cutting frame — a pocket or chamfer needs it flat; ' +
+          're-orient the model, or machine a different face',
+      );
+    }
   } else {
     notes.push(
-      'this face is not level in the cutting frame — a pocket or chamfer needs it flat; ' +
-        (rotary
-          ? 'an Index op can rotate it up first'
-          : 're-orient the model, or machine a different face'),
+      rotary
+        ? `this face is tilted ${f1(residual)}° along the stock axis (X) — rotating the stock ` +
+            'cannot remove that tilt, so it can never face the cutter squarely; re-orient the ' +
+            'model to machine it'
+        : `this face is tilted ${f1(residual)}° — it can never face the cutter squarely; ` +
+            're-orient the model, or machine a different face',
     );
   }
   return { kind: 'plane', title: 'Flat face', facts, candidates, notes };

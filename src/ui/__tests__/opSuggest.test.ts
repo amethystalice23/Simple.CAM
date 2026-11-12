@@ -206,8 +206,39 @@ describe('describePickedFeature — planes', () => {
     expect(size?.value).toBe('10.0 × 6.0 mm');
   });
 
-  it('a tilted face offers nothing and points at the Index op', () => {
-    // 30° tilt about Y: normal (sin30, 0, cos30)
+  it('a face pointing AWAY (far side) names the Index angle that rescues it', () => {
+    // normal straight down at A=0 — the bottom of a part. Rotation about
+    // the stock axis brings it level at A=180°
+    const plane: PlaneFeature = {
+      kind: 'plane',
+      id: 'p1',
+      point: { x: 0, y: 0, z: 5 },
+      normal: { x: 0, y: 0, z: -1 },
+    };
+    const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
+    // the SIGN gate (opTargets pocketRegions gates the same way): a
+    // down-face is NOT level-up — nothing is offered without the Index
+    expect(k.candidates).toEqual([]);
+    expect(k.facts.find((f) => f.label === 'faces')?.value).toContain('tilted');
+    expect(k.notes[0]).toContain('Index op at A 180');
+  });
+
+  it('a sideways face names its rescuing Index angle too', () => {
+    // 30° tilt in the YZ plane — the rotatable kind: A=30 brings it level
+    const plane: PlaneFeature = {
+      kind: 'plane',
+      id: 'p1',
+      point: { x: 0, y: 0, z: 5 },
+      normal: { x: 0, y: 0.5, z: Math.cos(Math.PI / 6) },
+    };
+    const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
+    expect(k.candidates).toEqual([]);
+    expect(k.notes[0]).toContain('Index op at A 30');
+  });
+
+  it('a tilt ALONG the stock axis is refused — no datum angle removes it', () => {
+    // 30° tilt about Y: normal (sin30, 0, cos30) — the X component stays
+    // under every rotation, so the face can never face the cutter
     const plane: PlaneFeature = {
       kind: 'plane',
       id: 'p1',
@@ -216,7 +247,19 @@ describe('describePickedFeature — planes', () => {
     };
     const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
     expect(k.candidates).toEqual([]);
-    expect(k.notes[0]).toContain('Index op');
+    expect(k.notes[0]).toContain('cannot remove that tilt');
+  });
+
+  it('a face parallel to the stock axis is refused the same way', () => {
+    const plane: PlaneFeature = {
+      kind: 'plane',
+      id: 'p1',
+      point: { x: 0, y: 0, z: 5 },
+      normal: { x: 1, y: 0, z: 0 },
+    };
+    const k = describePickedFeature(resolved('plane', source({ planes: [plane] }), 0), stock4);
+    expect(k.candidates).toEqual([]);
+    expect(k.notes[0]).toContain('cannot remove that tilt');
   });
 });
 

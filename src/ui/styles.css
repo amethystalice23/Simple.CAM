@@ -354,8 +354,11 @@ button.secondary:disabled:hover { background: #31373e; }
 .op-help-points li::marker { color: var(--kind-color, #4d94c9); }
 
 /* ---- suggest ops (round 1: the picker button + the knowledge sheet) ---- */
-.suggest-btn { background: #31373e; }
-.suggest-btn:hover { background: #3d444d; }
+/* a sibling of + Add toolpath: blue like it, one hue off so the pair
+   reads as two entries of one list (Alice: "make it blue, or a slightly
+   different colour, but style it similar") */
+.suggest-btn { background: #3a5fa8; }
+.suggest-btn:hover { background: #466db8; }
 .suggest-btn.armed { background: #234254; color: #7fd4ff; }
 .suggest-btn.armed:hover { background: #2a4d61; }
 .suggest-modal { width: 440px; }

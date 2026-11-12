@@ -1460,7 +1460,7 @@ export function OpsPanel(props: Props) {
           title="Pick a feature in the viewport — the detector tells you what it measured and which operations could drive it"
           onClick={props.onSuggestOps}
         >
-          {props.suggestArmed ? '◉ picking — click a feature' : 'Suggest ops…'}
+          {props.suggestArmed ? '◉ picking — click a feature' : '+ Suggest toolpath'}
         </button>
       </div>
       {props.ops.length === 0 && (
