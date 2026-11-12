@@ -350,6 +350,21 @@ export function drillTargetsFromSelection(
     const center = xf(up.center);
     targets.push({ x: center.x, y: center.y, topZ: center.z, depth });
   }
+  // selected THREAD features (internal): the tap-size bore center —
+  // the minor-Ø hole the thread mill needs pre-cut
+  for (const t of features.threads) {
+    if (!selection.includes(t.id) || !t.internal) continue;
+    const start = {
+      x: t.axisPoint.x + t.axisDir.x * t.xStart,
+      y: t.axisPoint.y + t.axisDir.y * t.xStart,
+      z: t.axisPoint.z + t.axisDir.z * t.xStart,
+    };
+    const m = xf(start);
+    const key = `t:${t.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push({ x: m.x, y: m.y, topZ: m.z, depth });
+  }
   return targets.length > 0 ? targets : null;
 }
 
@@ -735,6 +750,28 @@ export function threadTargetsFromSelection(
     const axis = new THREE.Vector3(c.axis.x, c.axis.y, c.axis.z);
     if (Math.abs(machineAxisZ(axis, xf)) < DRILL_Z_TOL) continue;
     push(c);
+  }
+
+  // Pass 1b: selected THREAD features (Pass-5 detections) — the
+  // measured thread IS the target: its axis, internal side, span and
+  // nominal radius come straight from the detection
+  for (const t of features.threads) {
+    if (!selection.includes(t.id)) continue;
+    // the up-facing end of the thread span: the axis point nearest the
+    // tool in the current cutting frame
+    const start = {
+      x: t.axisPoint.x + t.axisDir.x * t.xStart,
+      y: t.axisPoint.y + t.axisDir.y * t.xStart,
+      z: t.axisPoint.z + t.axisDir.z * t.xStart,
+    };
+    const startM = xf(start);
+    targets.push({
+      center: { x: startM.x, y: startM.y },
+      internal: t.internal,
+      rimZ: startM.z,
+      radius: t.nominalDiameter / 2,
+    });
+    sawPartial = false; // a detected thread overrides rim-breakage
   }
 
   // Pass 2: selected planes — floors circle-match their rims (the chamfer

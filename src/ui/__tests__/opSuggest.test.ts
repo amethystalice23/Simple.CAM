@@ -13,7 +13,7 @@ import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFea
 import { MAKERA_TOOLS } from '../../core/makeraTools.generated';
 import type { FeatureSource } from '../featureSources';
 import type { ResolvedFeature } from '../featureSources';
-import { createSuggestedOp, describePickedFeature, suggestToolFor } from '../opSuggest';
+import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from '../opSuggest';
 
 const IDENTITY: ModelTransform = {
   position: { x: 0, y: 0, z: 0 },
@@ -511,8 +511,10 @@ describe('createSuggestedOp — the op each ticked suggestion becomes', () => {
     const s = source({ threads: [t] });
     const r = resolved('thread', s, 0);
     const k = describePickedFeature(r, stock4);
-    expect(k.candidates.map((c) => c.kind)).toEqual(['threadMill']);
-    const tm = createSuggestedOp(k.candidates[0], r, [s], stock4, flat, 'delrin', []);
+    // an internal thread offers its tap-size drill first, then the mill
+    expect(k.candidates.map((c) => c.kind)).toEqual(['drill', 'threadMill']);
+    expect(k.candidates[0].why).toContain('tap-size');
+    const tm = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', []);
     expect(tm.kind).toBe('threadMill');
     const tmv = tm as Extract<JobOp, { kind: 'threadMill' }>;
     expect(tmv.featureIds).toEqual(['t1']);

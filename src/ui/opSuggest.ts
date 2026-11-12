@@ -594,13 +594,29 @@ function describeThread(
             why: `cut this thread with the A axis — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'} over its ${f1(t.xEnd - t.xStart)} mm span`,
           },
         ]
-      : [
-          {
-            kind: 'threadMill',
-            internal: t.internal,
-            why: `cut this thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}${t.internal ? ' internal' : ''}`,
-          },
-        ],
+      : t.internal
+        ? [
+            // an internal thread needs its minor-Ø bore pre-cut: the
+            // tap-size hole the mill rides (Alice, 2026-11-12: "it also
+            // needs a drill/pocket op in advance to make the minor
+            // thread diameter")
+            {
+              kind: 'drill',
+              why: `drill the tap-size bore first — Ø${f1(t.rootDiameter)} minor for the ${f1(t.nominalDiameter)}×${f1(t.pitch)} thread`,
+            },
+            {
+              kind: 'threadMill',
+              internal: true,
+              why: `cut the internal thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}`,
+            },
+          ]
+        : [
+            {
+              kind: 'threadMill',
+              internal: false,
+              why: `cut this thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}`,
+            },
+          ],
     notes: [
       {
         text: 'the model already carries the finished thread form — these parameters are measured from it.',
@@ -824,7 +840,11 @@ const WANTS_LARGEST = new Set<JobOp['kind']>([
  *  region (half the smallest extent). Infinity = no Ø constraint. */
 function toolBound(cand: SuggestCandidate, r: ResolvedFeature): number {
   const circleDia = r.kind === 'circle' ? (r.feature as CircleFeature).radius * 2 : null;
-  if (cand.kind === 'drill') return circleDia ?? Infinity;
+  if (cand.kind === 'drill') {
+    // a drill for an internal thread targets the tap-size (minor) Ø
+    if (r.kind === 'thread') return (r.feature as ThreadFeature).rootDiameter;
+    return circleDia ?? Infinity;
+  }
   if (cand.kind === 'threadMill') {
     // a detected THREAD feature: the mill's pitch must match the
     // thread's measured pitch (picked by TOOL_TYPES order), and for an
