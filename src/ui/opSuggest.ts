@@ -83,6 +83,21 @@ export interface FeatureKnowledge {
 }
 
 const f1 = (n: number) => n.toFixed(1);
+const dot3 = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
+/** true when the circle's center lies on the thread's axis line —
+ *  the rim belongs to the threaded feature */
+function coaxialThread(t: ThreadFeature, c: CircleFeature): boolean {
+  const ap = t.axisPoint;
+  const dir = t.axisDir;
+  const w = { x: c.center.x - ap.x, y: c.center.y - ap.y, z: c.center.z - ap.z };
+  const along = dot3(w, dir);
+  const off = {
+    x: w.x - dir.x * along,
+    y: w.y - dir.y * along,
+    z: w.z - dir.z * along,
+  };
+  return Math.hypot(off.x, off.y, off.z) <= 0.3;
+}
 
 /** true when two circles share one axis line (parallel axes, each center
  *  on the other's axis within COMPANION_TOL) — same-Ø companions are one
@@ -168,6 +183,7 @@ export function describePickedFeature(r: ResolvedFeature, stock: Stock): Feature
       describeCircle(
         r.feature as CircleFeature,
         r.source.features.circles,
+        r.source.features.threads,
         r.source.geometry,
         xf,
         rotary,
@@ -286,6 +302,7 @@ function describePlane(
 function describeCircle(
   c: CircleFeature,
   allCircles: CircleFeature[],
+  allThreads: ThreadFeature[],
   geometry: THREE.BufferGeometry,
   xf: (p: Vec3) => THREE.Vector3,
   rotary: boolean,
@@ -340,6 +357,21 @@ function describeCircle(
    *  offers a profile, not an automatic thread. */
   const pushBoreCands = (suffix: string) => {
     if (partial) {
+      // a rim broken by a helical ridge is the signature of a threaded
+      // hole — point the user at the detected thread feature
+      const threadHere = allThreads.find(
+        (t) =>
+          Math.abs(dot3(t.axisDir, c.axis)) /
+            (Math.hypot(t.axisDir.x, t.axisDir.y, t.axisDir.z) *
+              Math.hypot(c.axis.x, c.axis.y, c.axis.z)) >
+            0.999 && coaxialThread(t, c),
+      );
+      if (threadHere) {
+        notes.push({
+          text: 'this rim is broken by the thread cut into this hole — select the amber thread helix for the thread operations.',
+        });
+        return;
+      }
       notes.push({
         text: 'this rim is broken by other features, so its diameter is the reliable measurement here.',
         detail:
@@ -348,7 +380,6 @@ function describeCircle(
       });
       return;
     }
-    const pitch = metricPitch(dia);
     if (stepped === 'floor' && comp) {
       candidates.push({
         kind: 'pocket',
@@ -392,12 +423,11 @@ function describeCircle(
       return;
     }
     if (c.inner) {
+      // thread ops are evidence-gated (Alice, 2026-11-12: offering a
+      // thread on an unthreaded hole is "not appropriate when there
+      // isn't a thread there"): a plain bore rim offers drill + chamfer
+      // only; a modelled thread is picked as its own feature
       candidates.push({ kind: 'drill', why: `drill this bore straight down from the rim${suffix}` });
-      candidates.push({
-        kind: 'threadMill',
-        internal: true,
-        why: `cut an internal thread${pitch ? ` — M${f1(dia)} × ${f1(pitch)}` : ''}`,
-      });
       candidates.push({ kind: 'chamfer', why: 'break this hole’s rim with a V-bit' });
     } else {
       // an outer rim is a boss/round-stock edge: profile it (Alice,
@@ -567,8 +597,8 @@ function describeThread(
       : [
           {
             kind: 'threadMill',
-            internal: false,
-            why: `cut this thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}`,
+            internal: t.internal,
+            why: `cut this thread with a single-profile mill — Ø${f1(t.nominalDiameter)} × ${f1(t.pitch)} ${t.rotation === 'ccw' ? 'ccw' : 'cw'}${t.internal ? ' internal' : ''}`,
           },
         ],
     notes: [
@@ -713,7 +743,7 @@ export function createSuggestedOp(
       nominalDiameter: t.nominalDiameter,
       pitch: t.pitch,
       rotation: t.rotation,
-      internal: false,
+      internal: t.internal,
     } as JobOp;
   }
   if (cand.kind === 'threadMill') {

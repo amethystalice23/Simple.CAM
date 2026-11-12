@@ -776,6 +776,229 @@ export interface DetectAxis {
   dir: Vec3;
 }
 
+/**
+ * Pass 5's per-axis thread scan (2026-11-12): the helical-signature
+ * detector. A CAD-modelled thread defeats every other pass (the helical
+ * surface is neither planar nor circular), but its VERTICES carry a
+ * sharp signature: the radius-about-axis histogram is BIMODAL (root
+ * mode + crest mode), and at the true pitch the wrapped phases
+ * (theta -/+ k*x) of a radius band COLLAPSE into sharp modes — the
+ * tessellation samples the groove at repeating profile stations.
+ * Measured: her M14x1 at pitch 1.000mm; the 3-axis test plate's M6x1
+ * and M4x0.7 at 1.000/0.700mm; plain bores and bosses never reach the
+ * 25% acceptance. Cheap gates (band population) reject non-thread axes
+ * before any pitch scan.
+ */
+export function scanThreadAxis(
+  verts: Vec3[],
+  axisPoint: Vec3,
+  axisDir: Vec3,
+): ThreadFeature | null {
+  const axis = { point: axisPoint, dir: axisDir };
+
+  // (a) radius histogram about the axis, in ROOT-mode sized bins
+  const rOf = (p: Vec3) => radialDistanceToAxis(p, axis);
+  const radii = verts.map((v) => rOf(v));
+  radii.sort((a, b) => a - b);
+  const R_MIN = 0.3; // µm-scale slivers die
+  const BIN = 0.05;
+  const hist = new Map<number, number>();
+  let nKept = 0;
+  for (const r of radii) {
+    if (r < R_MIN) continue;
+    const b = Math.floor(r / BIN);
+    hist.set(b, (hist.get(b) ?? 0) + 1);
+    nKept++;
+  }
+  if (nKept >= 500) {
+    // (b) candidate root bands: one per radius-histogram LOCAL MAX
+    // (a bin taller than both neighbours) with a real population.
+    // CAD tessellations differ: hers lands vertices at discrete
+    // profile stations (modes at root AND crest), the synthetic
+    // ground truth samples the flank uniformly — a single mode-pair
+    // heuristic misses one or the other. Scanning every mode and
+    // letting the phase-collapse decide finds both.
+    const BAND_HALF_WIDTH = 0.08;
+    // mode test: local max in a PLATEAU sense — uniform flank sampling
+    // yields equal neighbours, so accept bin >= both neighbours when at
+    // least one neighbour is smaller (a shoulder edge counts as a mode)
+    const isMode = (b: number): boolean => {
+      const n = hist.get(b) ?? 0;
+      const l = hist.get(b - 1) ?? 0;
+      const r = hist.get(b + 1) ?? 0;
+      return n >= 30 && n >= l && n >= r && (n > l || n > r || (n === l && n > (hist.get(b - 2) ?? 0)) || (n === r && n > (hist.get(b + 2) ?? 0)));
+    };
+    const TWO_PI = Math.PI * 2;
+    const mod2pi = (t: number) => ((t % TWO_PI) + TWO_PI) % TWO_PI;
+    const { u, v } = basis(axis.dir);
+    const sub2 = (p: Vec3) => sub(p, axis.point);
+    let best: { score: number; pitch: number; rootR: number; crestR: number; band: Vec3[] } | null = null;
+    // scan candidates: every mode bin, PLUS the extreme radius bins —
+    // uniform flank tessellation produces no sharp modes, but the
+    // min/max radius bins isolate single profile stations (root/crest)
+    const minBin = Math.min(...hist.keys());
+    const maxBin = Math.max(...hist.keys());
+    for (const [b, n] of hist) {
+      if (!(isMode(b) || b === minBin || b === maxBin) || n < 30) continue;
+      const r0 = (b + 0.5) * BIN;
+      let band = verts.filter((p) => Math.abs(rOf(p) - r0) <= BAND_HALF_WIDTH);
+      if (band.length < 200) continue;
+      // subsample huge bands: the phase scan is O(verts × pitches);
+      // 3000 sampled vertices carry the collapse signal fine
+      if (band.length > 3000) {
+        const step = Math.ceil(band.length / 3000);
+        band = band.filter((_, i) => i % step === 0);
+      }
+      const thetas = band.map((p) => mod2pi(Math.atan2(dot(sub2(p), v), dot(sub2(p), u))));
+      const axisCoord = band.map((p) => dot(sub2(p), axis.dir));
+      for (let pTry = 0.3; pTry <= 6.001; pTry += 0.005) {
+        for (const sign of [1, -1] as const) {
+          const k = TWO_PI / pTry;
+          const phases = thetas.map((t, i) => mod2pi(t - sign * k * axisCoord[i]));
+          phases.sort((a, c) => a - c);
+          // largest 10° circular window (doubled array handles wrap)
+          const W = (10 * Math.PI) / 180;
+          const dbl = [...phases, ...phases.map((ph) => ph + TWO_PI)];
+          let mx = 1;
+          let j = 0;
+          for (let i = 0; i < dbl.length; i++) {
+            while (dbl[i] - dbl[j] > W) j++;
+            mx = Math.max(mx, i - j + 1);
+          }
+          const score = mx / phases.length;
+          if (!best || score > best.score) {
+            best = { score, pitch: pTry, rootR: r0, crestR: 0, band };
+          }
+        }
+      }
+    }
+    // (f) acceptance: a real thread collapses ≥25% of a mode's band
+    // vertices into one window; crests of a plain cylinder or bore
+    // walls scatter (their band never reaches the threshold at any
+    // pitch — measured: bore walls score <0.05, her thread root 0.435)
+    if (best && best.score >= 0.25) {
+      // The collapsing band is either the root OR the crest (both lie
+      // on helices at the same pitch). Partner: the LARGEST-POPULATION
+      // radius mode inside the band's x range on the OTHER side of the
+      // band — extremes would catch shoulder-chamfer sweeps (a step
+      // face samples every radius up to the next Ø); modes land on
+      // the thread's own root/crest stations.
+      const { pitch } = best;
+      const bandX = best.band.map((p) => dot(sub2(p), axis.dir));
+      const xsSorted = [...bandX].sort((a, b2) => a - b2);
+      const xq = (f: number) => xsSorted[Math.min(xsSorted.length - 1, Math.floor(f * (xsSorted.length - 1)))];
+      const xLo = xq(0.02);
+      const xHi = xq(0.98);
+      const subHist = new Map<number, number>();
+      for (const p of verts) {
+        const x = dot(sub2(p), axis.dir);
+        if (x < xLo - 0.05 || x > xHi + 0.05) continue;
+        const r = rOf(p);
+        if (r < R_MIN) continue;
+        const b = Math.floor(r / BIN);
+        subHist.set(b, (subHist.get(b) ?? 0) + 1);
+      }
+      const bandR = best.rootR;
+      let belowBest = 0, aboveBest = 0; // largest mode below / above the band
+      let belowR = -1, aboveR = -1;
+      for (const [b, n] of subHist) {
+        const r0 = (b + 0.5) * BIN;
+        if (Math.abs(r0 - bandR) < 0.1) continue;
+        if (Math.abs(r0 - bandR) > 3) continue; // V-depth sanity
+        if (r0 < bandR && n > belowBest) { belowBest = n; belowR = r0; }
+        if (r0 > bandR && n > aboveBest) { aboveBest = n; aboveR = r0; }
+      }
+      const partnerR = belowBest >= aboveBest ? belowR : aboveR;
+      const rootR = Math.min(bandR, partnerR === -1 ? bandR : partnerR);
+      const crestR = Math.max(bandR, partnerR === -1 ? bandR : partnerR);
+      // (g) hand: which sign collapsed the phases
+      let handSign = 1;
+      {
+        const k = TWO_PI / pitch;
+        let bestConc = 0;
+        for (const sign of [1, -1] as const) {
+          const phases = best.band.map((p, i) =>
+            mod2pi(
+              mod2pi(Math.atan2(dot(sub2(p), v), dot(sub2(p), u))) - sign * k * bandX[i],
+            ),
+          );
+          phases.sort((a, c) => a - c);
+          const W = (10 * Math.PI) / 180;
+          const dbl = [...phases, ...phases.map((ph) => ph + TWO_PI)];
+          let mx = 1;
+          let j = 0;
+          for (let i = 0; i < dbl.length; i++) {
+            while (dbl[i] - dbl[j] > W) j++;
+            mx = Math.max(mx, i - j + 1);
+          }
+          if (mx / phases.length > bestConc) { bestConc = mx / phases.length; handSign = sign; }
+        }
+      }
+      // inliers: vertices in the collapsed modes (≥8% share, ≥3×
+      // uniform) — robust x extent
+      const k = TWO_PI / pitch;
+      const inlierPhase = best.band.map((p, i) =>
+        mod2pi(mod2pi(Math.atan2(dot(sub2(p), v), dot(sub2(p), u))) - handSign * k * bandX[i]),
+      );
+      const B = 24;
+      const bins2 = new Array(B).fill(0);
+      for (const ph of inlierPhase) bins2[Math.min(B - 1, Math.floor((ph / TWO_PI) * B))]++;
+      const mean2 = inlierPhase.length / B;
+      const inliers = inlierPhase
+        .map((ph, i) => ({ ph, i }))
+        .filter(({ ph }) => {
+          const cnt = bins2[Math.min(B - 1, Math.floor((ph / TWO_PI) * B))];
+          return cnt >= inlierPhase.length * 0.08 && cnt >= 3 * mean2;
+        });
+      if (inliers.length >= 200) {
+        const xs = inliers.map((o) => bandX[o.i]).sort((a, b2) => a - b2);
+        const q = (f: number) => xs[Math.min(xs.length - 1, Math.floor(f * (xs.length - 1)))];
+        // the measured helix's phase at x=0: the inlier phases are
+        // MULTI-modal (one mode per tessellation profile station), so
+        // a global circular mean lands between modes. Take the
+        // DOMINANT mode's members and circular-mean those alone.
+        let bi = 0;
+        for (let b2 = 1; b2 < B; b2++) if (bins2[b2] > bins2[bi]) bi = b2;
+        let cMeanX = 0;
+        let cMeanY = 0;
+        let modeN = 0;
+        for (const o of inliers) {
+          if (Math.min(B - 1, Math.floor((inlierPhase[o.i] / TWO_PI) * B)) !== bi) continue;
+          cMeanX += Math.cos(inlierPhase[o.i]);
+          cMeanY += Math.sin(inlierPhase[o.i]);
+          modeN++;
+        }
+        // fallback: no dominant mode (all equal) — mean of everything
+        if (modeN === 0) {
+          for (const o of inliers) {
+            cMeanX += Math.cos(inlierPhase[o.i]);
+            cMeanY += Math.sin(inlierPhase[o.i]);
+          }
+        }
+        const phase0 = Math.atan2(cMeanY, cMeanX);
+        return {
+          kind: 'thread',
+          id: featureId('thread', [rootR, crestR, pitch, handSign]),
+          nominalDiameter: round2(crestR * 2),
+          rootDiameter: round2(rootR * 2),
+          pitch: round2(pitch),
+          rotation: handSign < 0 ? 'ccw' : 'cw',
+          xStart: round2(q(0.01)),
+          xEnd: round2(q(0.99)),
+          internal: false,
+          axisPoint: axis.point,
+          axisDir: axis.dir,
+          basisU: u,
+          basisV: v,
+          phase0,
+          bandRadius: round2(best.rootR),
+        };
+      }
+    }
+  }
+  return null;
+}
+
 export function detectFeatures(
   geometry: THREE.BufferGeometry,
   /** the stock axis in model space — chains chain about it. Absent:
@@ -1384,206 +1607,68 @@ export function detectFeatures(
   // The pass needs an axis: only the stock axis for now (external
   // threads); internal (bore-axis) threads are a follow-up.
   const threads: ThreadFeature[] = [];
-  if (axis) {
-    // (a) radius histogram about the axis, in ROOT-mode sized bins
-    const rOf = (p: Vec3) => radialDistanceToAxis(p, axis);
-    const radii = verts.map((v) => rOf(v));
-    radii.sort((a, b) => a - b);
-    const R_MIN = 0.3; // µm-scale slivers die
-    const BIN = 0.05;
-    const hist = new Map<number, number>();
-    let nKept = 0;
-    for (const r of radii) {
-      if (r < R_MIN) continue;
-      const b = Math.floor(r / BIN);
-      hist.set(b, (hist.get(b) ?? 0) + 1);
-      nKept++;
+  {
+    // (a) the STOCK axis (4-axis): the whole part rotates about it
+    if (axis) {
+      const t = scanThreadAxis(verts, axis.point, axis.dir);
+      if (t) threads.push(t);
     }
-    if (nKept >= 500) {
-      // (b) candidate root bands: one per radius-histogram LOCAL MAX
-      // (a bin taller than both neighbours) with a real population.
-      // CAD tessellations differ: hers lands vertices at discrete
-      // profile stations (modes at root AND crest), the synthetic
-      // ground truth samples the flank uniformly — a single mode-pair
-      // heuristic misses one or the other. Scanning every mode and
-      // letting the phase-collapse decide finds both.
-      const BAND_HALF_WIDTH = 0.08;
-      // mode test: local max in a PLATEAU sense — uniform flank sampling
-      // yields equal neighbours, so accept bin >= both neighbours when at
-      // least one neighbour is smaller (a shoulder edge counts as a mode)
-      const isMode = (b: number): boolean => {
-        const n = hist.get(b) ?? 0;
-        const l = hist.get(b - 1) ?? 0;
-        const r = hist.get(b + 1) ?? 0;
-        return n >= 30 && n >= l && n >= r && (n > l || n > r || (n === l && n > (hist.get(b - 2) ?? 0)) || (n === r && n > (hist.get(b + 2) ?? 0)));
-      };
-      const TWO_PI = Math.PI * 2;
-      const mod2pi = (t: number) => ((t % TWO_PI) + TWO_PI) % TWO_PI;
-      const { u, v } = basis(axis.dir);
-      const sub2 = (p: Vec3) => sub(p, axis.point);
-      let best: { score: number; pitch: number; rootR: number; crestR: number; band: Vec3[] } | null = null;
-      // scan candidates: every mode bin, PLUS the extreme radius bins —
-      // uniform flank tessellation produces no sharp modes, but the
-      // min/max radius bins isolate single profile stations (root/crest)
-      const minBin = Math.min(...hist.keys());
-      const maxBin = Math.max(...hist.keys());
-      for (const [b, n] of hist) {
-        if (!(isMode(b) || b === minBin || b === maxBin) || n < 30) continue;
-        const r0 = (b + 0.5) * BIN;
-        let band = verts.filter((p) => Math.abs(rOf(p) - r0) <= BAND_HALF_WIDTH);
-        if (band.length < 200) continue;
-        // subsample huge bands: the phase scan is O(verts × pitches);
-        // 3000 sampled vertices carry the collapse signal fine
-        if (band.length > 3000) {
-          const step = Math.ceil(band.length / 3000);
-          band = band.filter((_, i) => i % step === 0);
-        }
-        const thetas = band.map((p) => mod2pi(Math.atan2(dot(sub2(p), v), dot(sub2(p), u))));
-        const axisCoord = band.map((p) => dot(sub2(p), axis.dir));
-        for (let pTry = 0.3; pTry <= 6.001; pTry += 0.005) {
-          for (const sign of [1, -1] as const) {
-            const k = TWO_PI / pTry;
-            const phases = thetas.map((t, i) => mod2pi(t - sign * k * axisCoord[i]));
-            phases.sort((a, c) => a - c);
-            // largest 10° circular window (doubled array handles wrap)
-            const W = (10 * Math.PI) / 180;
-            const dbl = [...phases, ...phases.map((ph) => ph + TWO_PI)];
-            let mx = 1;
-            let j = 0;
-            for (let i = 0; i < dbl.length; i++) {
-              while (dbl[i] - dbl[j] > W) j++;
-              mx = Math.max(mx, i - j + 1);
-            }
-            const score = mx / phases.length;
-            if (!best || score > best.score) {
-              best = { score, pitch: pTry, rootR: r0, crestR: 0, band };
-            }
-          }
-        }
+    // (b) every detected circle's own axis line is also a candidate —
+    // internal bore threads and free-standing studs have no stock axis
+    // in a 3-axis job (Alice's test plate: the M6 internal and M4
+    // external were invisible until these ran). Lines are deduped; the
+    // cheap band gates keep non-thread axes near-free.
+    const seenLines: { p: Vec3; d: Vec3 }[] = [];
+    for (const c of circles) {
+      const dl = Math.hypot(c.axis.x, c.axis.y, c.axis.z) || 1;
+      let d = { x: c.axis.x / dl, y: c.axis.y / dl, z: c.axis.z / dl };
+      // canonical direction (positive Z preferred, then X): the hand
+      // is measured in this basis, so two rims of one feature must not
+      // read opposite hands
+      if (d.z < -1e-6 || (Math.abs(d.z) < 1e-6 && d.x < -1e-6)) {
+        d = { x: -d.x, y: -d.y, z: -d.z };
       }
-      // (f) acceptance: a real thread collapses ≥25% of a mode's band
-      // vertices into one window; crests of a plain cylinder or bore
-      // walls scatter (their band never reaches the threshold at any
-      // pitch — measured: bore walls score <0.05, her thread root 0.435)
-      if (best && best.score >= 0.25) {
-        // The collapsing band is either the root OR the crest (both lie
-        // on helices at the same pitch). Partner: the LARGEST-POPULATION
-        // radius mode inside the band's x range on the OTHER side of the
-        // band — extremes would catch shoulder-chamfer sweeps (a step
-        // face samples every radius up to the next Ø); modes land on
-        // the thread's own root/crest stations.
-        const { pitch } = best;
-        const bandX = best.band.map((p) => dot(sub2(p), axis.dir));
-        const xsSorted = [...bandX].sort((a, b2) => a - b2);
-        const xq = (f: number) => xsSorted[Math.min(xsSorted.length - 1, Math.floor(f * (xsSorted.length - 1)))];
-        const xLo = xq(0.02);
-        const xHi = xq(0.98);
-        const subHist = new Map<number, number>();
-        for (const p of verts) {
-          const x = dot(sub2(p), axis.dir);
-          if (x < xLo - 0.05 || x > xHi + 0.05) continue;
-          const r = rOf(p);
-          if (r < R_MIN) continue;
-          const b = Math.floor(r / BIN);
-          subHist.set(b, (subHist.get(b) ?? 0) + 1);
-        }
-        const bandR = best.rootR;
-        let belowBest = 0, aboveBest = 0; // largest mode below / above the band
-        let belowR = -1, aboveR = -1;
-        for (const [b, n] of subHist) {
-          const r0 = (b + 0.5) * BIN;
-          if (Math.abs(r0 - bandR) < 0.1) continue;
-          if (Math.abs(r0 - bandR) > 3) continue; // V-depth sanity
-          if (r0 < bandR && n > belowBest) { belowBest = n; belowR = r0; }
-          if (r0 > bandR && n > aboveBest) { aboveBest = n; aboveR = r0; }
-        }
-        const partnerR = belowBest >= aboveBest ? belowR : aboveR;
-        const rootR = Math.min(bandR, partnerR === -1 ? bandR : partnerR);
-        const crestR = Math.max(bandR, partnerR === -1 ? bandR : partnerR);
-        // (g) hand: which sign collapsed the phases
-        let handSign = 1;
-        {
-          const k = TWO_PI / pitch;
-          let bestConc = 0;
-          for (const sign of [1, -1] as const) {
-            const phases = best.band.map((p, i) =>
-              mod2pi(
-                mod2pi(Math.atan2(dot(sub2(p), v), dot(sub2(p), u))) - sign * k * bandX[i],
-              ),
-            );
-            phases.sort((a, c) => a - c);
-            const W = (10 * Math.PI) / 180;
-            const dbl = [...phases, ...phases.map((ph) => ph + TWO_PI)];
-            let mx = 1;
-            let j = 0;
-            for (let i = 0; i < dbl.length; i++) {
-              while (dbl[i] - dbl[j] > W) j++;
-              mx = Math.max(mx, i - j + 1);
-            }
-            if (mx / phases.length > bestConc) { bestConc = mx / phases.length; handSign = sign; }
-          }
-        }
-        // inliers: vertices in the collapsed modes (≥8% share, ≥3×
-        // uniform) — robust x extent
-        const k = TWO_PI / pitch;
-        const inlierPhase = best.band.map((p, i) =>
-          mod2pi(mod2pi(Math.atan2(dot(sub2(p), v), dot(sub2(p), u))) - handSign * k * bandX[i]),
-        );
-        const B = 24;
-        const bins2 = new Array(B).fill(0);
-        for (const ph of inlierPhase) bins2[Math.min(B - 1, Math.floor((ph / TWO_PI) * B))]++;
-        const mean2 = inlierPhase.length / B;
-        const inliers = inlierPhase
-          .map((ph, i) => ({ ph, i }))
-          .filter(({ ph }) => {
-            const cnt = bins2[Math.min(B - 1, Math.floor((ph / TWO_PI) * B))];
-            return cnt >= inlierPhase.length * 0.08 && cnt >= 3 * mean2;
-          });
-        if (inliers.length >= 200) {
-          const xs = inliers.map((o) => bandX[o.i]).sort((a, b2) => a - b2);
-          const q = (f: number) => xs[Math.min(xs.length - 1, Math.floor(f * (xs.length - 1)))];
-          // the measured helix's phase at x=0: the inlier phases are
-          // MULTI-modal (one mode per tessellation profile station), so
-          // a global circular mean lands between modes. Take the
-          // DOMINANT mode's members and circular-mean those alone.
-          let bi = 0;
-          for (let b2 = 1; b2 < B; b2++) if (bins2[b2] > bins2[bi]) bi = b2;
-          let cMeanX = 0;
-          let cMeanY = 0;
-          let modeN = 0;
-          for (const o of inliers) {
-            if (Math.min(B - 1, Math.floor((inlierPhase[o.i] / TWO_PI) * B)) !== bi) continue;
-            cMeanX += Math.cos(inlierPhase[o.i]);
-            cMeanY += Math.sin(inlierPhase[o.i]);
-            modeN++;
-          }
-          // fallback: no dominant mode (all equal) — mean of everything
-          if (modeN === 0) {
-            for (const o of inliers) {
-              cMeanX += Math.cos(inlierPhase[o.i]);
-              cMeanY += Math.sin(inlierPhase[o.i]);
-            }
-          }
-          const phase0 = Math.atan2(cMeanY, cMeanX);
-          threads.push({
-            kind: 'thread',
-            id: featureId('thread', [rootR, crestR, pitch, handSign]),
-            nominalDiameter: round2(crestR * 2),
-            rootDiameter: round2(rootR * 2),
-            pitch: round2(pitch),
-            rotation: handSign < 0 ? 'ccw' : 'cw',
-            xStart: round2(q(0.01)),
-            xEnd: round2(q(0.99)),
-            internal: false,
-            axisPoint: axis.point,
-            axisDir: axis.dir,
-            basisU: u,
-            basisV: v,
-            phase0,
-            bandRadius: round2(best.rootR),
-          });
-        }
-      }
+      if (
+        seenLines.some(
+          (l) =>
+            Math.abs(Math.abs(dot(l.d, d)) - 1) < 1e-3 &&
+            radialDistanceToAxis(c.center, { point: l.p, dir: l.d }) < 0.3,
+        )
+      )
+        continue;
+      seenLines.push({ p: c.center, d });
+      // candidate vertices: the feature's neighbourhood alone — a
+      // plate's distant material must not enter the radius histogram
+      const limit = Math.max(3, c.radius * 1.6);
+      const near = verts.filter((p) => radialDistanceToAxis(p, { point: c.center, dir: d }) <= limit);
+      const t = scanThreadAxis(near, c.center, d);
+      if (!t) continue;
+      // internal vs external: a COAXIAL circle inside the thread's own
+      // axial span whose radial vote says material sits outside it = a
+      // bore wall = internal. The barrel's on-axis bore rims sit
+      // OUTSIDE the M14's span, so its thread stays external.
+      const internal = circles.some(
+        (o) =>
+          o.id !== c.id &&
+          o.inner &&
+          Math.abs(Math.abs(dot(normalize(o.axis), d)) - 1) < 1e-3 &&
+          radialDistanceToAxis(o.center, { point: c.center, dir: d }) < 0.3 &&
+          (() => {
+            const ao = dot(sub(o.center, t.axisPoint), t.axisDir);
+            return ao >= t.xStart - 0.5 && ao <= t.xEnd + 0.5;
+          })(),
+      );
+      t.internal = internal;
+      // dedupe: the same thread may be found from the stock axis and a
+      // coaxial circle (the barrel) — same line + same root + same pitch
+      const dupe = threads.some(
+        (x) =>
+          Math.abs(Math.abs(dot(normalize(x.axisDir), d)) - 1) < 1e-3 &&
+          radialDistanceToAxis(t.axisPoint, { point: x.axisPoint, dir: x.axisDir }) < 0.3 &&
+          Math.abs(x.rootDiameter - t.rootDiameter) < 0.2 &&
+          Math.abs(x.pitch - t.pitch) < 0.05,
+      );
+      if (!dupe) threads.push(t);
     }
   }
 

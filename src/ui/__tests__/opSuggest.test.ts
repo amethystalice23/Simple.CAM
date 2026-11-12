@@ -73,7 +73,7 @@ function resolved(
 }
 
 describe('describePickedFeature — circles', () => {
-  it('a full vertical hole rim offers drill, internal thread, chamfer', () => {
+  it('a full vertical hole rim offers drill and chamfer — the thread op needs evidence', () => {
     const c: CircleFeature = {
       kind: 'circle',
       id: 'c1',
@@ -85,9 +85,9 @@ describe('describePickedFeature — circles', () => {
     const s = source({ circles: [c] });
     const k = describePickedFeature(resolved('circle', s, 0), stock4);
     expect(k.title).toBe('Ø6.0 hole rim');
-    expect(k.candidates.map((x) => x.kind)).toEqual(['drill', 'threadMill', 'chamfer']);
-    // the metric pitch rides the offer: an M6 rim threads at 1.0
-    expect(k.candidates[1].why).toContain('M6.0 × 1.0');
+    // thread ops are evidence-gated: a plain rim offers drill + chamfer;
+    // the threadMill comes from the detected thread feature's own sheet
+    expect(k.candidates.map((x) => x.kind)).toEqual(['drill', 'chamfer']);
     expect(k.notes).toEqual([]);
   });
 
@@ -184,7 +184,7 @@ describe('describePickedFeature — circles', () => {
       inner: true,
     };
     const k = describePickedFeature(resolved('circle', source({ circles: [c] }), 0), stock4);
-    expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'drill', 'threadMill', 'chamfer']);
+    expect(k.candidates.map((x) => x.kind)).toEqual(['index', 'drill', 'chamfer']);
     expect(k.candidates[0].angle).toBe(90);
     expect(k.notes[0].text).toContain('keep it checked');
   });
@@ -302,7 +302,7 @@ describe('describePickedFeature — stepped rims (indent vs chamfered bore)', ()
     const s = source({ circles });
     s.geometry = geometry;
     const k = describePickedFeature(resolved('circle', s, 1), stock4);
-    expect(k.candidates.map((x) => x.kind)).toEqual(['drill', 'threadMill', 'chamfer']);
+    expect(k.candidates.map((x) => x.kind)).toEqual(['drill', 'chamfer']);
   });
 });
 
@@ -488,33 +488,38 @@ describe('createSuggestedOp — the op each ticked suggestion becomes', () => {
     expect((bare as Extract<JobOp, { kind: 'pocket' }>).endDepth).toBe(5);
   });
 
-  it('a vertical M6 rim: the thread mill arrives fully specified', () => {
-    const c: CircleFeature = {
-      kind: 'circle',
-      id: 'c1',
-      center: { x: 3, y: 4, z: 28 },
-      axis: { x: 0, y: 0, z: 1 },
-      radius: 3,
-      inner: true,
+  it('a detected M6 thread: the thread mill arrives fully specified', () => {
+    // the thread op is evidence-gated: it comes from a DETECTED thread
+    // feature (off the stock axis), prefilled with the measurements
+    const t: ThreadFeature = {
+      kind: 'thread',
+      id: 't1',
+      nominalDiameter: 6,
+      rootDiameter: 4.9,
+      pitch: 1,
+      rotation: 'ccw',
+      xStart: 0,
+      xEnd: 5,
+      internal: true,
+      axisPoint: { x: 3, y: 4, z: 0 },
+      axisDir: { x: 0, y: 0, z: 1 },
+      basisU: { x: 1, y: 0, z: 0 },
+      basisV: { x: 0, y: 1, z: 0 },
+      phase0: 0,
+      bandRadius: 2.45,
     };
-    const s = source({ circles: [c] });
-    const r = resolved('circle', s, 0);
+    const s = source({ threads: [t] });
+    const r = resolved('thread', s, 0);
     const k = describePickedFeature(r, stock4);
-    const tm = createSuggestedOp(k.candidates[1], r, [s], stock4, flat, 'delrin', []);
+    expect(k.candidates.map((c) => c.kind)).toEqual(['threadMill']);
+    const tm = createSuggestedOp(k.candidates[0], r, [s], stock4, flat, 'delrin', []);
     expect(tm.kind).toBe('threadMill');
-    const t = tm as Extract<JobOp, { kind: 'threadMill' }>;
-    expect(t.featureIds).toEqual(['c1']);
-    expect(t.internal).toBe(true);
-    expect(t.nominalDiameter).toBe(6);
-    expect(t.pitch).toBe(1);
-    expect(t.startDepth).toBe(2); // crown 30 − rim 28
-    // drill keeps its defaults (not depth-bearing): first-click parity
-    const drill = createSuggestedOp(k.candidates[0], r, [s], stock4, flat, 'delrin', []) as Extract<
-      JobOp,
-      { kind: 'drill' }
-    >;
-    expect(drill.featureIds).toEqual(['c1']);
-    expect(drill.depth).toBe(5);
+    const tmv = tm as Extract<JobOp, { kind: 'threadMill' }>;
+    expect(tmv.featureIds).toEqual(['t1']);
+    expect(tmv.internal).toBe(true);
+    expect(tmv.nominalDiameter).toBe(6);
+    expect(tmv.pitch).toBe(1);
+    expect(tmv.rotation).toBe('ccw');
   });
 
   it('an around-axis rim prefills the rotary face target Ø', () => {
@@ -587,10 +592,8 @@ describe('suggestToolFor — the tool each suggestion would run with', () => {
   });
 
   it('an internal thread mill must clear the minor Ø — and be a thread mill', () => {
-    const { r, k } = rim6(); // M6 × 1 → minor ≈ 4.9, bound ≈ 4.4
-    const tm = k.candidates[1];
-    expect(tm.kind).toBe('threadMill');
-    expect(tm.internal).toBe(true);
+    const { r } = rim6(); // M6 × 1 → minor ≈ 4.9, bound ≈ 4.4
+    const tm: SuggestCandidate = { kind: 'threadMill', internal: true, why: '' };
     // threadMill generation requires a real thread-mill type tool: a Ø5
     // one in use that cannot tilt inside the bore, and no fitting thread
     // mill anywhere → NO suggestion (the generator's own gate, mirrored)
@@ -630,7 +633,7 @@ describe('suggestToolFor — the tool each suggestion would run with', () => {
 
   it('chamfer wants a V-bit even when flats are in use', () => {
     const { r, k } = rim6();
-    const s = suggestToolFor(k.candidates[2], r, [flat3], library);
+    const s = suggestToolFor(k.candidates[1], r, [flat3], library);
     expect(s?.tool.id).toBe('v1');
     expect(s?.inUse).toBe(false);
   });

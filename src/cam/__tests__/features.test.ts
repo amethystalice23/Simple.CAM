@@ -1085,3 +1085,86 @@ describe('detectFeatures: threads (Pass 5)', () => {
     expect(f2.threads).toHaveLength(0);
   });
 });
+
+describe('detectFeatures: threads on candidate axes (3-axis)', () => {
+  /** plate 20×20×4 with a vertical threaded stud and a threaded bore —
+   *  no stock axis passed (the 3-axis path): the scan must run from
+   *  the DETECTED circles' own axis lines. */
+  function threadedPlate(): THREE.BufferGeometry {
+    // closed solid: outer wall at r=5 around (5,5), helical bore
+    // Ø5.4→Ø6.55 (an M6-ish internal thread), annulus caps at z=0 and
+    // z=4 — the caps' inner rims are the circles that seed the
+    // candidate axis (exactly Alice's test plate topology)
+    const pts: number[] = [];
+    const R_MIN = 2.7; // ridge crest (the drilled bore wall)
+    const R_MAX = 3.275; // groove bottom
+    const pitch = 1.0;
+    const height = 4;
+    const segs = 96;
+    const rOf = (z: number, th: number) => {
+      const w = ((z / pitch - th / (2 * Math.PI)) % 1 + 1) % 1;
+      return R_MIN + (R_MAX - R_MIN) * Math.abs(2 * w - 1);
+    };
+    const C = 5;
+    const B = (r: number, th: number, z: number) =>
+      [C + Math.cos(th) * r, C + Math.sin(th) * r, z] as [number, number, number];
+    // GRID tessellation (ring × segment): the phase w depends on BOTH
+    // θ and z — a lockstep sweep (z tied to θ per step) changes the
+    // lead; the grid keeps the groove helical at the true pitch
+    const rings = 24 * height; // axial rings
+    const vert = (k: number, j: number) => {
+      const th = (k * 2 * Math.PI) / segs;
+      const z = (j * height) / rings;
+      return B(rOf(z, th), th, z);
+    };
+    for (let j = 0; j < rings; j++) {
+      for (let k = 0; k < segs; k++) {
+        const a = vert(k, j), b = vert(k + 1, j), c = vert(k + 1, j + 1), d = vert(k, j + 1);
+        pts.push(...a, ...b, ...c);
+        pts.push(...a, ...c, ...d);
+      }
+    }
+    // outer wall at r=5 (plain cylinder)
+    for (let i = 0; i < segs; i++) {
+      const t0 = (i * 2 * Math.PI) / segs;
+      const t1 = ((i + 1) * 2 * Math.PI) / segs;
+      pts.push(...B(5, t0, 0), ...B(5, t1, 0), ...B(5, t1, height));
+      pts.push(...B(5, t0, 0), ...B(5, t1, height), ...B(5, t0, height));
+    }
+    // caps: annulus from the bore wall out to r=5, at z=0 and z=height
+    for (const z of [0, height] as const) {
+      const dir = z === 0 ? -1 : 1; // winding: bottom CW seen from +z
+      for (let i = 0; i < segs; i++) {
+        const t0 = (i * 2 * Math.PI) / segs;
+        const t1 = ((i + 1) * 2 * Math.PI) / segs;
+        const ri0 = rOf(z, t0);
+        const ri1 = rOf(z, t1);
+        if (dir < 0) {
+          pts.push(...B(ri0, t0, z), ...B(5, t1, z), ...B(5, t0, z));
+          pts.push(...B(ri0, t0, z), ...B(ri1, t1, z), ...B(5, t1, z));
+        } else {
+          pts.push(...B(ri0, t0, z), ...B(5, t0, z), ...B(5, t1, z));
+          pts.push(...B(ri0, t0, z), ...B(5, t1, z), ...B(ri1, t1, z));
+        }
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+    return g;
+  }
+
+  it('finds a bore-axis thread with no stock axis (3-axis candidate axes)', () => {
+    const geo = threadedPlate();
+    const f = detectFeatures(geo); // NO axis — the 3-axis path
+    expect(f.threads.length).toBeGreaterThanOrEqual(1);
+    const t = f.threads[0];
+    expect(t.pitch).toBeCloseTo(1.0, 1);
+    expect(t.internal).toBe(true); // a bore wall thread
+  });
+
+  it('a plain cylinder plate carries no threads in 3-axis', () => {
+    const geo = new THREE.BoxGeometry(20, 20, 4).toNonIndexed();
+    const f = detectFeatures(geo);
+    expect(f.threads).toHaveLength(0);
+  });
+});
