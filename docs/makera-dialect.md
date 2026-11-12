@@ -344,10 +344,15 @@ code copied). Two versions matter:
   match commanded surface speed. This is the mechanism PLAN.md's
   "radius-aware G94 surface-speed compensation" refers to.
 
-### G2/G3 arcs (`Robot.cpp:613-614, 1292, 2087-2265`) — firmware-read 2026-11-12, NOT corpus-verified
+### G2/G3 arcs (`Robot.cpp:613-614, 1292, 2087-2265`) — firmware-read 2026-11-12, MACHINE-VERIFIED 2026-11-12
 
-The corpus has zero G2/G3 — this section comes from the firmware source,
-and everything here is pending the air-cut test (probes/arc-aircut-test.nc).
+Corpus has zero G2/G3; this section was written from the firmware source
+and then **verified on the machine** (Alice, 2026-11-12: the community
+controller's preview rendered partial arcs, both full-circle directions,
+and a G91 helical correctly, and the machine traced them — tool head
+describing the same arcs, circles and spiral; test file
+probes/arc-aircut-test.nc, run with the z-probe's red pointer at park
+height).
 
 - **I/J/K offset form ONLY.** `process_move` reads I/J/K into the arc
   offset (Robot.cpp:1292-1296); R is never parsed as an arc radius (its
@@ -484,10 +489,6 @@ blocks — worth keeping as a fallback emission mode).
 
 ## Open questions
 
-- **G2/G3 machine verification** (2026-11-12): every fact in the arcs
-  section is firmware-read, not corpus-verified. The gate:
-  probes/arc-aircut-test.nc — partial arcs, both full-circle directions,
-  helical descent. Results to note here once cut.
 - The Z1's **epsilon axis** (`config_z1.default`, 5th actuator, max rate
   100): what it drives (B-axis? ATC?) and whether it can appear in G-code
   as B words. No Z1 machine profile constants in the controller reference
