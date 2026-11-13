@@ -2320,6 +2320,14 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `${ballStrips.centerDodges} stance(s) dodged to the window center — parked stance clipped, re-verdicted against the mesh`,
           );
         }
+        // STAGE 1.1 (the horse's nose): contact discontinuities between
+        // adjacent cells split the strips honestly — each side re-enters
+        // with its own verified plunge. Named, never silent.
+        if (ballStrips && ballStrips.breaks > 0) {
+          notes.push(
+            `${ballStrips.breaks} strip break(s) at contact discontinuities — split, re-entered per side`,
+          );
+        }
         return {
           moves,
           minutes,

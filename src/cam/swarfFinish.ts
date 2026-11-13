@@ -891,6 +891,14 @@ export function segmentBallStrips(o: SegmentBallStripsOptions): SegmentBallStrip
           breaks++; // the emitter must never wrap a step this large
           break;
         }
+        // STAGE 1.1 (the horse's nose, 2026-11-13): the chord re-verdict —
+        // adjacent clear cells with verified stances can still hide a
+        // contact discontinuity between them (the ridge class); refuse
+        // the step and split the strip rather than mow through it
+        if (ballChordClips(clipCtx, stripCells[stripCells.length - 1], runningA, ci, att)) {
+          breaks++;
+          break;
+        }
       }
       visited[ci] = 1;
       stripCells.push(ci);
@@ -1417,6 +1425,24 @@ function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
 function ballCellClips(ctx: BallClipCtx, ci: number, attitudeDeg: number): boolean {
   const c = ctx.map.cells[ci];
   const C = ballToolCenterAt(c.p, c.n, ctx.toolR, ctx.axisZ, attitudeDeg);
+  return ballBandsClip(ctx, C, attitudeDeg, 1e-3, c.p);
+}
+
+/**
+ * The shared two-band capsule-vs-mesh test at ONE machine tool pose: the
+ * ball center C at machine attitude `attitudeDeg`, both bands swept up the
+ * tool axis. `epsilon` is the graze allowance (band radius − closest mesh
+ * distance must exceed it to count as a clip); `excludeP`, when present, is
+ * a material-frame point whose contact neighborhood is legal touch, not
+ * collision (the cell's own contact).
+ */
+function ballBandsClip(
+  ctx: BallClipCtx,
+  C: { x: number; y: number; z: number },
+  attitudeDeg: number,
+  epsilon: number,
+  excludeP?: { x: number; y: number; z: number },
+): boolean {
   const rotBack = indexedPointRotation(-attitudeDeg, ctx.axisZ);
   ctx.segStart.copy(rotBack({ x: C.x, y: C.y, z: C.z }));
   ctx.segMid.copy(rotBack({ x: C.x, y: C.y, z: C.z + ctx.toolR }));
@@ -1448,12 +1474,15 @@ function ballCellClips(ctx: BallClipCtx, ci: number, attitudeDeg: number): boole
         if (hit) return true;
         // the contacted neighborhood exclusion first (cheap): the
         // touched face's own fan is legal contact, not collision
-        if (t.distanceToPoint(ctx.p3.set(c.p.x, c.p.y, c.p.z)) < ctx.exclusionR) {
+        if (
+          excludeP !== undefined &&
+          t.distanceToPoint(ctx.p3.set(excludeP.x, excludeP.y, excludeP.z)) < ctx.exclusionR
+        ) {
           return false;
         }
         const d = t.closestPointToSegment(ctx.seg, ctx.closest);
-        // 1 µm graze epsilon: exact-tangent triangles are legal contact
-        if (d < r - 1e-3) {
+        // graze allowance: exact-tangent triangles are legal contact
+        if (d < r - epsilon) {
           hit = true;
           return true;
         }
@@ -1462,6 +1491,53 @@ function ballCellClips(ctx: BallClipCtx, ci: number, attitudeDeg: number): boole
     });
   }
   return hit;
+}
+
+/**
+ * STAGE 1.1 — the CHORD RE-VERDICT (2026-11-13, "chunks out of the horse's
+ * nose"): the emitter draws ONE straight machine-space move between two
+ * verified stances, and grid adjacency says nothing about the CONTACTS
+ * themselves — on a thin ridge, adjacent rays land on opposite levels
+ * (measured 15mm apart on her knight), both stances verify clear at the
+ * SAME parked A, and the straight chord then mows straight through the
+ * ridge (measured: full tool radius, deliberate-looking, unflagged — the
+ * marks judge intent against standing stock, not the model). Sample the
+ * interpolated center path (the emitter's own linear interpolation, both
+ * bands) and refuse the step when any interior sample clips deeper than
+ * CHORD_EPS: a depth NO locally-smooth step-bounded chord can produce
+ * (the polyline sagitta class, measured ≤ ~0.15mm at stepOver 1.6), but
+ * every measured real crossing exceeds (0.3–1.58mm). The strip breaks
+ * HONESTLY — each side re-enters with its own verified plunge, the same
+ * split the walk already makes at gaps and fold pairs. No exclusion: an
+ * interior sample has no legal contact of its own; anything it touches
+ * deeper than the sagitta allowance is unintended.
+ */
+const CHORD_SAMPLE_EPS = 0.3;
+const CHORD_SAMPLES = [0.25, 0.5, 0.75] as const;
+
+function ballChordClips(
+  ctx: BallClipCtx,
+  fromCi: number,
+  fromAtt: number,
+  toCi: number,
+  toAtt: number,
+): boolean {
+  const a0 = ctx.map.cells[fromCi];
+  const a1 = ctx.map.cells[toCi];
+  const c0 = ballToolCenterAt(a0.p, a0.n, ctx.toolR, ctx.axisZ, fromAtt);
+  const c1 = ballToolCenterAt(a1.p, a1.n, ctx.toolR, ctx.axisZ, toAtt);
+  for (const t of CHORD_SAMPLES) {
+    const C = {
+      x: c0.x + (c1.x - c0.x) * t,
+      y: c0.y + (c1.y - c0.y) * t,
+      z: c0.z + (c1.z - c0.z) * t,
+    };
+    // the machine attitude interpolates with the move, exactly as the
+    // controller replays the modal words
+    const att = fromAtt + (toAtt - fromAtt) * t;
+    if (ballBandsClip(ctx, C, att, CHORD_SAMPLE_EPS, undefined)) return true;
+  }
+  return false;
 }
 
 export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {

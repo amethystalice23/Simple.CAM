@@ -2325,3 +2325,63 @@ describe('segmentBallStrips — the offset sphere (the fragmentation fix, measur
     }
   });
 });
+
+describe('segmentBallStrips — Stage 1.1: the ridge step (the chord re-verdict)', () => {
+  // THE HORSE'S NOSE (2026-11-13), in miniature: two shelves 10mm apart in
+  // Z joined by a thin wall, all normals up (φ ≈ 0, one parked stance) —
+  // adjacent x-columns across the wall ray-land on OPPOSITE LEVELS, both
+  // stances verify clear, and the straight chord between them mows
+  // through the wall. Before Stage 1.1 the walk chained them into ONE
+  // strip (the measured full-radius field bites); now the chord
+  // re-verdict must split the strip at the wall and re-enter each side
+  // with its own verified plunge.
+  const high = new THREE.BoxGeometry(6, 4, 4).translate(-3, 0, AXIS_Z + 13); // top z+15
+  const low = new THREE.BoxGeometry(6, 4, 4).translate(3, 0, AXIS_Z + 3); // top z+5
+  const wall = new THREE.BoxGeometry(0.6, 4, 10).translate(0, 0, AXIS_Z + 10); // z+5..15
+  const positions = new Float32Array([...attr(high), ...attr(low), ...attr(wall)]);
+  const tool = { ...TOOL(4, 20), type: 'ball' as const, shaftDiameter: 3.175 };
+  const map = buildContactMap({
+    positions,
+    x0: -7,
+    x1: 7,
+    radius: 16,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const verdict = ballClearanceCheck({ positions, tool, map, axisZ: AXIS_Z, radius: 16 });
+  const res = segmentBallStrips({
+    positions,
+    tool,
+    map,
+    axisZ: AXIS_Z,
+    radius: 16,
+    verdict,
+    startA: 0,
+  });
+
+  it('no strip mixes the two shelf levels — the chord never crosses the wall', () => {
+    // the regression property: any strip chaining high into low contains
+    // contacts 10mm apart in Z with one straight move between them
+    for (const strip of res.patches) {
+      const levels = strip.cells.map((ci) => map.cells[ci].p.z - AXIS_Z);
+      const spread = Math.max(...levels) - Math.min(...levels);
+      expect(spread).toBeLessThan(3); // shelves are 10 apart — no mix
+    }
+  });
+
+  it('the split fired honestly (breaks counted) and both levels still cover', () => {
+    expect(res.breaks).toBeGreaterThan(0);
+    const swept = new Set(res.patches.flatMap((p) => p.cells));
+    expect(swept.size).toBe([...swept].length); // no duplicates
+    const clear = new Set<number>();
+    verdict.forEach((v, ci) => {
+      if (v === FLUTE_CLEAR) clear.add(ci);
+    });
+    for (const ci of clear) expect(swept.has(ci)).toBe(true); // none dropped
+    expect(swept.size).toBeGreaterThan(0);
+    // and the high level specifically survived (the fixture is not vacuous)
+    const highCells = [...clear].filter((ci) => map.cells[ci].p.z - AXIS_Z > 10);
+    expect(highCells.length).toBeGreaterThan(0);
+    for (const ci of highCells) expect(swept.has(ci)).toBe(true);
+  });
+});
