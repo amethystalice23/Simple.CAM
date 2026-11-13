@@ -720,7 +720,15 @@ the SELECTOR is per-op — the trigger depends on what each op knows):**
   load, and trochoids would ADD time. Adaptive is a G94 flat-world
   tool.
 
-**BUILD STATE (steps 1–3 landed 2026-11-13, branch `feat/adaptive-clearing`):**
+**BUILD STATE (steps 1–3 landed 2026-11-13, branch `feat/adaptive-clearing`;
+step 4 DEFERRED, Alice's call 2026-11-13: she has no deep-pocket jobs to
+tune on and won't spend scarce machine time calibrating a mode she rarely
+uses — the first-cut constants ARE the shipped values, and the clamps make
+them conservative-by-construction: the derived rates can never leave the
+material's measured DOC/chip-load bands, so untuned means slower-than-
+optimal, never harder than the presets. Revisit ONLY if a real deep-pocket
+job ever shows the numbers reading badly — the corner nibble and
+trochoidal slotting stay in the same deferred bag):**
 selector + emitter + replay wired into `pocket2d`; 1226/1226 green.
 Step 3 — derived rates: `cutAdvisor.derivedTrochoidRates` is the single
 pure source (scale = min(3, 0.5·Ø/ae); step-down clamped by flute length
