@@ -693,14 +693,19 @@ the SELECTOR is per-op — the trigger depends on what each op knows):**
   roughing work, not pocket v1.
 - **Slice pocket** — inherits automatically: routes through the same
   pocket generation.
-- **Profile with clear-to-stock — DEFERRED, and honestly NOT the
-  same mechanism.** A deep profile through solid stock is a
-  full-width SLOT (profile is one radial pass per level today,
-  multi-radial is a noted later refinement) — the classic
-  desktop broken-bit case, but there is no AREA to orbit in. The
-  candidate mechanism is trochoidal SLOTTING (loops along the wall
-  line, reusing the emitter's loop primitive), taken up only if real
-  jobs break bits there.
+- **Profile with clear-to-stock — INHERITS AUTOMATICALLY, via the
+  decomposition Alice spotted (2026-11-13): the op is ALREADY two
+  parts, and only one of them is a wall pass.** `clearanceResult`
+  (jobGeneration) routes the excess frame (`stockFootprint −
+  keepOut`) through `pocket2d` over the same z ladder — so the bulk
+  clear adopts the trochoid engine with ZERO extra wiring; the same
+  pattern as the waterline's per-level clearing (band pass + area
+  clear → pocket2d). What stays outside the engine is only the
+  single-width WALL GROOVE itself — the deliberate pass that gives
+  the boss its face; ramp entry bounds its entry load, and a
+  one-tool slot has no room to orbit. Trochoidal SLOTTING of that
+  groove (loops along the wall line) stays a deferred candidate,
+  taken up only if real jobs break bits there.
 - **Rotary ops (face cylinder, spiral carve) — NEVER.** RPM-capped
   (6.6°/s ceiling, G93 world): the bottleneck is A-speed, not chip
   load, and trochoids would ADD time. Adaptive is a G94 flat-world
