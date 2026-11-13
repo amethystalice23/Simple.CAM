@@ -1224,6 +1224,87 @@ is a mechanism choice at the revisit. (5) The 64 yellow = no rough at
 final size, the documented workflow class. NEXT FOCUS (her word):
 the basic, immediately useful LASER ENGRAVING modes.
 
+### 4D finishing TRACES — the staged corridor/strip plan (SPEC 2026-11-13, branch `feat/4d-finish-traces`; takes filed item 1)
+
+Committee 2026-11-13, five workers (minimal-diff, spec-re-read,
+alternative-mechanism, adversary ×2 — the instrument-first seat was
+lost to a classifier-denied spawn and every member ran probes anyway),
+all five probe-backed, adjudicated staged in the main session.
+
+**Diagnosis (shared by all five, comparator verified in main):**
+the patch planner fragments for two stacked reasons. (a) The walk's
+own comparator: `walkComponent`'s neighbor test reads a sub-noise
+BACKWARD dip (−ε) as ~360° "behind" through the plain mod-360
+forward-delta and rejects a neighbor that should be visited — on any
+slowly-drifting smooth trace facet noise produces such dips
+constantly → stall → fold → new pass (a 0.02° noise-ε in the same
+walk: 3,338 passes → 210, max 5,125 cells on a smooth ellipsoid
+fixture); plus a 0/360 seam artifact. (b) The BALL window (±~72° at
+floor 0.3) is treated as a point: the merge tolerance (2× θ-row
+pitch ≈ 7°) shatters wherever normals wobble faster than that —
+her knight's class. FLANK/CORN fragmentation is geometry-forced
+(honest negative, probed): the exact-alignment envelope leaves the
+flank walk essentially correct, untouched by this work.
+
+**Field survey (live research, 2026-11-13):** RotatoCam — spiral
+finishing (helix around the axis, tool vertical) + Pro helical
+finishing + 3+1 indexed surfacing (grblHAL/GRBL/LinuxCNC). Vectric —
+wrapped rotary machining + spiral toolpaths (tool vertical).
+OpenChuck CAM — free OSS 4-axis rotary CAM tested on the Z1 (our
+machine class): swarf ("complex face geometries — blades on a disk")
++ simultaneous XYZA "moves the machine in all 4 axes to maintain the
+normal of the tool where needed … crankshafts which have multiple
+centres of rotation". **AGPL-3.0 — HARD QUARANTINE: docs and facts
+only, its code is never read or pasted (the license rule).** Nobody
+surveyed documents a per-cell engagement-window solve (A-parking /
+corridor threading) — that is simple.cam's differentiator. The
+"crankshaft" class (off-axis stacked lobes — multi-centre surfaces)
+is filed beside the pure-X-normal limit as a radial-map honesty case.
+
+**STAGE 0 — foundation (each independently valuable; both adversaries'
+measured guards):**
+- 0.1 **Comparator fix**: wrap-aware signed forward-delta + a noise ε
+  (0.02°, first-cut) in `walkComponent`'s neighbor test — an
+  equal-or-ε-behind neighbor reads as a zero advance, not ~360°
+  behind. Kills the noise class for BOTH kernels; real wobble
+  (0.2–0.7°) is Stage 1's job, not ε's.
+- 0.2 **Honest time**: charge the patch-transition A-rapids
+  (ΔA/ROTARY_FEED_DEG_MIN) and the retract/re-plunge in the pass
+  minutes — the adversaries measured the shipped estimate EXCLUDING
+  the dominant term (entry rapids ≈ 293°/patch ≈ 7s at the 6.6 RPM
+  clamp; her true knight run likely ~2× the quoted 355.9 min).
+  Pass count becomes the real objective only when minutes charge it.
+- 0.3 **Signed-ΔA writer**: `emitSwarfPass` must accept bounded
+  SIGNED ΔA steps — today a −4.2° attitude step wraps into a 355.8°
+  forward move (probe: midpoint penetrations 0.85–1.25mm, up to the
+  full ball radius). Guards: |ΔA| ≤ ~30° between grid-adjacent cells
+  or a mid-attitude clearance re-verdict; the post's G92.4 counter
+  re-checked for in-pass reversal.
+- 0.4 **Tip-vs-center Z** (filed item 2, FIRST): resolve against the
+  MakeraStudio corpus + docs/makera-dialect.md + her machine BEFORE
+  the new planner's first ball cut; pin in test. Not silently
+  inherited.
+
+**STAGE 1 — the ball planner** (replaces segmentation+walk for the
+ball kernel only): θ-row STRIPS traced along X with **A-parking**
+(A holds while the next cell's window still contains it; ΔA only
+when the window slides away), rows chained end-to-end, breaks only
+at true obstacles (air, CLIPPED, no-window); per-edge clearance
+RE-VERDICT at the actually-threaded attitude (center-only verdicts
+clip 1.6–2.1% at window edges — probed). Probed wins (synthetic,
+rapids-charged): barrel 2,079 passes ×2.4 cells → 17 × 295;
+torus → ONE 840-cell trace. Acceptance on her knight: pass count
+÷≥10, charged minutes ÷≥4, sim 3-class clean.
+
+**STAGE 2 — parked**: per-region ring/strip selection (a direction
+field — rings win 13× on revolution-class regions; the choice is
+per REGION, not per op), the corridor DP for wobble-dominated
+organic surfaces, the boustrophedon weaver, the flat-bottom kernel
+(flank's fallback, filed).
+
+Flank path, goldens, and the post untouched except 0.3's signed-ΔA
+and the G92.4 re-check. Roughing untouched.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
