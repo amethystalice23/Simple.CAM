@@ -29,6 +29,8 @@ import {
   buildContactMap,
   emitSwarfPass,
   fluteClearanceCheck,
+  makeBallClipCtx,
+  orderBallStripsByStance,
   segmentBallStrips,
   segmentContactPatches,
   type ContactPatch,
@@ -2264,11 +2266,39 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const { patches, unswarfableCells } = ballStrips
           ? { patches: ballStrips.patches as ContactPatch[], unswarfableCells: ballStrips.unswarfableCells }
           : segmentContactPatches({ map, verdict });
+        // STAGE 1.2 (the +35% recovery, 2026-11-13): emission order by
+        // stance proximity (greedy nearest-forward — the entry A rapid
+        // only charges forward), and LOCAL re-entry: each strip exits to
+        // its own local clearance (corridor-checked) and the next strip
+        // plunges from THERE instead of the safe plane. The corridor
+        // checks (A-swing under the parked tool, the XY hop at exit
+        // height, the plunge) run against the mesh with the same
+        // two-band test that verdicts the stances; any clip falls back
+        // to the classic safe-plane entry. Cuts untouched — strips are
+        // independent cell sets. One clip ctx for the whole emission
+        // (the planner already built and disposed its own for the
+        // re-verdicts; this second BVH build per op run is the P0
+        // worker's to consolidate eventually).
+        const ordered = isBall
+          ? orderBallStripsByStance(patches, ctx.startA)
+          : patches;
+        const clipCtx = isBall
+          ? makeBallClipCtx({
+              positions,
+              tool,
+              map,
+              axisZ: cal.axisZ,
+              radius: cal.effectiveRadius,
+            })
+          : null;
+        const opClearance = op.rates?.clearance ?? SAFE_CLEARANCE;
+        const safeZ = cal.axisZ + cal.effectiveRadius + opClearance;
         const moves: Move[] = [];
         let minutes = 0;
         let a = ctx.startA;
         let swept = 0;
-        for (const patch of patches) {
+        let prevExit: { x: number; y: number; zTip: number } | undefined = undefined;
+        for (const patch of ordered) {
           const r = emitSwarfPass({
             map,
             patch,
@@ -2277,14 +2307,24 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             radius: cal.effectiveRadius,
             feed,
             plungeFeed,
-            safeClearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            safeClearance: opClearance,
             startA: a,
             attitude: isBall ? 'ball' : 'flank',
+            entryPose: prevExit,
+            clipCtx: clipCtx ?? undefined,
           });
           moves.push(...r.moves);
           minutes += r.estimatedMinutes;
           a = r.endA;
           swept += patch.cells.length;
+          prevExit = r.exitPose;
+        }
+        clipCtx?.geo.dispose();
+        // the final retract restores the classic contract: local exits
+        // leave the tool low, and the datum-discipline return move + the
+        // next op must find the tool at the safe plane
+        if (isBall && moves.length > 0) {
+          moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
         }
         if (moves.length === 0) {
           return fail(

@@ -3035,4 +3035,33 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
       }
     }
   });
+
+  it('Stage 1.2: local exits between strips, the final retract restores the safe plane', () => {
+    // the case threads exitPose → entryPose + one clip ctx and appends the
+    // final safe retract: intermediate strips may exit LOW (corridor-
+    // checked local re-entry), but the op must END at the classic safe
+    // plane — the datum-discipline return and the next op depend on it
+    const ball: Tool = {
+      id: 'b1',
+      name: 'ball',
+      type: 'ball',
+      diameter: 6,
+      spindleRpm: 18000,
+      fluteLength: 20,
+    };
+    const res = generateJobOp(swarfOp({ toolId: 'b1' }), {
+      ...cylCtx,
+      tools: [...tools, ball],
+    });
+    expect(res.error).toBeNull();
+    const zRapids = res.moves.filter((m) => m.rapid && m.words.z !== undefined);
+    expect(zRapids.length).toBeGreaterThan(0);
+    const safeZ = cylStock.calibration.axisZ + cylStock.calibration.effectiveRadius + 5;
+    // at least one LOCAL exit (retracted only to the strip's own clearance)
+    expect(zRapids.some((m) => m.words.z! < safeZ - 1e-6)).toBe(true);
+    // and the op's LAST z-rapid restores the safe plane (the wrapper's
+    // datum-return A move may follow it — at that plane, by contract)
+    const lastZ = zRapids[zRapids.length - 1];
+    expect(lastZ.words.z).toBeCloseTo(safeZ, 6);
+  });
 });
