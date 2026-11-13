@@ -2984,4 +2984,55 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
     const cuts = res.moves.filter((m) => !m.rapid && m.words.a !== undefined);
     expect(cuts.length).toBeGreaterThan(0);
   });
+
+  // REGRESSION (2026-11-13, the polish-after-index gouge): her knight job
+  // ran index 90 → waterline → index 270 → waterline → polish with NO
+  // index-to-zero, and the polish surfaced a rotated copy and gouged
+  // through the model — the op fed the mesh through
+  // indexFrame(ctx.datumAngle), so every attitude read align−datum while
+  // contactAt rotated the (already rotated) point by align−datum: the
+  // tool placed where a CORRECTLY aligned part would put it, the part a
+  // full datum away. Her ruling: the finish ignores the Index datum — an
+  // implicit Index=0 at its start. This pins it: the datum changes
+  // NOTHING about the emitted moves (both envelopes) — not the A words,
+  // not the XYZ, not the feeds. Only startA (which op sequencing threads)
+  // may move the machine, and here it is held equal.
+  it('ignores the Index datum: moves identical at datum 0 and 270, flank and ball', () => {
+    const ball: Tool = {
+      id: 'b1',
+      name: 'ball',
+      type: 'ball',
+      diameter: 6,
+      spindleRpm: 18000,
+      fluteLength: 20,
+    };
+    const atDatum = (datumAngle: number, op = swarfOp()) =>
+      generateJobOp(op, {
+        ...cylCtx,
+        tools: [...tools, ball],
+        datumAngle,
+      });
+    for (const op of [swarfOp(), swarfOp({ toolId: 'b1' })]) {
+      const flat = atDatum(0, op);
+      const indexed = atDatum(270, op);
+      expect(flat.error).toBeNull();
+      expect(indexed.error).toBeNull();
+      // same pass count, same cells swept — the datum must not even
+      // change the patch/strip plan (it did before the fix: every
+      // attitude shifted −270 mod 360, a different walk)
+      expect(indexed.summary).toBe(flat.summary);
+      expect(indexed.moves.length).toBe(flat.moves.length);
+      for (let i = 0; i < flat.moves.length; i++) {
+        const a = flat.moves[i];
+        const b = indexed.moves[i];
+        expect(b.rapid).toBe(a.rapid);
+        expect(b.comment).toBe(a.comment);
+        for (const w of ['x', 'y', 'z', 'a'] as const) {
+          if (a.words[w] === undefined) expect(b.words[w]).toBeUndefined();
+          else expect(b.words[w]).toBeCloseTo(a.words[w] as number, 6);
+        }
+        if (a.feed !== undefined) expect(b.feed).toBeCloseTo(a.feed, 6);
+      }
+    }
+  });
 });

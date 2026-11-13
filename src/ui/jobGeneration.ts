@@ -2199,24 +2199,24 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const envelope = isBall ? 'ball' : 'flank';
         const cal = rotaryCalibrationOf(ctx.stock);
         const [sx0, sx1] = stockSpan(ctx.stock, 'x');
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
-        const positions = rotate
-          ? (() => {
-              const out = new Float32Array(positions0.length);
-              for (let i = 0; i < positions0.length; i += 3) {
-                const v = rotate({
-                  x: positions0[i],
-                  y: positions0[i + 1],
-                  z: positions0[i + 2],
-                });
-                out[i] = v.x;
-                out[i + 1] = v.y;
-                out[i + 2] = v.z;
-              }
-              return out;
-            })()
-          : positions0;
+        // THE DATUM IS IGNORED — an implicit Index=0 at the op's start
+        // (Alice's 2026-11-13 ruling, the polish-after-index gouge): the
+        // contact map derives its attitudes in the A=0 MATERIAL frame
+        // (swarfFinish.ts's pinned contract — align = atan2(n.y,n.z)+90°)
+        // and the sweep writer's A words are ABSOLUTE, landing each cell
+        // its own stance wherever the Index ops left the part. Feeding the
+        // mesh through indexFrame(datum) pre-rotation made every attitude
+        // read align−datum while contactAt rotated the (already
+        // datum-rotated) point by align−datum — the tool placed where a
+        // CORRECTLY aligned part would put it, the part itself a full
+        // datum away: the surfaced "rotated copy" that gouged her knight
+        // at datum 270. The finish sweeps the whole surface from the
+        // part's own geometry — no Index can help it, so it honors none
+        // (Engrave's pinned datumAngle: 0 is the same call). startA still
+        // threads honestly: the entry rapid advances from wherever the
+        // machine really sits, and the datum-discipline return move
+        // (below) restores the borrowed orientation for whatever follows.
+        const positions = transformedPositions(ctx.geometry, ctx.transform);
         const map = buildContactMap({
           positions,
           x0: sx0,
