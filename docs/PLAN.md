@@ -97,7 +97,9 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 | Thread (90° V-bit, IMPLEMENTED 2026-10-20) | parametric helix | `thread.ts`: per pass `G1 X… A…` constant Z, A advances `(span/lead)·360°` (lead = starts×pitch); Z depth-steps between passes re-entering at identical absolute A phase (levels retrace — sweeps alternate, A returns along the helix); multi-start = 360/starts phase offsets following the index datum; spring pass per start; external only. Depth derives from pitch + the tool's tip angle + tolerance (grooves half a pitch wide at crest; crest Ø = nominal − 2·tolerance); the panel's "Add facing toolpath" INSERTS a prefilled Face cylinder op before the thread (crest Ø, the thread's X range and rotation — its own tool/feeds/step-over); editing the nominal Ø prefills the standard ISO coarse pitch (metricPitch: M4→0.7, M6→1.0…). Fit is EMPIRICAL (risk 3) — the tolerance knob tunes it on a coupon |
 | Thread mill (3-axis, SPEC 2026-10-28) | helical interpolation | `threadMill.ts`: internal AND external threads with a single-profile thread mill — helix in machine XYZ, no A, G94 throughout. MILL-TESTED GROUND TRUTH: examples/MakeraStudioGHM9_Stage3_TOP_20261003132726.nc `[T6]14ccw thread` — her GHM9 part, an external M14×1 CCW cut with a Ø4.75 M6-form mill. Their proven EXTERNAL cycle, copied verbatim: approach outside the boss at Rc + clearance → plunge beside the boss to the thread's BOTTOM (staged feeds, F1000 bulk / F100 near material) → RADIAL feed in to Rc (no arc lead-in — the entry notch IS the bottom groove) → ASCENDING helix, one pitch per revolution, ~1°/segment (chord 0.15mm) at the cut feed → straight rapid up at the top (nothing stands above) → THE WHOLE CYCLE RUNS TWICE (their spring pass = a full second thread pass). Path radius pinned: 8.76 = d3/2 + toolR with d3 = ISO 724 EXTERNAL minor (nominal − 1.2268·p, root-arc-truncated — matches to 3 decimals, deliberate); INTERNAL mirrors with tips at the major: Rc = nominal/2 − toolR + tolerance, external Rc = d3/2 + toolR − tolerance; prep sizes ISO-true (bore at d1 = nominal − 1.0825·p, boss at nominal). Hand convention verified by the same file: "ccw" = left-hand = helix CW-viewed-from-above ASCENDING (z decreases with CCW rotation) ⇒ right-hand = CW-descending, as derived. ANTI-PATTERN, pinned by regression test (Alice's report, 2026-10-28 — "at some point the makera output did something silly and plunged to start subsequent cuts without allowance for the thread already there and gouged the thread face; they fixed this in later versions"): the 09-11 example cut a RADIAL LADDER (helix levels at 9.44 → 9.1 → 8.76) and re-plunged between levels AT THE CUT RADIUS — a vertical feed descent straight through the thread it had just cut; the fixed 10-03 cycle re-approaches from outside the crest first. Our cycle inherits the fix: every Z-descending move (spring pass, each multi-start, each target) starts from clear space — the approach point outside the crest (external) or the bore center (internal) — asserted over the whole move list by the descent test. INTERNAL cycle (no example exists — mirrored): approach at the bore CENTER, plunge inside the prep-cleared bore to the thread bottom, radial out to Rc, ascend; retract per Alice 2026-10-28 ("move aside… as long as there is hole diameter to do so, because we would have had a preceding pocket operation to clear it; if the tolerances are getting tight, follow the spiral back out"): aside — radial in to the bore center + straight lift — when the cleared bore leaves room (boreR − toolR ≥ margin; a sloppier prep or a slimmer tool — her Ø4.75 in an M14 bore has 4mm of room), else FOLLOW THE SPIRAL OUT: keep the helix going fraction of a lap past the mouth until the form is clear of the face, needing NO radial room (a straight lift while engaged drags the tooth through the thread teeth — the tight case; the bore-sized Makera mills with ~10µm aside room always exit this way). Multi-start = starts helices offset one pitch, lead = starts×pitch descending per rev; segments = 0.15mm chord target (floor 64, cap 512/rev); tool pitch validated strictly against thread pitch — and the panel SETS AND LOCKS the pitch from the tool while a fixed-pitch mill is selected (Alice, 2026-10-28: "as these threadmill bits have fixed pitch"; a pitch-less kind keeps it editable, defaulting to the ISO coarse on tool change). The thread perception is named cw/ccw like the rotary Thread op (Alice: "dont use right-hand/left-hand as the other thread tool uses cw/ccw, so be consistant" — 'ccw' = left-hand, the 14ccw example). RADIAL LADDER (Alice: "for tougher materials you might need to do this in multiple passes"): a Step over field (0.05mm increments) — 0 = the full form in ONE radial pass (the Makera cycle), > 0 splits the radial span into even levels, each a full bottom-up thread at its own radius, deepest last, the spring repeating the final level; the sim classifies thread removals against the ladder's step (or the full form depth) so a correct thread paints fine. The PREP insert's allowance is FORCED ≥ 0 (her first prep computed nominalR − bossR = −0.01 from a boss a hair over nominal and the profile errored: "dont warn that it must be >= 0, force it to be" — profile2d clamps, not throws). TOOL MODEL (Alice, 2026-10-28, twice-corrected — final form shop-checked against global.makera.com/en-gb/products/thread-milling-bit-6mm-shank): thread mills come in three kinds — 1-tooth, 3-tooth, and full-thread (the last is internal-only tapping, not in the Makera set). The Makera 1/3-tooth mills: a 2mm TOOTHED BAND (LCF) at the tip, then a long thin CUTTING LENGTH — the taper before the shank (18mm on the M6, 24 on the M8; shop overrides in the import) — then the SHANK (Ø6 on the M6/M8, 1/8″ on M1–M5; SFDM was RIGHT all along, the 3.175 "neck" clamp was the wrong reading of "long neck"), OAL 38/50. fluteLength carries the CUTTING LENGTH, so the full-depth helix keeps the shank clear: EXTERNAL — the shank crosses the crest radially unconditionally (Rc − shankR < crestR always), so a thread deeper than the cutting length throws (the shank would sweep the stock beside the thread); INTERNAL — the thread is capped at cutting − one pitch when the shank misses the bore. The OVERALL LENGTH caps the thread below the collet margin (OAL − 15mm). `flutes` = the TOOTH count ("there are no flutes, the teeth appear in only one spot on the circumference"): a 3-tooth is HARD-LOCKED to its pitch (teeth must ride successive turns of one groove), a 1-tooth cuts ANY pitch; records with no count read locked. The SIM classifies a thread's removals against the FULL THREAD LENGTH (one axial pass by tool design — her report: "wether i set step over of 0 or 0.1mm gives a wall of yellow"; the radial ladder never changes axial engagement), and models the tool with the cutting length as the flute — the 2mm-band record put the Ø6 shank 2mm above the tip, inside the stock beside every full-depth thread. The prep insert runs 1mm past the thread floor (form clearance below the last turn). PROFILE ALLOWANCE SPLIT (Alice, 2026-10-28 night): "allowance i dont want to change as it is height as well as width, which would mean unseen consequences" — the profile's single allowance becomes **Bottom allowance** (floor stock, forced ≥ 0) + **Side allowance** (RADIAL, SIGNED — negative steps the tool-center path INSIDE the contour, turning a boss down past its modeled Ø); a diameter field was rejected ("not only circular features"), offset-on-top-of-allowance as confusing. normalizeJobOps migrates old saves (single allowance → both). The THREAD PREP INSERT prefills `sideAllowance = (nominal − 2·tolerance)/2 − bossR` — the ISO-fit crest target, BOTH ends from the THREAD (nominal + tolerance), the start from the resolved boss: "the feature on the thread might not be the same as the thread diameter set" — so the neck rides the reduced crest at zero clearance and the red streamers stop (the internal pocket prep analogously: allowance = boreR − d1R, clamped ≥ 0 — a pocket cannot grow its region). Her job now generates clean end-to-end. DEPTH SEMANTICS CONFIRMED (Alice, 2026-10-28 night): the boxes anchor at the STOCK CROWN like every op, and that is what she wants — "i genuinely wanted thread from the very top of the stock to 9mm down… i moved up 1mm from [the datum] to allow for the runout that the facing op would give us". The SELECTED FACE IS JUST A DATUM: on a model that already carries the finished thread form, the right-Ø feature may sit at the base of a modelled outward chamfer where thread meets body — start 0 from the crown is the legitimate setup (the prefill fills Ø/pitch/side; the depths are hers). Her production workflow for the GHM9 adapter: thread end in the 4th-axis vice → rotary-mill the flats half → re-fixture vertical in 3-axis → mill the outer thread (this op) + pocket the through hole. THREAD END TREATMENT (her ruling, 2026-10-28 night — answering the transition question): EXTERNAL threads NEVER fade — the leading end (screwed into something) is threaded FULL FORM until it falls off the face, then a CHAMFER BIT dresses the face, 'possibly combined with an end mill to clear some of it down to the inner radius' (root-Ø relief so the chamfer has room); 'it is sadly impossible to inset the thread so that it slowly disappears… and give a tapered start' — the best extra is 'mill some of the peaks off with an endmill afterwards' (crest-dressing). The trailing end at a shoulder: EITHER pre-cut a chamfer/undercut down to the thread's minor Ø in advance (the last turn runs out into it), OR thread down until it butts the wider piece (a partial last turn). FADE-OUT / FORM RUNOUT IS AN INTERNAL-ONLY FEATURE — only inside threads can fade, harmlessly into the bore wall where nothing must engage; PARKED until an internal job wants it. Makera's own Stage3 flow confirms the recipe: the 14ccw thread is followed by [T4] chamfer ops (Inside/Outside). No generator feature needed — the external treatment composes from the existing chamfer/profile ops. Flute check internal: depth ≤ fluteLength when the shank oversizes the bore (loud error). The panel's "Add prep toolpath" INSERTS a prefilled op before the thread (Alice 2026-10-28; Makera's own prep on the same part was a flat-endmill contour around the boss): external → a PROFILE turning the boss to the major Ø (side outside, clear-to-stock, allowance = nominalR − bossR, negative to turn down); internal → a POCKET opening the bore to d1 (allowance = boreR − d1/2); nominal-Ø edit prefills the ISO coarse pitch like the rotary op |
 | Spiral carve (wrapped groove, STARTED 2026-10-20) | parametric | `spiralCarve.ts`: multi-start helices about the stock axis at a user angle off circumferential (90° = axial); depth ladder retraces the same groove per level (sweeps alternate, A returns along the helix); width > tool Ø fans parallel passes; X+A sweeps G93 from the rotary limit; strand phases follow the index datum; setup ghost + groove marks in the viewport (docs/edge-tracing.md §5). Archimedean/straight/cross-hatch still to come |
-| Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection. Profile (and slice-pocket outside) carry **TABS** (2026-10-25, Alice's cut-out workflow): N auto-spaced hold-down bridges (count/height/length, defaults 3 × 0.5mm × 3mm) — deep levels cut spans between them, shallow levels cut through; arc-length placement never straddles the loop seam. The waterline rough needs none: its upper-shadow keep-out plus the widest-section stop make it provably unable to free a part (2026-10-25, tabs removed). Pocket and Profile ops carry a **cut-over toggle** (2026-10-28), with split semantics settled by Alice the same day: pocket ON = a **deliberate step-over perimeter around the defined area** — the cut REGION grows by one step-over before the tool-radius inset, so the swept cut extends exactly one step-over past the selected outline (clean past boundary drop-offs — her flat-on-the-barrel: clear past the horizon so the transition to the curve is crisp, no rim skin; "if you permitted the step-over, you already vouched nothing of value sits within it") and the stock clamp dilates the same way; OFF = the cut stops at the selected outline and clamps to the stock. Profile — a single-cut op — keeps ON as **permission**: the loop stays intact even where it runs out of stock to cut through, OFF clips the wall pass to open spans at the stock edge. |
+| Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection. Profile (and slice-pocket outside) carry **TABS** (2026-10-25, Alice's cut-out workflow): N auto-spaced hold-down bridges (count/height/length, defaults 3 × 0.5mm × 3mm) — deep levels cut spans between them, shallow levels cut through; arc-length placement never straddles the loop seam. The waterline rough needs none: its upper-shadow keep-out plus the widest-section stop make it provably unable to free a part (2026-10-25, tabs removed). Pocket and Profile ops carry a **cut-over toggle** (2026-10-28), with split semantics settled by Alice the same day: pocket ON = a **deliberate step-over perimeter around the defined area** — the cut REGION grows by one step-over before the tool-radius inset, so the swept cut extends exactly one step-over past the selected outline (clean past boundary drop-offs — her flat-on-the-barrel: clear past the horizon so the transition to the curve is crisp, no rim skin; "if you permitted the step-over, you already vouched nothing of value sits within it") and the stock clamp dilates the same way; OFF = the cut stops at the selected outline and clamps to the stock.
+Deep-pocket roughing auto-selects TROCHOIDAL constant-engagement
+emission (spec 2026-11-13 below) — no knob, like climb. Profile — a single-cut op — keeps ON as **permission**: the loop stays intact even where it runs out of stock to cut through, OFF clips the wall pass to open spans at the stock edge. |
 | Slice pocket (3-axis) | 2.5D | one `sliceAtZ` cross-section at the op's slice plane → `'outside'` profiles around it (tool-center path offset out by tool Ø/2 + allowance) / `'inside'` pockets its interior, over the start→end band; floor via the ⇩ pick; violet section-plane overlay + drag handle (docs/edge-tracing.md §2, §5) |
 | Flat chamfer (V-bit) | single-pass flank | two modes. **add**: the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path) — a new chamfer through a sharp edge. **existing**: the model already has the chamfer — the bit rides the modelled face, and direction selects which end was clicked: **up** = the bottom edge, traced exactly (depth ignored — the bit cuts up and out from there); **down** = the top edge, the tip slides down-and-in by depth·tan(angle/2) along the modelled face, landing on the bottom edge when depth matches the model. User side option (inside/outside — geometry can't always tell) and depth along the wall |
 | Cylinder chamfer (4-axis, 2026-10-23) | rotary ring pass | `cylChamfer.ts`: the degenerate face-cylinder vertical ring — one full A revolution per level at the selected edge circle's exact X, tip at Ø/2 − depth. The DEPTH is the only direction. V-BIT: 0 anchors on the circle and cuts up-and-out through whatever rises above it (ladder from the stock surface — the adjoining Ø is deliberately unknown, the one-circle rule; spec + edge sources in edge-tracing §6), >0 slides below the circle from an already-clear rim. BALL-NOSE (2026-11-05, Alice's Ø1 U-channel ask): depth 0 anchors on the circle like the V-bit — the upper hemisphere shears a FILLET up-and-to-the-side (the rounded analogue of the cone's chamfer; her same-day ruling: sometimes the only clickable feature is the floor, the sim reveals what it reached), ≤ radius is the true U (depth = radius → full semicircle, width = tool Ø; shallower → width = 2·√(r²−(r−d)²)), > radius passes the equator — the shank takes the walls straight, warned with width capped at tool Ø; no reach check (the hemisphere is always tangent at the equator). Edges are A-coaxial circles: face-cylinder ops publish their step edges at their own target Ø (`o:` ids), the stock its end rims, model circles on turned parts too; A-only sweeps G94 at the rotary deg/min |
@@ -603,8 +605,99 @@ estimate before anyone commits a 3-hour bar.
 
 **Open for the build session:** 4-axis roughing strategy (face the
 cylinder + finish directly into round stock, vs. an unwrapped-frame
-waterline rough); adaptive clearing (trochoidal — a named contour type to add, with raster contour/waterline contour the family so far); adaptive Δz levels; slope-split finishing; how the
+waterline rough); adaptive clearing — now spec'd (2026-11-13, below);
+adaptive Δz levels; slope-split finishing; how the
 long-running worker integrates with the recalc/preview pipeline.
+
+### Adaptive clearing — constant-engagement roughing (SPEC 2026-11-13, branch `feat/adaptive-clearing`)
+
+**Position (Alice's 2026-11-13 ruling, same family as the climb
+ruling):** NOT an operation, NOT a checkbox. Adaptive/trochoidal
+clearing is the **roughing engine inside area-clearing ops**, picked
+automatically the way the continuous-descent path already is — the
+minimalist "machine makes the sensible choice" stance, precedent the
+2026-10-29 climb-milling ruling (always climb, no option). Fusion
+exposes it as a user-facing strategy because Fusion's model is
+"the user picks the mechanism"; ours subsumes it. No new op kind, no
+new panel row, no new knob — the same deep pocket simply emits a
+different roughing. Scope: **pocket v1** (the only flat bulk-clearing
+op); face/slice-pocket/rest-roughing candidates later. NEVER profile —
+a wall pass has no bulk to clear, chip load is the entry machinery's
+job there.
+
+**The selector.** `pocket2d` becomes a three-way auto-select; today's
+two branches are untouched (single clearable orbit → continuous
+helical descent; everything else → contour-offset orbits). The new
+third branch fires when the cut is DEEP in bulk stock:
+
+```
+trochoid  ⇔  (topZ − floorZ) > 2·D  AND  ≥ 2 roughing levels  AND  > 1 orbit
+```
+
+Depth in tool diameters is the real variable (a 3mm pocket with a 6mm
+cutter is one level, nothing to optimize; the same 3mm with a 3mm
+cutter in aluminium is where desktop bits snap on full-width orbits).
+Constants are FIRST-CUT, tuned in build (the coupon machinery exists
+for exactly this); the RULE SHAPE — depth × area, never
+material-dependent, never user-set — is the contract. Everything that fails the rule keeps
+today's emission BYTE-IDENTICALLY (the minLoopPerimeter/leadIn
+precedent: absent ⇒ unchanged).
+
+**The emission.** Per level, build the level's swept/standing map
+(the same machinery the `leadIn`/`sweptCorridor` hooks consult —
+v1 is PER-OP knowledge only: this level's earlier orbits + lower
+levels; cross-op stock awareness is the 4D-clearing P1 machinery,
+out of scope). Then walk the offset orbits at ae spacing and:
+- **cut straight where engagement ≤ ae** (G1, the region is already
+  open), 
+- **insert a backward trochoid loop where it would exceed** — the
+  tool pivots back through its own swept disc and re-advances, so the
+  arc of engagement never grows past ae. Loop = two semicircular G3s
+  (climb) + tangent link; the loop IS the entry — the first loop
+  descends by ramp (rampEntry's slope machinery, the bore-descent
+  precedent), a plunge happens only into provably cleared space.
+  Arcs are first-class in the IR + post (G2/G3, I/J only —
+  Robot.cpp:1292-6, full-XY endpoints required, G94-only, no A) —
+  the trochoid chain is a few lines per loop, not a polyline
+  blizzard, so file size and the Z1 61-char line limit are
+  non-issues.
+
+**Derived rates (the point of the whole exercise).** Defaults today:
+stepOver 0.5·D, stepDown ≤ 0.5·D — 50% radial engagement caps axial
+depth. Trochoid engages ae ≈ **0.15·D**, so chip thinning buys back
+axial depth: stepDown_trochoid = preset stepDown × chip-thinning
+scale (first-cut: min(3, 0.5·D / ae)), clamped by flute length and
+the material preset; feed scales the same way. Both DERIVED, shown
+in the ⚡ popup like every other rate, never a user field. Honest
+MRR comparison in the estimate decides the constants, not theory.
+
+**What it will NOT address (deliberate):** wall finish — the
+finishing orbit/allowance machinery is untouched (trochoid is
+roughing, the rough/finish split stays the user's artistic checkbox);
+narrow single-orbit regions (continuous descent already owns them;
+no room to loop); shallow/open areas (contour-offset is shorter and
+gentler on direction reversals — losing time there would be the
+wrong default); cross-op rest machining.
+
+**License:** reimplement from descriptions only (the hard rule);
+HSMWorks/Fusion/SprutCAM adaptive code is never read or pasted.
+
+**Tests + build order on the branch:**
+1. `chooseClearingStrategy(op, tool) → 'descent' | 'orbits' |
+   'trochoid'` as a pure function with boundary tests; selector
+   wired but inert until (2) lands (non-trochoid emission must stay
+   byte-identical — a regression test asserts it).
+2. The emitter as a pure module (`src/cam/adaptive.ts`): engagement
+   map in, Move[] out. Numeric tests: (a) max radial engagement over
+   the emitted path ≤ ae + tol, measured by sampling the tool-disc
+   sweep against the level's standing grid; (b) every arc move
+   satisfies the IR contract (endpoint explicit, I/J nonzero); (c)
+   the voxel sim classifies the removals with no gouge/shank alarms.
+3. Wire into `pocket2d`'s branch + derived rates + estimate;
+   golden post coverage for arc-dense output.
+4. Tune the constants on a real deep-pocket job of hers (GHM9-class)
+   + a trochoid-mode calibration coupon variant if the plain coupon
+   matrix doesn't read well.
 
 ### True optimized 4D carve (SKETCH 2026-10-28 — the v2 headliner, conversation opened by Alice, to be picked up another day)
 
@@ -1059,6 +1152,10 @@ reference these numbers):
    that lets small desktop machines cut deep without snapping bits;
    the most-asked-for roughing feature in hobby CAM (Fusion's
    flagship strategy). Already discussed; Phase-3 territory.
+   SPEC LANDED 2026-11-13 — see the adaptive-clearing section under
+   Operations: an invisible roughing engine inside the pocket op
+   (auto-selected like climb and continuous descent), not a new op
+   or checkbox.
 2. **True V-carving** — variable-depth V-bit cut that fills lettering
    out to its vector outline with crisp corners; the feature that
    built Vectric's business. ALICE: possibly related to her idea of
