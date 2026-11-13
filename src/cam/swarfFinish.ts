@@ -922,6 +922,18 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
     ball
       ? ballToolCenter(cells[ci].p, cells[ci].n, toolR, o.axisZ)
       : fluteToolCenter(cells[ci].p, cells[ci].n, cells[ci].align, toolR, o.axisZ);
+  /**
+   * The COMMANDED Z, Stage 0.4 (spec 2026-11-13): the machine's Z word
+   * is the tool TIP, resolved from the mill-verified MakeraStudio corpus
+   * (examples/MakeraStudioTurned_path2_MULT: the Ø2 ball descends to
+   * Z8 = the Ø16 stock's crown exactly — a CENTER-referenced ball would
+   * gouge a ball-radius on arrival; the flank family is already
+   * tip-referenced, fluteToolCenter returns the contact-height z). The
+   * ball's geometric CENTER stays what the clearance kernels reason
+   * about; only the commanded word drops by toolR — the sim poses the
+   * tip at commanded z, so center-at-commanded+r now matches intent.
+   */
+  const tipZOf = (c: { x: number; y: number; z: number }) => (ball ? c.z - toolR : c.z);
   /** the surface contact at cell ci, rotated to machine attitude `deg` */
   const contactAt = (ci: number, deg: number) => {
     const th = (deg * Math.PI) / 180;
@@ -947,8 +959,8 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   }
   const c0 = centerOf(first);
   moves.push({ words: { x: c0.x, y: c0.y }, feed: 0, rapid: true });
-  moves.push({ words: { z: c0.z }, feed: plungeFeed }); // pure-Z plunge
-  minutes += Math.max(0, safeZ - c0.z) / plungeFeed;
+  moves.push({ words: { z: tipZOf(c0) }, feed: plungeFeed }); // pure-Z plunge (tip plane, Stage 0.4)
+  minutes += Math.max(0, safeZ - tipZOf(c0)) / plungeFeed;
 
   // ---- the sweep: one G93 XYZA move per remaining cell ----
   let prevCi = first;
@@ -979,7 +991,7 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
       centerPath / feed,
       (Math.abs(fwd) / 360) / MAX_ROTARY_RPM,
     );
-    moves.push({ words: { x: c.x, y: c.y, z: c.z, a }, feed: 1 / passMinutes });
+    moves.push({ words: { x: c.x, y: c.y, z: tipZOf(c), a }, feed: 1 / passMinutes });
     minutes += passMinutes;
     prevCi = ci;
     prevC = c;

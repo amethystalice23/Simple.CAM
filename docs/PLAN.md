@@ -1280,10 +1280,22 @@ measured guards):**
   full ball radius). Guards: |ΔA| ≤ ~30° between grid-adjacent cells
   or a mid-attitude clearance re-verdict; the post's G92.4 counter
   re-checked for in-pass reversal.
-- 0.4 **Tip-vs-center Z** (filed item 2, FIRST): resolve against the
-  MakeraStudio corpus + docs/makera-dialect.md + her machine BEFORE
-  the new planner's first ball cut; pin in test. Not silently
-  inherited.
+- 0.4 **Tip-vs-center Z — RESOLVED 2026-11-13** (filed item 2, and
+  the adversary's float finding CONFIRMED): the machine's Z word is
+  the tool TIP. Evidence: examples/MakeraStudioTurned_path2_MULT
+  (mill-verified) records Ø16 stock with the origin at the axis
+  (leftCenter z=0), and its Ø2 ball's first descent lands at Z8 =
+  EXACTLY the stock crown — a CENTER-referenced ball would gouge a
+  ball-radius on arrival; its sculpted contour Z4.31→5.27 reads as
+  surface heights directly. MakeraStudio emits tip-Z; our ball
+  emission wrote the geometric CENTER (ballToolCenter's z) and
+  floated the ball a full toolR — cutting nothing. FIXED in
+  emitSwarfPass: commanded z = center.z − toolR (ball family); the
+  flank was already tip-referenced (fluteToolCenter returns the
+  contact-height z — verified, unchanged); the sim poses tip-at-Z, so
+  machine and sim now agree. Pinned in test (the Stage 0.4 CONVENTION
+  PIN). The cleared kernels still reason about the CENTER — only the
+  commanded word moved.
 
 **STAGE 1 — the ball planner** (replaces segmentation+walk for the
 ball kernel only): θ-row STRIPS traced along X with **A-parking**

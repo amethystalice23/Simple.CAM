@@ -1969,7 +1969,7 @@ describe('emitSwarfPass attitude ball — the wall strip at the window center (m
     }
   });
 
-  it('entry: A rapid to 90 → XY rapid → pure-Z plunge to the ball-center plane', () => {
+  it('entry: A rapid to 90 → XY rapid → pure-Z plunge to the ball TIP plane (Stage 0.4)', () => {
     const [aRapid, xy, plunge] = r.moves;
     expect(aRapid.rapid).toBe(true);
     expect(aRapid.words.a).toBeCloseTo(90, 6); // NOT 180 — the ball family
@@ -1983,10 +1983,13 @@ describe('emitSwarfPass attitude ball — the wall strip at the window center (m
     expect(plunge.words.x).toBeUndefined();
     expect(plunge.words.y).toBeUndefined();
     expect(plunge.words.a).toBeUndefined();
-    // the plunge target = the first cell's ball-center height
+    // the plunge target = the ball's LOWEST POINT, one toolR BELOW the
+    // geometric center — the machine's Z word is the TIP (mill-verified
+    // corpus: the Ø2 ball descends to Z8 = the Ø16 stock crown exactly;
+    // a center-referenced ball would gouge a ball-radius on arrival)
     const c0 = map.cells[patches[0].cells[0]];
     const C0 = ballToolCenter(c0.p, c0.n, 2, AXIS_Z);
-    expect(plunge.words.z).toBeCloseTo(C0.z, 6);
+    expect(plunge.words.z).toBeCloseTo(C0.z - 2, 6);
   });
 
   it('cuts ride at the ball attitude (align − 90) with ball centers, monotone A', () => {
@@ -1999,12 +2002,14 @@ describe('emitSwarfPass attitude ball — the wall strip at the window center (m
       expect(a).toBeGreaterThanOrEqual(prevA - 1e-9);
       prevA = a;
       expect((((a % 360) + 360) % 360)).toBeCloseTo(90, 6); // the ball family, not 180
-      // the cut's center = the cell's ballToolCenter (at its own attitude)
+      // the cut's XY = the cell's ball center (the tool axis); the
+      // commanded Z = the TIP, one toolR below the geometric center
+      // (Stage 0.4 — the Z-word-is-tip convention, corpus-pinned above)
       const cell = map.cells[patches[0].cells[k + 1]];
       const C = ballToolCenter(cell.p, cell.n, 2, AXIS_Z);
       expect(m.words.x).toBeCloseTo(C.x, 6);
       expect(m.words.y).toBeCloseTo(C.y, 6);
-      expect(m.words.z).toBeCloseTo(C.z, 6);
+      expect(m.words.z).toBeCloseTo(C.z - 2, 6);
       // G93 feed: 1/max(contactPath, centerPath)/FEED minutes — the rotary
       // term is 0 here (constant attitude), so the feed is exactly the
       // inverse path time
@@ -2109,5 +2114,39 @@ describe('emitSwarfPass — Stage 0.3: the signed-ΔA writer (spec 2026-11-13)',
 
   it('the FOLD_PAIR guard throws on a step beyond 30° — planner bug, never emitted', () => {
     expect(() => emit2([10, 100])).toThrow(/folded-pair guard/);
+  });
+
+  it('Stage 0.4 CONVENTION PIN: the ball commanded Z is the TIP, not the center', () => {
+    // RESOLVED (spec Stage 0.4) from the mill-verified corpus
+    // (examples/MakeraStudioTurned_path2_MULT): Ø16 stock, origin at the
+    // axis (leftCenter z=0), the Ø2 ball's first descent lands at Z8 =
+    // EXACTLY the stock crown — the machine's Z word is the tool TIP, and
+    // MakeraStudio emits tip-Z for ball tools. Our emission writing the
+    // geometric CENTER floated the ball a full toolR and cut nothing; the
+    // flank family was already tip-referenced (contact-height z). The
+    // sim poses the tip at commanded Z, so machine and sim now agree.
+    const map = stage0Map([10, 10]);
+    const r = emitSwarfPass({
+      map,
+      patch: { cells: [0, 1] },
+      tool: { ...TOOL(4, 20), type: 'ball' as const },
+      axisZ: 0,
+      radius: 10,
+      feed: 600,
+      plungeFeed: 300,
+      attitude: 'ball',
+    });
+    const plunge = r.moves[2];
+    const C0 = ballToolCenter(map.cells[0].p, map.cells[0].n, 2, 0);
+    expect(plunge.words.z).toBeCloseTo(C0.z - 2, 9); // tip = center − toolR
+    const cut = r.moves.find((m) => !m.rapid && m.words.a !== undefined)!;
+    expect(cut.words.z).toBeCloseTo(C0.z - 2, 9);
+    // the flank family is unchanged: commanded z = the contact height
+    const flank = emit2([10, 10]);
+    const fCut = flank.moves.find((m) => !m.rapid && m.words.a !== undefined)!;
+    expect(fCut.words.z).toBeCloseTo(
+      fluteToolCenter(map.cells[1].p, map.cells[1].n, 10, 2, 0).z,
+      9,
+    );
   });
 });
