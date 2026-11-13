@@ -16,6 +16,7 @@ import {
   totalArea,
   union,
 } from './clipper';
+import { chooseClearingStrategy } from './adaptive';
 import { arcTable, boreDescentFits, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
@@ -382,6 +383,22 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
       continuous: 1,
       orbits: [loop],
     };
+  }
+
+  // ADAPTIVE CLEARING SELECTOR (spec 2026-11-13): the deep-bulk third
+  // route — trochoid ⇔ depth > 2·D AND levels ≥ 2 AND orbitCount > 1.
+  // The continuous-descent branch above keeps absolute precedence (it
+  // returns before this line; single-orbit regions never reach here).
+  // Everything that fails the rule keeps today's contour-offset emission
+  // byte-identically.
+  const strategy = chooseClearingStrategy({
+    toolDiameter: tool.diameter,
+    depth: op.topZ - op.floorZ,
+    levels: levels.length,
+    orbitCount: flatPassCount,
+  });
+  if (strategy === 'trochoid') {
+    // TODO(spec step 2): trochoid emission not yet built — inert fall-through
   }
 
   // stay-down state: after a pass the tool RESTS at `cur` at `restZ` — the
