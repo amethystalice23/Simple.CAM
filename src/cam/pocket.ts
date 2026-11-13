@@ -16,7 +16,7 @@ import {
   totalArea,
   union,
 } from './clipper';
-import { chooseClearingStrategy } from './adaptive';
+import { chooseClearingStrategy, planTrochoid } from './adaptive';
 import { arcTable, boreDescentFits, rampEntry, type EntryMode } from './entry';
 import { APPROACH_CLEARANCE, rotateToNearest, zLadder } from './paths';
 
@@ -398,7 +398,111 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     orbitCount: flatPassCount,
   });
   if (strategy === 'trochoid') {
-    // TODO(spec step 2): trochoid emission not yet built — inert fall-through
+    // ADAPTIVE ROUGHING (spec build step 2): plan the constant-engagement
+    // walk ONCE (the region is identical at every level — the same fact
+    // the hoisted orbit ladder rests on), then replay per level with the
+    // app's entry/link conventions. The user's stepOver is NOT consulted:
+    // the ae ladder and the walk decisions are the strategy's own.
+    const plan = planTrochoid({
+      regions: op.regions,
+      footprint: op.footprint && op.footprint.length > 0 ? op.footprint : undefined,
+      toolR,
+      minLoopPerimeter: opts.minLoopPerimeter,
+    });
+    const tDropped = plan.dropped * levels.length;
+    let tRestZ: number | null = null;
+    let tLinks = 0;
+    // `cur` / `passes` / `entries` / `minutes` are the function-scoped tallies
+    for (const levelZ of levels) {
+      const entryTop = Math.max(standingZ, op.approachCeiling ?? -Infinity);
+      const approachZ = Math.max(levelZ, entryTop) + APPROACH_CLEARANCE;
+      for (let j = 0; j < plan.walks.length; j++) {
+        const walk = plan.walks[j];
+        const start = walk.loop[0];
+        const tRest = tRestZ === levelZ ? cur : null;
+
+        if (j > 0 && walk.linkStayDown && tRest !== null) {
+          // STAY DOWN: the plan proved the capsule swept and in-region —
+          // feed straight to the ring start at depth
+          moves.push({
+            words: { x: start.x, y: start.y },
+            feed: op.feed,
+            comment: `level z${levelZ.toFixed(2)} walk ${j + 1} — stay-down link`,
+          });
+          minutes += Math.hypot(start.x - tRest.x, start.y - tRest.y) / op.feed;
+          tLinks++;
+        } else {
+          // RAISED APPROACH + RAMP ENTRY along the ring's own loop — the
+          // entry pre-clears the ring's band; the walk is the cleaning lap
+          if (tRestZ !== null) {
+            moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+          }
+          moves.push({
+            words: { x: start.x, y: start.y },
+            feed: 0,
+            rapid: true,
+            comment: `level z${levelZ.toFixed(2)} walk ${j + 1} — adaptive roughing`,
+          });
+          moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+          moves.push({ words: { z: approachZ }, feed: 0, rapid: true });
+          const cum = arcTable(walk.loop);
+          const entry = rampEntry({
+            loop: walk.loop,
+            cum,
+            sStart: 0,
+            stretch: cum[walk.loop.length],
+            closed: true,
+            band: op.finishingOnly ? 0 : entryTop - levelZ,
+            fromZ: approachZ,
+            toZ: levelZ,
+            stepDown: op.stepDown,
+            feed: op.plungeFeed,
+          });
+          moves.push(...entry.moves);
+          minutes += entry.minutes;
+          entries[entry.mode]++;
+        }
+
+        // replay the planned walk steps at this level's cut plane
+        let prev = start;
+        for (const st of walk.steps) {
+          if (st.center && st.cw !== undefined) {
+            moves.push({
+              words: { x: st.to.x, y: st.to.y },
+              feed: op.feed,
+              arc: { i: st.center.x - prev.x, j: st.center.y - prev.y, cw: st.cw },
+              comment: 'trochoid peel',
+            });
+            minutes += (Math.PI * Math.hypot(st.center.x - prev.x, st.center.y - prev.y)) / op.feed;
+          } else {
+            moves.push({ words: { x: st.to.x, y: st.to.y }, feed: op.feed });
+            minutes += Math.hypot(st.to.x - prev.x, st.to.y - prev.y) / op.feed;
+          }
+          prev = st.to;
+        }
+
+        cur = walk.end;
+        tRestZ = levelZ;
+        passes++;
+      }
+      // this level cleared its region down to levelZ — the next level's
+      // ramps meet nothing above that
+      standingZ = levelZ;
+    }
+    if (tRestZ !== null) {
+      moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    }
+    return {
+      moves,
+      levels: levels.length,
+      passes,
+      estimatedMinutes: minutes,
+      droppedLoops: tDropped,
+      entries,
+      links: tLinks,
+      continuous: 0,
+      orbits: plan.walks.map((w) => w.loop),
+    };
   }
 
   // stay-down state: after a pass the tool RESTS at `cur` at `restZ` — the

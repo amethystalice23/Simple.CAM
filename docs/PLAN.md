@@ -711,6 +711,31 @@ the SELECTOR is per-op — the trigger depends on what each op knows):**
   load, and trochoids would ADD time. Adaptive is a G94 flat-world
   tool.
 
+**BUILD STATE (steps 1–2 landed 2026-11-13, branch `feat/adaptive-clearing`):**
+selector + emitter + replay wired into `pocket2d`; 1210/1210 green.
+The engagement oracle is a rasterized standing grid (pitch ae/4) and
+the metric is newly-swept standing area ÷ path length. Two honest
+limits the build exposed (both NO WORSE than the orbit mode's own
+behavior at the same spots — recorded in adaptive.ts's HONEST LIMITS):
+- ENTRY EXCEPTION: the first ramp revolution of an entry cuts at full
+  disc width, bounded by the entry.ts descent discipline (≤3°, ≤
+  stepDown/rev) — the accepted app-wide entry behavior.
+- CORNER PIVOTS + FRESH-FRONT CORRIDORS: a disc pivoting a sharp ring
+  corner carves an O(R²) outer quadrant no semicircle peel can dilute
+  (the wedge does not shrink with ρ; a full-circle trochoid was tried
+  and removed — its own sweep of the un-walked strip keeps cEng above
+  the bound at every contained radius), and where a ring's inner-
+  neighbor topology dies (a neck narrower than the ring ladder), a
+  tool-width corridor admits no bounded move at all. Both commit via
+  a straight fallback ≤ the disc ceiling. The fixes — the multi-circle
+  corner nibble, and true trochoidal slotting (many circles advancing
+  δ each) for fresh corridors — are the TUNING STEP's items, not
+  blockers: they are rare segments and identical to today's orbit
+  emission there. Tests pin the two-tier contract: straight runs ≤
+  ae·tolerance (corner-adjacent excluded), over-runs rare + ceiling-
+  bounded, full coverage, arc IR contract, entry discipline, and the
+  non-trochoid regression.
+
 **License:** reimplement from descriptions only (the hard rule);
 HSMWorks/Fusion/SprutCAM adaptive code is never read or pasted.
 

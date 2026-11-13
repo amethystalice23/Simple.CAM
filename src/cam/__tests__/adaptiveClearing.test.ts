@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Move, PocketOp, Tool, Vec2 } from '../../core/types';
+import type { PocketOp, Tool, Vec2 } from '../../core/types';
 import { chooseClearingStrategy } from '../adaptive';
 import { pocket2d } from '../pocket';
 
@@ -59,27 +59,15 @@ describe('chooseClearingStrategy', () => {
   });
 });
 
-// ---- inertness regression (SPEC build step 1) ----
+// ---- trochoid-route divergence regression (SPEC build steps 1→2) ----
 //
-// The selector is wired into pocket2d but the trochoid emitter does not
-// exist yet, so a trochoid-selected op must emit EXACTLY today's contour-
-// offset orbits. The pin straddles the depth leg with two ops identical
-// except that one crosses the 2·D threshold:
-//
-//   A: Ø3 tool, region Ø40, stepOver 4 → 4 surviving circular inset
-//      loops (r 18.5 / 14.5 / 10.5 / 6.5; the r 2.5 fifth is dropped by
-//      minLoopPerimeter), depth 10 > 2·3 · 10 levels → TROCHOID
-//   B: the same op with depth 5.999 = 2·D − 0.001 → ORBITS
-//
-// A full Move[] deep-equal is impossible BY CONSTRUCTION between any
-// depth-nudged pair: the z ladder itself scales with depth (rung =
-// span/levels, rapids sit at clearance above it, ramp z's interpolate
-// across it), so z-bearing words can never coincide. The pin therefore
-// compares the DEPTH-FREE canonical form — rapid/feed kind, XY words,
-// feed, arc vectors, z-word PRESENCE, comments with the level-z token
-// masked — plus the real z structure at the level landings, whose
-// depth-fractions (k/10) coincide because both ladders carry the SAME
-// level count (B's stepDown 0.605 keeps n = 10).
+// The step-1 inertness pin straddled the depth leg with two ops identical
+// except that one crosses the 2·D threshold (A: Ø3 tool, region Ø40, depth
+// 10 → trochoid; B: depth 5.999 = 2·D − 0.001 → orbits). Step 2 made the
+// route LIVE: the deep twin now diverges onto the adaptive walk (the old
+// canonical deep-equal was retired with the fall-through it pinned). The
+// shallow side of the pair survives below as the orbit-mode regression —
+// with the full pocket suite pinning orbit emission throughout.
 
 /** CCW 64-gon — the region shape opTargets emits for a circular feature. */
 function circle64(cx: number, cy: number, r: number): Vec2[] {
@@ -108,38 +96,14 @@ function op(overrides: Partial<PocketOp> = {}): PocketOp {
   };
 }
 
-/** Depth-free canonical form of a move list (see the block comment). */
-function canonical(moves: Move[]): unknown[] {
-  return moves.map((m) => ({
-    rapid: m.rapid ?? false,
-    feed: m.rapid ? 0 : m.feed,
-    x: m.words.x ?? null,
-    y: m.words.y ?? null,
-    // z PRESENCE only: the z VALUES are the nudge itself (ladder scaling)
-    zWord: m.words.z === undefined ? null : 'z',
-    a: m.words.a ?? null,
-    arc: m.arc ? { i: m.arc.i, j: m.arc.j, cw: m.arc.cw } : null,
-    // `level z-1.00` tokens scale with depth; pass/turn structure does not
-    comment: m.comment?.replace(/z-?[\d.]+/g, 'z#') ?? null,
-  }));
-}
-
-/** Landing z of every entry run (the cut level), as a DEPTH FRACTION of
- *  the op's span: k/levels for the k-th rung — identical for both ladders. */
-function landingFractions(moves: Move[], span: number): number[] {
-  const zs = moves.filter((m) => !m.rapid && m.words.z !== undefined).map((m) => m.words.z!);
-  const runs: number[][] = [];
-  for (const z of zs) {
-    const last = runs[runs.length - 1];
-    if (!last || z > last[last.length - 1] + 1e-12) runs.push([z]);
-    else last.push(z);
-  }
-  return runs.map((r) => Number(((0 - r[r.length - 1]) / span).toFixed(5)));
-}
-
-describe('pocket2d — adaptive selector wired, inert (spec step 1)', () => {
+describe('pocket2d — the trochoid route is LIVE (spec step 2)', () => {
+  // The SAME pair the step-1 inertness pin used. Step 2 replaced the inert
+  // fall-through with the emitter: the deep twin now DIVERGES onto the
+  // adaptive route; the shallow twin keeps today's orbit emission (that
+  // side of the old pin survives as the regression test, joined by the
+  // full pocket suite, which pins orbit-mode behavior throughout).
   // stepDown 0.605: ceil(5.999/0.605) = ceil(9.916) = 10 — the SAME level
-  // count as the deep op, so pass structure is genuinely comparable
+  // count as the deep op, so the pair is genuinely comparable.
   const deep = pocket2d(op(), tool, { minLoopPerimeter: 30 });
   const shallow = pocket2d(op({ floorZ: -(2 * 3 - 0.001), stepDown: 0.605 }), tool, {
     minLoopPerimeter: 30,
@@ -149,31 +113,23 @@ describe('pocket2d — adaptive selector wired, inert (spec step 1)', () => {
   it('the pair straddles the selector exactly as pocket2d computes it', () => {
     expect(chooseClearingStrategy({ toolDiameter: 3, depth: 10, levels: deep.levels, orbitCount: deep.orbits.length })).toBe('trochoid');
     expect(chooseClearingStrategy({ toolDiameter: 3, depth: shallowSpan, levels: shallow.levels, orbitCount: shallow.orbits.length })).toBe('orbits');
-    expect(shallow.levels).toBe(deep.levels); // 10 = 10, by the stepDown choice
     expect(deep.continuous).toBe(0);
     expect(shallow.continuous).toBe(0); // neither takes the descent branch
   });
 
-  it('a trochoid-selected op emits today\'s orbit ladder (inert fall-through)', () => {
-    expect(canonical(shallow.moves)).toEqual(canonical(deep.moves));
-  });
-
-  it('level landings sit on the same depth fractions (k/10) in both', () => {
-    const a = landingFractions(deep.moves, 10);
-    const b = landingFractions(shallow.moves, shallowSpan);
-    expect(b).toEqual(a);
-    // every rung exactly once per pass-ladder: first landing 1/10, last 1
-    expect(a[0]).toBeCloseTo(0.1, 5);
-    expect(a[a.length - 1]).toBeCloseTo(1, 5);
-  });
-
-  it('pass structure is identical (4 surviving circles × 10 levels)', () => {
+  it('the deep twin emits the adaptive route (walks, ae ladder)', () => {
+    expect(deep.moves.some((m) => m.comment?.includes('adaptive roughing'))).toBe(true);
     expect(deep.levels).toBe(10);
-    expect(deep.passes).toBe(40);
-    expect(shallow.passes).toBe(40);
+    // the ae ladder (0.45mm spacing) rings the region far denser than the
+    // 4 surviving step-over orbits: many more walk passes per level
+    expect(deep.passes).toBeGreaterThan(shallow.passes);
+  });
+
+  it('the shallow twin keeps today\'s orbit emission, no adaptive markers', () => {
+    expect(shallow.moves.some((m) => m.comment?.includes('adaptive roughing'))).toBe(false);
+    expect(shallow.moves.some((m) => m.comment?.includes('trochoid peel'))).toBe(false);
     expect(shallow.orbits.length).toBe(4);
-    expect(shallow.links).toBe(deep.links);
-    expect(shallow.entries).toEqual(deep.entries);
-    expect(shallow.moves.length).toBe(deep.moves.length);
+    expect(shallow.passes).toBe(40);
+    expect(shallow.moves.length).toBeGreaterThan(0);
   });
 });
