@@ -473,11 +473,13 @@ import {
   ballAttitudeDeg,
   ballClearanceCheck,
   ballToolCenter,
+  ballToolCenterAt,
   emitSwarfPass,
   fluteClearanceCheck,
   fluteToolCenter,
   FLUTE_CLEAR,
   FLUTE_CLIPPED,
+  segmentBallStrips,
   segmentContactPatches,
 } from '../swarfFinish';
 
@@ -2035,16 +2037,22 @@ describe('emitSwarfPass attitude ball — the wall strip at the window center (m
 /* ------------------- Stage 0 of the traces spec (2026-11-13) ------------------- */
 
 /** a minimal hand-built map: one θ-row, `aligns[i]` at x=i — the walk and
- *  the emitter are pure over cells + cellIndex, so no mesh is needed */
+ *  the emitter are pure over cells + cellIndex, so no mesh is needed.
+ *  Each cell's n is derived from its align (real map cells derive align
+ *  FROM n: align = atan2(n.y,n.z)+90°), so the ball attitude align−90 ≡
+ *  ballAttitudeDeg(n) — the consistency the emitter assumes. */
 const stage0Map = (aligns: number[]) => {
   const nx = aligns.length;
-  const cells = aligns.map((align, i) => ({
-    theta: 0,
-    p: { x: i, y: 5, z: 5 },
-    n: { x: 0, y: 0, z: 1 },
-    align,
-    rake: 0,
-  }));
+  const cells = aligns.map((align, i) => {
+    const th = ((align - 90) * Math.PI) / 180; // the ball attitude φ
+    return {
+      theta: 0,
+      p: { x: i, y: 5, z: 5 },
+      n: { x: 0, y: Math.sin(th), z: Math.cos(th) },
+      align,
+      rake: 0,
+    };
+  });
   const cellIndex = new Uint32Array(nx).fill(CONTACT_AIR);
   for (let i = 0; i < nx; i++) cellIndex[i] = i;
   return { cells, cellIndex, nx, nTheta: 1, pitchX: 1, gx0: 0, surfaceCells: cells.length };
@@ -2148,5 +2156,172 @@ describe('emitSwarfPass — Stage 0.3: the signed-ΔA writer (spec 2026-11-13)',
       fluteToolCenter(map.cells[1].p, map.cells[1].n, 10, 2, 0).z,
       9,
     );
+  });
+});
+
+/* ---------------- STAGE 1 — the ball strip planner (traces spec, 2026-11-13) ---------------- */
+
+describe('segmentBallStrips — the wall strip (A-parking, one strip, full coverage)', () => {
+  // the ball-emission wall fixture: the box's +Y face (uniform align 180,
+  // ball windows ±72.5° at ρ=1) — the patch planner already chains it as
+  // one patch; the strip planner must too, with every stance INSIDE each
+  // cell's window and every step within the fold-pair cap
+  const positions = attr(new THREE.BoxGeometry(12, 6, 12).translate(0, -5, AXIS_Z));
+  const map = buildContactMap({
+    positions,
+    x0: -5.5,
+    x1: 5.5,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const tool = { ...TOOL(4, 20), type: 'ball' as const, shaftDiameter: 3.175 };
+  const verdict = ballClearanceCheck({ positions, tool, map, axisZ: AXIS_Z, radius: 12 });
+  const wallIdx = map.cells.map((c, i) => (c.n.y > 0.99 ? i : -1)).filter((i) => i >= 0);
+  const clearWall = wallIdx.filter((i) => verdict[i] === FLUTE_CLEAR);
+  const res = segmentBallStrips({
+    positions,
+    tool,
+    map,
+    axisZ: AXIS_Z,
+    radius: 12,
+    verdict,
+    startA: 0,
+  });
+
+  it('covers every CLEAR wall cell in strips — none dropped, none duplicated', () => {
+    const swept = new Set(res.patches.flatMap((p) => p.cells));
+    expect(swept.size).toBe([...swept].length); // no duplicates across strips
+    for (const i of clearWall) expect(swept.has(i)).toBe(true);
+    // the unreachable class is exactly the CLIPPED verdicts (the convex
+    // box clears everywhere, so this fixture pins the zero case; the
+    // sphere fixture below pins the non-zero case)
+    const clipped = Array.from(verdict).filter((v) => v !== FLUTE_CLEAR).length;
+    expect(res.unswarfableCells).toBe(clipped);
+  });
+
+  it('every stance sits inside its cell\'s window and every step within the fold-pair cap', () => {
+    const floor = 0.3;
+    for (const strip of res.patches) {
+      expect(strip.attitudes.length).toBe(strip.cells.length);
+      for (let k = 0; k < strip.cells.length; k++) {
+        const c = map.cells[strip.cells[k]];
+        const rho = Math.hypot(c.n.y, c.n.z);
+        const phi = ballAttitudeDeg(c.n);
+        const hw = (Math.acos(floor / rho) * 180) / Math.PI;
+        const d = ((strip.attitudes[k] - phi) % 360 + 360) % 360;
+        const off = Math.min(d, 360 - d);
+        expect(off).toBeLessThanOrEqual(hw + 1e-6); // inside the engagement window
+        if (k > 0) {
+          const step = Math.abs(strip.attitudes[k] - strip.attitudes[k - 1]);
+          expect(step).toBeLessThanOrEqual(30 + 1e-6); // the fold-pair contract
+        }
+      }
+    }
+  });
+
+  it('A-PARKS: the wall chain holds one stance across the whole strip', () => {
+    // uniform φ on this wall: whichever stance the walk opens at, it
+    // stays — ΔA is zero cell-to-cell (the whole point: attitude is an
+    // interval, and the planner exploits it instead of re-aligning)
+    const bigStrips = res.patches.filter((p) => p.cells.length >= 8);
+    expect(bigStrips.length).toBeGreaterThan(0);
+    for (const s of bigStrips) {
+      const spread = Math.max(...s.attitudes) - Math.min(...s.attitudes);
+      expect(spread).toBeLessThan(1e-6);
+    }
+  });
+
+  it('the emitter follows the thread: entry advances to attitudes[0], cuts ride the parked stance', () => {
+    const strip = res.patches.find((p) => p.cells.length >= 8)!;
+    const r = emitSwarfPass({
+      map,
+      patch: strip,
+      tool,
+      axisZ: AXIS_Z,
+      radius: 12,
+      feed: 600,
+      plungeFeed: 300,
+      attitude: 'ball',
+    });
+    const cuts = r.moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cuts.length).toBe(strip.cells.length - 1);
+    for (const m of cuts) {
+      const amod = (((m.words.a! % 360) + 360) % 360);
+      expect(Math.min(Math.abs(amod - strip.attitudes[0]), 360 - Math.abs(amod - strip.attitudes[0]))).toBeLessThan(1e-6);
+    }
+    // the tool center follows the THREADED stance (ballToolCenterAt),
+    // not the window center — and the commanded z is the TIP (Stage 0.4)
+    const c1 = map.cells[strip.cells[1]];
+    const cut1 = cuts[0];
+    const C = ballToolCenterAt(c1.p, c1.n, 2, AXIS_Z, strip.attitudes[1]);
+    expect(cut1.words.x).toBeCloseTo(C.x, 6);
+    expect(cut1.words.y).toBeCloseTo(C.y, 6);
+    expect(cut1.words.z).toBeCloseTo(C.z - 2, 6);
+  });
+});
+
+describe('segmentBallStrips — the offset sphere (the fragmentation fix, measured)', () => {
+  // the smooth organic fixture: normals swing continuously, so the
+  // patch planner's attitude-merge gate fragments it; the strip planner
+  // walks θ-rows. The assertion is the committee's acceptance shape:
+  // the same coverage, at a strictly smaller trace count.
+  const RS = 4;
+  const g = new THREE.SphereGeometry(RS, 32, 16);
+  g.translate(-8, 0, AXIS_Z + 1);
+  const positions = attr(g);
+  const map = buildContactMap({
+    positions,
+    x0: -12,
+    x1: 12,
+    radius: 12,
+    axisZ: AXIS_Z,
+    thetaStepOver: 3,
+  });
+  const tool = { ...TOOL(4, 20), type: 'ball' as const, shaftDiameter: 3.175 };
+  const verdict = ballClearanceCheck({ positions, tool, map, axisZ: AXIS_Z, radius: 12 });
+  const oldPatches = segmentContactPatches({ map, verdict }).patches;
+  const res = segmentBallStrips({
+    positions,
+    tool,
+    map,
+    axisZ: AXIS_Z,
+    radius: 12,
+    verdict,
+    startA: 0,
+  });
+
+  it('same reachable set as the patch planner (honesty parity)', () => {
+    expect(res.unswarfableCells).toBe(segmentContactPatches({ map, verdict }).unswarfableCells);
+    const swept = new Set(res.patches.flatMap((p) => p.cells));
+    expect(swept.size).toBe(map.cells.length - res.unswarfableCells);
+  });
+
+  it('STRICTLY fewer traces than the patch planner on the smooth fixture (the fix is measurable)', () => {
+    // the committee probes measured 5–30× on smooth fixtures; a broad
+    // inequality keeps the pin robust to fixture tuning while still
+    // failing if the strip planner ever regresses to fragments
+    expect(res.patches.length).toBeLessThan(oldPatches.length);
+    const meanStrip = res.patches.reduce((s, p) => s + p.cells.length, 0) / res.patches.length;
+    const meanPatch = oldPatches.reduce((s, p) => s + p.cells.length, 0) / oldPatches.length;
+    expect(meanStrip).toBeGreaterThan(meanPatch);
+  });
+
+  it('every stance inside its window, every step within the cap (the invariant, everywhere)', () => {
+    const floor = 0.3;
+    for (const strip of res.patches) {
+      for (let k = 0; k < strip.cells.length; k++) {
+        const c = map.cells[strip.cells[k]];
+        const rho = Math.hypot(c.n.y, c.n.z);
+        const phi = ballAttitudeDeg(c.n);
+        const hw = (Math.acos(floor / rho) * 180) / Math.PI;
+        let d = Math.abs(strip.attitudes[k] - phi) % 360;
+        if (d > 180) d = 360 - d;
+        expect(d).toBeLessThanOrEqual(hw + 1e-6);
+        if (k > 0) {
+          expect(Math.abs(strip.attitudes[k] - strip.attitudes[k - 1])).toBeLessThanOrEqual(30 + 1e-6);
+        }
+      }
+    }
   });
 });

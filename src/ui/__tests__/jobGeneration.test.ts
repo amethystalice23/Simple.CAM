@@ -2789,7 +2789,10 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
       tools: [...tools, ball],
     });
     expect(res.error).toBeNull();
-    expect(res.summary).toMatch(/ball patch/); // the envelope word, not 'flank'
+    // Stage 1 (traces spec, 2026-11-13): the ball kernel runs the STRIP
+    // planner — this smooth cylinder fixture lands ONE strip end to end
+    // (the patch planner's fragments are the bug this replaces)
+    expect(res.summary).toMatch(/ball strip/); // the envelope word, not 'flank'
     expect(res.summary).toMatch(/swept/);
     const cuts = res.moves.filter((m) => !m.rapid && m.words.a !== undefined);
     expect(cuts.length).toBeGreaterThan(100); // the same full grid, one move per cell

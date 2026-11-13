@@ -609,6 +609,15 @@ export function fluteClearanceCheck(o: FluteClearanceOptions): Uint8Array {
  *  in WALK ORDER (non-decreasing machine attitude) */
 export interface ContactPatch {
   cells: number[];
+  /**
+   * Stage 1 (the traces spec, 2026-11-13): per-cell THREADED attitudes,
+   * parallel to `cells` — present when a planner chose each stance (the
+   * ball strip planner's A-parking); absent = the kernel's own attitude
+   * (flank align, ball window center). The emitter follows the thread:
+   * entry advances to attitudes[0], each sweep move to attitudes[k], the
+   * tool center to ballToolCenterAt(stance).
+   */
+  attitudes?: number[];
 }
 
 export interface SegmentPatchesResult {
@@ -736,6 +745,187 @@ function wrapDeltaDeg(a: number, b: number): number {
   let d = Math.abs(a - b) % 360;
   if (d > 180) d = 360 - d;
   return d;
+}
+
+/** signed wrap-aware delta, (−180, 180] — to relative to from */
+function signedDeltaDeg(from: number, to: number): number {
+  let d = ((to - from) % 360 + 360) % 360;
+  if (d > 180) d -= 360;
+  return d;
+}
+
+/* --------------- STAGE 1 — THE BALL STRIP PLANNER (traces spec, 2026-11-13) --------------- */
+
+export interface SegmentBallStripsOptions extends BallClearanceOptions {
+  /** the ballClearanceCheck verdict for this map (center-attitude CLEAR/CLIPPED) */
+  verdict: Uint8Array;
+  /** machine A the first strip parks from — the op threads ctx.startA */
+  startA?: number;
+}
+
+/** one strip: cells in walk order + the threaded stance per cell */
+export interface BallStrip extends ContactPatch {
+  attitudes: number[];
+}
+
+export interface SegmentBallStripsResult {
+  patches: BallStrip[];
+  /**
+   * Cells no strip covers — the same honesty class as
+   * segmentContactPatches: every CLIPPED verdict (clearance-blocked or
+   * no window) plus any clear cell left behind. Every CLEAR cell with a
+   * window is covered by construction (its own strip in the worst
+   * case), so this equals the unreachable count.
+   */
+  unswarfableCells: number;
+  /** steps that dodged back to the window center — the parked/edge
+   *  stance CLIPPED at the threaded attitude (the per-edge re-verdict
+   *  guard, the adversaries' G3: center-only verdicts miss 1.6–2.1% of
+   *  wavy cells at window edges) */
+  centerDodges: number;
+  /** in-strip breaks (fold-pair guard, or a parked stance that fouls
+   *  with the center unreachable within the step cap) — honest retracts */
+  breaks: number;
+}
+
+/**
+ * The BALL strip planner (Stage 1 of the traces spec, 2026-11-13): the
+ * patch-planner fragmentation fix. The window is a ±~72° INTERVAL per
+ * cell, not a point — so the planner TRACES θ-row strips along X
+ * (Alice's stated shape), chaining rows end-to-end boustrophedon-style
+ * (wrap-aware at the seam), and A PARKS: the stance holds while the
+ * next cell's window still contains it, moves only to the nearest
+ * window edge when it must, and every off-center stance RE-VERDICTS
+ * against the real mesh (G3). Steps beyond the FOLD_PAIR cap break the
+ * strip honestly — the emitter never wraps them. The stance chain
+ * carries in the patch's `attitudes`; the flank path keeps
+ * segmentContactPatches verbatim (exact envelope, geometry-forced).
+ */
+export function segmentBallStrips(o: SegmentBallStripsOptions): SegmentBallStripsResult {
+  const { map, verdict } = o;
+  const n = map.cells.length;
+  if (verdict.length !== n) {
+    throw new Error(`verdict/map mismatch: ${verdict.length} verdicts for ${n} cells`);
+  }
+  const floor = o.glancingFloor ?? BALL_DEFAULT_FLOOR;
+  if (!(floor > 0) || !(floor < 1)) {
+    throw new Error('bad glancing floor: 0 < floor < 1');
+  }
+  const { cellIndex, nx, nTheta, cells } = map;
+
+  /** cell index at grid (i, θ-row j) — θ wraps, X clamps; −1 = air */
+  const cellAt = (i: number, j: number): number => {
+    if (i < 0 || i >= nx) return -1;
+    const jj = ((j % nTheta) + nTheta) % nTheta;
+    const s = cellIndex[jj * nx + i];
+    return s === CONTACT_AIR ? -1 : s;
+  };
+  const clearAt = (i: number, j: number): boolean => {
+    const s = cellAt(i, j);
+    return s >= 0 && verdict[s] === FLUTE_CLEAR && visited[s] === 0;
+  };
+
+  // the engagement windows: center φ (normal-UP) and half-width
+  // acos(floor/ρ). CLEAR cells always have ρ ≥ floor (the verdict
+  // clips the axial class on sight).
+  const phi = new Float64Array(n);
+  const hw = new Float64Array(n);
+  for (let ci = 0; ci < n; ci++) {
+    const c = cells[ci];
+    const rho = Math.hypot(c.n.y, c.n.z);
+    phi[ci] = ballAttitudeDeg(c.n);
+    hw[ci] =
+      Math.acos(Math.min(1, floor / Math.max(rho, 1e-12))) * (180 / Math.PI);
+  }
+
+  // the re-verdict machinery — one more BVH build per op run (the
+  // center-attitude pass already built one; acceptable now, the P0
+  // genWorker hosting is the eventual home for both)
+  const clipCtx = makeBallClipCtx(o);
+
+  const visited = new Uint8Array(n);
+  const patches: BallStrip[] = [];
+  let centerDodges = 0;
+  let breaks = 0;
+  let runningA = o.startA ?? 0;
+
+  /** the stance for `ci` continuing from `a`: PARKED if a sits inside
+   *  the window, else its nearest edge */
+  const stanceFor = (ci: number, a: number): number => {
+    const d = signedDeltaDeg(phi[ci], a);
+    if (Math.abs(d) <= hw[ci] + 1e-9) return a;
+    return phi[ci] + Math.sign(d) * hw[ci];
+  };
+
+  /** walk one strip from an unvisited clear cell: along the row, then
+   *  boustrophedon-turn to the next θ-row at the same end-i, wrap-aware;
+   *  honest break at gaps, fold-pair violations, or fouling stances */
+  const walkStrip = (startI: number, startJ: number): void => {
+    const stripCells: number[] = [];
+    const stripAtt: number[] = [];
+    let i = startI;
+    let j = startJ;
+    let dir = 1; // the first row runs +X; each turn flips
+    for (;;) {
+      const ci = cellAt(i, j);
+      if (ci < 0 || visited[ci] !== 0) break; // defensive
+      let att = stanceFor(ci, runningA);
+      if (att !== phi[ci]) {
+        // an OFF-CENTER stance: unverified by the map pass — re-verdict
+        // against the real mesh (G3). Fouling parked stances dodge to
+        // the window CENTER (the precomputed CLEAR verdict guarantees
+        // it clears); mid-strip dodges beyond the step cap break.
+        if (ballCellClips(clipCtx, ci, att)) {
+          const dCenter = signedDeltaDeg(runningA, phi[ci]);
+          if (stripCells.length > 0 && Math.abs(dCenter) > FOLD_PAIR_MAX_DEG + 1e-9) {
+            breaks++;
+            break;
+          }
+          att = phi[ci];
+          centerDodges++;
+        }
+      }
+      if (stripCells.length > 0) {
+        const step = signedDeltaDeg(runningA, att);
+        if (Math.abs(step) > FOLD_PAIR_MAX_DEG + 1e-9) {
+          breaks++; // the emitter must never wrap a step this large
+          break;
+        }
+      }
+      visited[ci] = 1;
+      stripCells.push(ci);
+      stripAtt.push(att);
+      runningA = att;
+      // advance along the row
+      if (clearAt(i + dir, j)) {
+        i += dir;
+        continue;
+      }
+      // row run end → boustrophedon turn: same end-i, next θ-row (wraps
+      // at the seam — a full-circumference strip closes there honestly)
+      if (clearAt(i, j + 1)) {
+        j += 1;
+        dir = -dir;
+        continue;
+      }
+      break; // the honest strip end: retract, re-approach
+    }
+    if (stripCells.length > 0) patches.push({ cells: stripCells, attitudes: stripAtt });
+  };
+
+  for (let j = 0; j < nTheta; j++) {
+    for (let i = 0; i < nx; i++) {
+      if (!clearAt(i, j)) continue;
+      walkStrip(i, j);
+    }
+  }
+
+  let unswarfable = 0;
+  for (let ci = 0; ci < n; ci++) {
+    if (verdict[ci] !== FLUTE_CLEAR || visited[ci] === 0) unswarfable++;
+  }
+  clipCtx.geo.dispose();
+  return { patches, unswarfableCells: unswarfable, centerDodges, breaks };
 }
 
 /**
@@ -909,18 +1099,33 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   let minutes = 0;
   const ball = o.attitude === 'ball';
 
-  /** the cell's contact attitude: flank = align (normal horizontal);
-   *  ball = align − 90° (normal UP, the window center). Constant shift,
-   *  so every walk DIFFERENCE below is family-agnostic. */
-  const attitudeOf = (ci: number) =>
-    ball ? ((((cells[ci].align - 90) % 360) + 360) % 360) : cells[ci].align;
+  /** the cell's contact attitude: a THREADED stance when the patch
+   *  carries one (Stage 1 A-parking), else flank = align (normal
+   *  horizontal) / ball = align − 90° (normal UP, the window center).
+   *  The ball's constant −90° shift preserves every walk DIFFERENCE. */
+  const attOverride = new Map<number, number>();
+  if (o.patch.attitudes !== undefined) {
+    if (o.patch.attitudes.length !== patch.length) {
+      throw new Error(
+        `attitudes/patch mismatch: ${o.patch.attitudes.length} attitudes for ${patch.length} cells`,
+      );
+    }
+    for (let k = 0; k < patch.length; k++) attOverride.set(patch[k], o.patch.attitudes[k]);
+  }
+  const attitudeOf = (ci: number) => {
+    const ov = attOverride.get(ci);
+    if (ov !== undefined) return ov;
+    return ball
+      ? ((((cells[ci].align - 90) % 360) + 360) % 360)
+      : cells[ci].align;
+  };
 
-  /** the tool center at cell ci's own attitude — fluteToolCenter's
-   *  formula (flank) or ballToolCenter's (ball, derived from n, so the
-   *  accumulated A and the attitude agree exactly in both families) */
+  /** the tool center at cell ci's OWN (threaded) attitude — fluteTool-
+   *  Center's formula (flank) or ballToolCenterAt's (ball; at the
+   *  window center φ it is exactly ballToolCenter). */
   const centerOf = (ci: number) =>
     ball
-      ? ballToolCenter(cells[ci].p, cells[ci].n, toolR, o.axisZ)
+      ? ballToolCenterAt(cells[ci].p, cells[ci].n, toolR, o.axisZ, attitudeOf(ci))
       : fluteToolCenter(cells[ci].p, cells[ci].n, cells[ci].align, toolR, o.axisZ);
   /**
    * The COMMANDED Z, Stage 0.4 (spec 2026-11-13): the machine's Z word
@@ -1076,15 +1281,33 @@ export function ballToolCenter(
   toolR: number,
   axisZ: number,
 ): { x: number; y: number; z: number } {
-  const th = (ballAttitudeDeg(n) * Math.PI) / 180;
+  return ballToolCenterAt(p, n, toolR, axisZ, ballAttitudeDeg(n));
+}
+
+/**
+ * The ball tool-center machine position at an EXPLICIT attitude, Stage 1
+ * (the traces spec, 2026-11-13): center = rotate(p, attitude) +
+ * toolR·n'(attitude), where n' is the machine-frame normal after the same
+ * rotation — the ball touches the surface at rotate(p, attitude) from
+ * that center. At attitude = φ (ballAttitudeDeg) this is exactly
+ * ballToolCenter (n'y ≡ 0 there, n'z = ρ); the A-PARKING planner threads
+ * attitudes off-center inside the window and the tool must follow.
+ */
+export function ballToolCenterAt(
+  p: { x: number; y: number; z: number },
+  n: { x: number; y: number; z: number },
+  toolR: number,
+  axisZ: number,
+  attitudeDeg: number,
+): { x: number; y: number; z: number } {
+  const th = (attitudeDeg * Math.PI) / 180;
   const cosA = Math.cos(th);
   const sinA = Math.sin(th);
   const zRel = p.z - axisZ;
-  const nr = Math.hypot(n.y, n.z);
   return {
     x: p.x + toolR * n.x,
-    y: p.y * cosA - zRel * sinA,
-    z: p.y * sinA + zRel * cosA + axisZ + toolR * nr,
+    y: p.y * cosA - zRel * sinA + toolR * (n.y * cosA - n.z * sinA),
+    z: p.y * sinA + zRel * cosA + axisZ + toolR * (n.y * sinA + n.z * cosA),
   };
 }
 
@@ -1117,7 +1340,30 @@ export interface BallClearanceOptions {
  * floor (nearly-axial normals: no honest window) are CLIPPED on sight;
  * the rest run the same capsule-vs-mesh shapecast as the flute check.
  */
-export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
+/** the two-band capsule test's shared state — one BVH per mesh, reused
+ *  by ballClearanceCheck's map pass AND the Stage 1 strip planner's
+ *  per-edge re-verdict (the adversaries' G3 guard: a stance parked
+ *  off-center inside the window is only honest if it re-clears). */
+interface BallClipCtx {
+  bvh: MeshBVH;
+  /** the BufferGeometry backing the BVH — dispose after the last verdict */
+  geo: THREE.BufferGeometry;
+  toolR: number;
+  shaftR: number;
+  flute: number;
+  axisZ: number;
+  map: ContactMapResult;
+  exclusionR: number;
+  segStart: THREE.Vector3;
+  segMid: THREE.Vector3;
+  segEnd: THREE.Vector3;
+  seg: THREE.Line3;
+  closest: THREE.Vector3;
+  p3: THREE.Vector3;
+  bb: THREE.Box3;
+}
+
+function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
   const toolR = o.tool.diameter / 2;
   const flute = o.tool.fluteLength;
   if (!(toolR > 0)) throw new Error('bad tool: diameter must be positive');
@@ -1125,34 +1371,105 @@ export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
     throw new Error('bad tool: fluteLength must be positive');
   }
   if (!(o.radius > 0)) throw new Error('bad stock radius: must be positive');
-  const floor = o.glancingFloor ?? BALL_DEFAULT_FLOOR;
   // the REAL shank above the ball is wider than the ball (the carve
   // sim's own shank rule: shaftDiameter ?? diameter) — the capsule's
   // shaft band carries the wider radius or tight cells clear the model
   // while the real shank grinds (the 2026-10-31 gouge chase, H1)
   const shaftR = Math.max(toolR, (o.tool.shaftDiameter ?? o.tool.diameter) / 2);
-  if (!(floor > 0) || !(floor < 1)) {
-    throw new Error('bad glancing floor: 0 < floor < 1');
-  }
-
   // the contacted-neighborhood exclusion (identical to the flute check)
   const arcPitch = (2 * Math.PI * o.radius) / o.map.nTheta;
   const exclusionR = Math.max(0.05, 0.25 * Math.min(o.map.pitchX, arcPitch));
-
   // the mesh BVH, built ONCE (the tool capsule moves, the model stays)
   const geo = new THREE.BufferGeometry();
   const pos = Float32Array.from(o.positions);
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const bvh = new MeshBVH(geo, { targetLeafSize: 1 });
+  return {
+    bvh,
+    geo,
+    toolR,
+    shaftR,
+    flute,
+    axisZ: o.axisZ,
+    map: o.map,
+    exclusionR,
+    segStart: new THREE.Vector3(),
+    segMid: new THREE.Vector3(),
+    segEnd: new THREE.Vector3(),
+    seg: new THREE.Line3(),
+    closest: new THREE.Vector3(),
+    p3: new THREE.Vector3(),
+    bb: new THREE.Box3(),
+  };
+}
 
-  const segStart = new THREE.Vector3();
-  const segMid = new THREE.Vector3();
-  const segEnd = new THREE.Vector3();
-  const seg = new THREE.Line3();
-  const closest = new THREE.Vector3();
-  const p3 = new THREE.Vector3();
-  const bb = new THREE.Box3();
+/**
+ * The TWO-BAND capsule test for ONE cell at ONE attitude (Stage 1
+ * extraction; the committee-hardened body, verbatim): the BALL band —
+ * sphere toolR at the ball center C(attitude), swept C..C+toolR; the
+ * SHAFT band — cylinder shaftR (the REAL shank, shaftDiameter ??
+ * diameter — the carve sim's own rule) over C+toolR..C+flute. BOTH
+ * machine endpoints rotate back through the pinned indexedPoint-
+ * Rotation(−attitude) — constructed, the committee lesson. A single
+ * WIDE radius was probed and REJECTED (clips every concave cell the
+ * ball fits); the band split is the minimal honest form.
+ */
+function ballCellClips(ctx: BallClipCtx, ci: number, attitudeDeg: number): boolean {
+  const c = ctx.map.cells[ci];
+  const C = ballToolCenterAt(c.p, c.n, ctx.toolR, ctx.axisZ, attitudeDeg);
+  const rotBack = indexedPointRotation(-attitudeDeg, ctx.axisZ);
+  ctx.segStart.copy(rotBack({ x: C.x, y: C.y, z: C.z }));
+  ctx.segMid.copy(rotBack({ x: C.x, y: C.y, z: C.z + ctx.toolR }));
+  ctx.segEnd.copy(rotBack({ x: C.x, y: C.y, z: C.z + ctx.flute }));
 
+  let hit = false;
+  for (const [s, e, r] of [
+    [ctx.segStart, ctx.segMid, ctx.toolR],
+    [ctx.segMid, ctx.segEnd, ctx.shaftR],
+  ] as const) {
+    if (hit) break;
+    ctx.seg.start.copy(s);
+    ctx.seg.end.copy(e);
+    ctx.bb.min.x = C.x - r;
+    ctx.bb.max.x = C.x + r;
+    ctx.bb.min.y = Math.min(s.y, e.y) - r;
+    ctx.bb.max.y = Math.max(s.y, e.y) + r;
+    ctx.bb.min.z = Math.min(s.z, e.z) - r;
+    ctx.bb.max.z = Math.max(s.z, e.z) + r;
+    ctx.bvh.shapecast({
+      intersectsBounds: (box) => {
+        if (hit) return false; // early-out once clipped
+        if (box.max.x < ctx.bb.min.x || box.min.x > ctx.bb.max.x) return false;
+        if (box.max.y < ctx.bb.min.y || box.min.y > ctx.bb.max.y) return false;
+        if (box.max.z < ctx.bb.min.z || box.min.z > ctx.bb.max.z) return false;
+        return true;
+      },
+      intersectsTriangle: (t) => {
+        if (hit) return true;
+        // the contacted neighborhood exclusion first (cheap): the
+        // touched face's own fan is legal contact, not collision
+        if (t.distanceToPoint(ctx.p3.set(c.p.x, c.p.y, c.p.z)) < ctx.exclusionR) {
+          return false;
+        }
+        const d = t.closestPointToSegment(ctx.seg, ctx.closest);
+        // 1 µm graze epsilon: exact-tangent triangles are legal contact
+        if (d < r - 1e-3) {
+          hit = true;
+          return true;
+        }
+        return false;
+      },
+    });
+  }
+  return hit;
+}
+
+export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
+  const floor = o.glancingFloor ?? BALL_DEFAULT_FLOOR;
+  if (!(floor > 0) || !(floor < 1)) {
+    throw new Error('bad glancing floor: 0 < floor < 1');
+  }
+  const ctx = makeBallClipCtx(o);
   const verdict = new Uint8Array(o.map.cells.length).fill(FLUTE_CLEAR);
 
   for (let ci = 0; ci < o.map.cells.length; ci++) {
@@ -1164,77 +1481,11 @@ export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {
       verdict[ci] = FLUTE_CLIPPED;
       continue;
     }
-    // the capsule, TWO BANDS (committee 2026-10-31, her knight's gouge
-    // chase): the BALL band — sphere toolR at the ball center C, swept
-    // C..C+toolR; the SHAFT band — cylinder shaftR (the REAL shank,
-    // shaftDiameter ?? diameter — the carve sim's own rule) over
-    // C+toolR..C+flute. BOTH machine endpoints rotate back through the
-    // pinned indexedPointRotation(−φ) — constructed, the committee
-    // lesson. The single-radius capsule this carried from milestone 5
-    // modeled the shank at the ball's Ø: her Ø2.5 ball on a Ø3.175
-    // shank read CLEAR on tight cells whose stances grind the real
-    // shank (the sim's 307 shank-contact class) — and a one-character
-    // bounds slip in the shapecast cull (box.min.y vs bb.MAX.y) skipped
-    // every BVH node dipping into the capsule's y-band, falsely CLEARing
-    // 1,404 of her 17,534 cells and sweeping the tool through solid
-    // material (the sim's gouge class). A single WIDE radius was probed
-    // and REJECTED (clips 17,511/17,534 — every concave cell the ball
-    // fits); the band split is the minimal honest form.
-    const C = ballToolCenter(c.p, c.n, toolR, o.axisZ);
-    const rotBack = indexedPointRotation(-ballAttitudeDeg(c.n), o.axisZ);
-    segStart.copy(rotBack({ x: C.x, y: C.y, z: C.z }));
-    segMid.copy(rotBack({ x: C.x, y: C.y, z: C.z + toolR }));
-    segEnd.copy(rotBack({ x: C.x, y: C.y, z: C.z + flute }));
-
-    // 4. BVH shapecast PER BAND: the swept capsule (radius r about the
-    //    band's segment) vs every triangle whose box the band's padded
-    //    AABB reaches. A triangle COLLIDES iff its true segment-distance
-    //    < r AND it lies outside the contacted neighborhood — the flute
-    //    check's contract, per band.
-    let hit = false;
-    for (const [s, e, r] of [
-      [segStart, segMid, toolR],
-      [segMid, segEnd, shaftR],
-    ] as const) {
-      if (hit) break;
-      seg.start.copy(s);
-      seg.end.copy(e);
-      bb.min.x = C.x - r;
-      bb.max.x = C.x + r;
-      bb.min.y = Math.min(s.y, e.y) - r;
-      bb.max.y = Math.max(s.y, e.y) + r;
-      bb.min.z = Math.min(s.z, e.z) - r;
-      bb.max.z = Math.max(s.z, e.z) + r;
-      bvh.shapecast({
-        intersectsBounds: (box) => {
-          if (hit) return false; // early-out once clipped
-          if (box.max.x < bb.min.x || box.min.x > bb.max.x) return false;
-          if (box.max.y < bb.min.y || box.min.y > bb.max.y) return false;
-          if (box.max.z < bb.min.z || box.min.z > bb.max.z) return false;
-          return true;
-        },
-        intersectsTriangle: (t) => {
-          if (hit) return true;
-          // the contacted neighborhood exclusion first (cheap): the
-          // touched face's own fan is legal contact, not collision
-          if (t.distanceToPoint(p3.set(c.p.x, c.p.y, c.p.z)) < exclusionR) {
-            return false;
-          }
-          const d = t.closestPointToSegment(seg, closest);
-          // 1 µm graze epsilon: exact-tangent triangles are legal contact
-          if (d < r - 1e-3) {
-            hit = true;
-            return true;
-          }
-          return false;
-        },
-      });
-    }
-    if (hit) {
+    if (ballCellClips(ctx, ci, ballAttitudeDeg(c.n))) {
       verdict[ci] = FLUTE_CLIPPED;
     }
   }
 
-  geo.dispose();
+  ctx.geo.dispose();
   return verdict;
 }

@@ -29,7 +29,9 @@ import {
   buildContactMap,
   emitSwarfPass,
   fluteClearanceCheck,
+  segmentBallStrips,
   segmentContactPatches,
+  type ContactPatch,
 } from '../cam/swarfFinish';
 import { difference, offsetInward, offsetOutward } from '../cam/clipper';
 import { engraveFillSpans } from '../cam/engraveFill';
@@ -2242,7 +2244,26 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               axisZ: cal.axisZ,
               radius: cal.effectiveRadius,
             });
-        const { patches, unswarfableCells } = segmentContactPatches({ map, verdict });
+        // STAGE 1 (traces spec, 2026-11-13): the ball kernel takes the
+        // STRIP planner — θ-row strips with A-parking and per-edge
+        // re-verdicts carry per-cell threaded stances in the patch; the
+        // flank keeps the exact-attitude patch planner verbatim
+        // (geometry-forced, committee-measured honest negative).
+        const ballStrips = isBall
+          ? segmentBallStrips({
+              positions,
+              tool,
+              map,
+              axisZ: cal.axisZ,
+              radius: cal.effectiveRadius,
+              glancingFloor: op.glancingFloor,
+              verdict,
+              startA: ctx.startA,
+            })
+          : null;
+        const { patches, unswarfableCells } = ballStrips
+          ? { patches: ballStrips.patches as ContactPatch[], unswarfableCells: ballStrips.unswarfableCells }
+          : segmentContactPatches({ map, verdict });
         const moves: Move[] = [];
         let minutes = 0;
         let a = ctx.startA;
@@ -2294,12 +2315,17 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           );
         }
         const pctSwept = (100 * swept) / map.surfaceCells;
+        if (ballStrips && ballStrips.centerDodges > 0) {
+          notes.push(
+            `${ballStrips.centerDodges} stance(s) dodged to the window center — parked stance clipped, re-verdicted against the mesh`,
+          );
+        }
         return {
           moves,
           minutes,
           error: null,
           summary:
-            `${patches.length} ${envelope} patch(es), ${swept}/${map.surfaceCells} cell(s) (${pctSwept.toFixed(0)}%) swept, ~${minutes.toFixed(1)} min` +
+            `${patches.length} ${envelope} ${isBall ? 'strip(s)' : 'patch(es)'}, ${swept}/${map.surfaceCells} cell(s) (${pctSwept.toFixed(0)}%) swept, ~${minutes.toFixed(1)} min` +
             (notes.length > 0 ? ` · ${notes.join(' · ')}` : ''),
         };
       }

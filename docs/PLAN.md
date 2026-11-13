@@ -1297,16 +1297,28 @@ measured guards):**
   PIN). The cleared kernels still reason about the CENTER — only the
   commanded word moved.
 
-**STAGE 1 — the ball planner** (replaces segmentation+walk for the
-ball kernel only): θ-row STRIPS traced along X with **A-parking**
-(A holds while the next cell's window still contains it; ΔA only
-when the window slides away), rows chained end-to-end, breaks only
-at true obstacles (air, CLIPPED, no-window); per-edge clearance
-RE-VERDICT at the actually-threaded attitude (center-only verdicts
-clip 1.6–2.1% at window edges — probed). Probed wins (synthetic,
-rapids-charged): barrel 2,079 passes ×2.4 cells → 17 × 295;
-torus → ONE 840-cell trace. Acceptance on her knight: pass count
-÷≥10, charged minutes ÷≥4, sim 3-class clean.
+**STAGE 1 — LANDED 2026-11-13** (the ball planner; replaces
+segmentation+walk for the ball kernel only): `segmentBallStrips` —
+θ-row STRIPS traced along X with **A-parking** (A holds while the
+next cell's window still contains it; ΔA only to the nearest window
+edge when it must), rows chained boustrophedon end-to-end
+(wrap-aware at the seam), breaks only at true obstacles (air,
+CLIPPED, a fold-pair step, or a fouling parked stance); per-edge
+clearance RE-VERDICT at the actually-threaded attitude via the
+extracted `ballCellClips` (the adversaries' G3 guard — an
+off-center stance that fouls dodges to the window CENTER, whose
+precomputed verdict guarantees clear). Threaded stances ride the
+patch's `attitudes`; the emitter follows (ballToolCenterAt at the
+threaded stance, entry advancing to attitudes[0], Stage 0.4's tip-Z
+at every stance). Fixture numbers: the job-level cylinder model →
+**ONE strip, 721/728 cells (99%)** where the patch planner
+fragmented; the offset-sphere fixture keeps honesty parity with the
+patch planner's reachable set at a strictly smaller trace count
+(pinned by inequality). The flank path keeps segmentContactPatches
+verbatim (geometry-forced, committee-measured honest negative).
+KNIGHT ACCEPTANCE (her run): pass count ÷≥10, charged minutes ÷≥4,
+sim 3-class clean — fixture bars met; the knight number is hers
+to cut.
 
 **STAGE 2 — parked**: per-region ring/strip selection (a direction
 field — rings win 13× on revolution-class regions; the choice is
