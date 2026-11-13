@@ -739,6 +739,18 @@ function wrapDeltaDeg(a: number, b: number): number {
 }
 
 /**
+ * Walk comparator noise floor, degrees (Stage 0.1, spec 2026-11-13): the
+ * walk's neighbor test reads a sub-noise BACKWARD attitude dip (−ε from
+ * facet quantization) as a ~360° "behind" forward delta and rejects a
+ * neighbor that should be visited — folding every smoothly-drifting
+ * trace at each noise dip (3,338 → 210 passes, max 5,125 cells on a
+ * smooth fixture, committee-probed). An advance within this of a full
+ * revolution reads as zero. Real wobble (≥0.2°) is Stage 1's parking,
+ * not this ε.
+ */
+const ATTITUDE_EPS_DEG = 0.02;
+
+/**
  * The greedy monotone walk over one connected component (see the
  * milestone-3 docstring): repeatedly open a pass at the lowest-A*
  * unvisited cell, sweep forward from it while unvisited grid-neighbors
@@ -749,7 +761,7 @@ function wrapDeltaDeg(a: number, b: number): number {
  * is a patch boundary, never a flat cell sequence the emitter would
  * chord straight across at cut height). Passes are returned in pass
  * order; cells within a pass are grid-adjacent steps in non-decreasing
- * unwrapped attitude.
+ * unwrapped attitude (ε-noise dips read as zero advance, Stage 0.1).
  */
 function walkComponent(
   component: number[],
@@ -782,9 +794,15 @@ function walkComponent(
         if (s < 0 || visited.has(s) || !inPatch.has(s)) continue;
         // FORWARD advance to the neighbor's attitude, mod 360, in [0,360)
         const fwd = ((cells[s].align - cells[cur].align) % 360 + 360) % 360;
-        if (fwd > tol + 1e-9) continue; // behind or too far: never drag back
-        if (fwd < bestFwd - 1e-12) {
-          bestFwd = fwd;
+        // STAGE 0.1 (spec 2026-11-13): a sub-noise backward dip computes a
+        // ~360° forward delta and was REJECTED here — folding smooth traces
+        // at every facet-noise dip. An advance within ATTITUDE_EPS_DEG of a
+        // full revolution is a zero advance (the neighbor sits effectively
+        // level); genuinely behind or beyond tol still never drags back.
+        const adv = fwd > 360 - ATTITUDE_EPS_DEG ? 0 : fwd;
+        if (adv > tol + 1e-9) continue; // behind or too far
+        if (adv < bestFwd - 1e-12) {
+          bestFwd = adv;
           best = s;
         }
       }
@@ -818,7 +836,9 @@ export interface EmitSwarfPassOptions {
   /**
    * Machine A this pass enters at, degrees (the caller threads the
    * previous pass's endA here; default 0 = the stock's A=0 material
-   * frame). The pass only ever advances A.
+   * frame). The ENTRY advance only moves A forward (monotone across
+   * passes, the residue-pin contract); the SWEEP may step A signed
+   * (Stage 0.3) — the walk's merge tolerance bounds each step.
    */
   startA?: number;
   /**
@@ -837,20 +857,39 @@ export interface EmitSwarfPassOptions {
 
 export interface EmitSwarfPassResult {
   moves: Move[];
-  /** cutting + plunge minutes (rapids uncharged — the caller's overhead
-   *  accounting owns rapid travel and spindle ramps, the family convention) */
+  /**
+   * Cutting + plunge + ENTRY-A minutes (Stage 0.2, spec 2026-11-13:
+   * the patch-transition A rapid is real machine time at the rotary
+   * ceiling, ΔA/360/RPM — the adversaries measured the shipped
+   * convention excluding it as the DOMINANT per-pass cost, ~293°/
+   * patch ≈ 7s at the 6.6 RPM clamp. XY/Z rapids stay uncharged, the
+   * family convention).
+   */
   estimatedMinutes: number;
   /** machine A at pass exit — thread into the next pass's startA */
   endA: number;
 }
 
 /**
- * Emit ONE patch as a continuous monotone-A XYZA finishing pass
- * (milestone 3; the ball family, milestone 5). Entry contract: the tool
- * sits at the SAFE PLANE (z = axisZ + radius + safeClearance) — the
- * pass retracts back to it on exit, so consecutive passes thread
- * directly. Per cut move G93 inverse-time with F on every line (the
- * post's rule), feeds per the milestone-3 docstring; A only advances.
+ * Folded-pair guard, degrees (Stage 0.3, spec 2026-11-13): the walk's
+ * merge tolerance bounds every sweep attitude step to ≤ tol (~7°), so a
+ * larger SIGNED step reaching the emitter is a planner bug, not a cut —
+ * the plain mod-360 delta used to wrap such steps into near-full-
+ * revolution moves whose lerped chord plowed up to the full ball radius
+ * at the midpoint (adversary-probed 0.85–1.25mm). Fail loud, never emit.
+ */
+export const FOLD_PAIR_MAX_DEG = 30;
+
+/**
+ * Emit ONE patch as a continuous XYZA finishing pass (milestone 3; the
+ * ball family, milestone 5; Stage 0.2/0.3 of the traces spec, 2026-11-13).
+ * Entry contract: the tool sits at the SAFE PLANE (z = axisZ + radius +
+ * safeClearance) — the pass retracts back to it on exit, so consecutive
+ * passes thread directly. Per cut move G93 inverse-time with F on every
+ * line (the post's rule), feeds per the milestone-3 docstring; the ENTRY
+ * advances A (charged at the rotary ceiling, Stage 0.2) and the SWEEP
+ * steps A SIGNED (Stage 0.3 — a small backward step is a small move, not
+ * a wrapped near-revolution).
  */
 export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   const toolR = o.tool.diameter / 2;
@@ -896,14 +935,15 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
     };
   };
 
-  // ---- entry: A forward (rapid, charged at the ceiling) → XY over →
-  // plunge. All at the safe plane until the plunge; no rapid mixes Z
+  // ---- entry: A forward (rapid, CHARGED at the ceiling, Stage 0.2) → XY
+  // over → plunge. All at the safe plane until the plunge; no rapid mixes Z
   // with X/Y/A (the pinned convention). ----
   const first = patch[0];
   const fwd0 = ((attitudeOf(first) - (((a % 360) + 360) % 360)) % 360 + 360) % 360;
   if (fwd0 > 1e-9) {
     a += fwd0;
-    moves.push({ words: { a }, feed: 0, rapid: true }); // rapid — uncharged (overhead owns it)
+    moves.push({ words: { a }, feed: 0, rapid: true }); // rapid — but ROTARY time is real time
+    minutes += (fwd0 / 360) / MAX_ROTARY_RPM; // Stage 0.2: charge the A re-approach
   }
   const c0 = centerOf(first);
   moves.push({ words: { x: c0.x, y: c0.y }, feed: 0, rapid: true });
@@ -916,7 +956,19 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   let prevP = contactAt(first, a);
   for (let k = 1; k < patch.length; k++) {
     const ci = patch[k];
-    const fwd = ((attitudeOf(ci) - attitudeOf(prevCi)) % 360 + 360) % 360;
+    // STAGE 0.3 (spec 2026-11-13): SIGNED wrap-aware delta. The plain
+    // mod-360 forward delta wrapped any BACKWARD attitude step into a
+    // near-full-revolution forward move (a −4.2° step read as +355.8°) —
+    // the lerped center then plowed up to the full ball radius at the
+    // chord midpoint (adversary-probed 0.85–1.25mm). The walk bounds each
+    // step to ≤ tol; the FOLD_PAIR guard fails loud on anything larger.
+    let fwd = ((attitudeOf(ci) - attitudeOf(prevCi)) % 360 + 360) % 360;
+    if (fwd > 180) fwd -= 360; // the signed shortest step, (−180, 180]
+    if (Math.abs(fwd) > FOLD_PAIR_MAX_DEG + 1e-9) {
+      throw new Error(
+        `swarf pass attitude step ${fwd.toFixed(2)}° exceeds the folded-pair guard ${FOLD_PAIR_MAX_DEG}° — planner bug, refusing to emit`,
+      );
+    }
     a += fwd;
     const c = centerOf(ci);
     const p = contactAt(ci, a);
@@ -925,7 +977,7 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
     const passMinutes = Math.max(
       contactPath / feed,
       centerPath / feed,
-      (fwd / 360) / MAX_ROTARY_RPM,
+      (Math.abs(fwd) / 360) / MAX_ROTARY_RPM,
     );
     moves.push({ words: { x: c.x, y: c.y, z: c.z, a }, feed: 1 / passMinutes });
     minutes += passMinutes;

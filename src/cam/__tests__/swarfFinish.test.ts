@@ -1072,9 +1072,13 @@ describe('segmentContactPatches — the 8-facet cylinder (attitude splits)', () 
       for (let k = 1; k < p.cells.length; k++) {
         const a = map.cells[p.cells[k]].align;
         const b = map.cells[p.cells[k - 1]].align;
-        // forward-or-equal attitude, within tol (the walk's own gate)
+        // forward-or-equal attitude, within tol (the walk's own gate);
+        // Stage 0.1: a sub-noise BACKWARD dip reads as ~360° through the
+        // plain mod-360 delta — treat within-ε-of-360 as a zero advance,
+        // mirroring the walk's comparator (spec 2026-11-13)
         const fwd = (((a - b) % 360) + 360) % 360;
-        expect(fwd).toBeLessThanOrEqual(2 * (360 / map.nTheta) + 1e-6);
+        const adv = fwd > 360 - 0.02 ? 0 : fwd;
+        expect(adv).toBeLessThanOrEqual(2 * (360 / map.nTheta) + 1e-6);
         // grid-adjacent step (θ wraps; the default tol carries it)
         const g1 = gridPosOf(map, p.cells[k - 1]);
         const g2 = gridPosOf(map, p.cells[k]);
@@ -1539,11 +1543,12 @@ describe('emitSwarfPass — the wall strip (entry, centers, feeds, threading)', 
     }
   });
 
-  it('estimated minutes = plunge + Σ passMinutes (rapids uncharged); endA threads', () => {
-    // the family convention: the generator charges cutting + plunge only —
-    // rapid travel (the entry A advance included) belongs to the caller's
-    // overhead accounting, so nothing here charges it (no double-count at
-    // two rates)
+  it('estimated minutes = plunge + Σ passMinutes + ENTRY-A (charged at the ceiling, Stage 0.2); endA threads', () => {
+    // Stage 0.2 (spec 2026-11-13): the patch-transition A rapid is real
+    // rotary time (ΔA/360/MAX_ROTARY_RPM) — the adversaries measured the
+    // uncharged convention excluding the DOMINANT per-pass cost. The
+    // generator now charges the entry A advance; XY/Z rapids stay
+    // uncharged (the family convention).
     const r = emit();
     expect(r.endA).toBeCloseTo(180, 9);
     const c0 = fluteToolCenter(
@@ -1555,11 +1560,13 @@ describe('emitSwarfPass — the wall strip (entry, centers, feeds, threading)', 
     );
     const safeZ = AXIS_Z + 12 + 5;
     const plungeMinutes = (safeZ - c0.z) / PLUNGE;
+    // the entry A advance: default startA 0 → first attitude 180
+    const entryMinutes = (180 / 360) / MAX_ROTARY_RPM;
     // Σ passMinutes from the moves' own feeds (1/feed each)
     const cuts = r.moves.filter((m) => !m.rapid && m.words.a !== undefined);
     let sum = 0;
     for (const m of cuts) sum += 1 / m.feed;
-    expect(r.estimatedMinutes).toBeCloseTo(plungeMinutes + sum, 9);
+    expect(r.estimatedMinutes).toBeCloseTo(plungeMinutes + entryMinutes + sum, 9);
 
     // threading: startA 200 → forward 340 (never backward) → 540, past 360
     const r2 = emit(200);
@@ -2017,5 +2024,90 @@ describe('emitSwarfPass attitude ball — the wall strip at the window center (m
       );
       expect(m.feed).toBeCloseTo(1 / Math.max(pth / FEED, cth / FEED), 6);
     }
+  });
+});
+
+/* ------------------- Stage 0 of the traces spec (2026-11-13) ------------------- */
+
+/** a minimal hand-built map: one θ-row, `aligns[i]` at x=i — the walk and
+ *  the emitter are pure over cells + cellIndex, so no mesh is needed */
+const stage0Map = (aligns: number[]) => {
+  const nx = aligns.length;
+  const cells = aligns.map((align, i) => ({
+    theta: 0,
+    p: { x: i, y: 5, z: 5 },
+    n: { x: 0, y: 0, z: 1 },
+    align,
+    rake: 0,
+  }));
+  const cellIndex = new Uint32Array(nx).fill(CONTACT_AIR);
+  for (let i = 0; i < nx; i++) cellIndex[i] = i;
+  return { cells, cellIndex, nx, nTheta: 1, pitchX: 1, gx0: 0, surfaceCells: cells.length };
+};
+const stage0Clear = (map: ReturnType<typeof stage0Map>) =>
+  new Uint8Array(map.cells.length).fill(FLUTE_CLEAR);
+
+describe('walkComponent — Stage 0.1: the noise-ε comparator (spec 2026-11-13)', () => {
+  it('a sub-noise BACKWARD dip chains the row instead of folding every cell', () => {
+    // the row rises 10.000→10.002 then dips back sub-noise: the walk
+    // (opened at the lowest, sweeping forward) reaches the dip and the
+    // plain mod-360 comparator read the −0.001° step as ~360° "behind" —
+    // folding the tail into its own passes (the fragmentation bug). The
+    // ε reads it as the zero advance it is; one pass covers the row.
+    // (A BIDIRECTIONAL oscillation cannot chain into one monotone pass —
+    // that is Stage 1's parking, not this comparator.)
+    const aligns = [10.0, 10.001, 10.002, 10.001, 10.0];
+    const map = stage0Map(aligns);
+    const { patches } = segmentContactPatches({ map, verdict: stage0Clear(map), alignTolDeg: 5 });
+    expect(patches.length).toBe(1);
+    expect(patches[0].cells.length).toBe(aligns.length);
+  });
+
+  it('a GENUINELY-behind neighbor (beyond ε) still folds — ε absorbs noise only', () => {
+    // 30 sits 20° ahead; its row-neighbors at 10 are 20° behind it — the
+    // walk opens at 10, stalls before 30, and the 30 cell re-walks alone
+    const map = stage0Map([10, 10, 30, 10]);
+    const { patches } = segmentContactPatches({ map, verdict: stage0Clear(map), alignTolDeg: 5 });
+    expect(patches.length).toBe(3);
+    // every patch still non-empty and disjoint-covering
+    const all = patches.flatMap((p) => p.cells).sort((a, b) => a - b);
+    expect(all).toEqual([0, 1, 2, 3]);
+  });
+});
+
+describe('emitSwarfPass — Stage 0.3: the signed-ΔA writer (spec 2026-11-13)', () => {
+  const TOOL4 = TOOL(4, 20);
+  const emit2 = (aligns: number[], startA?: number) => {
+    const map = stage0Map(aligns);
+    return emitSwarfPass({
+      map,
+      patch: { cells: aligns.map((_, i) => i) },
+      tool: TOOL4,
+      axisZ: 0,
+      radius: 10,
+      feed: 600,
+      plungeFeed: 300,
+      startA,
+    });
+  };
+
+  it('a small BACKWARD attitude step emits a small signed move, not a wrapped near-revolution', () => {
+    // cell 1 sits 2° BEHIND cell 0: the old mod-360 forward delta read it
+    // as +358° and the lerped center plowed the chord (adversary-probed
+    // up to the full ball radius); the signed writer steps −2°
+    const r = emit2([10, 8]);
+    const cut = r.moves.find((m) => !m.rapid && m.words.a !== undefined)!;
+    expect(cut.words.a).toBeCloseTo(8, 9); // 10 entry → 8 sweep, NOT 368
+    expect(r.endA).toBeCloseTo(8, 9);
+  });
+
+  it('the seam stays signed: 359.9 → 0.1 crosses as +0.2, not +0.4−360', () => {
+    const r = emit2([359.9, 0.1]);
+    const cut = r.moves.find((m) => !m.rapid && m.words.a !== undefined)!;
+    expect(cut.words.a!).toBeCloseTo(360.1, 6); // entry 359.9 + signed +0.2
+  });
+
+  it('the FOLD_PAIR guard throws on a step beyond 30° — planner bug, never emitted', () => {
+    expect(() => emit2([10, 100])).toThrow(/folded-pair guard/);
   });
 });
