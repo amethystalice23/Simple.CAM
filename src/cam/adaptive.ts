@@ -41,8 +41,19 @@ export interface ClearingFacts {
   orbitCount: number;
 }
 
+/**
+ * The two GEOMETRY-INDEPENDENT legs of the trochoid rule (depth in tool
+ * diameters, real ladder). The third leg — orbitCount > 1 — needs the
+ * region's offset ladder, so only the generator knows it; the ⚡ popup
+ * (which knows the op's depth/step-down but not the region shape) calls
+ * this to say "eligible on depth; the region decides at generate".
+ */
+export function trochoidDepthLegs(toolDiameter: number, depth: number, levels: number): boolean {
+  return depth > 2 * toolDiameter && levels >= 2;
+}
+
 export function chooseClearingStrategy(f: ClearingFacts): ClearingStrategy {
-  return f.depth > 2 * f.toolDiameter && f.levels >= 2 && f.orbitCount > 1
+  return trochoidDepthLegs(f.toolDiameter, f.depth, f.levels) && f.orbitCount > 1
     ? 'trochoid'
     : 'orbits';
 }

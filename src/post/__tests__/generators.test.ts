@@ -138,6 +138,51 @@ describe('generator post goldens', () => {
     }),
   );
 
+  // ADAPTIVE ROUGHING GOLDEN (spec step 3): the deep bulk pocket takes the
+  // trochoid route — arc-dense emission (G2/G3 peels, I/J form), the derived
+  // chip-thinning rates the job layer would pass (Ø6, ae 0.9: DOC 2→4, feed
+  // 600→1200), and the entry discipline's helical ramps. Pins the post's
+  // handling of a trochoidal job end to end.
+  const trochTool: Tool = {
+    id: 't6',
+    name: '6mm flat',
+    type: 'flat',
+    diameter: 6,
+    flutes: 2,
+    spindleRpm: 16000,
+  };
+  const deepSquare: Vec2[] = [
+    { x: 0, y: 0 },
+    { x: 40, y: 0 },
+    { x: 40, y: 24 },
+    { x: 0, y: 24 },
+  ];
+  const deepPocketOp: PocketOp = {
+    kind: 'pocket',
+    id: 'opT',
+    toolId: 't6',
+    regions: [deepSquare],
+    topZ: 0,
+    floorZ: -15, // 15 > 2·6 — deep bulk
+    stepDown: 2,
+    stepOver: 3,
+    feed: 600,
+    plungeFeed: 200,
+    safeClearance: 5,
+  };
+  const deepRes = pocket2d(deepPocketOp, trochTool, {
+    trochoidRates: { stepDown: 4, feed: 1200 },
+  });
+  if (!deepRes.trochoid) throw new Error('deep pocket fixture must take the trochoid route');
+  checkGolden(
+    'pocket-trochoid.nc',
+    postCarvera({
+      moves: deepRes.moves,
+      tools: [trochTool],
+      options: { jobName: 'pocket-trochoid' },
+    }),
+  );
+
   checkGolden(
     'drill-holes.nc',
     postCarvera({

@@ -720,12 +720,27 @@ the SELECTOR is per-op — the trigger depends on what each op knows):**
   load, and trochoids would ADD time. Adaptive is a G94 flat-world
   tool.
 
-**BUILD STATE (steps 1–2 landed 2026-11-13, branch `feat/adaptive-clearing`):**
-selector + emitter + replay wired into `pocket2d`; 1210/1210 green.
-The engagement oracle is a rasterized standing grid (pitch ae/4) and
-the metric is newly-swept standing area ÷ path length. Two honest
-limits the build exposed (both NO WORSE than the orbit mode's own
-behavior at the same spots — recorded in adaptive.ts's HONEST LIMITS):
+**BUILD STATE (steps 1–3 landed 2026-11-13, branch `feat/adaptive-clearing`):**
+selector + emitter + replay wired into `pocket2d`; 1226/1226 green.
+Step 3 — derived rates: `cutAdvisor.derivedTrochoidRates` is the single
+pure source (scale = min(3, 0.5·Ø/ae); step-down clamped by flute length
+and the material's max DOC; feed clamped by the chip-load band max) —
+the JOB layer computes the pair (material knowledge lives there) and
+passes it via `PocketOptions.trochoidRates`; the generator applies it
+ONLY in the trochoid branch (absent = op rates, pre-step-3 behavior,
+cam tests stay material-free), reports what actually cut in
+`PocketResult.trochoid`, and the op summary + estimate reflect it (the
+honest MRR record the tuning step reads). The ⚡ popup shows the derived
+pair read-only for depth-eligible pockets (`trochoidDepthLegs` — the
+orbit leg is generation-time knowledge, so the line says "if the region
+loops"). Goldens: `pocket-trochoid.nc` (52 G2/G3 peels, derived
+F1200/4mm DOC) pins the arc-dense post output end to end. The SELECTOR
+stays on the preset ladder — eligibility never depends on the depth it
+derives. The engagement oracle is a rasterized standing grid (pitch
+ae/4) and the metric is newly-swept standing area ÷ path length. The
+two honest limits the build exposed (both NO WORSE than
+the orbit mode's own behavior at the same spots — recorded in
+adaptive.ts's HONEST LIMITS):
 - ENTRY EXCEPTION: the first ramp revolution of an entry cuts at full
   disc width, bounded by the entry.ts descent discipline (≤3°, ≤
   stepDown/rev) — the accepted app-wide entry behavior.

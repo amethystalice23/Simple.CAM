@@ -54,6 +54,14 @@ export interface PocketResult {
    * over-claims exactly by them).
    */
   orbits: Vec2[][];
+  /**
+   * Set ONLY when the trochoid strategy ran: the rates the roughing
+   * actually cut at (the derived chip-thinning values when the caller
+   * passed them, else the op's own). The summary line reports from
+   * this — the honest record of what ran, per the spec's estimate
+   * clause (the MRR comparison the tuning step reads).
+   */
+  trochoid?: { stepDown: number; feed: number; ae: number };
 }
 
 /**
@@ -219,6 +227,19 @@ export interface PocketOptions {
    * the corridor swept. Absent = today's two-clause test only.
    */
   sweptCorridor?: (cutZ: number, from: Vec2, to: Vec2, toolR: number) => boolean;
+  /**
+   * DERIVED TROCHOID RATES (adaptive spec step 3, 2026-11-13): the
+   * chip-thinning step-down/feed the trochoid branch cuts at. The
+   * CALLER computes them (the job layer, which knows the stock
+   * material; cutAdvisor.derivedTrochoidRates is the single source)
+   * because this generator is deliberately material-agnostic. Applied
+   * ONLY while the trochoid strategy fires — the roughing ladder gets
+   * the deeper step-down, the walk feeds at the scaled feed; the ramp
+   * entry's per-rev descent discipline follows the derived step-down
+   * (entry.ts bounds it). Absent = the op's own rates, the pre-step-3
+   * behavior (cam-level tests stay material-free).
+   */
+  trochoidRates?: { stepDown: number; feed: number };
 }
 
 export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): PocketResult {
@@ -403,17 +424,28 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     // the hoisted orbit ladder rests on), then replay per level with the
     // app's entry/link conventions. The user's stepOver is NOT consulted:
     // the ae ladder and the walk decisions are the strategy's own.
+    //
+    // DERIVED RATES (step 3): the caller's chip-thinning pair replaces the
+    // preset rates for THIS branch only — a deeper roughing ladder (fewer
+    // levels) and a faster walk, both reported in `trochoid` below. The
+    // SELECTOR above stays on the preset ladder: the rule shape (depth in
+    // tool diameters × real preset levels) is the contract, and "is this
+    // a deep bulk cut" must not depend on the derived depth it produces.
+    // Absent pair = the op's own rates (the pre-step-3 behavior).
+    const tStep = opts.trochoidRates?.stepDown ?? op.stepDown;
+    const tFeed = opts.trochoidRates?.feed ?? op.feed;
+    const tLevels = zLadder(op.topZ, op.floorZ, tStep);
     const plan = planTrochoid({
       regions: op.regions,
       footprint: op.footprint && op.footprint.length > 0 ? op.footprint : undefined,
       toolR,
       minLoopPerimeter: opts.minLoopPerimeter,
     });
-    const tDropped = plan.dropped * levels.length;
+    const tDropped = plan.dropped * tLevels.length;
     let tRestZ: number | null = null;
     let tLinks = 0;
     // `cur` / `passes` / `entries` / `minutes` are the function-scoped tallies
-    for (const levelZ of levels) {
+    for (const levelZ of tLevels) {
       const entryTop = Math.max(standingZ, op.approachCeiling ?? -Infinity);
       const approachZ = Math.max(levelZ, entryTop) + APPROACH_CLEARANCE;
       for (let j = 0; j < plan.walks.length; j++) {
@@ -426,10 +458,10 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
           // feed straight to the ring start at depth
           moves.push({
             words: { x: start.x, y: start.y },
-            feed: op.feed,
+            feed: tFeed,
             comment: `level z${levelZ.toFixed(2)} walk ${j + 1} — stay-down link`,
           });
-          minutes += Math.hypot(start.x - tRest.x, start.y - tRest.y) / op.feed;
+          minutes += Math.hypot(start.x - tRest.x, start.y - tRest.y) / tFeed;
           tLinks++;
         } else {
           // RAISED APPROACH + RAMP ENTRY along the ring's own loop — the
@@ -455,7 +487,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
             band: op.finishingOnly ? 0 : entryTop - levelZ,
             fromZ: approachZ,
             toZ: levelZ,
-            stepDown: op.stepDown,
+            stepDown: tStep,
             feed: op.plungeFeed,
           });
           moves.push(...entry.moves);
@@ -469,14 +501,14 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
           if (st.center && st.cw !== undefined) {
             moves.push({
               words: { x: st.to.x, y: st.to.y },
-              feed: op.feed,
+              feed: tFeed,
               arc: { i: st.center.x - prev.x, j: st.center.y - prev.y, cw: st.cw },
               comment: 'trochoid peel',
             });
-            minutes += (Math.PI * Math.hypot(st.center.x - prev.x, st.center.y - prev.y)) / op.feed;
+            minutes += (Math.PI * Math.hypot(st.center.x - prev.x, st.center.y - prev.y)) / tFeed;
           } else {
-            moves.push({ words: { x: st.to.x, y: st.to.y }, feed: op.feed });
-            minutes += Math.hypot(st.to.x - prev.x, st.to.y - prev.y) / op.feed;
+            moves.push({ words: { x: st.to.x, y: st.to.y }, feed: tFeed });
+            minutes += Math.hypot(st.to.x - prev.x, st.to.y - prev.y) / tFeed;
           }
           prev = st.to;
         }
@@ -494,7 +526,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
     }
     return {
       moves,
-      levels: levels.length,
+      levels: tLevels.length,
       passes,
       estimatedMinutes: minutes,
       droppedLoops: tDropped,
@@ -502,6 +534,7 @@ export function pocket2d(op: PocketOp, tool: Tool, opts: PocketOptions = {}): Po
       links: tLinks,
       continuous: 0,
       orbits: plan.walks.map((w) => w.loop),
+      trochoid: { stepDown: tStep, feed: tFeed, ae: plan.ae },
     };
   }
 

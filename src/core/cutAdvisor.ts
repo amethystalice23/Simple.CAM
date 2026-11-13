@@ -287,3 +287,95 @@ export function cutAdvice(
 function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
+
+/**
+ * ADAPTIVE ROUGHING DERIVED RATES (PLAN.md adaptive-clearing spec,
+ * 2026-11-13): the chip-thinning buy-back a 0.15·Ø engagement earns.
+ * The whole point of trochoidal roughing is that thin radial engagement
+ * thins the chip, so axial depth and feed can rise without loading the
+ * tooth more than the preset's full-width values do. BOTH numbers are
+ * DERIVED — shown in the ⚡ popup like every other rate, never a user
+ * field — and clamped by the physics that does not thin:
+ *
+ *   scale = min(3, 0.5·Ø / ae)     (first-cut cap; the tuning step owns it)
+ *   stepDown_trochoid = stepDown × scale, clamped by the tool's FLUTE
+ *     LENGTH (chips have to clear the flute) and the material preset's
+ *     max DOC fraction × Ø (the corpus ceiling)
+ *   feed_trochoid = feed × scale, clamped by the chip-load band's max
+ *     (feed per tooth never leaves the measured band)
+ *
+ * The pocket's rough/finish split is untouched: these apply only while
+ * the trochoid branch is the chosen strategy; every other emission keeps
+ * the preset rates byte-identically. Pure: reads tool + material +
+ * effective rates, writes nothing. Returns null when the inputs cannot
+ * describe a cut (laser tool, non-positive geometry) — callers pass the
+ * op's own values through unchanged in that case.
+ */
+export interface TrochoidDerivedRates {
+  /** radial engagement the trochoid walk holds, mm (the emitter's AE) */
+  ae: number;
+  /** the chip-thinning scale actually applied (pre-clamp) */
+  scale: number;
+  /** derived axial step-down, mm */
+  stepDown: number;
+  /** derived feed, mm/min */
+  feed: number;
+  /** which ceiling bound the step-down: the flute length, the material
+   * preset's max DOC, or neither (null) */
+  stepClamp: 'flute' | 'material' | null;
+  /** true when the chip-load band capped the feed */
+  feedClamp: boolean;
+}
+
+/** First-cut cap on the chip-thinning scale (spec: min(3, 0.5·Ø / ae)). */
+const CHIP_THIN_CAP = 3;
+
+export function derivedTrochoidRates(
+  tool: Tool,
+  material: MaterialPreset,
+  effective: { ae: number; stepDown: number; feed: number; spindleRpm?: number },
+): TrochoidDerivedRates | null {
+  const d = tool.diameter;
+  const ae = effective.ae;
+  if (
+    tool.type === 'laser' ||
+    !(d > 0) ||
+    !(ae > 0) ||
+    !(effective.stepDown > 0) ||
+    !(effective.feed > 0)
+  ) {
+    return null;
+  }
+  const family = materialFamily(material.id);
+  const scale = Math.min(CHIP_THIN_CAP, (0.5 * d) / ae);
+
+  let stepDown = effective.stepDown * scale;
+  let stepClamp: TrochoidDerivedRates['stepClamp'] = null;
+  if (tool.fluteLength !== undefined && tool.fluteLength > 0 && stepDown > tool.fluteLength) {
+    stepDown = tool.fluteLength;
+    stepClamp = 'flute';
+  }
+  const docBand = DOC_FRACTION[family];
+  if (docBand) {
+    const docMax = docBand.max * d;
+    if (stepDown > docMax) {
+      stepDown = docMax;
+      stepClamp = 'material';
+    }
+  }
+
+  let feed = effective.feed * scale;
+  let feedClamp = false;
+  const band = CHIP_BANDS[`${family}:${tool.type}`];
+  const rpm = effective.spindleRpm ?? tool.spindleRpm;
+  const flutes = tool.flutes ?? 2;
+  if (band && rpm > 0) {
+    const feedMax = band.max * rpm * flutes;
+    if (feed > feedMax) {
+      feed = feedMax;
+      feedClamp = true;
+    }
+  }
+
+  return { ae, scale, stepDown: round2(stepDown), feed: Math.round(feed), stepClamp, feedClamp };
+}

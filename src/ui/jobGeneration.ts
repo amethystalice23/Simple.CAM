@@ -38,7 +38,8 @@ import { indexedPointRotation } from '../cam/indexing';
 import type { DetectedFeatures } from '../cam/features';
 import { getMaterial } from '../core/materials';
 import type { MaterialPreset } from '../core/materials';
-import { cutAdvice } from '../core/cutAdvisor';
+import { cutAdvice, derivedTrochoidRates } from '../core/cutAdvisor';
+import { AE_FACTOR } from '../cam/adaptive';
 import type {
   ChamferLoop,
   CylChamferEdge,
@@ -535,6 +536,11 @@ function clearanceResult(
         finishingOnly: op.finishingOnly,
       },
       tool,
+      // the bulk frame inherits adaptive roughing for free (spec, 2026-11-13):
+      // same pure derivation, same material knowledge as the pocket op itself
+      {
+        trochoidRates: trochoidRatesFor(tool, ctx.stock.materialId, op.rates, op.stepDown, feed),
+      },
     );
     if (res.moves.length === 0) return null;
     return { moves: res.moves, minutes: res.estimatedMinutes, passes: res.passes };
@@ -612,6 +618,32 @@ function feedsFor(tool: Tool, material: MaterialPreset, rates?: OpRates) {
     preset?.plungeFeed ??
     Math.round(material.feedByTool[tool.type] * material.plungeFraction);
   return { feed, plungeFeed };
+}
+
+/**
+ * The DERIVED TROCHOID RATES (adaptive-clearing spec step 3, 2026-11-13)
+ * for one op's effective rates: chip-thinning step-down/feed, clamped by
+ * the flute length, the material's max DOC, and the chip-load band.
+ * Computed here — the job layer is where material knowledge lives — and
+ * handed to pocket2d via opts; the generator applies them ONLY while the
+ * trochoid strategy fires (absent = the op's own rates). The pure source
+ * (cutAdvisor.derivedTrochoidRates) is the same one the ⚡ popup displays
+ * from, so the popup and the emission can never drift apart.
+ */
+function trochoidRatesFor(
+  tool: Tool,
+  materialId: string,
+  rates: OpRates | undefined,
+  stepDown: number,
+  feed: number,
+): { stepDown: number; feed: number } | undefined {
+  const derived = derivedTrochoidRates(tool, getMaterial(materialId), {
+    ae: AE_FACTOR * tool.diameter,
+    stepDown,
+    feed,
+    spindleRpm: rpmFor(tool, materialId, rates) ?? tool.spindleRpm,
+  });
+  return derived ? { stepDown: derived.stepDown, feed: derived.feed } : undefined;
 }
 
 /**
@@ -1434,6 +1466,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               : offsetOutward(stockFootprint(ctx.stock, ctx.datumAngle !== 0), op.stepOver),
           },
           tool,
+          // derived chip-thinning rates (spec step 3): applied only while
+          // the deep-bulk trochoid strategy fires
+          { trochoidRates: trochoidRatesFor(tool, ctx.stock.materialId, op.rates, op.stepDown, feed) },
         );
         return {
           moves: res.moves,
@@ -1441,6 +1476,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           error: null,
           summary:
             `${res.passes} passes / ${res.levels} level(s), z${range.topZ.toFixed(1)} → z${range.floorZ.toFixed(1)}` +
+            (res.trochoid
+              ? `, adaptive roughing — ${res.trochoid.stepDown.toFixed(2)}mm DOC × ${res.trochoid.ae.toFixed(2)}mm engagement, feed ${res.trochoid.feed} (chip-thinning)`
+              : '') +
             (op.allowance > 0 ? `, ${op.allowance}mm allowance` : '') +
             (res.continuous > 0 ? ', continuous descent' : '') +
             (res.links > 0 ? `, ${res.links} stay-down link(s)` : '') +
@@ -1519,6 +1557,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               finishingOnly: op.finishingOnly,
             },
             tool,
+            { trochoidRates: trochoidRatesFor(tool, ctx.stock.materialId, op.rates, op.stepDown, feed) },
           );
           return {
             moves: res.moves,
@@ -1526,6 +1565,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             error: null,
             summary:
               sliceSummary(op, range, res.passes, res.estimatedMinutes, dropped, 'pocket') +
+              (res.trochoid
+                ? ` · adaptive roughing, ${res.trochoid.stepDown.toFixed(2)}mm DOC, feed ${res.trochoid.feed}`
+                : '') +
               (op.finishingOnly ? ' · finishing pass only' : ''),
           };
         }

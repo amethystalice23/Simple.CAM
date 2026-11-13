@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chipLoad, cutAdvice, docAdvice, materialFamily } from '../cutAdvisor';
+import { chipLoad, cutAdvice, derivedTrochoidRates, docAdvice, materialFamily } from '../cutAdvisor';
 import { getMaterial } from '../materials';
 import type { Tool } from '../types';
 
@@ -113,5 +113,83 @@ describe('docAdvice', () => {
     expect(docAdvice(1, 0, 'plastic').verdict).toBe('unknown');
     expect(docAdvice(1, 3, 'unobtanium').verdict).toBe('unknown');
     expect(docAdvice(NaN, 3, 'plastic').verdict).toBe('unknown');
+  });
+});
+
+describe('derivedTrochoidRates (adaptive-clearing spec step 3)', () => {
+  // ae comes from the emitter's AE_FACTOR (0.15·Ø) — the derivation must
+  // stay consistent with what the walk actually engages
+  const ae6 = 0.15 * 6; // 0.9mm on the Ø6 flat
+
+  it('the chip-thinning scale buys back depth and feed: min(3, 0.5·Ø/ae)', () => {
+    const r = derivedTrochoidRates(flat6, getMaterial('aluminum-6061'), {
+      ae: ae6,
+      stepDown: 0.5,
+      feed: 500,
+      spindleRpm: 18000,
+    });
+    expect(r).not.toBeNull();
+    // 0.5·Ø/ae = 3/0.9 = 3.33 → capped at 3
+    expect(r!.scale).toBe(3);
+    expect(r!.stepDown).toBe(1.5);
+    expect(r!.feed).toBe(1500);
+    expect(r!.stepClamp).toBeNull();
+    // aluminum flat band max 0.06: 1500/(18000·2) = 0.0417 < 0.06 — no clamp
+    expect(r!.feedClamp).toBe(false);
+  });
+
+  it('a larger engagement thins the buy-back (scale follows 0.5·Ø/ae)', () => {
+    const r = derivedTrochoidRates(flat6, getMaterial('aluminum-6061'), {
+      ae: 1.5, // 0.25·Ø
+      stepDown: 0.5,
+      feed: 500,
+      spindleRpm: 18000,
+    });
+    expect(r!.scale).toBe(2);
+    expect(r!.stepDown).toBe(1);
+  });
+
+  it('the flute length clamps the derived step-down', () => {
+    const longDoc: Tool = { ...flat6, fluteLength: 1.2 };
+    const r = derivedTrochoidRates(longDoc, getMaterial('aluminum-6061'), {
+      ae: ae6,
+      stepDown: 0.5,
+      feed: 500,
+      spindleRpm: 18000,
+    });
+    expect(r!.stepDown).toBe(1.2);
+    expect(r!.stepClamp).toBe('flute');
+  });
+
+  it('the material preset clamps the derived step-down to its max DOC × Ø', () => {
+    // aluminum max 0.5×Ø = 3mm: a preset stepDown of 2mm × 3 = 6 → clamped
+    const r = derivedTrochoidRates(flat6, getMaterial('aluminum-6061'), {
+      ae: ae6,
+      stepDown: 2,
+      feed: 500,
+      spindleRpm: 18000,
+    });
+    expect(r!.stepDown).toBe(3);
+    expect(r!.stepClamp).toBe('material');
+  });
+
+  it('the chip-load band caps the derived feed at the band max × rpm × flutes', () => {
+    // aluminum flat band max 0.06 mm/tooth: at 10000 RPM × 2 flutes the
+    // ceiling is 1200 mm/min — 500 × 3 = 1500 must clamp to 1200
+    const r = derivedTrochoidRates(flat6, getMaterial('aluminum-6061'), {
+      ae: ae6,
+      stepDown: 0.5,
+      feed: 500,
+      spindleRpm: 10000,
+    });
+    expect(r!.feed).toBe(1200);
+    expect(r!.feedClamp).toBe(true);
+  });
+
+  it('null on degenerate inputs — callers keep the op rates unchanged', () => {
+    expect(derivedTrochoidRates(laser, getMaterial('delrin'), { ae: 0.03, stepDown: 1, feed: 100 })).toBeNull();
+    expect(derivedTrochoidRates(flat6, getMaterial('delrin'), { ae: 0, stepDown: 1, feed: 100 })).toBeNull();
+    expect(derivedTrochoidRates(flat6, getMaterial('delrin'), { ae: ae6, stepDown: 0, feed: 100 })).toBeNull();
+    expect(derivedTrochoidRates(flat6, getMaterial('delrin'), { ae: ae6, stepDown: 1, feed: 0 })).toBeNull();
   });
 });

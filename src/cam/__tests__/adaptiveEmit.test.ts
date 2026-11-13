@@ -268,6 +268,60 @@ describe('pocket2d — trochoid route live (spec step 2, tests 3+4)', () => {
   });
 });
 
+describe('pocket2d — derived trochoid rates (spec step 3)', () => {
+  // the chip-thinning pair the JOB layer derives (cutAdvisor.derivedTrochoidRates)
+  // and passes in — the cam layer stays material-agnostic, so the test
+  // supplies the pair directly. deepOp: depth 15, preset stepDown 2 → 8
+  // levels; the derived pair quadruples the DOC and the feed.
+  const derived = { stepDown: 4, feed: 1200 };
+  const res = pocket2d(deepOp(), tool, { trochoidRates: derived });
+  const plain = pocket2d(deepOp(), tool);
+
+  it('reports the rates it actually cut at (res.trochoid, the honest record)', () => {
+    expect(res.trochoid).toEqual({ stepDown: 4, feed: 1200, ae });
+    expect(plain.trochoid).toEqual({ stepDown: 2, feed: 600, ae });
+  });
+
+  it('the roughing ladder uses the derived step-down (fewer, deeper levels)', () => {
+    expect(res.levels).toBe(4);
+    expect(plain.levels).toBe(8);
+    // the deepest cut plane is still the floor — the ladder clamps
+    const cutZs = [
+      ...new Set(
+        res.moves
+          .filter((m) => !m.rapid && m.words.z !== undefined)
+          .map((m) => m.words.z as number),
+      ),
+    ];
+    expect(Math.min(...cutZs)).toBeCloseTo(-15, 6);
+  });
+
+  it('the walk feeds at the derived feed — the preset feed never appears', () => {
+    const feeds = new Set(res.moves.filter((m) => !m.rapid && m.feed).map((m) => m.feed));
+    expect(feeds.has(1200)).toBe(true);
+    expect(feeds.has(600)).toBe(false);
+    // the ramp entries stay on the plunge feed (the entry discipline's own)
+    expect(feeds.has(200)).toBe(true);
+  });
+
+  it('the estimate reflects the derived rates: same path, faster feed, fewer entries', () => {
+    // the walk geometry is level-independent; the derived run does the same
+    // XY work at double the feed in half the entries — strictly faster
+    expect(res.estimatedMinutes).toBeLessThan(plain.estimatedMinutes * 0.75);
+    expect(res.estimatedMinutes).toBeGreaterThan(0);
+  });
+
+  it('the selector itself stays on the preset ladder (the rule shape is the contract)', () => {
+    // depth > 2·D and ≥ 2 PRESET levels fired the branch; a derived pair
+    // that would collapse to one level does not un-fire it — eligibility
+    // never depends on the depth it derives. Same fixture, collapsing pair:
+    const one = pocket2d(deepOp(), tool, { trochoidRates: { stepDown: 15, feed: 1200 } });
+    expect(one.levels).toBe(1);
+    expect(one.moves.some((m) => m.comment?.includes('adaptive roughing'))).toBe(true);
+    expect(one.trochoid?.stepDown).toBe(15);
+  });
+});
+
 describe('non-trochoid regression (spec step 2, test 5)', () => {
   // the SAME fixture nudged just below the 2·D threshold keeps the orbit
   // ladder: no adaptive markers, no peel arcs, orbit-mode pass structure

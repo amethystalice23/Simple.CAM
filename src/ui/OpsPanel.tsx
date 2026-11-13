@@ -67,7 +67,8 @@ import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
 import { isMultiTooth } from '../cam/threadMill';
 import { getMaterial } from '../core/materials';
-import { cutAdvice } from '../core/cutAdvisor';
+import { cutAdvice, derivedTrochoidRates } from '../core/cutAdvisor';
+import { AE_FACTOR, trochoidDepthLegs } from '../cam/adaptive';
 
 interface Props {
   ops: JobOp[];
@@ -303,6 +304,24 @@ function RatesPopup(props: {
     feed: rates.feed ?? defaults.feed,
     spindleRpm: tool.type === 'laser' ? rates.spindleRpm : (rates.spindleRpm ?? defaults.spindleRpm),
   }, opStepDown);
+  // ADAPTIVE ROUGHING (spec step 3): the DERIVED chip-thinning rates,
+  // read-only — never a user field. Only the depth legs are checkable
+  // here (the region's orbit count is generation-time knowledge), so the
+  // line honestly says "if the region loops".
+  const pocketTrochoid =
+    op.kind === 'pocket' && !op.finishingOnly && opStepDown !== undefined && tool.type !== 'laser'
+      ? (() => {
+          const depth = op.endDepth - op.startDepth;
+          const levels = Math.max(1, Math.ceil(depth / opStepDown));
+          if (!trochoidDepthLegs(tool.diameter, depth, levels)) return null;
+          return derivedTrochoidRates(tool, getMaterial(props.materialId), {
+            ae: AE_FACTOR * tool.diameter,
+            stepDown: opStepDown,
+            feed: rates.feed ?? defaults.feed,
+            spindleRpm: rates.spindleRpm ?? defaults.spindleRpm,
+          });
+        })()
+      : null;
   const chipCls =
     advice.verdict === 'ok'
       ? 'hint'
@@ -368,6 +387,24 @@ function RatesPopup(props: {
         </p>
       )}
       {advice.docNote && <p className={chipCls}>⚠ {advice.docNote}</p>}
+      {pocketTrochoid && (
+        <p
+          className="hint"
+          title="constant-engagement roughing picks itself on deep bulk cuts — the rates below are derived, never fields"
+        >
+          ⚡ deep bulk cut — a region with room to loop runs adaptive roughing:
+          step-down derives to {pocketTrochoid.stepDown}mm ({pocketTrochoid.scale.toFixed(1)}×
+          chip-thinning at {pocketTrochoid.ae.toFixed(2)}mm engagement), feed to{' '}
+          {pocketTrochoid.feed}mm/min
+          {pocketTrochoid.stepClamp || pocketTrochoid.feedClamp
+            ? ` — clamped by ${
+                [pocketTrochoid.stepClamp === 'flute' ? 'flute length' : pocketTrochoid.stepClamp === 'material' ? 'the material preset' : '', pocketTrochoid.feedClamp ? 'the chip-load band' : '']
+                  .filter(Boolean)
+                  .join(' and ')
+              }`
+            : ''}
+        </p>
+      )}
       <div className="buttons">
         {(advice.verdict === 'low' || advice.verdict === 'high') &&
           advice.recommendedFeed !== null &&

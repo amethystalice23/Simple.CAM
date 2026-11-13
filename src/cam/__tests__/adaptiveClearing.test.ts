@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { PocketOp, Tool, Vec2 } from '../../core/types';
-import { chooseClearingStrategy } from '../adaptive';
+import { chooseClearingStrategy, trochoidDepthLegs } from '../adaptive';
 import { pocket2d } from '../pocket';
 
 const tool: Tool = { id: 't3', name: '3mm flat', type: 'flat', diameter: 3, spindleRpm: 18000 };
 
 // ---- boundary tests for the selector (SPEC 2026-11-13) ----
+
+describe('trochoidDepthLegs (spec step 3: the popup-checkable half of the rule)', () => {
+  it('is the selector without the orbit leg — identical boundaries', () => {
+    expect(trochoidDepthLegs(3, 10, 3)).toBe(true);
+    expect(trochoidDepthLegs(3, 2 * 3, 3)).toBe(false);
+    expect(trochoidDepthLegs(3, 2 * 3 + 0.001, 3)).toBe(true);
+    expect(trochoidDepthLegs(3, 10, 1)).toBe(false);
+    expect(trochoidDepthLegs(3, 10, 2)).toBe(true);
+  });
+});
 
 describe('chooseClearingStrategy', () => {
   // every leg satisfied: the deep-bulk case
