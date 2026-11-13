@@ -679,6 +679,33 @@ no room to loop); shallow/open areas (contour-offset is shorter and
 gentler on direction reversals — losing time there would be the
 wrong default); cross-op rest machining.
 
+**Adoption beyond pocket (recorded 2026-11-13; the EMITTER is shared,
+the SELECTOR is per-op — the trigger depends on what each op knows):**
+- **Waterline rough levels** — natural second adopter, EMITTER
+  INHERITED FOR FREE: the waterline already routes each level's
+  clearing through `pocket2d` (`waterline.ts:617`, single-level
+  top==floor calls). But the pocket's depth-leg selector never fires
+  there — each call is ONE level — so waterline gets its own trigger:
+  a level's clearing band vs its STANDING STOCK (the upper-shadow map
+  it already keeps is exactly the engagement knowledge needed). Win is
+  uniform engagement at concave corners + arc-friendly emission, NOT
+  deeper DOC (level spacing is the ladder's). Phase with the 3-axis
+  roughing work, not pocket v1.
+- **Slice pocket** — inherits automatically: routes through the same
+  pocket generation.
+- **Profile with clear-to-stock — DEFERRED, and honestly NOT the
+  same mechanism.** A deep profile through solid stock is a
+  full-width SLOT (profile is one radial pass per level today,
+  multi-radial is a noted later refinement) — the classic
+  desktop broken-bit case, but there is no AREA to orbit in. The
+  candidate mechanism is trochoidal SLOTTING (loops along the wall
+  line, reusing the emitter's loop primitive), taken up only if real
+  jobs break bits there.
+- **Rotary ops (face cylinder, spiral carve) — NEVER.** RPM-capped
+  (6.6°/s ceiling, G93 world): the bottleneck is A-speed, not chip
+  load, and trochoids would ADD time. Adaptive is a G94 flat-world
+  tool.
+
 **License:** reimplement from descriptions only (the hard rule);
 HSMWorks/Fusion/SprutCAM adaptive code is never read or pasted.
 
