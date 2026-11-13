@@ -366,4 +366,129 @@ describe('inter-op A shrink (G92.4 A0 S0 at op boundaries)', () => {
     // every later absolute A word by whole turns
     expect(gcode).not.toMatch(/whole turns, no motion[\s\S]*G93[\s\S]*G1 X23\.6 A-4680[\s\S]*whole turns, no motion/);
   });
+
+  // THE ±360 WHOLE-TURN RESIDUE PIN (2026-11-13, the TDC_Adjust no-op ring
+  // report): a datum-discipline return that lands the counter at EXACTLY
+  // ±360 makes the next op's first absolute ring (startA + 360) a
+  // zero-travel no-op — measured twice on her milled part (op 7's only
+  // chamfer ring and op 10's level 1/3 both machined nothing). The pin is
+  // a plain counter reset, and it is datum-agnostic: a |A| ≈ 360 residue
+  // only ever sits on a spoke ≡ 0 (mod 360).
+  it('pins the ±360 residue at an op boundary so the next ring cuts a real revolution', () => {
+    const cal = { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 };
+    const op1 = { number: 1, name: 'Rotary face', toolNumber: 1 };
+    const op2 = { number: 2, name: 'Chamfer', toolNumber: 2 };
+    // op 1 ends with a datum return whose post-shrink re-expression lands
+    // the counter at exactly +360 (the TDC op-6 pattern: pile 4860 →
+    // shrink → 180 → return target re-expressed to 360)
+    const face = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op: op1 },
+      { words: { a: 4860 }, feed: 2376, op: op1 },
+      { words: { a: 5040 }, feed: 0, rapid: true, op: op1, comment: 'return A to the borrowed datum 0.0° (datum discipline)' },
+    ];
+    // op 2: the chamfer built from startA = 0 — its ONLY ring targets
+    // A360, the exact alias the machine sits on without the pin
+    const cham = cylChamfer(
+      { kind: 'cylChamfer', id: 'c1', toolId: 't2', edges: [{ x: 10, diameter: 40 }], depth: 0.5, stepDown: 2, rotation: 'cw', plungeFeed: 200 },
+      cal,
+      tools[1],
+      0,
+    ).moves.map((m) => ({ ...m, op: op2 }));
+    const gcode = postCarvera({
+      moves: [...face, ...cham],
+      tools,
+      toolNumbers: [1, 2],
+      options: { jobName: 'residue-pin' },
+    });
+    const lines = gcode.split('\n');
+    const marker2 = lines.indexOf(';@MKR|TOOLPATH_START|toolpath_number=2');
+    // the return's re-expressed target is 360 (as in the TDC job): the
+    // counter arrives AT the residue
+    const ret = lines.findIndex((l) => /^G0 A360(;| |$)/.test(l));
+    expect(ret).toBeGreaterThan(-1);
+    // THE PIN: at op 2's boundary the counter resets to the sub-360 spoke
+    // — no motion, no S0 shrink needed (|360| never exceeded 360)
+    const pinAt = lines.indexOf('G92.4 A0', marker2);
+    expect(pinAt).toBeGreaterThan(marker2);
+    expect(lines[pinAt - 1]).toMatch(/pin the ±360 whole-turn residue to 0(\.00)?/i);
+    // and NO S0 shrink at this boundary — the pin alone unwraps it
+    expect(lines.slice(marker2, pinAt + 1)).not.toContain('G92.4 A0 S0');
+    // the ring still targets A360, but now from counter 0: ONE REAL
+    // REVOLUTION of cut instead of the zero-travel no-op
+    const ring = lines.findIndex((l, i) => i > pinAt && /^G1 A360(;| |$)/.test(l));
+    expect(ring).toBeGreaterThan(pinAt);
+  });
+
+  it('pins the residue after a pre-anchor shrink of a whole-turn pile (the TDC thread→groove boundary)', () => {
+    const op1 = { number: 1, name: 'Thread', toolNumber: 1 };
+    const op2 = { number: 2, name: 'Grooves', toolNumber: 1 };
+    const gcode = postCarvera({
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op: op1 },
+        // the thread pile: exactly 13 whole turns negative
+        { words: { x: 23.6, a: -4680 }, feed: 0.51, op: op1 },
+        // op 2's opening anchor, built from startA = 0 (the idealized
+        // datum): targets A0
+        { words: { a: 0 }, feed: 0, rapid: true, op: op2, comment: 'strand 1/48' },
+        { words: { x: 8.2 }, feed: 0, rapid: true, op: op2 },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'residue-pin-anchor' },
+    });
+    const lines = gcode.split('\n');
+    // the pre-anchor shrink drops 12 turns leaving −360 (the firmware's
+    // strictly-> 360 loop), then the PIN rewrites the counter to 0
+    const shrinkAt = lines.indexOf('G92.4 A0 S0');
+    expect(shrinkAt).toBeGreaterThan(-1);
+    const pinAt = lines.indexOf('G92.4 A0', shrinkAt + 1);
+    expect(pinAt).toBeGreaterThan(shrinkAt);
+    expect(lines[pinAt - 1]).toMatch(/pin the ±360 whole-turn residue to 0(\.00)?/i);
+    // the anchor then emits A0 — ZERO-TRAVEL under EITHER firmware
+    // shrink semantics (the phantom full-rev the TDC job showed at its
+    // groove ops dies here): never the raw ±360 alias
+    const anchor = lines.findIndex((l, i) => i > pinAt && /^G0 A0(;| |$)/.test(l));
+    expect(anchor).toBeGreaterThan(pinAt);
+    const between = lines.slice(pinAt + 1, anchor);
+    expect(between.some((l) => /^G0 A-?360/.test(l))).toBe(false);
+  });
+
+  it('indexed datum ≠ 0: the boundary shrink unwraps the pile to the datum, no pin, ring cuts one rev', () => {
+    // the general indexing case (Alice, 2026-11-13: "i don't want to leave
+    // indexed ops broken"): a pile of datum + 360·k unwraps to the datum
+    // through the ordinary S0 shrink — |A| > 360 always — so the residue
+    // class (a counter at exactly startA + 360) cannot arise for a datum
+    // off the 0 spoke, and the pin never fires
+    const cal = { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 };
+    const op1 = { number: 1, name: 'Index + face', toolNumber: 1 };
+    const op2 = { number: 2, name: 'Chamfer', toolNumber: 2 };
+    const moves = [
+      { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op: op1 },
+      // the stock indexed to 90°, then a face pile of 90 + 360·k
+      { words: { a: 90 }, feed: 0, rapid: true, op: op1 },
+      { words: { a: 450 }, feed: 2376, op: op1 },
+    ];
+    const cham = cylChamfer(
+      { kind: 'cylChamfer', id: 'c1', toolId: 't2', edges: [{ x: 10, diameter: 40 }], depth: 0.5, stepDown: 2, rotation: 'cw', plungeFeed: 200 },
+      cal,
+      tools[1],
+      90, // startA = the datum
+    ).moves.map((m) => ({ ...m, op: op2 }));
+    const gcode = postCarvera({
+      moves: [...moves, ...cham],
+      tools,
+      toolNumbers: [1, 2],
+      options: { jobName: 'indexed-datum' },
+    });
+    const lines = gcode.split('\n');
+    const marker2 = lines.indexOf(';@MKR|TOOLPATH_START|toolpath_number=2');
+    // the boundary shrink unwraps 450 → 90 = the datum exactly
+    const shrinkAt = lines.indexOf('G92.4 A0 S0', marker2);
+    expect(shrinkAt).toBeGreaterThan(marker2);
+    expect(lines.slice(marker2, shrinkAt).join('\n')).not.toMatch(/pin the ±360/i);
+    // the chamfer's first ring targets startA + 360 = 450: from the
+    // shrunk counter 90 that is ONE full revolution of real cut
+    const ring = lines.findIndex((l, i) => i > shrinkAt && /^G1 A450(;| |$)/.test(l));
+    expect(ring).toBeGreaterThan(shrinkAt);
+  });
 });

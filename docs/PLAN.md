@@ -18,7 +18,16 @@ exchange files and conventions with it, never code.
   set the work-A datum (R's value is ignored); `G92.4 A0 S0` = shrink
   work-coordinate A back into ±360 — that's the wrap command, and both forms
   are verified in firmware source and machined examples (see
-  docs/makera-dialect.md and examples/); A-axis is
+  docs/makera-dialect.md and examples/); **the shrink loop is strictly
+  `> 360` (Robot.cpp:796), so a whole-turn pile lands at exactly ±360,
+  NOT 0** — a counter sitting at ±360 is a whole-turn alias that makes the
+  next generator's first absolute ring (`startA + 360·1`) a ZERO-TRAVEL
+  no-op cut (measured twice on the 2026-11-13 TDC_Adjust job: op 7's only
+  chamfer ring and op 10's level 1/3 machined nothing), so the post PINS
+  the residue with a plain `G92.4 A<0>` counter reset at op boundaries
+  and after pre-anchor shrinks — no motion, datum-agnostic (a ±360 residue
+  only ever sits on a spoke ≡ 0 mod 360), and correct under either
+  firmware shrink-landing semantics; A-axis is
   rotation-rate limited (firmware config max: C1 1800°/min ≈ 5 RPM, Z1
   3600°/min = 10 RPM; the older 6.6/12.5 RPM figures are community
   operational guidance); G94 surface-speed compensation is radius-aware

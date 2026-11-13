@@ -126,6 +126,36 @@ function shrinkA(a: number): number {
   return v;
 }
 
+/**
+ * THE ±360 WHOLE-TURN RESIDUE PIN (2026-11-13, the TDC_Adjust no-op ring
+ * report): a counter sitting at EXACTLY ±360 is a whole-turn alias of the
+ * sub-360 spoke — the shrink cannot drop it (the firmware loop is
+ * strictly > 360, and a pile that grew to exactly +364 from a datum
+ * return's +4 skips the shrink entirely). The next op's generator builds
+ * its ABSOLUTE A ladder from startA (the datum): the first ring targets
+ * startA + 360·1, and a machine already sitting on that alias travels
+ * ZERO — a silent no-op cut. Measured on her TDC_Adjust job twice: op 7's
+ * only chamfer ring (op 6's return left the counter at exactly +360) and
+ * op 10's level 1/3 (op 9's return, same residue) both machined NOTHING —
+ * plunge dimple, no rotation, retract.
+ *
+ * The pin is a plain `G92.4 A<norm>` counter reset (Robot.cpp:776-833:
+ * sets work-A, no motion, no EEPROM — the same primitive the short-way
+ * alias branch uses), which lands the counter on the sub-360 spoke value
+ * whatever the firmware's own shrink loop did: a strict loop leaves ±360
+ * and the pin rewrites it to ∓0; an inclusive loop already left ~0 and
+ * the pin is a no-op. It is datum-AGNOSTIC — a residue of |A| ≈ 360 only
+ * ever arises on a spoke ≡ 0 (mod 360), so norm ≈ 0 regardless of the
+ * datum. This also kills the phantom full-rev anchor the residue caused
+ * at whole-turn-pile boundaries under firmware whose shrink lands at 0
+ * instead of ±360 (the "rotated ~180° at ops 9/11" report).
+ */
+const RESIDUE_EPS = 1e-6;
+function residuePin(a: number): number | null {
+  if (Math.abs(a) > 360 - RESIDUE_EPS) return a - Math.sign(a) * 360;
+  return null;
+}
+
 function wordsLine(m: Move, withFeed: boolean, sWord?: string): string {
   const w = m.words;
   const parts: string[] = [];
@@ -281,6 +311,20 @@ export function postCarvera(input: PostInput): string {
           // and the next op's first A move must account for it)
           st.lastA = shrinkA(st.lastA);
         }
+        // RESIDUE PIN (see residuePin): a counter at exactly ±360 makes
+        // the next generator's first absolute ring (startA + 360) a
+        // zero-travel no-op cut. Pin to the sub-360 spoke first — no
+        // motion, whatever the firmware's shrink loop left.
+        if (opts.wrapA) {
+          const pin = residuePin(st.lastA);
+          if (pin !== null) {
+            lines.push(
+              `; pin the ±360 whole-turn residue to ${fmt(pin, 2)} (counter reset, no motion)`,
+            );
+            lines.push(`G92.4 A${fmt(pin, 2)}`);
+            st.lastA = pin;
+          }
+        }
 
         // Tool change?
         const prevToolNum = prevOp?.toolNumber;
@@ -399,14 +443,28 @@ export function postCarvera(input: PostInput): string {
         let after = preA;
         if (Math.abs(preA) > 360 + 1e-9) {
           after = shrinkA(preA);
-          // signed remainder of the original delta in (−180, 180]
-          let d = (((target - preA) % 360) + 360) % 360;
-          if (d > 180) d -= 360;
-          tgt = after + d;
           lines.push(
             `; shrink work-coordinate A by ${(preA - after).toFixed(0)}° (whole turns, no motion) — anchor turn stays < 1 rev`,
           );
           lines.push('G92.4 A0 S0');
+          // RESIDUE PIN (see residuePin): the shrink may have left exactly
+          // ±360; pin the counter to the sub-360 spoke — AFTER the S0
+          // shrink on the wire (pin-first would set the counter to ~0 and
+          // make the shrink a silent no-op) — or a whole-turn anchor
+          // target becomes a zero-travel move and the op's first cut
+          // silently no-ops
+          const pin = residuePin(after);
+          if (pin !== null) {
+            lines.push(
+              `; pin the ±360 whole-turn residue to ${fmt(pin, 2)} (counter reset, no motion)`,
+            );
+            lines.push(`G92.4 A${fmt(pin, 2)}`);
+            after = pin;
+          }
+          // signed remainder of the original delta in (−180, 180]
+          let d = (((target - preA) % 360) + 360) % 360;
+          if (d > 180) d -= 360;
+          tgt = after + d;
           st.lastA = after;
         }
         // SHORTEST-DIRECTION ANCHOR (Alice, 2026-11-06): a >180° pure-A
