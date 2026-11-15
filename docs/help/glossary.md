@@ -147,6 +147,12 @@ pushing straight down. Prevents snapped tools and marred starts.
 
 *In simple.cam:* entries are ramped or helical, automatic.
 
+### pass
+
+One complete sweep of the tool along its route. Most ops cut many:
+[step-down](#step-down) stacks passes in depth, [step-over](#step-over)
+lays them side by side. The op row's summary counts them.
+
 ### peck drilling
 
 Drilling in steps — a bite, a lift to clear chips, a bite — so deep
@@ -156,6 +162,12 @@ holes don't pack with swarf.
 
 Feeding the tool straight down into material. Harder on the tool than
 cutting sideways, so it runs slower.
+
+### rapids
+
+The non-cutting travel between cuts, run at the machine's full speed.
+Red in the preview. The tool should be clear of material on a rapid —
+check that red lines cross nothing you care about.
 
 ### roughing pass
 

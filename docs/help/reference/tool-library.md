@@ -52,6 +52,6 @@ highlighted — useful to see where a number in the ⚡ popup came from.
 - **Chip load** (mm per tooth) is the thickness of the curl each
   cutting edge takes per revolution — the ⚡ popup grades your feed
   against it and will recommend one when you're off.
-- When in doubt: run the [Calibration…](../overview.md) coupon, which
-  cuts a grid of test cells varying two parameters so the machine
-  tells you what your material actually wants.
+- When in doubt: run the [Calibration…](../concepts/feeds-and-speeds.md#finding-your-materials-real-numbers)
+  coupon, which cuts a grid of test cells varying two parameters so
+  the machine tells you what your material actually wants.
