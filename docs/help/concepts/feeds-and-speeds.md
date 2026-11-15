@@ -64,10 +64,12 @@ effective values — your override if you've set one, the preset if not:
   with derived step-down and feed — those rates are computed, never
   fields.
 
-<!-- CAPTURE: an op on Delrin stock, ⚡ popup open, with a chip-load ⚠
-     verdict line (low verdict — "raise the feed or slow the spindle")
-     and the "Apply recommended feed" button visible; a second advice
-     line (step-down or adaptive roughing) welcome. Crop to the popup -->
+<!-- CAPTURE: an op on Delrin stock, ⚡ popup open. A fresh op arrives at
+     healthy advised rates (chip load ✓), so the warning needs one real
+     user edit: type 250 into the popup's Feed box — chip load drops to
+     0.0208 mm/tooth and the low verdict + "Apply recommended feed"
+     button appear via the real advisor. Capture with the ⚠ line and
+     the button visible. Crop to the popup -->
 ![The rates popup with a chip-load warning and the apply button](../images/concepts/feeds-and-speeds-01-popup.png)
 *Figure 1 — The verdict grades the numbers in the boxes; edit a box and the grade updates to match.*
 

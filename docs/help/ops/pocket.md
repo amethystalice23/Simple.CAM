@@ -51,15 +51,15 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
 ![The pocket panel with End depth linked to a picked floor and the defaults showing](../images/ops/pocket-02-panel.png)
 *Figure 2 — Hand-editing End depth detaches the ⇩ link; the number wins until you pick again.*
 
-4. **Recalculate.** The panel's Recalculate button generates the [toolpath](../glossary.md#toolpath) and turns the preview on. Passes render in the op's color; the ⚡ popup on the op row holds feed and spindle, defaulted from the tool's preset for the stock material.
+4. **Recalculate.** The panel's Recalculate button generates the [toolpath](../glossary.md#toolpath) and turns the preview on. Cutting moves render amber, [rapids](../glossary.md#rapids) red; the ⚡ popup on the op row holds feed and spindle, defaulted from the tool's preset for the stock material.
 
 <!-- CAPTURE: the same job after Recalculate — toolpath preview on in the
-     viewport, the Pocket op selected so its passes render in the op
-     color, contour-offset passes covering the 40 x 30 mm region down
-     to the 4 mm floor; the op row reads "80 passes / 20 level(s),
-     z0.0 -> z-4.0, ~96.3 min", status strip "recalculated 1 op".
-     Framing: loose crop of the viewport with the amber preview -->
-![The generated pocket toolpath in the viewport, drawn in the op's color](../images/ops/pocket-03-preview.png)
+     viewport, contour-offset cutting moves rendered amber (rapids red)
+     covering the 40 x 30 mm region down to the 4 mm floor; the op row
+     reads "80 passes / 20 level(s), z0.0 -> z-4.0, ~96.3 min", status
+     strip "recalculated 1 op". Framing: loose crop of the viewport
+     with the amber preview -->
+![The generated pocket toolpath in the viewport: amber cutting moves filling the recess](../images/ops/pocket-03-preview.png)
 *Figure 3 — Read the preview as coverage: the passes should tile the whole region with no untouched islands.*
 
 5. **The gotcha.** Generation fails with "select either faces or holes for this operation, not both" when the selection mixes kinds. Split it: one Pocket for the faces, one for the circles.

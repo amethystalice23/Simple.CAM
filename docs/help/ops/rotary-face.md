@@ -40,23 +40,22 @@ Box stock works too: the app faces it as a cylinder of its corner-to-corner radi
 
 <!-- CAPTURE: the same Rotary face op, panel expanded: tool T1 (Ø6 flat),
      Start X 5, End X 55, Target Ø 20 filled by the armed pick, Step down
-     0.5, Step over 3.0 (the half-Ø default), Finish allowance 0.2,
+     0.5, Step over 3 (the half-Ø default, shown as "3"), Finish allowance 0.2,
      Pattern "spiral — continuous helical cut", Rotation cw, "cut past
      the stock edge" unticked, op not yet calculated. Framing: crop of the
      Ops panel around the rotary face row, a little margin around it -->
 ![The Rotary face panel with Target Ø picked from the model and the defaults showing](../images/ops/rotary-face-02-panel.png)
 *Figure 2 — Ticking **finishing pass only** hides Step down, Step over, and Finish allowance: one pass straight to the target Ø, bulk assumed gone.*
 
-4. **Recalculate.** The row's summary shows the pass count and the diameter, and the [toolpath](../glossary.md#toolpath) preview renders in the op's color. The A axis turns at about 6.6 RPM sustained — the community firmware's rotary limit — so full revolutions dominate the time estimate. Moves that coordinate A with X run in [G93](../glossary.md#g93) inverse-time; A-only rings run plain G94.
+4. **Recalculate.** The row's summary shows the pass count and the diameter, and the [toolpath](../glossary.md#toolpath) preview draws its cutting moves amber ([rapids](../glossary.md#rapids) red). The A axis turns at about 6.6 RPM sustained — the community firmware's rotary limit — so full revolutions dominate the time estimate. Moves that coordinate A with X run in [G93](../glossary.md#g93) inverse-time; A-only rings run plain G94.
 
 <!-- CAPTURE: the same job after Recalculate — toolpath preview on, the
-     Rotary face op selected so its passes render in the op color, the
-     spiral wrap covering X 8..52 (the tool-center path, inset by the Ø6
-     tool's radius inside the 5..55 span) at Ø20; the op row reads
-     "6 passes (spiral) → Ø20.0mm, X 5…55, squared edges" plus its live
-     "~N.N min" estimate. Framing: loose crop of the viewport with the
-     preview over the rod -->
-![The generated rotary face toolpath wrapped around the rod, drawn in the op's color](../images/ops/rotary-face-03-preview.png)
+     spiral wrap covering X 8..52 (the tool-center path, inset by the
+     Ø6 tool's radius inside the 5..55 span) at Ø20, rendered amber; the
+     op row reads "6 passes (spiral) → Ø20.0mm, X 5…55, squared edges"
+     plus its live "~N.N min" estimate. Framing: loose crop of the
+     viewport with the preview over the rod -->
+![The generated rotary face toolpath wrapped around the rod: amber spiral cutting moves](../images/ops/rotary-face-03-preview.png)
 *Figure 3 — The summary ends "squared edges" when cut past the stock edge is off; read the preview as coverage over the whole circumference.*
 
 5. **The gotcha.** Target Ø must be *below* the stock diameter. Set it at or above the stock Ø and generation fails with "nothing to face" — the op turns material off, it can't grow it back.

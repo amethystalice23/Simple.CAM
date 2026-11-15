@@ -51,16 +51,15 @@ You point Profile at flat faces or circles on the model. The tool then runs one 
 ![The profile panel with Side set to outside, depths filled, and the tab defaults showing](../images/ops/profile-02-panel.png)
 *Figure 2 — Side allowance is signed: a negative value steps the tool path inward and cuts the shape smaller than modeled.*
 
-4. **Recalculate.** The panel's Recalculate button generates the [toolpath](../glossary.md#toolpath) and turns the preview on. Passes render in the op's color; the ⚡ popup on the op row holds feed and spindle, defaulted from the tool's preset for the stock material.
+4. **Recalculate.** The panel's Recalculate button generates the [toolpath](../glossary.md#toolpath) and turns the preview on. Cutting moves render amber, [rapids](../glossary.md#rapids) red; the ⚡ popup on the op row holds feed and spindle, defaulted from the tool's preset for the stock material.
 
 <!-- CAPTURE: the same job after Recalculate — toolpath preview on in the
-     viewport, the Profile op selected so its passes render in the op
-     color: the wall ring around the plate at every level, with gaps in
-     the deep-level loops where the three tabs hold the part; the op row
-     reads "N wall pass(es) / M level(s), z0.0 -> z-8.5, ... ~X min"
-     (counts and time as generated). Framing: loose crop of the viewport
-     with the preview -->
-![The generated profile toolpath in the viewport, drawn in the op's color, with tab gaps in the deep loops](../images/ops/profile-03-preview.png)
+     viewport, the wall ring around the plate at every level rendered
+     amber (rapids red), with gaps in the deep-level loops where the
+     three tabs hold the part; the op row reads "N wall pass(es) /
+     M level(s), z0.0 -> z-8.5, ... ~X min" (counts and time as
+     generated). Framing: loose crop of the viewport with the preview -->
+![The generated profile toolpath in the viewport: the amber wall ring with tab gaps in the deep loops](../images/ops/profile-03-preview.png)
 *Figure 3 — The gaps in the deep-level loops are the tabs; snap the part free and file the nubs once the job ends.*
 
 5. **The gotcha.** An inside profile fails with "profile offset leaves no path — tool too large for an inside profile?" when the tool can't fit inside the loop. Pick a slimmer tool, or switch the side to outside.
