@@ -41,8 +41,8 @@ Box stock works too: the app faces it as a cylinder of its corner-to-corner radi
 <!-- CAPTURE: the same Rotary face op, panel expanded: tool T1 (Ø6 flat),
      Start X 5, End X 55, Target Ø 20 filled by the armed pick, Step down
      0.5, Step over 3.0 (the half-Ø default), Finish allowance 0.2,
-     Pattern "spiral — continuous helical cut", Rotation cw, "allow tail
-     stock cut-over" unticked, op not yet calculated. Framing: crop of the
+     Pattern "spiral — continuous helical cut", Rotation cw, "cut past
+     the stock edge" unticked, op not yet calculated. Framing: crop of the
      Ops panel around the rotary face row, a little margin around it -->
 ![The Rotary face panel with Target Ø picked from the model and the defaults showing](../images/ops/rotary-face-02-panel.png)
 *Figure 2 — Ticking **finishing pass only** hides Step down, Step over, and Finish allowance: one pass straight to the target Ø, bulk assumed gone.*
@@ -57,13 +57,13 @@ Box stock works too: the app faces it as a cylinder of its corner-to-corner radi
      "~N.N min" estimate. Framing: loose crop of the viewport with the
      preview over the rod -->
 ![The generated rotary face toolpath wrapped around the rod, drawn in the op's color](../images/ops/rotary-face-03-preview.png)
-*Figure 3 — The summary ends "squared edges" when cut-over is off; read the preview as coverage over the whole circumference.*
+*Figure 3 — The summary ends "squared edges" when cut past the stock edge is off; read the preview as coverage over the whole circumference.*
 
 5. **The gotcha.** Target Ø must be *below* the stock diameter. Set it at or above the stock Ø and generation fails with "nothing to face" — the op turns material off, it can't grow it back.
 
 ## Tips & pitfalls
 
-- **Squared ends vs cut-over.** With **allow tail stock cut-over** off (the default), every level opens and closes with a full 360° ring, so both end walls stand sharp, and the flute's *edge* cuts exactly to the X lines. Tick it and the tool cuts past the end faces instead — and it's the only way to cut a span narrower than the tool.
+- **Squared ends vs cut-over.** With **cut past the stock edge** off (the default), every level opens and closes with a full 360° ring, so both end walls stand sharp, and the flute's *edge* cuts exactly to the X lines. Tick it and the tool cuts past the end faces instead — and it's the only way to cut a span narrower than the tool.
 - **Caution:** raising Step over past half the tool diameter pushes radial engagement toward slotting — and on this machine the rotary drive carries the cutting torque directly. The default is conservative for a reason.
 - **Rough + finish:** set Finish allowance on the first op, duplicate it, tick **finishing pass only** on the copy. The rough clears the bulk, the finish takes the skin. See [Finishing pass only](../reference/fields.md#finishing-pass-only).
 - **Zero allowance, no waste:** with Finish allowance at 0, the roughing ladder lands exactly on the target Ø — its last level *is* the finishing pass.

@@ -40,12 +40,12 @@ You point Profile at flat faces or circles on the model. The tool then runs one 
 
    Tick **tabs — leave holding bridges across the cut** for any cut that goes past the part's bottom. Defaults are 3 bridges, 0.5 mm tall and 3 mm long (details in [the fields reference](../reference/fields.md#tabs)): levels above the tab tops cut the full loop, deeper levels cut only the spans between bridges — the part stays attached until the job ends.
 
-   Two toggles sit below. **clear excess stock** (outside side only) appends passes that sweep the leftover waste frame out to the stock wall. **keep the loop past the stock edge** lets the wall loop leave the declared stock where it runs out of material to cut; unticked, the pass clips to the stock edge in open spans.
+   Two toggles sit below. **clear excess stock** (outside side only) appends passes that sweep the leftover waste frame out to the stock wall. **cut past the stock edge** keeps the wall loop intact where it runs out of stock to cut; unticked, the pass clips to the stock edge in open spans.
 
 <!-- CAPTURE: the same Profile op, panel expanded: Side "outside",
      Start depth 0, End depth 8.5, Step down at its default, tabs ticked
      showing Tab count 3 / Tab height 0.5 / Tab length 3, clear excess
-     stock unticked, keep the loop past the stock edge unticked, op not
+     stock unticked, cut past the stock edge unticked, op not
      yet calculated. Framing: crop of the Ops panel around the profile
      row, a little margin around it -->
 ![The profile panel with Side set to outside, depths filled, and the tab defaults showing](../images/ops/profile-02-panel.png)

@@ -45,7 +45,7 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
 <!-- CAPTURE: the same Pocket op, panel expanded: tool T1 (Ø6 flat),
      Start depth 0, End depth 4 filled by the ⇩ floor pick (link
      active), Step down 0.2 and Step over 3 at their defaults,
-     flatten and finishing pass only unticked, step over the edge
+     flatten and finishing pass only unticked, cut past the stock edge
      unticked, op not yet calculated. Framing: crop of the Ops panel
      around the pocket row, a little margin around it -->
 ![The pocket panel with End depth linked to a picked floor and the defaults showing](../images/ops/pocket-02-panel.png)
@@ -68,5 +68,5 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
 
 - **Rough + finish:** set Allowance around 0.2 mm on the first op, duplicate it, tick **finishing pass only** on the copy. The rough clears the bulk, the finish takes the skin. See [Fields every operation shares](../reference/fields.md#finishing-pass-only).
 - **Deep pockets go adaptive on their own.** When the cut is deeper than two tool diameters and the region has room to loop, roughing runs as steady-engagement loops at derived step-down and feed rates. The ⚡ popup shows the numbers and why they changed — they're derived, never fields.
-- **Caution:** **step over the edge** grows the cut region by one step-over past the selected outline, and past the stock edge the same way. Tick it only when nothing of value sits within one step-over outside the region — the setting is a vouch, not a trim.
+- **Caution:** **cut past the stock edge** grows the cut region by one step-over past the selected outline, and past the stock edge the same way. Tick it only when nothing of value sits within one step-over outside the region — the setting is a vouch, not a trim.
 - **Islands:** leave **flatten** off to keep material standing inside the region. Turn it on only when the interior voids are junk you want gone.

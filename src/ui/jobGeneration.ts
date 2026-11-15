@@ -1258,7 +1258,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${res.passes} passes (${op.pattern}) → Ø${op.targetDiameter.toFixed(1)}mm, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}` +
             (op.finishingOnly ? ', finishing pass only' : '') +
-            (op.cutBeyondStock ? ', tail stock cut-over' : ', squared edges') +
+            (op.cutBeyondStock ? ', cut past edge' : ', squared edges') +
             `, ~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }
