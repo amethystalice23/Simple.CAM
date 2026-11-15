@@ -70,12 +70,16 @@ One line: what it does.
 3–5 concrete situations as bullets.
 
 ## How to use it
-Numbered steps, screenshot-anchored:
-1. select the region → Figure 1
-2. add the op, assign a tool → Figure 2
-3. set the fields that matter (link fields.md for the rest)
+Numbered steps, screenshot-anchored (the app's real flow — the op is
+added first, then pointed at what it cuts):
+1. add the op — `+ Add toolpath`, pick the kind, assign a tool
+2. point it at what it cuts (Select features) → Figure 1
+3. set the fields that matter (link fields.md for the rest) → Figure 2
 4. generate, read the preview → Figure 3
 5. the one gotcha users hit
+
+Steps 2–4 carry the three standard figures; steps 1 and 5 are usually
+figure-less. Figures sit at the top level of their numbered step. users hit
 
 ## Tips & pitfalls
 2–4 bullets, each from a verified behavior.

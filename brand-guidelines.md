@@ -25,7 +25,7 @@ respect, no assumed machining vocabulary.
 
 **Always use:**
 - Correct machining terminology, defined on first use and linked to the
-  glossary (e.g. [stepover](docs/help/glossary.md#stepover)).
+  glossary (e.g. [stepover](docs/help/glossary.md#step-over)).
 - 3D-printing analogies where they genuinely map, flagged as analogies
   ("a roughing pass is like infill: it removes the bulk").
 - mm and degrees; Carvera names for machine features.
