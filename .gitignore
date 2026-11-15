@@ -5,8 +5,9 @@ dist/
 llmfit.json
 tsconfig.tsbuildinfo
 # Local reference material — repo checkouts and analysis notes that are
-# deliberately unpublished (licensing / not ours to distribute)
-reference/
+# deliberately unpublished (licensing / not ours to distribute).
+# Root-only: docs/help/reference/ is shipped user documentation.
+/reference/
 # Local agent/skill infrastructure — tooling, not part of the software
 .claude/
 .agents/

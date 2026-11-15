@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDocsTree,
   docKeyToPage,
+  landingPageOf,
   pageTitle,
   parseFrontmatter,
   resolveDocLink,
@@ -59,17 +60,29 @@ describe('pageTitle', () => {
 });
 
 describe('buildDocsTree', () => {
-  it('groups pages by top-level directory in the pinned order', () => {
+  it('groups pages by top-level directory, root pages last', () => {
     const tree = buildDocsTree([
       { path: 'reference/fields.md', title: 'Fields' },
       { path: 'ops/pocket.md', title: 'Pocket' },
       { path: 'glossary.md', title: 'Glossary' },
     ]);
-    expect(tree.map((g) => g.dir)).toEqual([null, 'ops', 'reference']);
-    expect(tree[0].pages.map((p) => p.title)).toEqual(['Glossary']);
-    expect(tree[0].label).toBe('');
-    expect(tree[1].label).toBe('Operations');
-    expect(tree[2].label).toBe('Reference');
+    expect(tree.map((g) => g.dir)).toEqual(['ops', 'reference', null]);
+    expect(tree[0].label).toBe('Operations');
+    expect(tree[1].label).toBe('Reference');
+    expect(tree[2].pages.map((p) => p.title)).toEqual(['Glossary']);
+    expect(tree[2].label).toBe('');
+  });
+
+  it('puts the landing page (index.md) first, before every group', () => {
+    const tree = buildDocsTree([
+      { path: 'glossary.md', title: 'Glossary' },
+      { path: 'ops/pocket.md', title: 'Pocket' },
+      { path: 'index.md', title: 'Welcome to simple.cam' },
+    ]);
+    expect(tree.map((g) => g.dir)).toEqual([null, 'ops', null]);
+    expect(tree[0].pages.map((p) => p.path)).toEqual(['index.md']);
+    expect(tree[1].pages.map((p) => p.path)).toEqual(['ops/pocket.md']);
+    expect(tree[2].pages.map((p) => p.path)).toEqual(['glossary.md']);
   });
 
   it('sorts pages inside a group by title', () => {
@@ -89,6 +102,25 @@ describe('buildDocsTree', () => {
     ]);
     expect(tree.map((g) => g.dir)).toEqual(['getting-started', 'ops', 'tutorials', 'advanced']);
     expect(tree[3].label).toBe('Advanced');
+  });
+});
+
+describe('landingPageOf', () => {
+  it('opens on index.md when the docs ship one (the tree hoists it to the head)', () => {
+    const tree = buildDocsTree([
+      { path: 'glossary.md', title: 'Glossary' },
+      { path: 'ops/pocket.md', title: 'Pocket' },
+      { path: 'index.md', title: 'Welcome to simple.cam' },
+    ]);
+    expect(landingPageOf(tree)).toBe('index.md');
+  });
+
+  it('falls back to the first tree entry without index.md', () => {
+    const tree = buildDocsTree([
+      { path: 'glossary.md', title: 'Glossary' },
+      { path: 'ops/engrave.md', title: 'Engrave' },
+    ]);
+    expect(landingPageOf(tree)).toBe('ops/engrave.md');
   });
 });
 

@@ -33,7 +33,8 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
      op added via + Add toolpath, row expanded, Select features armed,
      the recess floor clicked and highlighted — the op row shows
      "Select features (1)" and End depth has auto-prefilled to 4 from
-     the picked floor -->
+     the picked floor. Framing: loose crop of the viewport area with
+     the highlighted floor — not the whole window -->
 ![The recess floor highlighted in the viewport, the op row showing Select features (1)](../images/ops/pocket-01-select.png)
 *Figure 1 — Clicking the floor attaches it to the op; the ⇩ prefill has already set End depth from it.*
 
@@ -45,7 +46,8 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
      Start depth 0, End depth 4 filled by the ⇩ floor pick (link
      active), Step down 0.2 and Step over 3 at their defaults,
      flatten and finishing pass only unticked, step over the edge
-     unticked, op not yet calculated -->
+     unticked, op not yet calculated. Framing: crop of the Ops panel
+     around the pocket row, a little margin around it -->
 ![The pocket panel with End depth linked to a picked floor and the defaults showing](../images/ops/pocket-02-panel.png)
 *Figure 2 — Hand-editing End depth detaches the ⇩ link; the number wins until you pick again.*
 
@@ -55,7 +57,8 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
      viewport, the Pocket op selected so its passes render in the op
      color, contour-offset passes covering the 40 x 30 mm region down
      to the 4 mm floor; the op row reads "80 passes / 20 level(s),
-     z0.0 -> z-4.0, ~96.3 min", status strip "recalculated 1 op" -->
+     z0.0 -> z-4.0, ~96.3 min", status strip "recalculated 1 op".
+     Framing: loose crop of the viewport with the amber preview -->
 ![The generated pocket toolpath in the viewport, drawn in the op's color](../images/ops/pocket-03-preview.png)
 *Figure 3 — Read the preview as coverage: the passes should tile the whole region with no untouched islands.*
 

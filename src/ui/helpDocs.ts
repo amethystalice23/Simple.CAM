@@ -52,6 +52,9 @@ export function pageTitle(path: string, raw: string): string {
 
 const GROUP_ORDER = ['getting-started', 'concepts', 'ops', 'reference', 'tutorials'];
 
+/** The viewer's landing page: docs/help/index.md when the docs ship one. */
+export const LANDING_PAGE = 'index.md';
+
 const GROUP_LABELS: Record<string, string> = {
   'getting-started': 'Getting started',
   concepts: 'Concepts',
@@ -65,20 +68,23 @@ export function groupLabel(dir: string): string {
   return GROUP_LABELS[dir] ?? dir.charAt(0).toUpperCase() + dir.slice(1);
 }
 
-/** Build the sidebar tree: root-level pages (glossary) first, no heading;
- * then one group per top-level directory in the pinned order above
- * (unknown dirs trail, alphabetically). Pages inside a group sort by
- * title, ties broken by path. */
+/** Build the sidebar tree: the landing page (index.md, when the docs ship
+ * one) first, then one group per top-level directory in the pinned order
+ * above (unknown dirs trail, alphabetically), and the remaining root-level
+ * pages (the glossary) LAST — after all the groups. Pages inside a group
+ * sort by title, ties broken by path. */
 export function buildDocsTree(pages: HelpPageMeta[]): HelpGroup[] {
   const byTitle = (a: HelpPageMeta, b: HelpPageMeta) =>
     a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }) ||
     a.path.localeCompare(b.path);
+  const landing: HelpPageMeta[] = [];
   const root: HelpPageMeta[] = [];
   const byDir = new Map<string, HelpPageMeta[]>();
   for (const p of pages) {
     const slash = p.path.indexOf('/');
     if (slash < 0) {
-      root.push(p);
+      if (p.path === LANDING_PAGE) landing.push(p);
+      else root.push(p);
     } else {
       const dir = p.path.slice(0, slash);
       const list = byDir.get(dir) ?? [];
@@ -87,7 +93,7 @@ export function buildDocsTree(pages: HelpPageMeta[]): HelpGroup[] {
     }
   }
   const groups: HelpGroup[] = [];
-  if (root.length > 0) groups.push({ dir: null, label: '', pages: root.slice().sort(byTitle) });
+  if (landing.length > 0) groups.push({ dir: null, label: '', pages: landing });
   const dirs = [...byDir.keys()].sort((a, b) => {
     const ia = GROUP_ORDER.indexOf(a);
     const ib = GROUP_ORDER.indexOf(b);
@@ -97,7 +103,15 @@ export function buildDocsTree(pages: HelpPageMeta[]): HelpGroup[] {
     const pages_ = (byDir.get(dir) ?? []).slice().sort(byTitle);
     groups.push({ dir, label: groupLabel(dir), pages: pages_ });
   }
+  if (root.length > 0) groups.push({ dir: null, label: '', pages: root.slice().sort(byTitle) });
   return groups;
+}
+
+/** The page the viewer opens on: the landing page (index.md) when the
+ * docs ship one — buildDocsTree hoists it to the tree's head — else the
+ * first entry of the built sidebar tree. */
+export function landingPageOf(tree: HelpGroup[]): string {
+  return tree[0]?.pages[0]?.path ?? LANDING_PAGE;
 }
 
 /** Join a relative href against the current page's directory within the

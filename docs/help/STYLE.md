@@ -97,7 +97,17 @@ figure-less. Figures sit at the top level of their numbered step. users hit
     preview in the viewport
   - optional `<op>-04-<slug>.png` — an op-specific state (a toggle on,
     a warning visible)
-- Capture at ≥1400 px wide, PNG, the real UI (no mock-ups).
+- **Cropped shots are the default.** Capture just the region the step
+  is about — the panel, the button group, the viewport feature — with
+  a little breathing room around it. Playwright element/clip captures
+  take the region at full device resolution, so the crop stays sharp
+  when shown large. Do NOT submit whole-window grabs for panel/field
+  steps: the reading column shrinks them and the detail is lost.
+- **Whole-window shots are the exception**, for orientation figures
+  where the entire layout is the point (getting-started pages, "where
+  everything lives"). The viewer's pop-out covers the detail for
+  those.
+- PNG, the real UI (no mock-ups).
 - Figure block format — alt text says what it shows, an italic caption
   under it, and an HTML comment above it with CAPTURE notes (the exact
   UI state to set up; the capture scripts read these):
