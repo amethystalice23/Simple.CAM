@@ -47,10 +47,26 @@ it.
 and **bottom allowance** (a skin on the floor). Side allowance is
 signed: negative cuts past the modeled surface.
 
+### backlash
+
+Mechanical play between moving parts — the table can shift a tiny
+amount before the screw engages and takes up the load.
+
+*In simple.cam:* nothing to set. It's the classic reason older,
+looser machines prefer [conventional milling](#conventional-milling).
+
 ### ball-nose
 
 An end mill whose tip is a hemisphere. It cuts smooth curves into
 surfaces — the tool that turns stair-steps into flowing shapes.
+
+### boss
+
+A raised shape standing proud of the surface around it — a pocket
+turned inside out.
+
+*In simple.cam:* profile it from outside or on the line; a negative
+side [allowance](#allowance) trims it below its modeled size.
 
 ### CAM
 
@@ -62,6 +78,15 @@ slicer of the CNC world.
 
 A beveled edge: the corner cut off at an angle instead of left
 sharp. Cut with a [V-bit](#v-bit) or a chamfer tool.
+
+### chatter
+
+Vibration while cutting — the tool or the part oscillates and
+leaves wavy ripples on the surface. A tool biting too hard, or
+sticking out too far, is the usual cause.
+
+*In simple.cam:* lighten the cut: smaller [step-down](#step-down)
+or [step-over](#step-over).
 
 ### chip load
 
@@ -89,6 +114,15 @@ The clamp that grips the tool's [shank](#shank) inside the
 *In simple.cam:* the simulation flags a collet collision before you
 ever cut metal.
 
+### conventional milling
+
+Feeding the tool against its rotation, so each chip starts at zero
+thickness and grows. Gentler on worn, loose machines, but the tooth
+rubs before it cuts. The opposite of [climb milling](#climb-milling).
+
+*In simple.cam:* not offered — where the app controls pass
+direction, it always climbs.
+
 ### crown
 
 The top surface of the stock.
@@ -103,6 +137,15 @@ every dimension is off by the same amount.
 
 *In simple.cam:* an Index op sets the angular (A) datum; thread ops
 align their helix to it.
+
+### depth of cut
+
+How much material the tool bites into per pass — sideways
+([step-over](#step-over)) or downward ([step-down](#step-down)).
+Deeper clears faster but loads the tool harder.
+
+*In simple.cam:* the ⚡ popup grades your depth against the tool's
+diameter and the material.
 
 ### end mill
 
@@ -157,6 +200,15 @@ pushing straight down. Prevents snapped tools and marred starts.
 
 *In simple.cam:* entries are ramped or helical, automatic.
 
+### modal
+
+A G-code mode that stays on until another command changes it — a
+switch, not a per-line instruction. G0/G1 and the feed modes are
+all modal.
+
+*In simple.cam:* the exported file switches modes where it must —
+see [G93](#g93).
+
 ### pass
 
 One complete sweep of the tool along its route. Most ops cut many:
@@ -191,6 +243,14 @@ bulk, the finish makes it pretty.
 The smooth, non-cutting shaft of a tool above its cutting part. If
 the shank hits stock, something breaks.
 
+### slotting
+
+A pass with the tool buried in material on both sides — full-width
+cutting, the hardest load a tool can take.
+
+*In simple.cam:* a step-over at or beyond the tool's diameter
+slots; the half-diameter default avoids it.
+
 ### spindle
 
 The motor that spins the tool. The business end of the machine — the
@@ -201,9 +261,9 @@ CNC equivalent of the hotend assembly, minus the heat.
 How deep each pass cuts — machining's layer height. Smaller means
 finer walls and more passes.
 
-*In simple.cam:* a field on every op with a depth ladder; zero it
-out and the op makes a single full-depth pass (see "Finishing pass
-only" in the app's op help).
+*In simple.cam:* a field on every op with a depth ladder; the panel
+won't take it below 0.1 mm. For one full-depth pass, tick
+"finishing pass only" instead of zeroing it.
 
 ### step-over
 

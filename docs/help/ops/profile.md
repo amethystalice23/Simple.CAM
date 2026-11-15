@@ -10,7 +10,7 @@ Cuts around a shape following its outline, offset to one side — how a part sep
 
 ## What it is
 
-You point Profile at flat faces or circles on the model. The tool then runs one loop per depth level around the outline, offset to the side you pick: **outside** cuts around the shape, **inside** follows a hole's rim, **on line** rides the outline itself with no offset. Every pass cuts [climb milling](../glossary.md#climb-milling), and entries ramp or helix in — a [lead-in](../glossary.md#lead-in) instead of a straight plunge.
+You point Profile at flat faces or circles on the model. The tool then runs one loop per depth level around the outline, offset to the side you pick: **outside** cuts around the shape, **inside** follows a hole's rim, **on line** rides the outline itself with no offset. Outside and inside passes cut [climb milling](../glossary.md#climb-milling); on line follows the model's own contour direction. Entries ramp or helix in — a [lead-in](../glossary.md#lead-in) instead of a straight plunge.
 
 ## When you'd use it
 

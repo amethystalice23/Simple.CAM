@@ -38,7 +38,9 @@ this file covers what the hook can't judge.
 - Topics with their own concepts page (feeds and speeds, tabs, the 4th
   axis): link the concept page; the glossary still anchors the first
   use of the term itself.
-- Use relative links so they work on GitHub and in the in-app viewer.
+- Use relative links so they work on GitHub and in the in-app viewer —
+  and write them page-relative: `../glossary.md#anchor` from a nested
+  page, bare `sibling.md` for a page in the same directory.
 
 ## Frontmatter
 
@@ -102,6 +104,16 @@ a whole-panel figure → short sections per control group, each with a
 cropped figure → "Where next" cross-links. What each *operation* does
 is not this page's job — link the ops pages. Same voice, truth,
 linking, and figure rules as everywhere else.
+
+## The concepts-page template
+
+Pages in `concepts/` teach one idea the reader meets across several
+ops. No `axes:` tag unless the idea itself only exists in one mode.
+Shape: a plain-language definition first, then why it matters — what
+goes wrong when it's wrong — then how it appears in simple.cam, with
+real field names and real defaults, and links to where it's used.
+Figures are optional; one real-UI shot only where the concept is
+actually visible on screen. Under ~120 lines.
 
 ## Figures
 
