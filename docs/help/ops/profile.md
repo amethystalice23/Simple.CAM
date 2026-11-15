@@ -1,5 +1,6 @@
 ---
 title: Profile
+axes: 3
 ---
 # Profile
 

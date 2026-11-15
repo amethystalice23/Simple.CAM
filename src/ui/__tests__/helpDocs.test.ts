@@ -48,6 +48,17 @@ describe('parseFrontmatter', () => {
   it('strips HTML comments on pages without frontmatter too', () => {
     expect(parseFrontmatter('Text\n\n<!-- note -->\nmore').body).toBe('Text\n\n\nmore');
   });
+
+  it('reads the axes tag (3, 4, 3+4)', () => {
+    expect(parseFrontmatter('---\ntitle: Pocket\naxes: 3\n---\n…').axes).toBe('3');
+    expect(parseFrontmatter('---\ntitle: Rotary face\naxes: 4\n---\n…').axes).toBe('4');
+    expect(parseFrontmatter('---\ntitle: Drill\naxes: 3+4\n---\n…').axes).toBe('3+4');
+  });
+
+  it('ignores a missing or unrecognized axes tag', () => {
+    expect(parseFrontmatter('---\ntitle: Glossary\n---\n…').axes).toBeNull();
+    expect(parseFrontmatter('---\ntitle: X\naxes: five\n---\n…').axes).toBeNull();
+  });
 });
 
 describe('pageTitle', () => {

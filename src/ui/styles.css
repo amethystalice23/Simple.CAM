@@ -1238,6 +1238,22 @@ pre {
   line-height: 1.55;
 }
 .help-doc h1 { font-size: 20px; margin: 4px 0 10px; }
+/* axes chips: which machine modes an op/feature page's subject works
+ * in — teal when it's an option, amber when the 4th axis is required */
+.help-axes { display: flex; gap: 6px; margin: 0 0 6px; }
+.axis-chip {
+  font-size: 10.5px;
+  padding: 1px 9px;
+  border-radius: 10px;
+  background: #1c3d37;
+  border: 1px solid #2b6d61;
+  color: #66d9c8;
+}
+.axis-chip.required {
+  background: #3a311f;
+  border-color: #8a6a2e;
+  color: #ffd27f;
+}
 .help-doc h2 {
   font-size: 15px;
   text-transform: none;

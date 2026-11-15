@@ -22,9 +22,16 @@ export interface HelpGroup {
   pages: HelpPageMeta[];
 }
 
+/** frontmatter `axes:` tag on op/feature pages — which machine modes the
+ * page's subject works in: plain 3-axis, 4-axis only, or both */
+export type AxesTag = '3' | '4' | '3+4';
+
 export interface ParsedDoc {
   /** frontmatter `title:` value, null when the page carries none */
   title: string | null;
+  /** frontmatter `axes:` value, null when the page carries none (or an
+   * unrecognized value — chips are opt-in per page) */
+  axes: AxesTag | null;
   /** the markdown body, frontmatter fence and HTML comments stripped */
   body: string;
 }
@@ -39,10 +46,14 @@ function stripHtmlComments(md: string): string {
  * title. A page without frontmatter parses as no-title/whole-body. */
 export function parseFrontmatter(raw: string): ParsedDoc {
   const fence = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
-  if (!fence) return { title: null, body: stripHtmlComments(raw) };
+  if (!fence) return { title: null, axes: null, body: stripHtmlComments(raw) };
   const line = /^title:\s*(.+?)\s*$/m.exec(fence[1]);
   const title = line ? line[1].replace(/^["']|["']$/g, '') : null;
-  return { title, body: stripHtmlComments(raw.slice(fence[0].length)) };
+  const axesLine = /^axes:\s*(.+?)\s*$/m.exec(fence[1]);
+  const axesRaw = axesLine ? axesLine[1].replace(/^["']|["']$/g, '') : null;
+  const axes: AxesTag | null =
+    axesRaw === '3' || axesRaw === '4' || axesRaw === '3+4' ? axesRaw : null;
+  return { title, axes, body: stripHtmlComments(raw.slice(fence[0].length)) };
 }
 
 /** Sidebar label: frontmatter title, else the filename minus extension. */
@@ -50,7 +61,7 @@ export function pageTitle(path: string, raw: string): string {
   return parseFrontmatter(raw).title ?? path.replace(/.*\//, '').replace(/\.md$/, '');
 }
 
-const GROUP_ORDER = ['getting-started', 'concepts', 'ops', 'reference', 'tutorials'];
+const GROUP_ORDER = ['getting-started', 'the-app', 'concepts', 'ops', 'reference', 'tutorials'];
 
 /** The viewer's landing page: docs/help/index.md when the docs ship one. */
 export const LANDING_PAGE = 'index.md';
@@ -60,6 +71,7 @@ export const GLOSSARY_PAGE = 'glossary.md';
 
 const GROUP_LABELS: Record<string, string> = {
   'getting-started': 'Getting started',
+  'the-app': 'The app',
   concepts: 'Concepts',
   ops: 'Operations',
   reference: 'Reference',

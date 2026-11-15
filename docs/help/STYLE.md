@@ -42,10 +42,15 @@ this file covers what the hook can't judge.
 
 ## Frontmatter
 
-`title:` only. Example:
+`title:` always. Op and feature pages also carry `axes:` — which machine
+modes the subject works in: `3`, `4`, or `3+4`. The viewer renders it
+as chips under the title; `4` alone reads "requires 4th axis", in amber.
+Assign it from the generator/UI reality, not intuition — note any
+uncertainty in your report. Example:
 
     ---
     title: Pocket
+    axes: 3
     ---
 
 ## The ops-page template
@@ -56,12 +61,15 @@ whole page under ~120 lines; each step gets a figure.
 ```markdown
 ---
 title: Pocket
+axes: 3
 ---
 # Pocket
 
 One line: what it does.
 
-*In 3D printing terms:* the analogy — only if one truly maps.
+*In 3D printing terms:* the analogy — only when one truly maps. Never
+force it; if a plain-language image works better (or nothing maps), say
+that instead and skip the flag.
 
 ## What it is
 2–3 sentences.

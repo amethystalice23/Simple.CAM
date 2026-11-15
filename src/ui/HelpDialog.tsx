@@ -30,6 +30,7 @@ import {
   resolveDocLink,
   resolveDocPath,
   splitGlossaryEntries,
+  type AxesTag,
   type HelpPageMeta,
 } from './helpDocs';
 
@@ -48,13 +49,22 @@ const imageUrls = import.meta.glob('/docs/help/images/**/*.png', {
   eager: true,
 }) as Record<string, string>;
 
+/** chips an `axes:` tag renders as. A 4-axis-only subject doesn't get a
+ * plain "4-axis" chip — it reads "requires 4th axis", amber, because
+ * that's a requirement, not an option */
+const AXES_CHIPS: Record<AxesTag, { label: string; required?: boolean }[]> = {
+  '3': [{ label: '3-axis' }],
+  '4': [{ label: 'requires 4th axis', required: true }],
+  '3+4': [{ label: '3-axis' }, { label: '4-axis' }],
+};
+
 /** page id → raw markdown, frontmatter stripped */
-const pages = new Map<string, HelpPageMeta & { body: string }>();
+const pages = new Map<string, HelpPageMeta & { body: string; axes: AxesTag | null }>();
 for (const [key, raw] of Object.entries(mdSources)) {
   const path = docKeyToPage(key);
   if (path === '' || path === 'STYLE.md') continue;
   const parsed = parseFrontmatter(raw);
-  pages.set(path, { path, title: pageTitle(path, raw), body: parsed.body });
+  pages.set(path, { path, title: pageTitle(path, raw), body: parsed.body, axes: parsed.axes });
 }
 
 /** resolved image URL by its docs-tree-relative path ("images/ops/…") */
@@ -266,6 +276,18 @@ export function HelpDialog(props: Props) {
             <div className="help-content" ref={contentRef}>
               {page && (
                 <article className="help-doc" key={page.path}>
+                  {page.axes && (
+                    <div className="help-axes">
+                      {AXES_CHIPS[page.axes].map((chip) => (
+                        <span
+                          key={chip.label}
+                          className={`axis-chip${chip.required ? ' required' : ''}`}
+                        >
+                          {chip.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     rehypePlugins={[rehypeSlug]}

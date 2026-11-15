@@ -1,11 +1,10 @@
 ---
 title: Rotary face
+axes: 4
 ---
 # Rotary face
 
-Turns the stock down to a target diameter over a stretch of its length — a lathe-style turning pass, done with a milling bit on the [A axis](../glossary.md#a-axis).
-
-*In 3D printing terms:* the depth ladder is slicing turned sideways — each level removes one thin ring of material, radially instead of vertically.
+Turns the stock down to a target diameter over a stretch of its length — a lathe-style turning pass, done with a milling bit on the [A axis](../glossary.md#a-axis). Each level removes one thin ring of material, like peeling away layers of an onion, radially instead of vertically.
 
 ## What it is
 
