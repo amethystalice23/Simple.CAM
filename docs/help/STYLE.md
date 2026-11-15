@@ -19,6 +19,8 @@ this file covers what the hook can't judge.
   needs the meaning to land, add a short inline definition too.
 - A 3D-printing analogy is welcome when it truly maps; flag it as an
   analogy and drop it when it stops helping.
+- No HTML entities in prose — the in-app viewer renders markdown only,
+  so `&nbsp;` and friends appear as literal text. Write plain text.
 - Full voice profile: [`brand-guidelines.md`](../../brand-guidelines.md).
 
 ## Truth

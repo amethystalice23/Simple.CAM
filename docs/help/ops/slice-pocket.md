@@ -65,11 +65,11 @@ The violet plane in the viewport is the slice. Drag its handle up or down and th
      clear excess stock off — toolpath preview on in the viewport, the
      amber profile ring riding the section outline (offset out by the
      tool radius, so it sits just outside the violet section line),
-     rapids red; the op row summary reads "N passes around the section
-     2.0 below the crown (profile), z0.0 → z-2.0, ~M min" (exact pass
-     count and minutes depend on the demo tool — capture what it
-     shows). Framing: loose crop of the viewport with the ring and the
-     model visible. deviceScaleFactor 2 -->
+     rapids red; the op row summary reads "1 passes around the section
+     2.0 below the crown (profile), z20.0 → z18.0, ~M min" ("passes"
+     counts concentric rings; minutes as generated). Framing: loose
+     crop of the viewport with the ring and the model visible.
+     deviceScaleFactor 2 -->
 ![The generated outside-mode toolpath in the viewport: an amber ring around the model's section](../images/ops/slice-pocket-03-preview.png)
 *Figure 3 — The ring sits outside the section by the tool radius, so the body inside keeps its modelled size.*
 

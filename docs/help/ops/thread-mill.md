@@ -42,8 +42,9 @@ The same op does internal (bore) and external (boss) threads — pick which with
 
    **Pitch** greys out when the selected mill is multi-tooth — its teeth only line up at the recorded pitch. The Makera mills in the library are all single-tooth, so their pitch stays editable and defaults to the tool's own value.
 
-<!-- CAPTURE: the same Thread mill op, panel expanded: tool Carvera
-     M6 Threadmill, Thread "internal (bore)", Nominal Ø 6 with the ⇩
+<!-- CAPTURE: the same Thread mill op, panel expanded: tool M6 (the
+     picker shows the app's short name, meta "Ø4.8 · shank 6", group
+     Threadmill), Thread "internal (bore)", Nominal Ø 6 with the ⇩
      link active from the picked rim, Pitch 1.0, Starts 1,
      Tolerance 0, Step over 0, Rotation cw, Start depth 0,
      End depth 5 (the ⇩ prefill), Add prep toolpath button visible
@@ -58,9 +59,14 @@ The same op does internal (bore) and external (boss) threads — pick which with
 <!-- CAPTURE: the same job after Recalculate — toolpath preview on in
      the viewport, the amber helix climbing the inside of the Ø6 bore
      (rapids red), viewed from slightly above the bore mouth; the op
-     row reads "1 internal thread(s), 6×1, ~X min" (time as
-     generated). Framing: loose crop of the viewport with the preview.
-     deviceScaleFactor 2 -->
+     row COLLAPSED before the shot (the expanded row draws a
+     translucent intended-area ghost cylinder over the bore), reading
+     "1 internal thread(s), 6×1 cw, 5.0mm, 2 pass(es) incl. spring ·
+     path radius Rc 0.600mm — tips land on the groove bottom
+     (internal, at the Ø6 major) · Ø6.00 bore → aside retract (0.60mm
+     of room), ~0.2 min". The demo block sits 0.02mm above the crown
+     (exactly-flush tops z-fight into moiré stripes). Framing: loose
+     crop of the viewport with the preview. deviceScaleFactor 2 -->
 ![The generated thread helix climbing the inside of the bore](../images/ops/thread-mill-03-preview.png)
 *Figure 3 — One unbroken amber spiral from the thread's bottom to its top; the pass runs twice — the second lap is the spring pass.*
 
