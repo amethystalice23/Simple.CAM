@@ -1,6 +1,6 @@
 ---
 title: Pocket
-axes: 3
+axes: 3+4
 ---
 # Pocket
 
@@ -21,6 +21,7 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
 - Roughing a cavity ahead of a finishing pass (the rough + finish pairing below).
 - A clean floor on a patch of the stock top.
 - A round seat for a bearing, magnet, or nut.
+- Cutting on the sides of a part in 4-axis mode — freeze the stock with an [Index](../glossary.md#indexing) op, then pocket the rotated face.
 
 ## How to use it
 

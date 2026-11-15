@@ -1,6 +1,6 @@
 ---
 title: Profile
-axes: 3
+axes: 3+4
 ---
 # Profile
 
@@ -18,6 +18,7 @@ You point Profile at flat faces or circles on the model. The tool then runs one 
 - Trimming a boss down to a target diameter with a negative side allowance.
 - Finishing a wall after a roughing pass — inside, with the allowance removed.
 - Tracing an outline on the line, engrave-style, with any flat tool.
+- Cutting on the sides of a part in 4-axis mode — freeze the stock with an [Index](../glossary.md#indexing) op, then profile the rotated face.
 
 ## How to use it
 
