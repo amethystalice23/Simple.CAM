@@ -33,6 +33,8 @@ safety and setup material first. The software is the safe part.
 ## How this help works
 
 - **Getting started** — your first cut, end to end.
+- **The app** — a tour of each tab: Stock, Model, Tools, and Ops, and
+  what every control on them does.
 - **Concepts** — the learn-once ideas (feeds and speeds, allowances,
   the 4th axis) that every op assumes.
 - **Operations** — one page per op: what it's for, when you'd use it,

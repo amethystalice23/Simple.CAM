@@ -63,5 +63,5 @@ Box stock works too: the app faces it as a cylinder of its corner-to-corner radi
 
 - **Squared ends vs cut-over.** With **cut past the stock edge** off (the default), every level opens and closes with a full 360° ring, so both end walls stand sharp, and the flute's *edge* cuts exactly to the X lines. Tick it and the tool cuts past the end faces instead — and it's the only way to cut a span narrower than the tool.
 - **Caution:** raising Step over past half the tool diameter pushes radial engagement toward slotting — and on this machine the rotary drive carries the cutting torque directly. The default is conservative for a reason.
-- **Rough + finish:** set Finish allowance on the first op, duplicate it, tick **finishing pass only** on the copy. The rough clears the bulk, the finish takes the skin. See [Finishing pass only](../reference/fields.md#finishing-pass-only).
+- **Rough + finish:** set Finish allowance on the first op, then add a second Rotary face over the same span and tick **finishing pass only** on it. The rough clears the bulk, the finish takes the skin. See [Finishing pass only](../reference/fields.md#finishing-pass-only).
 - **Zero allowance, no waste:** with Finish allowance at 0, the roughing ladder lands exactly on the target Ø — its last level *is* the finishing pass.

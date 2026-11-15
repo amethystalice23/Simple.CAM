@@ -46,7 +46,7 @@ this file covers what the hook can't judge.
 modes the subject works in: `3`, `4`, or `3+4`. The viewer renders it
 as chips under the title; `4` alone reads "requires 4th axis", in amber.
 Assign it from the generator/UI reality, not intuition — note any
-uncertainty in your report. Example:
+uncertainty in your report. App/tab pages carry `title:` only. Example:
 
     ---
     title: Pocket
@@ -93,9 +93,20 @@ figure-less. Figures sit at the top level of their numbered step. users hit
 2–4 bullets, each from a verified behavior.
 ```
 
+## The tab-page template
+
+Pages in `the-app/` orient the reader to one tab of the app —
+`the-app/stock-tab.md`, `the-app/model-tab.md`, and so on. Title-only
+frontmatter, no `axes:` tag. Shape: one-line intro → "The layout" with
+a whole-panel figure → short sections per control group, each with a
+cropped figure → "Where next" cross-links. What each *operation* does
+is not this page's job — link the ops pages. Same voice, truth,
+linking, and figure rules as everywhere else.
+
 ## Figures
 
-- Store under `images/<section>/`: `images/ops/`, `images/reference/`…
+- Store under `images/<section>/`: `images/ops/`, `images/the-app/`,
+  `images/reference/`…
 - Name: `<page>-<nn>-<slug>.png` — `pocket-02-panel.png`. Ops pages
   use the standard set:
   - `<op>-01-select.png` — the selection state: what to click
@@ -111,10 +122,12 @@ figure-less. Figures sit at the top level of their numbered step. users hit
   take the region at full device resolution, so the crop stays sharp
   when shown large. Do NOT submit whole-window grabs for panel/field
   steps: the reading column shrinks them and the detail is lost.
-- **Whole-window shots are the exception**, for orientation figures
-  where the entire layout is the point (getting-started pages, "where
-  everything lives"). The viewer's pop-out covers the detail for
-  those.
+- **Whole-panel shots** (the tab panel, not the window) fit
+  orientation figures on tab pages, where the panel's layout is the
+  point. **Whole-window shots** are the rarer exception, for figures
+  where the entire app layout is the point (getting-started pages,
+  "where everything lives"). The viewer's pop-out covers the detail
+  for both.
 - PNG, the real UI (no mock-ups).
 - Figure block format — alt text says what it shows, an italic caption
   under it, and an HTML comment above it with CAPTURE notes (the exact

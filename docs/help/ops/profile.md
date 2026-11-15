@@ -68,6 +68,6 @@ You point Profile at flat faces or circles on the model. The tool then runs one 
 ## Tips & pitfalls
 
 - **Caution:** a through cut with tabs unticked sets the part free before the job ends — it can break loose and fly. Tick tabs (the defaults: 3 × 0.5 mm × 3 mm) on any cut past the part's bottom.
-- **Rough + finish:** set Side allowance around 0.2 mm on the first op, duplicate it, tick **finishing pass only** on the copy. Ticking zeroes both allowances and cuts one full-depth wall lap. See [Fields every operation shares](../reference/fields.md#finishing-pass-only).
+- **Rough + finish:** set Side allowance around 0.2 mm on the first op, then add a second Profile over the same outline and tick **finishing pass only** on it. Ticking zeroes both allowances and cuts one full-depth wall lap. See [Fields every operation shares](../reference/fields.md#finishing-pass-only).
 - **Tabs space themselves.** They sit evenly spaced along the outline by arc length, never straddling the loop's seam, and keep the same positions on every level. A loop too short for the requested count warns and clamps the count.
 - **Watch the waste frame.** With **clear excess stock** on, a frame narrower than the tool reports "frame thinner than the tool — waste left standing" and the waste stays put.

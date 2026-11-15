@@ -67,7 +67,7 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
 
 ## Tips & pitfalls
 
-- **Rough + finish:** set Allowance around 0.2 mm on the first op, duplicate it, tick **finishing pass only** on the copy. The rough clears the bulk, the finish takes the skin. See [Fields every operation shares](../reference/fields.md#finishing-pass-only).
+- **Rough + finish:** set Allowance around 0.2 mm on the first op, then add a second Pocket, point it at the same features, and tick **finishing pass only** on it. The rough clears the bulk, the finish takes the skin. See [Fields every operation shares](../reference/fields.md#finishing-pass-only).
 - **Deep pockets go adaptive on their own.** When the cut is deeper than two tool diameters and the region has room to loop, roughing runs as steady-engagement loops at derived step-down and feed rates. The ⚡ popup shows the numbers and why they changed — they're derived, never fields.
 - **Caution:** **cut past the stock edge** grows the cut region by one step-over past the selected outline, and past the stock edge the same way. Tick it only when nothing of value sits within one step-over outside the region — the setting is a vouch, not a trim.
 - **Islands:** leave **flatten** off to keep material standing inside the region. Turn it on only when the interior voids are junk you want gone.

@@ -19,6 +19,16 @@ of a lathe spindle built into the CNC bed.
 Rotary ops write A angles in degrees; [indexing](#indexing) freezes
 them.
 
+### 4th axis
+
+The extra rotary axis beyond the three linear ones (X, Y, Z) — on the
+Carvera, the [A axis](#a-axis). "3-axis" work uses only the linear
+axes; "4-axis" work spins the stock too.
+
+*In simple.cam:* the Stock tab's mode setting. Ops that need it carry
+the **requires 4th axis** tag in the help; the app disables them in
+3-axis mode.
+
 ### adaptive clearing
 
 Deep [roughing](#roughing-pass) that carves smooth looping arcs

@@ -55,7 +55,8 @@ plus a finishing pass is a rough + finish strategy.
 A checkbox on every op with a depth ladder. Ticking it removes the
 roughing levels: the op cuts only one thin finishing pass at its
 final depth/contour, taking zero allowance. Use it as the second half
-of a rough + finish strategy: duplicate the op, tick the box.
+of a rough + finish strategy: add a second op of the same kind over
+the same features, tick the box on it.
 
 ## Feeds and speeds (the ⚡ popup)
 

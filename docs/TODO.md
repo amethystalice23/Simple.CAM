@@ -14,3 +14,9 @@ Not ordered; pick up when the docs fan-out is done.
   exact material should be able to save their own — like custom
   filament profiles in a slicer — not just pick a broad type
   (Alice, 2026-11-15).
+- **App: duplicate-op control.** The rough + finish pattern (allowance
+  on the first op, finishing pass only on the second) is a standard
+  doc recommendation, but the ops list has no duplicate — users rebuild
+  the second op by hand. A duplicate button on each op row (carrying
+  the kind, tool, features, and field values) would match the docs'
+  own advice (found writing the-app pages, 2026-11-15).

@@ -11,7 +11,7 @@ pages this walkthrough links to.
 
 ## 1. Set up the stock
 
-The app opens on the Stock tab. It starts you on a Ø100 × 100 mm
+The app opens on the Stock tab. It starts you on a Ø50 × 100 mm
 cylinder in 4-axis mode — click **Box** for a first flat job.
 
 Fill in **X (mm)**, **Y (mm)**, and **Z (mm)** to match your real blank,

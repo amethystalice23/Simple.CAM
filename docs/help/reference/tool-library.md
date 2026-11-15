@@ -11,7 +11,7 @@ reuses it. The library ships with the Makera tool presets built in.
 
 - **Search** filters by name, type, or diameter; the **Bit type** and
   **Shank Ø** dropdowns narrow it further.
-- **New** starts a draft tool (a Ø6 flat end mill at 18000 rpm).
+- **Add Tool** starts a draft tool (a Ø6 flat end mill at 18000 rpm).
 - **Import CSV… / Export CSV…** move the whole library through the
   same CSV format a Fusion 360 tool-library export produces — if you
   already have a Fusion library, import it rather than retyping.
