@@ -31,10 +31,18 @@ respect, no assumed machining vocabulary.
 - mm and degrees; Carvera names for machine features.
 
 **Avoid:**
-- Undefined jargon, in-jokes, and vague terms ("powerful", "flexible",
-  "intuitive", "simply", "easy").
-- Business-speak ("leverage", "synergy", "utilize").
-- Hedging and filler ("note that", "it should be mentioned that").
+- leverage
+- synergy
+- utilize
+- simply
+- easy
+- powerful
+- flexible
+- intuitive
+- jargon
+- in-jokes
+- "note that"
+- "it should be mentioned that"
 
 ## Voice sample
 
