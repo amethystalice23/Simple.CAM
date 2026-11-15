@@ -1337,8 +1337,12 @@ pre {
 .help-term {
   width: 560px;
   max-width: 100%;
-  max-height: min(70vh, 640px);
+  /* auto-height to fit the definition, scrolling after roughly half
+   * the old cap (was min(70vh, 640px)) */
+  max-height: min(35vh, 320px);
   overflow-y: auto;
+  margin: auto; /* center in the flex overlay — it's not an img, so
+                 .help-lightbox img's margin:auto never applied */
   z-index: 210; /* above the lightbox, below nothing */
   cursor: default;
 }
