@@ -77,12 +77,14 @@ The app warns about implausible numbers but does not block them: the
 **simulation** is the judge of intent, and only physically impossible
 cuts are refused outright.
 
-## Tabs (Profile, Slice pocket outside)
+## Tabs
 
 **Tabs** are hold-down bridges: the cut-out stays connected to the
-stock by N small uncut bridges so it can't break loose and fly. After
-the job, snap the part free and file the nubs. Count / height /
-length defaults are 3 × 0.5 mm × 3 mm.
+stock by N small uncut bridges so it can't break loose and fly. They
+appear on Profile and on Slice pocket's outside region — an inside
+pocket can't free a part, so it gets no tab rows. After the job,
+snap the part free and file the nubs. Count / height / length
+defaults are 3 × 0.5 mm × 3 mm.
 
 ## Rotation (cw / ccw)
 

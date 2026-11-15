@@ -169,6 +169,15 @@ A light final cut at the final size. [Roughing](#roughing-pass)
 leaves [allowance](#allowance) behind; finishing removes it. Smoother
 and more accurate than trying to do both at once.
 
+### flank
+
+The slanted side of a cone or V-shaped cutter — the surface that
+does the actual cutting on a chamfer. On a thread, the slanted faces
+of the groove.
+
+*In simple.cam:* chamfer width comes from the bit's flank angle and
+the depth you set.
+
 ### flutes
 
 The cutting edges (teeth) of a mill. More flutes usually means a
@@ -186,6 +195,14 @@ machine.
 Inverse-time [feed rate](#feed-rate): instead of mm/min, the F value
 means "do this move in 1/F minutes". Used whenever the A axis moves
 together with a straight axis, so speed stays true on curved paths.
+
+### helix
+
+A spiral path: motion around an axis that also advances along it,
+like a ramp that curls. A thread is a helix.
+
+*In simple.cam:* thread milling follows one, and deep entries often
+helix down instead of plunging.
 
 ### indexing
 
@@ -220,6 +237,15 @@ lays them side by side. The op row's summary counts them.
 Drilling in steps — a bite, a lift to clear chips, a bite — so deep
 holes don't pack with swarf.
 
+### pitch
+
+On a thread, the distance from one crest to the next, in mm. M6×1.0
+means 6 mm nominal with a 1.0 mm pitch. Coarser threads have
+bigger pitches and deeper grooves.
+
+*In simple.cam:* a thread-mill field, ⇩-prefilled from the picked
+rim or wall.
+
 ### plunge
 
 Feeding the tool straight down into material. Harder on the tool than
@@ -230,6 +256,13 @@ cutting sideways, so it runs slower.
 The non-cutting travel between cuts, run at the machine's full speed.
 Red in the preview. The tool should be clear of material on a rapid —
 check that red lines cross nothing you care about.
+
+### rim
+
+The circular edge where a hole or round feature meets the surface.
+
+*In simple.cam:* rims are selectable circles — click one to attach
+it to an op. Pockets, drills and chamfers all take them.
 
 ### roughing pass
 
@@ -274,6 +307,13 @@ rougher surface.
 *In simple.cam:* defaults to half the tool's diameter on area-clearing
 ops — a conservative bite.
 
+### spring pass
+
+A final lap that re-cuts the same path at the same depth — cleaning
+up where the material sprang away from the tool on the way past.
+
+*In simple.cam:* thread mill runs bottom-up and always adds one.
+
 ### stock
 
 The blank you start from: a box or a cylinder of raw material.
@@ -290,6 +330,24 @@ possible where the tool can reach.
 Small bridges of material left holding a cut-out part to the stock
 until the job is done. Like the tags holding a model-kit part in its
 sprue.
+
+### tap
+
+The classic thread tool: a hardened screw you twist into a hole to
+cut an internal thread. It either survives, or it snaps — usually
+when you least want it to.
+
+*In simple.cam:* not offered — the Thread mill op covers the cases
+that would break a tap.
+
+### thread mill
+
+A cutter that mills a thread by following a helix, instead of
+twisting like a tap. Much harder to break, and it can reach threads
+a tap can't.
+
+*In simple.cam:* the Thread mill op, with ⇩ prefill for Ø, pitch
+and length.
 
 ### toolpath
 

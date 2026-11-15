@@ -48,7 +48,11 @@ this file covers what the hook can't judge.
 modes the subject works in: `3`, `4`, or `3+4`. The viewer renders it
 as chips under the title; `4` alone reads "requires 4th axis", in amber.
 Assign it from the generator/UI reality, not intuition — note any
-uncertainty in your report. App/tab pages carry `title:` only. Example:
+uncertainty in your report. The tag says which *modes* the op runs
+in: an op that works flat AND inside an indexed 4-axis job (under an
+Index op, through the index frame) is `3+4`, whatever a plan-table
+label says about its interpolation — the code wins. App/tab pages
+carry `title:` only. Example:
 
     ---
     title: Pocket
@@ -58,7 +62,8 @@ uncertainty in your report. App/tab pages carry `title:` only. Example:
 ## The ops-page template
 
 Every page in `ops/` follows this skeleton, in this order. Keep the
-whole page under ~120 lines; each step gets a figure.
+whole page under ~120 lines; steps 2–4 carry the three standard
+figures.
 
 ```markdown
 ---
@@ -146,11 +151,13 @@ actually visible on screen. Under ~120 lines.
   caption.
 - Figure block format — alt text says what it shows, an italic caption
   under it, and an HTML comment above it with CAPTURE notes (the exact
-  UI state to set up; the capture scripts read these):
+  UI state to set up; the capture scripts read these; note the shot
+  is taken at deviceScaleFactor 2):
 
 ```markdown
 <!-- CAPTURE: pocket op added, panel expanded, End depth picked
-     from the floor, stock 20mm box, 2mm-deep demo region -->
+     from the floor, stock 20mm box, 2mm-deep demo region.
+     Shot at deviceScaleFactor 2. -->
 ![The pocket panel with depths filled from a floor pick](../images/ops/pocket-02-panel.png)
 *Figure 2 — End depth is a floor: the tool cuts down to it and stops.*
 ```
