@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "brand-voice": {
+      "command": "npx",
+      "args": [
+        "brand-voice-mcp"
+      ]
+    }
+  }
+}
