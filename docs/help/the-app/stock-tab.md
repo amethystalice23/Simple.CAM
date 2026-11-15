@@ -105,13 +105,13 @@ not rules — every op keeps its own overrides, and the
 [feeds and speeds](../concepts/feeds-and-speeds.md) page explains how to
 read and change them.
 
-<!-- CAPTURE: Stock tab, Material row with the dropdown OPEN showing
-     all five options — Aluminum 6061, Brass 360, Delrin (acetal),
-     Hardwood (maple/birch), Acrylic (cast) — Aluminum 6061 currently
-     selected. Framing: tight crop of the Material row with the open
-     list, small margin. Shot at deviceScaleFactor 2. -->
-![The Material dropdown open, showing the five presets](../images/the-app/stock-tab-04-material.png)
-*Figure 4 — The material you pick here is what the ⚡ popup defaults from later; change it before cutting something softer or harder.*
+<!-- CAPTURE: Stock tab, Material row with Aluminum 6061 selected. The
+     dropdown is a native select — its open popup can't be captured, so
+     the shot shows the closed row and the caption names the five
+     presets. Framing: tight crop of the Material row, small margin.
+     Shot at deviceScaleFactor 2. -->
+![The Material row with Aluminum 6061 selected](../images/the-app/stock-tab-04-material.png)
+*Figure 4 — The five presets: Aluminum 6061, Brass 360, Delrin (acetal), Hardwood (maple/birch), Acrylic (cast). The material you pick here is what the ⚡ popup defaults from later.*
 
 ## Where this connects
 

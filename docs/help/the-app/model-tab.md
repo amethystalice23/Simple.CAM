@@ -9,7 +9,7 @@ Everything the job cuts from lives here: the model you loaded, built-in shapes, 
 
 The tab has two sections. The **Objects** list names every cuttable thing in the job — the model, any shapes you added, any artwork. Below it, the **editor card** appears when you select one, with its Size, Position, and Rotation.
 
-You don't load files from this tab. Drop a file anywhere on the viewport and the app switches here for you.
+You don't load files from this tab. Drop a file anywhere on the viewport — an STL or STEP switches here for you. Artwork imports without the switch, so click the tab yourself.
 
 <!-- CAPTURE: Model tab active. A binary STL loaded (an 80 x 60 x 10 mm
      bracket), its row selected so the editor card shows; + Cylinder

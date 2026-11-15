@@ -13,7 +13,9 @@ them. A row starts collapsed — kind, tool chip, and a one-line summary —
 and expands to that op's full settings.
 
 <!-- CAPTURE: Ops tab with two ops — a Pocket row (calculated, collapsed:
-     T1 chip, summary "80 passes / 20 level(s), z0.0 → z-4.0, ~96.3 min",
+     T1 chip, summary "80 passes / 20 level(s), z0.0 → z-4.0, 40 stay-down
+     link(s), ~96.3 min" — the collapsed row truncates the long summary
+     with an ellipsis, which is its real appearance; full text on hover),
      a feature snippet) above an expanded second op (e.g. a Profile with
      its Tool picker and fields visible). + Add toolpath and
      + Suggest toolpath visible at the top, Recalculate and Clear at the
@@ -38,10 +40,10 @@ and which ops could cut it.
 ## The op row
 
 <!-- CAPTURE: one calculated Pocket op row, collapsed: kind select
-     "Pocket", ⓘ, 👁, ↻, ✕ icons; T1 tool chip; summary
-     "80 passes / 20 level(s), z0.0 → z-4.0, ~96.3 min"; a feature
-     snippet like "recess floor". Framing: loose crop of the Ops panel
-     around that single row -->
+     "Pocket", ⓘ, 👁, ↻, ✕ icons; T1 tool chip; the summary truncated
+     with an ellipsis at "…40 sta…" beside the feature snippet (the
+     full string is on hover); a feature snippet like "40.0×30.0".
+     Framing: loose crop of the Ops panel around that single row -->
 ![A calculated op row with its tool chip and summary line](../images/the-app/ops-tab-02-row.png)
 *Figure 2 — T1 means first tool used in the list; the export uses the same numbers.*
 
@@ -51,9 +53,11 @@ and which ops could cut it.
   Two ops sharing a tool share a number; deleting an op renumbers the
   rest. The export dialog prefills from these same numbers.
 - **The summary line.** After a recalculation it reads, for example,
-  `80 passes / 20 level(s), z0.0 → z-4.0, ~96.3 min` — passes and depth
-  levels, the depth band, and the cutting-time estimate. Before that it
-  says `not calculated yet`. Hover the line for the full text.
+  `80 passes / 20 level(s), z0.0 → z-4.0, 40 stay-down link(s), ~96.3 min`
+  — passes, depth levels, stay-down links (moves between passes that
+  stay at depth instead of retracting), the depth band, and the
+  cutting-time estimate. Before that it says `not calculated yet`. A long
+  summary truncates with an ellipsis; hover the line for the full text.
 - **The feature snippet.** Names what the op cuts — the first two selected
   features, then `+N more`. Empty ops read `no features`.
 - **Row icons.** ⓘ opens a what-this-op-does popup (Esc closes). 👁 hides

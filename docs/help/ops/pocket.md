@@ -57,9 +57,10 @@ The clearing strategy picks itself, the same way climb does. A narrow region get
 <!-- CAPTURE: the same job after Recalculate — toolpath preview on in the
      viewport, contour-offset cutting moves rendered amber (rapids red)
      covering the 40 x 30 mm region down to the 4 mm floor; the op row
-     reads "80 passes / 20 level(s), z0.0 -> z-4.0, ~96.3 min", status
-     strip "recalculated 1 op". Framing: loose crop of the viewport
-     with the amber preview -->
+     reads "80 passes / 20 level(s), z0.0 -> z-4.0, 40 stay-down link(s),
+     ~96.3 min" (truncated with an ellipsis when collapsed; full text on
+     hover), status strip "recalculated 1 op". Framing: loose crop of
+     the viewport with the amber preview -->
 ![The generated pocket toolpath in the viewport: amber cutting moves filling the recess](../images/ops/pocket-03-preview.png)
 *Figure 3 — Read the preview as coverage: the passes should tile the whole region with no untouched islands.*
 

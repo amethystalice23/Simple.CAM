@@ -128,7 +128,10 @@ linking, and figure rules as everywhere else.
   where the entire app layout is the point (getting-started pages,
   "where everything lives"). The viewer's pop-out covers the detail
   for both.
-- PNG, the real UI (no mock-ups).
+- PNG, the real UI (no mock-ups). Native `<select>` dropdowns can't be
+  captured open — headless shots always show the closed row — so write
+  those recipes for the closed row and name the options in prose or the
+  caption.
 - Figure block format — alt text says what it shows, an italic caption
   under it, and an HTML comment above it with CAPTURE notes (the exact
   UI state to set up; the capture scripts read these):
