@@ -134,13 +134,14 @@ export interface GlossaryEntry {
   anchor: string;
   /** the raw heading text ("A axis") */
   title: string;
-  /** the section's markdown, heading line included (the popup shows it) */
+  /** the section's markdown WITHOUT its heading line — the popup card
+   * renders the term title itself, so keeping it would duplicate */
   md: string;
 }
 
 /** Split the glossary body into per-term sections at `### ` headings.
- * Each section keeps its heading (so the popup renders the term name)
- * and is keyed by the GitHub slug of that heading. */
+ * Each section drops its heading (the popup card renders the term
+ * name) and is keyed by the GitHub slug of that heading. */
 export function splitGlossaryEntries(body: string): GlossaryEntry[] {
   const entries: { title: string; lines: string[] }[] = [];
   let current: { title: string; lines: string[] } | null = null;
@@ -157,7 +158,7 @@ export function splitGlossaryEntries(body: string): GlossaryEntry[] {
   return entries.map((e) => ({
     anchor: githubSlug(e.title),
     title: e.title,
-    md: e.lines.join('\n').replace(/\s+$/, ''),
+    md: e.lines.slice(1).join('\n').trim(),
   }));
 }
 

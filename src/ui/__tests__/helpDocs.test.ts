@@ -248,11 +248,12 @@ describe('splitGlossaryEntries', () => {
     expect(entries.map((e) => e.title)).toEqual(['A axis', 'ball-nose', 'crown']);
   });
 
-  it('keeps the heading line in the section markdown (the popup shows the term name)', () => {
+  it('drops the heading line from the section markdown (the popup card renders the term title itself)', () => {
     const [axis] = splitGlossaryEntries(body);
     expect(axis.md).toBe(
-      '### A axis\n\nThe rotary axis: it spins the stock.\n\n*In simple.cam:* the 4-axis mode mounts the stock on this axis.',
+      'The rotary axis: it spins the stock.\n\n*In simple.cam:* the 4-axis mode mounts the stock on this axis.',
     );
+    expect(axis.md).not.toContain('###');
   });
 
   it('ignores text before the first heading and trailing content is kept', () => {
