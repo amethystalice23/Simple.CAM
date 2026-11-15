@@ -1331,3 +1331,21 @@ pre {
   border-radius: 6px;
 }
 .help-missing-image { color: #7d8891; font-style: italic; }
+/* the dictionary popup: one glossary term's definition, dictionary-style,
+ * over the unchanged page — backdrop click dismisses, ✕ top-right */
+.help-term-overlay { cursor: default; }
+.help-term {
+  width: 560px;
+  max-width: 100%;
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  z-index: 210; /* above the lightbox, below nothing */
+  cursor: default;
+}
+.help-term h2 {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 15px;
+}
+.help-term-doc { font-size: 12.5px; }
+.help-term-doc h3 { margin-top: 0; color: #d8dde2; font-size: 13.5px; }

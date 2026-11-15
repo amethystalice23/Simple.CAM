@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDocsTree,
   docKeyToPage,
+  findGlossaryEntry,
+  githubSlug,
   landingPageOf,
   pageTitle,
   parseFrontmatter,
   resolveDocLink,
   resolveDocPath,
+  splitGlossaryEntries,
 } from '../helpDocs';
 
 describe('parseFrontmatter', () => {
@@ -187,5 +190,97 @@ describe('docKeyToPage', () => {
   });
   it('leaves keys without the marker untouched', () => {
     expect(docKeyToPage('glossary.md')).toBe('glossary.md');
+  });
+});
+
+describe('githubSlug', () => {
+  it('lowercases and hyphenates plain headings', () => {
+    expect(githubSlug('A axis')).toBe('a-axis');
+    expect(githubSlug('Crown')).toBe('crown');
+  });
+  it('keeps existing hyphens', () => {
+    expect(githubSlug('step-over')).toBe('step-over');
+    expect(githubSlug('climb milling')).toBe('climb-milling');
+  });
+  it('strips punctuation like the GitHub slugger', () => {
+    expect(githubSlug('Tips & pitfalls')).toBe('tips--pitfalls');
+    expect(githubSlug('RPM (speed)')).toBe('rpm-speed');
+    expect(githubSlug("Alice's rule")).toBe('alices-rule');
+  });
+  it('matches the anchors the docs actually link', () => {
+    // docs/help/ops/pocket.md links ../glossary.md#step-over etc.
+    for (const heading of [
+      'step-over',
+      'adaptive clearing',
+      'climb milling',
+      'crown',
+      'allowance',
+    ]) {
+      expect(githubSlug(heading)).toBe(heading.replace(/ /g, '-'));
+    }
+  });
+});
+
+describe('splitGlossaryEntries', () => {
+  const body = [
+    '# Glossary',
+    '',
+    'Intro paragraph.',
+    '',
+    '### A axis',
+    '',
+    'The rotary axis: it spins the stock.',
+    '',
+    '*In simple.cam:* the 4-axis mode mounts the stock on this axis.',
+    '',
+    '### ball-nose',
+    '',
+    'A cutter with a rounded tip.',
+    '',
+    '### crown',
+    '',
+    "The stock's top surface.",
+  ].join('\n');
+
+  it('splits the body into one entry per ### heading', () => {
+    const entries = splitGlossaryEntries(body);
+    expect(entries.map((e) => e.anchor)).toEqual(['a-axis', 'ball-nose', 'crown']);
+    expect(entries.map((e) => e.title)).toEqual(['A axis', 'ball-nose', 'crown']);
+  });
+
+  it('keeps the heading line in the section markdown (the popup shows the term name)', () => {
+    const [axis] = splitGlossaryEntries(body);
+    expect(axis.md).toBe(
+      '### A axis\n\nThe rotary axis: it spins the stock.\n\n*In simple.cam:* the 4-axis mode mounts the stock on this axis.',
+    );
+  });
+
+  it('ignores text before the first heading and trailing content is kept', () => {
+    const entries = splitGlossaryEntries(body);
+    expect(entries[0].md).not.toContain('Intro paragraph');
+    expect(entries[2].md).toContain("The stock's top surface.");
+  });
+
+  it('returns no entries for a body without ### headings', () => {
+    expect(splitGlossaryEntries('# Pocket\n\nA flat recess.')).toEqual([]);
+  });
+
+  it('keys entries the same way rehype-slug ids them', () => {
+    const entries = splitGlossaryEntries('### Tips & pitfalls\n\nWatch out.');
+    expect(entries[0].anchor).toBe(githubSlug('Tips & pitfalls'));
+  });
+});
+
+describe('findGlossaryEntry', () => {
+  const entries = splitGlossaryEntries('### A axis\n\nSpins the stock.\n\n### crown\n\nTop surface.');
+
+  it('finds an entry by anchor', () => {
+    expect(findGlossaryEntry(entries, 'a-axis')?.title).toBe('A axis');
+    expect(findGlossaryEntry(entries, 'crown')?.title).toBe('crown');
+  });
+
+  it('returns null for a missing term (the caller falls back to the page)', () => {
+    expect(findGlossaryEntry(entries, 'step-over')).toBeNull();
+    expect(findGlossaryEntry(entries, '')).toBeNull();
   });
 });

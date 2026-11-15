@@ -55,6 +55,9 @@ const GROUP_ORDER = ['getting-started', 'concepts', 'ops', 'reference', 'tutoria
 /** The viewer's landing page: docs/help/index.md when the docs ship one. */
 export const LANDING_PAGE = 'index.md';
 
+/** The dictionary page glossary-term links pop out of. */
+export const GLOSSARY_PAGE = 'glossary.md';
+
 const GROUP_LABELS: Record<string, string> = {
   'getting-started': 'Getting started',
   concepts: 'Concepts',
@@ -112,6 +115,56 @@ export function buildDocsTree(pages: HelpPageMeta[]): HelpGroup[] {
  * first entry of the built sidebar tree. */
 export function landingPageOf(tree: HelpGroup[]): string {
   return tree[0]?.pages[0]?.path ?? LANDING_PAGE;
+}
+
+/** GitHub-style heading slug, matching rehype-slug's default slugger:
+ * lowercase, punctuation stripped (word characters, spaces, hyphens and
+ * underscores survive), every space becomes a hyphen one-for-one — so
+ * "Tips & pitfalls" slugs to "tips--pitfalls", like GitHub. */
+export function githubSlug(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .replace(/\s/g, '-');
+}
+
+export interface GlossaryEntry {
+  /** heading slug — what a `glossary.md#…` anchor points at */
+  anchor: string;
+  /** the raw heading text ("A axis") */
+  title: string;
+  /** the section's markdown, heading line included (the popup shows it) */
+  md: string;
+}
+
+/** Split the glossary body into per-term sections at `### ` headings.
+ * Each section keeps its heading (so the popup renders the term name)
+ * and is keyed by the GitHub slug of that heading. */
+export function splitGlossaryEntries(body: string): GlossaryEntry[] {
+  const entries: { title: string; lines: string[] }[] = [];
+  let current: { title: string; lines: string[] } | null = null;
+  for (const line of body.split('\n')) {
+    const heading = /^###\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      if (current) entries.push(current);
+      current = { title: heading[1], lines: [line] };
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  if (current) entries.push(current);
+  return entries.map((e) => ({
+    anchor: githubSlug(e.title),
+    title: e.title,
+    md: e.lines.join('\n').replace(/\s+$/, ''),
+  }));
+}
+
+/** The entry a `glossary.md#anchor` link points at, or null when no
+ * section matches (the caller falls back to opening the page). */
+export function findGlossaryEntry(entries: GlossaryEntry[], anchor: string): GlossaryEntry | null {
+  return entries.find((e) => e.anchor === anchor) ?? null;
 }
 
 /** Join a relative href against the current page's directory within the

@@ -9,8 +9,10 @@
  * and production build behave identically. Internal links swap the
  * content pane (sidebar clicks, cross-page links, #heading anchors);
  * external http(s) links open a new tab. Doc screenshots pop out into a
- * lightbox at full resolution (click to enlarge). Escape closes the
- * lightbox first, then the dialog.
+ * lightbox at full resolution (click to enlarge). Glossary-term links
+ * pop a dictionary-style popup with just that term's definition — the
+ * page behind never moves; links inside the popup swap the popup.
+ * Escape closes innermost-first (lightbox → glossary popup → dialog).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -20,11 +22,14 @@ import rehypeSlug from 'rehype-slug';
 import {
   buildDocsTree,
   docKeyToPage,
+  findGlossaryEntry,
+  GLOSSARY_PAGE,
   landingPageOf,
   pageTitle,
   parseFrontmatter,
   resolveDocLink,
   resolveDocPath,
+  splitGlossaryEntries,
   type HelpPageMeta,
 } from './helpDocs';
 
@@ -58,6 +63,10 @@ for (const [key, url] of Object.entries(imageUrls)) {
   imageUrlByPath.set(docKeyToPage(key), url);
 }
 
+/** the glossary parsed into per-term sections — dictionary popups draw
+ * from this, never the whole page */
+const glossaryEntries = splitGlossaryEntries(pages.get(GLOSSARY_PAGE)?.body ?? '');
+
 /** the sidebar tree, stable — computed once from the bundled set */
 const tree = buildDocsTree([...pages.values()]);
 
@@ -69,11 +78,87 @@ interface Props {
   onClose: () => void;
 }
 
+/** Markdown element overrides for one render context: rewrite in-doc
+ * links and images against `fromPage`'s location in the docs tree.
+ * Glossary-term links (`glossary.md#…`) pop the term's definition via
+ * `onGlossaryTerm` when given (and the section exists) instead of
+ * navigating; every other link goes through `onNavigate`; screenshots
+ * pop out via `onImage`. */
+function makeComponents(
+  fromPage: string,
+  onGlossaryTerm: ((anchor: string) => void) | null,
+  onNavigate: (page: string, anchor: string | null) => void,
+  onImage: (src: string, alt: string) => void,
+): Components {
+  return {
+    a({ href, children }) {
+      const target = href ?? '';
+      if (/^(https?:)?\/\//i.test(target) || /^[a-z][a-z0-9+.-]*:/i.test(target)) {
+        return (
+          <a href={target} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        );
+      }
+      const resolved = resolveDocLink(fromPage, target);
+      if (!resolved) return <a>{children}</a>;
+      if (
+        resolved.page === GLOSSARY_PAGE &&
+        resolved.anchor !== null &&
+        onGlossaryTerm &&
+        findGlossaryEntry(glossaryEntries, resolved.anchor)
+      ) {
+        const anchor = resolved.anchor;
+        return (
+          <a
+            href={target} // keeps the browser's status line honest; clicks are intercepted
+            onClick={(e) => {
+              e.preventDefault();
+              onGlossaryTerm(anchor);
+            }}
+          >
+            {children}
+          </a>
+        );
+      }
+      return (
+        <a
+          href={target} // keeps the browser's status line honest; clicks are intercepted
+          onClick={(e) => {
+            e.preventDefault();
+            onNavigate(resolved.page, resolved.anchor);
+          }}
+        >
+          {children}
+        </a>
+      );
+    },
+    img({ src, alt }) {
+      const url = typeof src === 'string' ? imageUrlByPath.get(resolveDocPath(fromPage, src)) : undefined;
+      if (!url) return <span className="help-missing-image">{alt}</span>;
+      // screenshots are 1600px+ — click pops the full-resolution asset
+      // into the lightbox (the reading column only shows a fit)
+      return (
+        <span
+          className="help-image"
+          role="button"
+          aria-label="Enlarge screenshot"
+          onClick={() => onImage(url, alt ?? '')}
+        >
+          <img src={url} alt={alt ?? ''} loading="lazy" />
+        </span>
+      );
+    },
+  };
+}
+
 export function HelpDialog(props: Props) {
   const [pagePath, setPagePath] = useState(defaultPage);
   const [anchor, setAnchor] = useState<string | null>(null);
   /** the lightboxed screenshot: its asset URL + alt, null when closed */
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  /** the open dictionary popup's glossary anchor, null when closed */
+  const [term, setTerm] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   /** Swap the content pane (sidebar click or in-doc link). An anchor
@@ -92,67 +177,55 @@ export function HelpDialog(props: Props) {
     else pane.scrollTop = 0;
   }, [pagePath, anchor]);
 
-  /** Escape closes the lightbox first, then the dialog (plus the ✕) —
-   * like the other dialogs */
+  /** Escape closes innermost-first: the lightbox, then the glossary
+   * popup, then the dialog (plus the ✕) — like the other dialogs */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (lightbox) setLightbox(null);
+      else if (term) setTerm(null);
       else props.onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [lightbox, props.onClose]);
+  }, [lightbox, term, props.onClose]);
 
-  /** markdown element overrides: rewrite in-doc links and images against
-   * the CURRENT page's location in the docs tree */
+  /** markdown element overrides for the content pane: glossary-term
+   * links pop the term's dictionary popup (missing sections fall back
+   * to opening the glossary page in the pane) */
   const components = useMemo<Components>(
-    () => ({
-      a({ href, children }) {
-        const target = href ?? '';
-        if (/^(https?:)?\/\//i.test(target) || /^[a-z][a-z0-9+.-]*:/i.test(target)) {
-          return (
-            <a href={target} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          );
-        }
-        const resolved = resolveDocLink(pagePath, target);
-        if (!resolved) return <a>{children}</a>;
-        return (
-          <a
-            href={target} // keeps the browser's status line honest; clicks are intercepted
-            onClick={(e) => {
-              e.preventDefault();
-              navigate(resolved.page, resolved.anchor);
-            }}
-          >
-            {children}
-          </a>
-        );
-      },
-      img({ src, alt }) {
-        const url = typeof src === 'string' ? imageUrlByPath.get(resolveDocPath(pagePath, src)) : undefined;
-        if (!url) return <span className="help-missing-image">{alt}</span>;
-        // screenshots are 1600px+ — click pops the full-resolution asset
-        // into the lightbox (the reading column only shows a fit)
-        return (
-          <span
-            className="help-image"
-            role="button"
-            aria-label="Enlarge screenshot"
-            onClick={() => setLightbox({ src: url, alt: alt ?? '' })}
-          >
-            <img src={url} alt={alt ?? ''} loading="lazy" />
-          </span>
-        );
-      },
-    }),
+    () =>
+      makeComponents(
+        pagePath,
+        (anchor) => setTerm(anchor),
+        navigate,
+        (src, alt) => setLightbox({ src, alt }),
+      ),
     // navigate is stable enough for the pane's lifetime (it only sets state)
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pagePath],
   );
 
+  /** and for the dictionary popup: glossary-term links swap the popup
+   * (dictionary browsing), anything else falls through to the pane and
+   * dismisses the popup — the page behind never moves for a term */
+  const termComponents = useMemo<Components>(
+    () =>
+      makeComponents(
+        GLOSSARY_PAGE,
+        (anchor) => setTerm(anchor),
+        (page_, anchor_) => {
+          setTerm(null);
+          navigate(page_, anchor_);
+        },
+        (src, alt) => setLightbox({ src, alt }),
+      ),
+    // navigate is stable enough (it only sets state)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const activeTerm = term ? findGlossaryEntry(glossaryEntries, term) : null;
   const page = pages.get(pagePath) ?? pages.get(defaultPage);
 
   return (
@@ -216,6 +289,46 @@ export function HelpDialog(props: Props) {
           onClick={() => setLightbox(null)}
         >
           <img src={lightbox.src} alt={lightbox.alt} />
+        </div>
+      )}
+      {/* the dictionary popup: ONE glossary term's definition over the
+       * unchanged page; backdrop click dismisses, ✕ top-right, term links
+       * inside swap the popup (dictionary browsing) */}
+      {term && activeTerm && (
+        <div
+          className="help-lightbox help-term-overlay"
+          role="button"
+          aria-label="Close definition"
+          onClick={() => setTerm(null)}
+        >
+          <div
+            className="modal help-term"
+            role="dialog"
+            aria-modal="true"
+            aria-label={activeTerm.title}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>
+              {activeTerm.title}
+              <button
+                type="button"
+                className="icon-btn"
+                title="Close (Esc)"
+                onClick={() => setTerm(null)}
+              >
+                ✕
+              </button>
+            </h2>
+            <div className="help-doc help-term-doc">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeSlug]}
+                components={termComponents}
+              >
+                {activeTerm.md}
+              </ReactMarkdown>
+            </div>
+          </div>
         </div>
       )}
     </>
