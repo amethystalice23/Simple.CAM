@@ -71,6 +71,7 @@ import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
 import { CalibrationDialog } from './CalibrationDialog';
 import { SimulateDialog } from './SimulateDialog';
+import { HelpDialog } from './HelpDialog';
 import { BitmapImportDialog, type BitmapImportResult } from './BitmapImportDialog';
 import { simStepDownFor } from '../sim/stepDown';
 import { useCarveSim } from './useCarveSim';
@@ -158,6 +159,8 @@ export function App() {
   const [showAbout, setShowAbout] = useState(false);
   /** the carve simulator dialog is open (top-bar "Simulate…") */
   const [showSimulate, setShowSimulate] = useState(false);
+  /** the help viewer dialog is open (top-bar "Help" button) */
+  const [showHelp, setShowHelp] = useState(false);
   /** the carve simulator hook — chunk meshes flow to the Viewport while
    *  the dialog runs; cleared (dispose) on exit */
   const carveSim = useCarveSim();
@@ -1886,6 +1889,17 @@ export function App() {
           <button type="button" onClick={() => setShowExport(true)}>
             Export g-code
           </button>
+          <span className="header-sep" aria-hidden />
+          {/* the docs affordance: set apart behind its own divider and
+           * colored like a reference, not an action on the job */}
+          <button
+            type="button"
+            className="help-btn"
+            title="Browse the user guide"
+            onClick={() => setShowHelp(true)}
+          >
+            Help
+          </button>
           <input
             ref={openJobInputRef}
             type="file"
@@ -2110,6 +2124,7 @@ export function App() {
         </aside>
       </main>
       {showAbout && <AboutBox onClose={() => setShowAbout(false)} />}
+      {showHelp && <HelpDialog onClose={() => setShowHelp(false)} />}
       {suggestKnowledge && (
         <SuggestPopup
           knowledge={suggestKnowledge}

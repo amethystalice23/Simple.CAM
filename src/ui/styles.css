@@ -1160,3 +1160,135 @@ pre {
 .sim-warning { color: #e0a94f; }
 .sim-note { color: #9aa4ad; }
 .sim-ok { color: #7fae6f; }
+
+/* ---- Help viewer (top-bar "Help" → bundled user docs) ---- */
+/* the header affordance: teal, a reference not an action — set apart
+ * behind its own divider after the job-work buttons */
+.help-btn {
+  background: transparent;
+  color: #66d9c8;
+  border: 1px solid #2b6d61;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.help-btn:hover {
+  background: #1c3d37;
+  border-color: #66d9c8;
+  color: #8ff0e0;
+}
+.help-modal {
+  width: 980px;
+  max-width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 0 0;
+}
+.help-modal h2 {
+  padding: 0 16px;
+  margin-bottom: 10px;
+}
+.help-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  border-top: 1px solid #31373e;
+}
+.help-sidebar {
+  width: 210px;
+  flex: none;
+  border-right: 1px solid #31373e;
+  overflow-y: auto;
+  padding: 10px 8px 14px;
+}
+.help-group { margin-bottom: 10px; }
+.help-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7d8891;
+  padding: 0 8px 4px;
+}
+.help-page-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: #aeb7bf;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 5px;
+}
+.help-page-btn:hover { background: #31373e; color: #fff; }
+.help-page-btn.active {
+  background: color-mix(in srgb, #66d9c8 14%, #1b1f24);
+  color: #8ff0e0;
+}
+.help-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px 24px 32px;
+}
+.help-doc {
+  max-width: 720px;
+  margin: 0 auto;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.help-doc h1 { font-size: 20px; margin: 4px 0 10px; }
+.help-doc h2 {
+  font-size: 15px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #d8dde2;
+  margin: 18px 0 6px;
+}
+.help-doc h3 { font-size: 13.5px; margin: 14px 0 4px; }
+.help-doc p { margin: 6px 0; }
+.help-doc ul, .help-doc ol { margin: 6px 0; padding-left: 22px; }
+.help-doc li { margin: 3px 0; }
+.help-doc a { color: #4d94c9; text-decoration: none; }
+.help-doc a:hover { text-decoration: underline; }
+.help-doc code {
+  background: #12161a;
+  border: 1px solid #31373e;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.help-doc pre {
+  background: #12161a;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.help-doc pre code { border: none; background: none; padding: 0; }
+.help-doc blockquote {
+  border-left: 3px solid #2e6f9e;
+  background: rgba(46, 111, 158, 0.08);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: #aeb7bf;
+}
+.help-doc table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  width: 100%;
+}
+.help-doc th, .help-doc td {
+  border: 1px solid #31373e;
+  padding: 5px 9px;
+  font-size: 12.5px;
+  text-align: left;
+}
+.help-doc th { background: #12161a; }
+.help-doc img {
+  max-width: 100%;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+.help-missing-image { color: #7d8891; font-style: italic; }
