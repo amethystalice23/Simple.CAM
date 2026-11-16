@@ -21,6 +21,7 @@
  */
 
 import type { JobOp } from '../core/types';
+import { CHORD_SAG_TAU } from '../cam/swarfFinish';
 
 export function simStepDownFor(op: JobOp): number {
   switch (op.kind) {
@@ -30,6 +31,15 @@ export function simStepDownFor(op: JobOp): number {
       return op.endDepth - op.startDepth;
     case 'chamfer':
       return op.depth;
+    case 'swarfFinish':
+      // A polish's intended removal below the pre-move standing is the
+      // finishing skin itself: the roughing allowance + waterline
+      // scallops (~0.4mm, the pitch-fallback band it always ran at)
+      // PLUS the chord-sagitta skin the emitter now bounds at
+      // CHORD_SAG_TAU (her ruling, 2026-11-16: tighten the polyline,
+      // then tolerate the small skin that remains). A real plow —
+      // removal deeper than that — still warns.
+      return 0.4 + CHORD_SAG_TAU;
     default:
       return 'stepDown' in op ? (op.stepDown as number | undefined) ?? 0 : 0;
   }

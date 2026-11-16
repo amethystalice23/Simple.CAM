@@ -1281,10 +1281,81 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   moves.push({ words: { z: tip0 }, feed: plungeFeed }); // pure-Z plunge (tip plane, Stage 0.4)
   minutes += Math.max(0, entryH - tip0) / plungeFeed;
 
-  // ---- the sweep: one G93 XYZA move per remaining cell ----
+  // ---- the sweep: one G93 XYZA move per remaining cell, SUBDIVIDED
+  // where the straight chord would dip below the surface (the sagitta
+  // tightening, 2026-11-16) — a surface-following midpoint per split,
+  // recursing while the measured dip exceeds CHORD_SAG_TAU ----
+  type Pose = {
+    c: { x: number; y: number; z: number }; // machine ball center
+    att: number; // the running A at the pose
+    pM: { x: number; y: number; z: number }; // machine contact
+    pMat: { x: number; y: number; z: number }; // material contact
+    colTh: number; // the contact's map-column theta (the ray's side)
+  };
+  const machineContact = (p: { x: number; y: number; z: number }, deg: number) => {
+    const th = (deg * Math.PI) / 180;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+    const zRel = p.z - o.axisZ;
+    return { x: p.x, y: p.y * c - zRel * s, z: p.y * s + zRel * c + o.axisZ };
+  };
+  const emitMove = (from: Pose, to: Pose) => {
+    const fwd = to.att - from.att;
+    const contactPath = Math.hypot(to.pM.x - from.pM.x, to.pM.y - from.pM.y, to.pM.z - from.pM.z);
+    const centerPath = Math.hypot(to.c.x - from.c.x, to.c.y - from.c.y, to.c.z - from.c.z);
+    const passMinutes = Math.max(
+      contactPath / feed,
+      centerPath / feed,
+      (Math.abs(fwd) / 360) / MAX_ROTARY_RPM,
+    );
+    moves.push({ words: { x: to.c.x, y: to.c.y, z: tipZOf(to.c), a: to.att }, feed: 1 / passMinutes });
+    minutes += passMinutes;
+  };
+  const emitChain = (from: Pose, to: Pose, depth: number) => {
+    const dip = ball && o.clipCtx !== undefined && depth > 0
+      ? chordDip(o.clipCtx, from.c, from.att, to.c, to.att)
+      : 0;
+    if (dip > CHORD_SAG_TAU) {
+      const m = chordMidContact(o.clipCtx!, from.pMat, to.pMat, from.colTh, to.colTh);
+      if (m !== undefined) {
+        // the A path is IDENTICAL to the un-subdivided move: the mid
+        // sits at the half-attitude the controller interpolated anyway
+        const attMid = from.att + (to.att - from.att) / 2;
+        const cMid = ballToolCenterAt(m.p, m.n, toolR, o.axisZ, attMid);
+        const cHalf = {
+          x: from.c.x + (to.c.x - from.c.x) / 2,
+          y: from.c.y + (to.c.y - from.c.y) / 2,
+          z: from.c.z + (to.c.z - from.c.z) / 2,
+        };
+        const jump = Math.hypot(cMid.x - cHalf.x, cMid.y - cHalf.y, cMid.z - cHalf.z);
+        // the mid pose must graze-clear like a stance (own fan only);
+        // if it does not, the move stays whole — the planner's 0.3mm
+        // chord break already bounded it (measured on the knight: the
+        // refusals are shank-grazes in tight grooves, geometry-honest)
+        if (
+          jump <= toolR + CHORD_SAMPLE_EPS &&
+          !ballBandsClip(o.clipCtx!, cMid, attMid, 1e-3, m.p)
+        ) {
+          const mid: Pose = {
+            c: cMid, att: attMid, pM: machineContact(m.p, attMid), pMat: m.p,
+            colTh: m.colTh,
+          };
+          emitChain(from, mid, depth - 1);
+          emitChain(mid, to, depth - 1);
+          return;
+        }
+      }
+    }
+    emitMove(from, to);
+  };
   let prevCi = first;
-  let prevC = c0;
-  let prevP = contactAt(first, a);
+  let prevPose: Pose = {
+    c: c0,
+    att: a,
+    pM: contactAt(first, a),
+    pMat: cells[first].p,
+    colTh: cells[first].theta,
+  };
   for (let k = 1; k < patch.length; k++) {
     const ci = patch[k];
     // STAGE 0.3 (spec 2026-11-13): SIGNED wrap-aware delta. The plain
@@ -1303,18 +1374,10 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
     a += fwd;
     const c = centerOf(ci);
     const p = contactAt(ci, a);
-    const contactPath = Math.hypot(p.x - prevP.x, p.y - prevP.y, p.z - prevP.z);
-    const centerPath = Math.hypot(c.x - prevC.x, c.y - prevC.y, c.z - prevC.z);
-    const passMinutes = Math.max(
-      contactPath / feed,
-      centerPath / feed,
-      (Math.abs(fwd) / 360) / MAX_ROTARY_RPM,
-    );
-    moves.push({ words: { x: c.x, y: c.y, z: tipZOf(c), a }, feed: 1 / passMinutes });
-    minutes += passMinutes;
+    const toPose: Pose = { c, att: a, pM: p, pMat: cells[ci].p, colTh: cells[ci].theta };
+    emitChain(prevPose, toPose, CHORD_SUBDIV_MAX_DEPTH);
     prevCi = ci;
-    prevC = c;
-    prevP = p;
+    prevPose = toPose;
   }
 
   // ---- exit: LOCAL rise (Stage 1.2, corridor-checked) when a clip ctx
@@ -1502,6 +1565,7 @@ export interface BallClipCtx {
   stockX0: number;
   stockX1: number;
   ray: THREE.Ray;
+  nrm: THREE.Vector3;
 }
 
 export function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
@@ -1548,6 +1612,7 @@ export function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
     stockX0: o.map.gx0,
     stockX1: o.map.gx0 + o.map.nx * o.map.pitchX,
     ray: new THREE.Ray(),
+    nrm: new THREE.Vector3(),
   };
 }
 
@@ -1889,6 +1954,138 @@ function ballChordClips(
     if (ballBandsClip(ctx, C, att, CHORD_SAMPLE_EPS, undefined)) return true;
   }
   return false;
+}
+
+/* ------------------------------------------------------------------ *
+ * THE CHORD-SAGATTA TIGHTENING (her ask, 2026-11-16, after the D-knob
+ * sim-flags report: the polish's own cut sweeps dip up to ~0.3mm
+ * below the surface between two verified contacts — "0.3mm sounds
+ * like quite a lot"; the fix, her word: tighten the polyline, then
+ * the sim may tolerate the small skin that remains). The emitted
+ * sweep is one straight G1 per cell; on tightly curved regions the
+ * straight chord cuts deeper than the arc the contacts sit on. Dips
+ * scale with chord², so a surface-following MIDPOINT — raycast the
+ * mesh at the interpolated column, pose the ball on it — quarters a
+ * dip per split. Only moves whose measured dip exceeds CHORD_SAG_TAU
+ * subdivide (+~1% moves on the knight, worst 0.297 → ≤ 0.1); the A
+ * word path is unchanged (the midpoint sits at the half-attitude the
+ * controller would have interpolated anyway). The mid pose must
+ * graze-clear like a stance (own fan only), else the move stays whole
+ * — the planner's 0.3mm chord break already bounded it.
+ * ------------------------------------------------------------------ */
+
+/** the chord-sagitta tolerance, mm — the emitter subdivides cut moves
+ *  whose straight chord would dip deeper than this below the surface,
+ *  and the sim tolerates the skin it leaves. Exported for the sim's
+ *  per-op step-down rule and the tests. */
+export const CHORD_SAG_TAU = 0.1;
+/** subdivision recursion bound: depth 2 allows a 4× split, dip/16 */
+const CHORD_SUBDIV_MAX_DEPTH = 2;
+
+/** The ball band's penetration below the mesh at ONE interpolated
+ *  machine pose (no exclusion — an interior sample has no legal
+ *  contact of its own), mm, floored at 0. The depth-measuring half of
+ *  ballBandsClip's ball band. */
+export function ballBandDepth(
+  ctx: BallClipCtx,
+  C: { x: number; y: number; z: number },
+  attitudeDeg: number,
+): number {
+  const rotBack = indexedPointRotation(-attitudeDeg, ctx.axisZ);
+  ctx.segStart.copy(rotBack({ x: C.x, y: C.y, z: C.z }));
+  ctx.segMid.copy(rotBack({ x: C.x, y: C.y, z: C.z + ctx.toolR }));
+  ctx.seg.start.copy(ctx.segStart);
+  ctx.seg.end.copy(ctx.segMid);
+  const r = ctx.toolR;
+  ctx.bb.min.x = Math.min(ctx.segStart.x, ctx.segMid.x) - r;
+  ctx.bb.max.x = Math.max(ctx.segStart.x, ctx.segMid.x) + r;
+  ctx.bb.min.y = Math.min(ctx.segStart.y, ctx.segMid.y) - r;
+  ctx.bb.max.y = Math.max(ctx.segStart.y, ctx.segMid.y) + r;
+  ctx.bb.min.z = Math.min(ctx.segStart.z, ctx.segMid.z) - r;
+  ctx.bb.max.z = Math.max(ctx.segStart.z, ctx.segMid.z) + r;
+  let depth = 0;
+  ctx.bvh.shapecast({
+    intersectsBounds: (box) => !(
+      box.max.x < ctx.bb.min.x || box.min.x > ctx.bb.max.x ||
+      box.max.y < ctx.bb.min.y || box.min.y > ctx.bb.max.y ||
+      box.max.z < ctx.bb.min.z || box.min.z > ctx.bb.max.z
+    ),
+    intersectsTriangle: (t) => {
+      const d = t.closestPointToSegment(ctx.seg, ctx.closest);
+      if (r - d > depth) depth = r - d;
+      return false;
+    },
+  });
+  return depth;
+}
+
+/** The worst ball-band dip along the straight chord between two
+ *  machine stances (the emitter's own linear interpolation, sampled
+ *  at the planner's chord points), mm. */
+function chordDip(
+  ctx: BallClipCtx,
+  c0: { x: number; y: number; z: number },
+  att0: number,
+  c1: { x: number; y: number; z: number },
+  att1: number,
+): number {
+  let dip = 0;
+  for (const t of CHORD_SAMPLES) {
+    const C = {
+      x: c0.x + (c1.x - c0.x) * t,
+      y: c0.y + (c1.y - c0.y) * t,
+      z: c0.z + (c1.z - c0.z) * t,
+    };
+    const att = att0 + (att1 - att0) * t;
+    const d = ballBandDepth(ctx, C, att);
+    if (d > dip) dip = d;
+  }
+  return dip;
+}
+
+/** The surface-following midpoint between two material-frame contacts:
+ *  the radial column at the interpolated (x, θ), raycast from outside
+ *  inward exactly as the contact map builds its cells — the first hit
+ *  IS the outer boundary — with the face normal healed against the
+ *  incoming ray (the map's own winding-irrelevant convention). No hit
+ *  (the mid column is air) → undefined: the move stays whole. */
+export function chordMidContact(
+  ctx: BallClipCtx,
+  p0: { x: number; y: number; z: number },
+  p1: { x: number; y: number; z: number },
+  th0: number,
+  th1: number,
+): { p: { x: number; y: number; z: number }; n: { x: number; y: number; z: number }; colTh: number } | undefined {
+  // THE COLUMN THETAS (the map's own ray directions), NOT the contacts'
+  // geometric angles: a cell on a surface facing away from the axis (the
+  // sphere fixture's lower flank, the knight's undercuts) sits at a
+  // small geometric θ but its column's ray comes from the FAR side —
+  // deriving θ from the contact position probes the WRONG SHEET and
+  // the "midpoint" lands on the opposite surface, through the solid
+  // (measured: a 9.2mm machine jump, dip 2.0 — the full ball radius).
+  const x = (p0.x + p1.x) / 2;
+  let d = th1 - th0;
+  if (d > Math.PI) d -= 2 * Math.PI;
+  else if (d < -Math.PI) d += 2 * Math.PI;
+  const th = th0 + d / 2;
+  const sin = Math.sin(th);
+  const cos = Math.cos(th);
+  const R = ctx.stockR + 10;
+  ctx.ray.origin.set(x, R * sin, ctx.axisZ + R * cos);
+  ctx.ray.direction.set(0, -sin, -cos);
+  const hit = ctx.bvh.raycastFirst(ctx.ray, THREE.DoubleSide);
+  if (!hit || hit.faceIndex == null || hit.face === undefined || hit.face === null) return undefined;
+  ctx.nrm.copy(hit.face.normal);
+  let nx = ctx.nrm.x;
+  let ny = ctx.nrm.y;
+  let nz = ctx.nrm.z;
+  // HEAL: the outward normal must oppose the incoming ray
+  if (nx * ctx.ray.direction.x + ny * ctx.ray.direction.y + nz * ctx.ray.direction.z > 0) {
+    nx = -nx;
+    ny = -ny;
+    nz = -nz;
+  }
+  return { p: { x: hit.point.x, y: hit.point.y, z: hit.point.z }, n: { x: nx, y: ny, z: nz }, colTh: th };
 }
 
 export function ballClearanceCheck(o: BallClearanceOptions): Uint8Array {

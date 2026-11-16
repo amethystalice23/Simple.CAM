@@ -29,6 +29,11 @@ describe('simStepDownFor — the classifier’s per-op intended DOC', () => {
     expect(simStepDownFor(op({ kind: 'chamfer', mode: 'existing', side: 'inside', direction: 'up', depth: 0.5 }))).toBe(0.5);
   });
 
+  it('swarfFinish: the finishing skin — allowance + scallops + the chord-sagitta bound (her 2026-11-16 ruling)', () => {
+    // tighten the polyline, then tolerate the small skin that remains
+    expect(simStepDownFor(op({ kind: 'swarfFinish' } as never))).toBe(0.5);
+  });
+
   it('the ladder ops carry their own stepDown; 0/absent → the kernel’s pitch fallback', () => {
     expect(simStepDownFor(op({ kind: 'pocket', stepDown: 1 } as never))).toBe(1);
     expect(simStepDownFor(op({ kind: 'pocket' } as never))).toBe(0);
