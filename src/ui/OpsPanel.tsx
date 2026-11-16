@@ -111,6 +111,10 @@ interface Props {
   hiddenOps: ReadonlySet<string>;
   onToggleVisible: (id: string) => void;
   onDeleteOp: (id: string) => void;
+  /** duplicate an op right below itself — the rough + finish pairing
+   * (docs/TODO.md): kind, tool, features, and field values carried,
+   * a fresh id; the copy lands expanded for immediate editing */
+  onDuplicateOp: (id: string) => void;
   onReorder: (dragId: string, targetId: string) => void;
   onSelectFeatures: (id: string | null) => void;
   onRecalcOne: (id: string) => void;
@@ -1619,6 +1623,17 @@ export function OpsPanel(props: Props) {
                   }}
                 >
                   ↻
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="Duplicate — a copy right below this op, carrying the tool, features, and every field value (the rough + finish pairing)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    props.onDuplicateOp(op.id);
+                  }}
+                >
+                  ⧉
                 </button>
                 <button
                   type="button"

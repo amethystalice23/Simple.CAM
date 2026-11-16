@@ -58,6 +58,7 @@ import {
   prefillDepths,
   prefillThreadMill,
   seedJobOpIds,
+  freshOpId,
   type GeneratedOp,
 } from './jobGeneration';
 import type { StandingGrid } from '../cam/rotaryCarve';
@@ -214,6 +215,11 @@ export function App() {
   const openJobInputRef = useRef<HTMLInputElement>(null);
   /** changes since the last save/new/restore — gates the New Job confirm */
   const [dirty, setDirty] = useState(false);
+  /** the blocking-load splash's caption (docs/TODO.md): non-null from the
+   * first paint (startup restore) and while opening a job file — the
+   * splash covers the main-thread decode/parse/detection freeze and
+   * drops exactly when the loaded scene commits */
+  const [busyNote, setBusyNote] = useState<string | null>('restoring your last job');
   const lastSavedRef = useRef<string | null>(null); // fingerprint baseline
   /** fingerprint of the last AUTOSAVE written — identical re-runs (edits
    * that didn't change the saved content, or effect re-fires) skip the
@@ -1375,6 +1381,25 @@ export function App() {
     });
   };
 
+  /** duplicate an op directly below itself (docs/TODO.md, found writing
+   * the-app pages): the rough + finish pattern is a standard doc
+   * recommendation, but users rebuilt the second op by hand. The copy
+   * carries kind, tool, features, and every field value; a fresh id keeps
+   * the generation cache keyed correctly. Not calculated — it joins the
+   * next recalculation like any new op. */
+  const duplicateOp = (id: string) => {
+    const src = ops.find((o) => o.id === id);
+    if (!src) return;
+    seedJobOpIds(ops); // the fresh id never collides with a restored one
+    const copy = { ...src, id: freshOpId() } as JobOp;
+    const at = ops.findIndex((o) => o.id === id);
+    const next = [...ops];
+    next.splice(at + 1, 0, copy);
+    setOps(next);
+    setExpandedOpId(copy.id);
+    setStatusNote(`duplicated ${src.kind} — the copy sits below; edit it, then recalculate`);
+  };
+
   /** thread op: insert a Rotary face toolpath right before it, prefilled
    * to face the crest Ø (nominal − 2·tolerance) over the thread's X range —
    * its own tool, feeds, and step-over, fully editable as a normal op */
@@ -1697,15 +1722,21 @@ export function App() {
     setDirty(false);
   };
 
-  /** Open a saved job file. */
+  /** Open a saved job file. The same splash as startup restore — reading
+   * a multi-MB save off disk, parsing it, and the detection pass are the
+   * same freeze; the splash shows through it and drops with the commit. */
   const openJob = async (file: File) => {
+    setBusyNote(`opening ${file.name}`);
     try {
-      applyJob(parseJobFile(await file.text()));
+      const text = await file.text(); // yields — the splash paints here
+      applyJob(parseJobFile(text));
       setTab('ops');
       setError(null);
       setStatusNote(null); // the fallback reports the freshly opened job
     } catch (e) {
       setError(`could not open job: ${String(e)}`);
+    } finally {
+      setBusyNote(null); // batches with applyJob's states — one commit
     }
   };
 
@@ -1782,9 +1813,17 @@ export function App() {
     setStatusNote(null); // a fresh job — the drop hint shows
   };
 
-  /** Restore the autosaved job once on mount (reload / browse away + back). */
+  /** Restore the autosaved job once on mount (reload / browse away + back).
+   * The "Loading…" splash is on screen from the FIRST paint (busyNote's
+   * initial value) — before the IndexedDB read, the multi-MB base64
+   * decode, the STL parse, and the synchronous feature-detection pass,
+   * all main-thread work that previously read as the app being stuck.
+   * Clearing busyNote batches with applyJob's state updates into ONE
+   * commit, so the splash drops exactly when the restored scene paints. */
   useEffect(() => {
     void (async () => {
+      // the async IndexedDB read yields here, so the browser paints the
+      // splash before this continuation resumes with the blocking work
       const job = await loadAutosave();
       if (job) {
         try {
@@ -1794,6 +1833,7 @@ export function App() {
         }
       }
       restoredRef.current = true;
+      setBusyNote(null);
       setDirty(false); // triggers the autosave effect now that restore is done
     })();
     // mount-only by design: restore runs once before any autosave
@@ -2106,6 +2146,7 @@ export function App() {
                 updateJobOutput(nextGen, nextHidden, nextOps);
               }}
               onReorder={reorderOps}
+              onDuplicateOp={duplicateOp}
               onSelectFeatures={toggleOpFeatures}
               onRecalcOne={recalcOne}
               onRecalcAll={recalcAll}
@@ -2124,6 +2165,24 @@ export function App() {
           {error && <p className="error">{error}</p>}
         </aside>
       </main>
+      {/* the blocking-load splash (docs/TODO.md): on screen from the first
+         * paint until the restored/opened scene commits — the spinner and
+         * the sliding bar animate through the main-thread freeze, so the
+         * app reads as busy instead of stuck */}
+      {busyNote && (
+        <div className="restore-overlay" role="status" aria-label="Loading">
+          <div className="restore-card">
+            <div className="restore-spinner" aria-hidden />
+            <div className="restore-card-text">
+              <h2>Loading…</h2>
+              <p>{busyNote}</p>
+              <div className="restore-bar" aria-hidden>
+                <span />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {showAbout && <AboutBox onClose={() => setShowAbout(false)} />}
       {showHelp && <HelpDialog onClose={() => setShowHelp(false)} />}
       {suggestKnowledge && (
