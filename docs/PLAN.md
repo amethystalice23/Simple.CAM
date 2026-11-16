@@ -1366,6 +1366,31 @@ unchecked low hop. Acceptance: suite + nose-chunks (model, unchanged)
 flags from standing thicker than 2mm are the knob's accepted residue,
 hers to tune or the pilot's to replace) + her field re-run.
 
+**THE CHORD-SAGATTA TIGHTENING (2026-11-16, branch
+`feat/chord-tighten`, her ask: "can we tighten up the polyline any?
+0.3mm sounds like quite a lot" — tighten it, then tolerate the small
+skin that remains).** The sweep emits one straight G1 per cell pair;
+on tight curvature the chord dips below the arc the contacts sit on
+(knight: 102 moves over 0.1mm, worst 0.297). CHORD_SAG_TAU = 0.1mm
+(swarfFinish.ts): where the measured dip exceeds τ, the emitter
+raycasts the mesh at the interpolated COLUMN (the map's own ray
+direction — a contact's geometric angle probes the wrong surface
+sheet on under-flank geometry; measured: a 9.2mm wrong-sheet mid,
+now also guarded by a jump ≤ toolR + chord-eps sanity check) and
+inserts a surface-following midpoint at the half-attitude (the A
+path is identical to the un-subdivided move), recursing to depth 2.
+The mid pose must graze-clear like a stance. Knight result: over-τ
+moves 102 → 31, the >0.2mm tail 35 → 6, worst 0.272, +101 moves
+(+1%), minutes unchanged; the residue is shank-graze geometry (the
+surface midpoint reachable only with the shank grazing a neighbor
+wall — no stance would be allowed there either). The paired sim
+rule: swarfFinish's intended DOC in the classifier is 0.4 +
+CHORD_SAG_TAU (the finishing skin: allowance + scallops + the chord
+bound) — the sim forgives the skin and flags real plows. NOTE: the
+sim's polish "cut"-class flags are SHANK contacts (gouge=false,
+shank=true — the shank brushing standing), a separate pre-existing
+class, not the chord skin.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the

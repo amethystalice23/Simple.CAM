@@ -480,8 +480,11 @@ import {
   makeBallClipCtx,
   orderBallStripsByStance,
   ballBandsClip,
+  ballBandDepth,
+  chordMidContact,
   corridorStockClips,
   CORRIDOR_STOCK_TOLERANCE_MM,
+  CHORD_SAG_TAU,
   FLUTE_CLEAR,
   FLUTE_CLIPPED,
   segmentBallStrips,
@@ -2635,5 +2638,103 @@ describe('emitSwarfPass — the D knob (corridor stock tolerance, 2026-11-16)', 
     // beyond the stock's axial end, close enough to matter: conservative clip
     expect(corridorStockClips(ctx, { x: 9, y: 0, z: AXIS_Z + 10 + ctx.toolR }, 0)).toBe(true);
     ctx.geo.dispose();
+  });
+});
+
+describe('emitSwarfPass — the chord-sagitta tightening (2026-11-16)', () => {
+  const TAU = CHORD_SAG_TAU;
+  /** a Ø6 sphere on the stock's top axis: radius-3 curvature is tight
+   *  enough that a 1.5mm grid chord dips ~0.16mm — over TAU without
+   *  the tightening, under it with one surface-following split */
+  const SPHERE_C = { x: 0, y: 0, z: AXIS_Z + 5 };
+  const sphereFixture = new Float32Array([
+    ...attr(new THREE.SphereGeometry(3, 48, 32).translate(SPHERE_C.x, SPHERE_C.y, SPHERE_C.z)),
+  ]);
+  const tool = { ...TOOL(4, 20), type: 'ball' as const, shaftDiameter: 3.175 };
+  const mapOf = (positions: Float32Array) =>
+    buildContactMap({ positions, x0: -8, x1: 8, radius: 16, axisZ: AXIS_Z, thetaStepOver: 3 });
+  const ctxOf = (positions: Float32Array) =>
+    makeBallClipCtx({ positions, tool, map: mapOf(positions), axisZ: AXIS_Z, radius: 16 });
+
+  it('ballBandDepth reads the ball band penetration, floored at 0', () => {
+    const ctx = ctxOf(new Float32Array([
+      ...attr(new THREE.BoxGeometry(16, 4, 4).translate(0, 0, AXIS_Z + 3)),
+    ]));
+    // the shelf top at z = AXIS_Z+5: pressing 0.05 INTO it reads 0.05
+    const pressed = { x: 0, y: 0, z: AXIS_Z + 5 - 0.05 + ctx.toolR };
+    expect(ballBandDepth(ctx, pressed, 0)).toBeCloseTo(0.05, 2);
+    // hovering 0.5 above reads nothing (no penetration)
+    const hover = { x: 0, y: 0, z: AXIS_Z + 5 + 0.5 + ctx.toolR };
+    expect(ballBandDepth(ctx, hover, 0)).toBe(0);
+    ctx.geo.dispose();
+  });
+
+  it('chordMidContact finds the surface midpoint between two contacts', () => {
+    const ctx = ctxOf(sphereFixture);
+    // two material contacts on the sphere's top, ±0.75mm apart in x
+    const p0 = { x: -0.75, y: 0, z: SPHERE_C.z + Math.sqrt(9 - 0.75 ** 2) };
+    const p1 = { x: 0.75, y: 0, z: p0.z };
+    const m = chordMidContact(ctx, p0, p1, 0, 0);
+    expect(m).toBeDefined();
+    // the midpoint lies ON the sphere, normal radial outward
+    const r = Math.hypot(m!.p.x - SPHERE_C.x, m!.p.y - SPHERE_C.y, m!.p.z - SPHERE_C.z);
+    expect(r).toBeCloseTo(3, 6);
+    const nx = (m!.p.x - SPHERE_C.x) / r, ny = (m!.p.y - SPHERE_C.y) / r, nz = (m!.p.z - SPHERE_C.z) / r;
+    // facet normals deviate from the true radial by up to half a facet
+    // (~4° on the 48-segment sphere) — the map's own convention
+    expect(m!.n.x * nx + m!.n.y * ny + m!.n.z * nz).toBeGreaterThan(Math.cos(0.1));
+    ctx.geo.dispose();
+  });
+
+  it('the sphere sweep subdivides: more cut moves than cell steps, every chord dip under TAU', () => {
+    const map = mapOf(sphereFixture);
+    expect(map.surfaceCells).toBeGreaterThan(4);
+    const verdict = ballClearanceCheck({ positions: sphereFixture, tool, map, axisZ: AXIS_Z, radius: 16 });
+    const strips = segmentBallStrips({ positions: sphereFixture, tool, map, axisZ: AXIS_Z, radius: 16, verdict, startA: 0 });
+    expect(strips.patches.length).toBeGreaterThan(0);
+    const ordered = orderBallStripsByStance(strips.patches, 0);
+    const clipCtx = ctxOf(sphereFixture);
+    const moves: Move[] = [];
+    let steps = 0;
+    let prev: { x: number; y: number; zTip: number } | undefined = undefined;
+    for (const p of ordered) {
+      const r = emitSwarfPass({
+        map, patch: p, tool, axisZ: AXIS_Z, radius: 16,
+        feed: 600, plungeFeed: 300, startA: 0, attitude: 'ball',
+        entryPose: prev, clipCtx,
+      });
+      moves.push(...r.moves);
+      steps += p.cells.length - 1; // one cut step per cell pair
+      prev = r.exitPose;
+    }
+    const cutMoves = moves.filter((m) => !m.rapid && m.words.a !== undefined);
+    expect(cutMoves.length).toBeGreaterThan(0);
+    // the tightening FIRED: more cut moves than the planner's cell steps
+    expect(cutMoves.length).toBeGreaterThan(steps);
+    // replay: every emitted chord's worst dip is under TAU — the
+    // independent re-check against the same mesh
+    const safeZ = AXIS_Z + 16 + SAFE_CLEARANCE;
+    let px: number | undefined, py: number | undefined, pz = safeZ, pa = 0;
+    let worst = 0;
+    for (const m of moves) {
+      const tx = m.words.x ?? px, ty = m.words.y ?? py, tz = m.words.z ?? pz, ta = m.words.a ?? pa;
+      if (tx === undefined || ty === undefined || tz === undefined || ta === undefined) throw new Error('modal');
+      if (!m.rapid && m.words.a !== undefined) {
+        const fx = px ?? tx, fy = py ?? ty, fz = pz ?? tz, fa = pa ?? ta;
+        for (const t of [0.25, 0.5, 0.75]) {
+          // the Z word is the TIP (Stage 0.4): the ball center sits a
+          // toolR above it
+          const C = {
+            x: fx + (tx - fx) * t, y: fy + (ty - fy) * t,
+            z: fz + (tz - fz) * t + tool.diameter / 2,
+          };
+          const d = ballBandDepth(clipCtx, C, fa + (ta - fa) * t);
+          if (d > worst) worst = d;
+        }
+      }
+      px = tx; py = ty; pz = tz; pa = ta;
+    }
+    clipCtx.geo.dispose();
+    expect(worst).toBeLessThanOrEqual(TAU + 1e-9);
   });
 });
