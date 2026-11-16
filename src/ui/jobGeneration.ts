@@ -223,6 +223,11 @@ export function seedJobOpIds(ops: JobOp[]): void {
     if (Number.isFinite(n) && n > opCount) opCount = n;
   }
 }
+/** A fresh op id from the same counter newJobOp uses — for ops cloned
+ * outside newJobOp (the duplicate button). */
+export function freshOpId(): string {
+  return `jobop-${++opCount}`;
+}
 /**
  * New op of the given kind with defaults derived from the tool, the stock
  * material (preset step-downs and a diameter-fraction step-over — never a

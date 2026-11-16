@@ -61,8 +61,94 @@ export const MATERIALS: MaterialPreset[] = [
   },
 ];
 
+/**
+ * User-defined material presets (2026-11-16, docs/TODO.md): the built-in
+ * table stays immutable — customs live in localStorage and are consulted
+ * AFTER the built-ins, so the panel lists them and every rate lookup
+ * (generation, ⚡ popups, calibration) resolves a custom id the same way
+ * it resolves 'aluminum-6061'.
+ */
+const CUSTOM_MATERIALS_KEY = 'simple.cam.materials.v1';
+
+const CUSTOM_PREFIX = 'user-';
+
+/** Custom presets as stored — parsed on demand (a tiny JSON array; the
+ * built-in path never pays for it). Kept pure-read: no module state, so
+ * storage edits between tests/worker reloads are always honored. */
+function storedCustomMaterials(): MaterialPreset[] | null {
+  return readCustomMaterials();
+}
+
+function isCustomPreset(m: MaterialPreset): boolean {
+  return m.id.startsWith(CUSTOM_PREFIX);
+}
+
+/** All customs currently known, or null when none are stored (and the
+ * parse failed — treat storage as absent, never break the app on it). */
+function readCustomMaterials(): MaterialPreset[] | null {
+  try {
+    const raw = localStorage.getItem(CUSTOM_MATERIALS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as MaterialPreset[]) : null;
+    if (Array.isArray(parsed)) {
+      // trim to the preset shape — extra keys are harmless, missing keys
+      // are the caller's validation problem, not a crash
+      return parsed.filter((m) => m && typeof m.id === 'string' && typeof m.name === 'string');
+    }
+  } catch {
+    // corrupt or unavailable storage — behave as if absent
+  }
+  return null;
+}
+
+function persistCustomMaterials(next: MaterialPreset[]): void {
+  try {
+    localStorage.setItem(CUSTOM_MATERIALS_KEY, JSON.stringify(next));
+  } catch {
+    // best-effort: customs live for the session when storage is full
+  }
+}
+
+/** Custom presets, parsed from storage on demand (a tiny array — the
+ * no-cache cost is one JSON.parse per op creation, not per move). */
+export function getCustomMaterials(): MaterialPreset[] {
+  return storedCustomMaterials() ?? [];
+}
+
+/** The full menu the Stock tab offers: built-ins first, customs after. */
+export function allMaterials(): MaterialPreset[] {
+  return [...MATERIALS, ...getCustomMaterials()];
+}
+
 export function getMaterial(id: string): MaterialPreset {
-  const m = MATERIALS.find((p) => p.id === id);
+  const m = allMaterials().find((p) => p.id === id);
   if (!m) throw new Error(`unknown material id: ${id}`);
   return m;
 }
+
+export function isCustomMaterialId(id: string): boolean {
+  return id.startsWith(CUSTOM_PREFIX);
+}
+
+/** Store the full custom list (replacing whatever was there), refresh the
+ * cache, and return the saved list. Refuses ids that collide with a
+ * built-in — the built-ins are immutable. */
+export function saveCustomMaterials(
+  next: MaterialPreset[],
+): MaterialPreset[] {
+  const clean = next.filter((m) => !MATERIALS.some((b) => b.id === m.id));
+  persistCustomMaterials(clean);
+  return clean;
+}
+
+/** Derive a fresh custom id for a name — `user-` + a slug, de-duplicated
+ * against every known id (built-ins included). */
+export function newCustomMaterialId(name: string): string {
+  const base = `user-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'custom'}`;
+  const taken = new Set(allMaterials().map((m) => m.id));
+  let id = base;
+  let n = 2;
+  while (taken.has(id)) id = `${base}-${n++}`;
+  return id;
+}
+
+export { isCustomPreset };

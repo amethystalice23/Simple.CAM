@@ -58,6 +58,7 @@ import {
   prefillDepths,
   prefillThreadMill,
   seedJobOpIds,
+  freshOpId,
   type GeneratedOp,
 } from './jobGeneration';
 import type { StandingGrid } from '../cam/rotaryCarve';
@@ -214,6 +215,9 @@ export function App() {
   const openJobInputRef = useRef<HTMLInputElement>(null);
   /** changes since the last save/new/restore — gates the New Job confirm */
   const [dirty, setDirty] = useState(false);
+  /** startup restore is reading the autosave back (docs/TODO.md): the
+   * "Loading…" notice is up — flips false when the restore effect lands */
+  const [restoring, setRestoring] = useState(true);
   const lastSavedRef = useRef<string | null>(null); // fingerprint baseline
   /** fingerprint of the last AUTOSAVE written — identical re-runs (edits
    * that didn't change the saved content, or effect re-fires) skip the
@@ -1374,6 +1378,25 @@ export function App() {
     });
   };
 
+  /** duplicate an op directly below itself (docs/TODO.md, found writing
+   * the-app pages): the rough + finish pattern is a standard doc
+   * recommendation, but users rebuilt the second op by hand. The copy
+   * carries kind, tool, features, and every field value; a fresh id keeps
+   * the generation cache keyed correctly. Not calculated — it joins the
+   * next recalculation like any new op. */
+  const duplicateOp = (id: string) => {
+    const src = ops.find((o) => o.id === id);
+    if (!src) return;
+    seedJobOpIds(ops); // the fresh id never collides with a restored one
+    const copy = { ...src, id: freshOpId() } as JobOp;
+    const at = ops.findIndex((o) => o.id === id);
+    const next = [...ops];
+    next.splice(at + 1, 0, copy);
+    setOps(next);
+    setExpandedOpId(copy.id);
+    setStatusNote(`duplicated ${src.kind} — the copy sits below; edit it, then recalculate`);
+  };
+
   /** thread op: insert a Rotary face toolpath right before it, prefilled
    * to face the crest Ø (nominal − 2·tolerance) over the thread's X range —
    * its own tool, feeds, and step-over, fully editable as a normal op */
@@ -1781,18 +1804,31 @@ export function App() {
     setStatusNote(null); // a fresh job — the drop hint shows
   };
 
-  /** Restore the autosaved job once on mount (reload / browse away + back). */
+  /** Restore the autosaved job once on mount (reload / browse away + back).
+   * A "Loading…" notice stays up for the whole restore (docs/TODO.md):
+   * reading the multi-MB autosave, decoding the embedded STL, and the
+   * feature-detection pass are all main-thread work that previously read
+   * as the app being stuck. The paint between the two awaits is the whole
+   * trick — the notice is on screen before the blocking decode starts. */
   useEffect(() => {
     void (async () => {
+      // let the first render PAINT before any blocking work — the notice
+      // must be visible before applyJob's decode/parse/detection run
+      await new Promise((r) => requestAnimationFrame(r));
       const job = await loadAutosave();
       if (job) {
         try {
           applyJob(job);
+          // applyJob's setState batch (incl. the geometry that triggers
+          // the synchronous detection memo) lands in one commit; yield so
+          // the "restored" render replaces the notice, not hides behind it
+          await new Promise((r) => requestAnimationFrame(r));
         } catch {
           // corrupt autosave — start fresh
         }
       }
       restoredRef.current = true;
+      setRestoring(false);
       setDirty(false); // triggers the autosave effect now that restore is done
     })();
     // mount-only by design: restore runs once before any autosave
@@ -1990,7 +2026,9 @@ export function App() {
             <TransportBar transport={transport} />
           )}
           <div className="drop-hint">
-            {stepBusy
+            {restoring
+              ? 'Loading… restoring your last job (a big model takes a moment)'
+              : stepBusy
               ? 'importing STEP… (tessellating — can take a few seconds)'
               : (statusNote ??
                 (geometry
@@ -2105,6 +2143,7 @@ export function App() {
                 updateJobOutput(nextGen, nextHidden, nextOps);
               }}
               onReorder={reorderOps}
+              onDuplicateOp={duplicateOp}
               onSelectFeatures={toggleOpFeatures}
               onRecalcOne={recalcOne}
               onRecalcAll={recalcAll}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Tool } from '../core/types';
 import { exportToolsCsv, mergeImportedTools, parseFusionToolCsv } from '../core/toolImport';
 import { BUILT_IN_TOOLS } from '../core/builtInTools';
-import { getMaterial, MATERIALS } from '../core/materials';
+import { getMaterial, allMaterials } from '../core/materials';
 import { chipLoad } from '../core/cutAdvisor';
 import { toolPresetFor } from './jobGeneration';
 import { deriveBaseline, toolState, type ToolState } from './toolNames';
@@ -37,7 +37,7 @@ function PresetTablePopup(props: { tool: Tool; materialId: string; onClose: () =
   // one column per known rate set: the tool's own Makera preset rows, then
   // the whole built-in simple.cam table (every material, this tool's type —
   // spindle there is the tool's singular Tools-tab value)
-  const builtin = MATERIALS.map((m) => ({
+  const builtin = allMaterials().map((m) => ({
     source: 'builtin' as const,
     id: m.id,
     name: m.name,

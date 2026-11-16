@@ -1,7 +1,9 @@
 import type { AxisMode, Stock } from '../core/types';
 import { rotaryCalibrationOf } from '../core/types';
-import { MATERIALS } from '../core/materials';
+import { allMaterials } from '../core/materials';
 import { NumberField, Segmented } from './fields';
+import { MaterialEditorDialog } from './MaterialEditor';
+import { useState } from 'react';
 
 interface Props {
   stock: Stock;
@@ -18,6 +20,7 @@ function mergeStock<S extends Stock>(base: S, next: Partial<S>): S {
 const AXIS_MODES: readonly AxisMode[] = ['3-axis', '4-axis'];
 
 export function StockPanel({ stock, onChange }: Props) {
+  const [editingMaterials, setEditingMaterials] = useState(false);
 
   return (
     <section>
@@ -156,13 +159,31 @@ export function StockPanel({ stock, onChange }: Props) {
       <label className="field">
         <span>Material</span>
         <select value={stock.materialId} onChange={(e) => onChange({ ...stock, materialId: e.target.value })}>
-          {MATERIALS.map((m) => (
+          {allMaterials().map((m) => (
             <option key={m.id} value={m.id}>
               {m.name}
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          className="icon-btn"
+          title="Add or edit your own materials — calibrate the perfect speeds once, pick them here forever (like custom filament profiles)"
+          onClick={() => setEditingMaterials(true)}
+        >
+          ＋
+        </button>
       </label>
+      {editingMaterials && (
+        <MaterialEditorDialog
+          selectedId={stock.materialId}
+          onPick={(id) => {
+            onChange({ ...stock, materialId: id });
+            setEditingMaterials(false);
+          }}
+          onClose={() => setEditingMaterials(false)}
+        />
+      )}
     </section>
   );
 }

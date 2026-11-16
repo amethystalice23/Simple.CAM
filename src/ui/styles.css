@@ -1369,3 +1369,16 @@ pre {
 }
 .help-term-doc { font-size: 12.5px; }
 .help-term-doc h3 { margin-top: 0; color: #d8dde2; font-size: 13.5px; }
+
+/* ---- user-defined materials (docs/TODO.md) ---- */
+.material-editor { width: 560px; }
+.material-list h3 { margin: 10px 0 4px; font-size: 12px; text-transform: none; letter-spacing: 0.04em; color: #8b949e; }
+.material-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; }
+.material-row.sel { background: #16222d; border: 1px solid #2e6f9e; }
+.material-row .material-name { flex: 1; }
+button.linklike { background: none; border: none; padding: 0; color: inherit; text-align: left; cursor: pointer; }
+button.linklike:hover { color: #fff; }
+.material-row .icon-btn { font-size: 11px; }
+.material-edit { border-top: 1px solid #31373e; margin-top: 10px; padding-top: 8px; }
+.material-edit h3 { margin: 0 0 6px; font-size: 13px; text-transform: none; letter-spacing: 0; color: #d8dde2; }
+.material-edit .origin-grid { grid-template-columns: 1fr; }
