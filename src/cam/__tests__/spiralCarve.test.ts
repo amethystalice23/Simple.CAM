@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { sampleSpiralMarks, spiralCarve, type SpiralCarveResult } from '../spiralCarve';
-import type { RotaryCalibration, SpiralCarveOp } from '../../core/types';
+import { sampleSpiralMarks, slotPasses, slotToolWidth, spiralCarve, type SpiralCarveResult } from '../spiralCarve';
+import type { RotaryCalibration, SpiralCarveOp, Tool } from '../../core/types';
 
 const cal: RotaryCalibration = { aOriginDeg: 0, axisZ: 0, effectiveRadius: 25 };
 
@@ -53,16 +53,19 @@ describe('spiralCarve', () => {
     expect(a1).toBeCloseTo(270, 6); // datum + 180
   });
 
-  it('fans parallel helices when the width exceeds the tool', () => {
+  it('fills a wide slot exactly like one pass of a Ø=width tool (Alice 2026-11-16)', () => {
     const res = spiralCarve({ ...op, width: 15 }, cal, 6, 0);
-    // ceil(15/6) = 3 fan passes per strand → 2 strands × 3 × 2 levels
-    expect(res.passes).toBe(12);
-    // axis-separate entries: the fan-pass start Xs live on the X-only travels
-    const starts = res.moves.filter((m) => m.rapid && m.words.x !== undefined).map((m) => m.words.x);
-    // per strand: the fan pass start Xs spread across (width − toolØ) = 9mm
-    const firstStrand = starts.slice(0, 3).sort((a, b) => a! - b!);
-    expect(firstStrand[1]! - firstStrand[0]!).toBeCloseTo(4.5, 5);
-    expect(firstStrand[2]! - firstStrand[1]!).toBeCloseTo(4.5, 5);
+    // ceil(15/6) = 3 channels + 2 cap arcs per strand
+    // → 2 strands × (3 + 2) passes × 2 levels
+    expect(res.passes).toBe(20);
+    // every pass is labelled: channels first, the two rounded-end caps last
+    const labels = res.moves
+      .filter((m) => m.rapid && m.words.a !== undefined && m.comment)
+      .map((m) => m.comment);
+    expect(labels[0]).toMatch(/channel 1\/3/);
+    expect(labels[2]).toMatch(/channel 3\/3/);
+    expect(labels[3]).toMatch(/end cap/);
+    expect(labels[4]).toMatch(/start cap/);
   });
 
   it('width 0 just follows the lines: one pass per strand, no fan', () => {
@@ -236,5 +239,147 @@ describe('spiralCarve: spin (starting A of strand 1)', () => {
       // …which is exactly where the generator positions strand s
       expect(theta).toBeCloseTo(genPhases[s], 6);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WIDTH CONTRACT (Alice 2026-11-16): a wide spiral slot must come out
+// EXACTLY as if one pass of a Ø=width tool cut it — the acceptance is
+// geometric, on the developed cylinder surface:
+//   no overcut:  every tool-center point stays inside the inset slot
+//                (the center path's stadium shrunk by the tool's cut
+//                half-width) — the emitted slot ⊆ the requested slot;
+//   no undercut: every point of the REQUESTED slot is within the tool's
+//                cut half-width of some tool-center segment — nothing
+//                left standing in the middle or at the rounded ends.
+describe('spiralCarve: the single-wide-tool slot contract', () => {
+  const flat: Tool = { id: 't', name: 'flat', type: 'flat', diameter: 6, spindleRpm: 18000 };
+  const ball: Tool = { id: 't', name: 'ball', type: 'ball', diameter: 6, spindleRpm: 18000 };
+  const vbit: Tool = {
+    id: 't', name: 'v', type: 'vbit', diameter: 3.175, vAngle: 60, tipDiameter: 0.1, spindleRpm: 18000,
+  };
+
+  it('slotToolWidth: the honest surface cut width per tool family', () => {
+    // flat: the full Ø at any depth
+    expect(slotToolWidth(flat, 0.5)).toBe(6);
+    // ball at depth 1 < R: the chord 2·√(R²−(R−d)²) = 2·√5 ≈ 4.472
+    expect(slotToolWidth(ball, 1)).toBeCloseTo(2 * Math.sqrt(5), 6);
+    // ball at depth ≥ R: the full Ø
+    expect(slotToolWidth(ball, 3)).toBe(6);
+    // V-bit at depth 1: tip + 2·1·tan30° ≈ 1.2546
+    expect(slotToolWidth(vbit, 1)).toBeCloseTo(0.1 + 2 * Math.tan(Math.PI / 6), 6);
+    // V-bit deeper than the cone: capped at the Ø
+    expect(slotToolWidth(vbit, 10)).toBe(3.175);
+  });
+
+  /** point-to-segment distance, mm */
+  function segDist(px: number, pu: number, ax: number, au: number, bx: number, bu: number): number {
+    const dx = bx - ax, du = bu - au;
+    const len2 = dx * dx + du * du;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (pu - au) * du) / len2));
+    return Math.hypot(px - (ax + t * dx), pu - (au + t * du));
+  }
+
+  /**
+   * The contract check on the developed surface. The desired slot =
+   * the center path segment ⊕ disc(width/2). Tool-center segments come
+   * from slotPasses directly (the emitter walks exactly these polylines
+   * — pinned by the pass-count/label tests above).
+   */
+  function checkContract(width: number, angle: number, tool: Tool, depth: number) {
+    const testOp: SpiralCarveOp = {
+      ...op,
+      spiralAngle: angle,
+      width,
+      depth,
+      count: 1,
+      xStart: 20,
+      xEnd: 80,
+    };
+    const r = testOp.surfaceDiameter / 2;
+    const e = slotToolWidth(tool, depth);
+    const { passes } = slotPasses(testOp, e);
+    // developed-plane reconstruction: the a offsets ARE arc offsets
+    // (degPerMm was applied); u = a·π/180·r (cw). Center path: from
+    // (xStart, 0) toward (xEnd, arc), length span/sinα.
+    const alpha = (angle * Math.PI) / 180;
+    const L = (testOp.xEnd - testOp.xStart) / Math.sin(alpha);
+    const path = { ax: testOp.xStart, au: 0, bx: testOp.xStart + L * Math.sin(alpha), bu: L * Math.cos(alpha) };
+    // every polyline vertex → (x, u)
+    const verts = passes.flatMap((p) =>
+      p.pts.map((q) => ({ x: q.x, u: (q.a * Math.PI) / 180 * r })),
+    );
+    // NO OVERCUT: each center vertex inside the inset stadium (h)
+    const h = (width - e) / 2;
+    for (const v of verts) {
+      const d = segDist(v.x, v.u, path.ax, path.au, path.bx, path.bu);
+      expect(d).toBeLessThanOrEqual(h + 1e-6);
+    }
+    // NO UNDERCUT: a dense grid over the requested slot — every point
+    // within e/2 (+ arc-sagitta tolerance) of some center segment
+    const segs: { ax: number; au: number; bx: number; bu: number }[] = [];
+    for (const p of passes) {
+      for (let i = 1; i < p.pts.length; i++) {
+        segs.push({
+          ax: p.pts[i - 1].x,
+          au: (p.pts[i - 1].a * Math.PI) / 180 * r,
+          bx: p.pts[i].x,
+          bu: (p.pts[i].a * Math.PI) / 180 * r,
+        });
+      }
+    }
+    const STEP = 0.1;
+    let checked = 0;
+    for (let x = testOp.xStart - width; x <= testOp.xEnd + width; x += STEP) {
+      for (let u = -width - 2; u <= L * Math.cos(alpha) + width + 2; u += STEP) {
+        const dPath = segDist(x, u, path.ax, path.au, path.bx, path.bu);
+        if (dPath > width / 2) continue; // outside the requested slot
+        checked++;
+        const dCenters = Math.min(...segs.map((s) => segDist(x, u, s.ax, s.au, s.bx, s.bu)));
+        expect(dCenters).toBeLessThanOrEqual(e / 2 + 0.15); // sagitta 0.05 + grid
+      }
+    }
+    expect(checked).toBeGreaterThan(100); // the grid really sampled the slot
+  }
+
+  it('flat endmill: exact slot at a 45° helix (width 15, Ø6)', () => {
+    checkContract(15, 45, flat, 1);
+  });
+
+  it('flat endmill: width an exact multiple of the Ø (width 12, Ø6) — the old knife-edge case', () => {
+    checkContract(12, 30, flat, 1);
+  });
+
+  it('flat endmill: really wide (width 20, Ø3.175) at 30°', () => {
+    checkContract(20, 30, { ...flat, diameter: 3.175 }, 1);
+  });
+
+  it('ball nose at shallow depth fills via the chord width (width 10, Ø6, depth 1)', () => {
+    checkContract(10, 45, ball, 1);
+  });
+
+  it('V-bit at depth 1 fills via the cone opening (width 6, Ø3.175 60°) — the reported case', () => {
+    checkContract(6, 30, vbit, 1);
+  });
+
+  it('a 90° axial slot fills around the circumference, rounded ends included (width 8, Ø2)', () => {
+    checkContract(8, 90, { ...flat, diameter: 2 }, 1);
+  });
+
+  it('the cap arcs meet the outermost channels exactly (contiguous racetrack)', () => {
+    const testOp: SpiralCarveOp = { ...op, width: 15, count: 1, xStart: 20, xEnd: 80 };
+    const { passes } = slotPasses(testOp, 6);
+    expect(passes).toHaveLength(5); // 3 channels + 2 caps
+    const [chMinus, , chPlus, endCap, startCap] = passes;
+    // end cap runs from the −h channel's end to the +h channel's end
+    expect(endCap.pts[0].x).toBeCloseTo(chMinus.pts[1].x, 9);
+    expect(endCap.pts[0].a).toBeCloseTo(chMinus.pts[1].a, 9);
+    expect(endCap.pts[endCap.pts.length - 1].x).toBeCloseTo(chPlus.pts[1].x, 9);
+    expect(endCap.pts[endCap.pts.length - 1].a).toBeCloseTo(chPlus.pts[1].a, 9);
+    // start cap (reversed) runs from the +h channel's start to the −h's
+    expect(startCap.pts[0].x).toBeCloseTo(chPlus.pts[0].x, 9);
+    expect(startCap.pts[0].a).toBeCloseTo(chPlus.pts[0].a, 9);
+    expect(startCap.pts[startCap.pts.length - 1].x).toBeCloseTo(chMinus.pts[0].x, 9);
+    expect(startCap.pts[startCap.pts.length - 1].a).toBeCloseTo(chMinus.pts[0].a, 9);
   });
 });

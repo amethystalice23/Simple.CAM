@@ -9,7 +9,7 @@ import type * as THREE from 'three';
 import { DEFAULT_STEP_OVER_FACTOR, faceCylinder, SAFE_CLEARANCE, shortestATo } from '../cam/faceCylinder';
 import { cylChamfer } from '../cam/cylChamfer';
 import { engrave } from '../cam/engrave';
-import { spiralCarve } from '../cam/spiralCarve';
+import { slotToolWidth, spiralCarve } from '../cam/spiralCarve';
 import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
 import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
@@ -1291,14 +1291,24 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             tool.diameter,
             ctx.datumAngle,
             ctx.startA,
+            // the tool's honest cut width at this depth — the channel
+            // spacing limit (ball chord / V cone opening, full Ø for a
+            // flat), so a wide slot fills for every tool family
+            slotToolWidth(tool, op.depth),
           );
           return {
             moves: res.moves,
             minutes: res.estimatedMinutes,
             error: null,
             summary:
-              `${op.count} strand(s) × ${res.passes / op.count} sweep(s), ${op.spiralAngle}° helix, ` +
-              `${op.depth}mm deep × ${op.width === 0 ? 'following the lines' : `${op.width}mm wide`}` +
+              `${op.count} strand(s) × ${res.passes / op.count} pass(es), ${op.spiralAngle}° helix, ` +
+              `${op.depth}mm deep × ${
+                op.width === 0
+                  ? 'following the lines'
+                  : op.width <= slotToolWidth(tool, op.depth)
+                    ? 'the tool’s own width'
+                    : `${op.width}mm slot (one Ø${op.width} pass, filled)`
+              }` +
               (op.finishingOnly ? ', finishing pass only' : '') +
               `, X ${op.xStart.toFixed(0)}…${op.xEnd.toFixed(0)}, ` +
               `~${res.estimatedMinutes.toFixed(1)} min`,

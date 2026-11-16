@@ -4,7 +4,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { axialExtentX, detectFeatures } from '../cam/features';
 import { indexedPointRotation, indexToAlignDirection } from '../cam/indexing';
 import { transformedPositions } from '../cam/slicing';
-import { sampleSpiralMarks } from '../cam/spiralCarve';
+import { sampleSpiralMarks, slotToolWidth } from '../cam/spiralCarve';
 import { ballWidth } from '../cam/cylChamfer';
 import { threadDepth, threadFaceDiameter } from '../cam/thread';
 import {
@@ -1005,6 +1005,7 @@ export function App() {
           rotaryCalibrationOf(stock),
           t?.diameter ?? 6,
           datumAngleBefore(ops, op.id),
+          t ? slotToolWidth(t, op.depth) : 6,
         ),
       };
     }
