@@ -477,11 +477,15 @@ import {
   emitSwarfPass,
   fluteClearanceCheck,
   fluteToolCenter,
+  makeBallClipCtx,
+  orderBallStripsByStance,
   FLUTE_CLEAR,
   FLUTE_CLIPPED,
   segmentBallStrips,
   segmentContactPatches,
+  type ContactPatch,
 } from '../swarfFinish';
+import type { Move } from '../../core/types';
 
 const TOOL = (d: number, flute: number) => ({
   id: 't',
@@ -1010,7 +1014,7 @@ describe('fluteClearanceCheck — test 4, blade overhanging a base plate', () =>
  * ------------------------------------------------------------------ */
 
 import { isSimultaneous } from '../../core/types';
-import { MAX_ROTARY_RPM } from '../faceCylinder';
+import { MAX_ROTARY_RPM, SAFE_CLEARANCE } from '../faceCylinder';
 
 /** grid position of a cell, from the dense index (θ wraps in callers) */
 function gridPosOf(map: ReturnType<typeof buildContactMap>, ci: number) {
@@ -2383,5 +2387,144 @@ describe('segmentBallStrips — Stage 1.1: the ridge step (the chord re-verdict)
     const highCells = [...clear].filter((ci) => map.cells[ci].p.z - AXIS_Z > 10);
     expect(highCells.length).toBeGreaterThan(0);
     for (const ci of highCells) expect(swept.has(ci)).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * STAGE 1.2 (2026-11-13, the +35% recovery): stance order + LOCAL
+ * re-entry. The chord re-verdict made every ridge split re-enter from
+ * the SAFE plane (measured: plunges 51% of the op's minutes, the
+ * ping-ponging A charge 23%, cuts only 26%). The recovery, measured on
+ * her knight: greedy stance order + corridor-checked local re-entry.
+ * ------------------------------------------------------------------ */
+describe('orderBallStripsByStance — the greedy stance order', () => {
+  const P = (att: number) => ({ cells: [1], attitudes: [att] }) as ContactPatch;
+  const charge = (ps: ContactPatch[]): number => {
+    let a = 0;
+    let tot = 0;
+    for (const p of ps) {
+      tot += ((p.attitudes![0] - a) % 360 + 360) % 360; // forward entry charge
+      a = p.attitudes![0];
+    }
+    return tot;
+  };
+
+  it('greedy beats scan order on the ping-pong stances (synthetic)', () => {
+    const scan = [P(350), P(20), P(10)];
+    const ordered = orderBallStripsByStance(scan, 0);
+    expect(ordered).toHaveLength(3);
+    // scan: 350 + 30 + 350 = 730°; greedy: 10 + 10 + 330 = 350°
+    expect(charge(ordered)).toBeLessThan(charge(scan));
+    expect(charge(ordered)).toBe(350);
+    // same SET, deterministic order
+    const key = (p: ContactPatch) => p.attitudes![0];
+    expect([...ordered].sort((x, y) => key(x) - key(y))).toEqual([...scan].sort((x, y) => key(x) - key(y)));
+  });
+
+  it('flank patches (no attitudes) pass through in scan order', () => {
+    const scan = [{ cells: [1] }, { cells: [2] }, { cells: [3] }] as ContactPatch[];
+    expect(orderBallStripsByStance(scan, 90)).toBe(scan); // the same array
+  });
+});
+
+describe('emitSwarfPass — Stage 1.2: local re-entry (the corridor)', () => {
+  const SAFE = SAFE_CLEARANCE;
+  /** two smooth shelves at ONE height — every exit is local, every
+   *  inter-strip corridor clears (air over the gap): the all-local case */
+  const twoShelves = new Float32Array([
+    ...attr(new THREE.BoxGeometry(6, 4, 4).translate(-4, 0, AXIS_Z + 13)),
+    ...attr(new THREE.BoxGeometry(6, 4, 4).translate(4, 0, AXIS_Z + 13)),
+  ]);
+  /** the same two LOW shelves with a TALL spike between them — the
+   *  shelf-to-shelf corridor crosses it: the blocked-corridor case */
+  const spikeBetween = new Float32Array([
+    ...attr(new THREE.BoxGeometry(6, 4, 4).translate(-4, 0, AXIS_Z + 3)),
+    ...attr(new THREE.BoxGeometry(6, 4, 4).translate(4, 0, AXIS_Z + 3)),
+    ...attr(new THREE.BoxGeometry(1.5, 4, 12).translate(0, 0, AXIS_Z + 9)),
+  ]);
+  const plan = (positions: Float32Array) => {
+    const tool = { ...TOOL(4, 20), type: 'ball' as const, shaftDiameter: 3.175 };
+    const map = buildContactMap({
+      positions, x0: -8, x1: 8, radius: 16, axisZ: AXIS_Z, thetaStepOver: 3,
+    });
+    const verdict = ballClearanceCheck({ positions, tool, map, axisZ: AXIS_Z, radius: 16 });
+    const strips = segmentBallStrips({
+      positions, tool, map, axisZ: AXIS_Z, radius: 16, verdict, startA: 0,
+    });
+    return { tool, map, verdict, strips };
+  };
+  /** the op case's emission loop, mirrored: greedy order, one clip ctx,
+   *  exitPose threaded entry-to-entry */
+  const emitAll = (
+    tool: ReturnType<typeof plan>['tool'],
+    map: ReturnType<typeof plan>['map'],
+    patches: ContactPatch[],
+    local: boolean,
+  ) => {
+    const ordered = orderBallStripsByStance(patches, 0);
+    const clipCtx = local ? makeBallClipCtx({ positions: twoShelves, tool, map, axisZ: AXIS_Z, radius: 16 }) : undefined;
+    const moves: Move[] = [];
+    let minutes = 0;
+    let prev: { x: number; y: number; zTip: number } | undefined = undefined;
+    for (const p of ordered) {
+      const r = emitSwarfPass({
+        map, patch: p, tool, axisZ: AXIS_Z, radius: 16,
+        feed: 600, plungeFeed: 300,
+        startA: 0, attitude: 'ball',
+        entryPose: prev, clipCtx,
+      });
+      moves.push(...r.moves);
+      minutes += r.estimatedMinutes;
+      prev = r.exitPose;
+    }
+    clipCtx?.geo.dispose();
+    return { moves, minutes, count: ordered.length };
+  };
+
+  it('the two-shelf job runs all-local: one exit per strip, every exit low, cheaper than the safe-plane entry', () => {
+    const { tool, map, strips } = plan(twoShelves);
+    expect(strips.patches.length).toBeGreaterThan(1);
+    const zRapids = (m: Move[]) => m.filter((x) => x.rapid && x.words.z !== undefined);
+    const local = emitAll(tool, map, strips.patches, true);
+    const classic = emitAll(tool, map, strips.patches, false);
+    // one z-rapid per strip (its exit) — NO fallback rises anywhere
+    expect(zRapids(local.moves).length).toBe(local.count);
+    // every exit retracted only to its LOCAL clearance, not the safe plane
+    const safeZ = AXIS_Z + 16 + SAFE;
+    for (const m of zRapids(local.moves)) {
+      expect(m.words.z!).toBeLessThan(safeZ - 1e-6);
+      expect(m.words.z!).toBeGreaterThan(AXIS_Z); // above the axis, sane
+    }
+    // and the classic (safe-plane) emission pays MORE minutes
+    expect(local.minutes).toBeLessThan(classic.minutes);
+  });
+
+  it('the spike blocks the shelf-to-shelf corridor: the safe-plane fallback fires (never an unchecked low hop)', () => {
+    const tool = { ...TOOL(4, 20), type: 'ball' as const, shaftDiameter: 3.175 };
+    const map = buildContactMap({
+      positions: spikeBetween, x0: -8, x1: 8, radius: 16, axisZ: AXIS_Z, thetaStepOver: 3,
+    });
+    const verdict = ballClearanceCheck({ positions: spikeBetween, tool, map, axisZ: AXIS_Z, radius: 16 });
+    const strips = segmentBallStrips({
+      positions: spikeBetween, tool, map, axisZ: AXIS_Z, radius: 16, verdict, startA: 0,
+    });
+    const ordered = orderBallStripsByStance(strips.patches, 0);
+    const clipCtx = makeBallClipCtx({ positions: spikeBetween, tool, map, axisZ: AXIS_Z, radius: 16 });
+    let prev: { x: number; y: number; zTip: number } | undefined = undefined;
+    const zRapids: number[] = [];
+    for (const p of ordered) {
+      const r = emitSwarfPass({
+        map, patch: p, tool, axisZ: AXIS_Z, radius: 16,
+        feed: 600, plungeFeed: 300, startA: 0, attitude: 'ball',
+        entryPose: prev, clipCtx,
+      });
+      for (const m of r.moves) if (m.rapid && m.words.z !== undefined) zRapids.push(m.words.z!);
+      prev = r.exitPose;
+    }
+    clipCtx.geo.dispose();
+    const safeZ = AXIS_Z + 16 + SAFE;
+    // the fallback rise exists: at least one rapid went ALL THE WAY to the
+    // safe plane mid-sequence (not the local exits, which stop low)
+    expect(zRapids.filter((z) => z > safeZ - 1e-6).length).toBeGreaterThan(0);
   });
 });

@@ -850,11 +850,21 @@ export function segmentBallStrips(o: SegmentBallStripsOptions): SegmentBallStrip
   let runningA = o.startA ?? 0;
 
   /** the stance for `ci` continuing from `a`: PARKED if a sits inside
-   *  the window, else its nearest edge */
+   *  the window, else its nearest edge. BOTH returns live in the
+   *  RUNNING-A domain (Stage 1.2, the startA asymmetry): the old
+   *  `phi + sign(d)·hw` returned the φ-domain edge, silently DROPPING
+   *  the accumulated whole turns whenever `a` had drifted past a
+   *  revolution — the fold guard signs its step mod-360 and is blind
+   *  to the drop, so the walk re-seeded in the φ-domain mid-plan, the
+   *  greedy emission then crossed domains, and every crossing charged
+   *  a spurious ~360° entry rapid (49 of them, 3.1 phantom min on her
+   *  knight at startA 360 — invisible at startA 0 where the domains
+   *  coincide). The a-domain edge: `a` stepped toward φ by |d|−hw —
+   *  same spoke (mod 360) as the old edge, never a turn-dropping jump. */
   const stanceFor = (ci: number, a: number): number => {
     const d = signedDeltaDeg(phi[ci], a);
     if (Math.abs(d) <= hw[ci] + 1e-9) return a;
-    return phi[ci] + Math.sign(d) * hw[ci];
+    return a - Math.sign(d) * (Math.abs(d) - hw[ci]);
   };
 
   /** walk one strip from an unvisited clear cell: along the row, then
@@ -881,7 +891,16 @@ export function segmentBallStrips(o: SegmentBallStripsOptions): SegmentBallStrip
             breaks++;
             break;
           }
-          att = phi[ci];
+          // STAGE 1.2 (the startA asymmetry, 2026-11-13): the dodge lands
+          // on the window CENTER'S ALIAS NEAREST THE RUNNING A, never
+          // raw phi — a phi-domain stance DROPS the accumulated whole
+          // turns, and the entry delta across that boundary then reads
+          // ≈360°: a spurious full-revolution A rapid (charged at the
+          // ceiling) that the Stage 1.2 corridor rightly refuses,
+          // forcing the safe-plane fallback (measured: 49 strips, 3.1
+          // phantom minutes on her knight at startA 360; invisible at
+          // startA 0 where the domains coincide). Same spoke either way.
+          att = runningA + dCenter;
           centerDodges++;
         }
       }
@@ -934,6 +953,48 @@ export function segmentBallStrips(o: SegmentBallStripsOptions): SegmentBallStrip
   }
   clipCtx.geo.dispose();
   return { patches, unswarfableCells: unswarfable, centerDodges, breaks };
+}
+
+/**
+ * STAGE 1.2 (2026-11-13, the +35% recovery, part 2): order the ball
+ * strips for EMISSION by stance proximity — greedy nearest-FORWARD
+ * entry from the running machine A (the entry advance only charges
+ * forward, so the cost of picking a strip is its mod-360 forward
+ * distance). Scan order ping-pongs the axis ~100°+ between
+ * strip-adjacent-but-stance-far entries (measured 17.3 min of pure
+ * A-charge on her knight); greedy runs it down to the local clusters.
+ * The CUTS are untouched — strips are independent cell sets; only
+ * their emission order changes. Patches without threaded attitudes
+ * (the flank path) pass through in scan order, untouched.
+ */
+export function orderBallStripsByStance(
+  patches: ContactPatch[],
+  startA: number,
+): ContactPatch[] {
+  if (patches.length < 2) return patches;
+  if (!patches.every((p) => p.attitudes !== undefined && p.attitudes.length > 0)) {
+    return patches; // not ours (flank): scan order stays
+  }
+  const remaining = [...patches];
+  const out: ContactPatch[] = [];
+  let a = startA;
+  while (remaining.length > 0) {
+    let best = 0;
+    let bestCost = Infinity;
+    for (let k = 0; k < remaining.length; k++) {
+      const att = remaining[k].attitudes![0];
+      const cost = ((att - a) % 360 + 360) % 360; // forward entry charge
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = k;
+      }
+    }
+    const p = remaining.splice(best, 1)[0];
+    out.push(p);
+    const atts = p.attitudes!;
+    a = atts[atts.length - 1]; // the machine A at strip exit
+  }
+  return out;
 }
 
 /**
@@ -1051,6 +1112,19 @@ export interface EmitSwarfPassOptions {
    * centers, and plunge height differ.
    */
   attitude?: 'flank' | 'ball';
+  /**
+   * STAGE 1.2 (2026-11-13): the tool's machine pose at entry (tip z),
+   * threaded from the PREVIOUS strip's exitPose. Absent = the tool sits
+   * at the safe plane (the classic full-plunge entry). Present + a
+   * clipCtx + a clear corridor → the LOCAL entry (short plunge from
+   * this height); any corridor clip → the safe-plane fallback.
+   */
+  entryPose?: { x: number; y: number; zTip: number };
+  /**
+   * The shared two-band capsule context (makeBallClipCtx, one per op)
+   * for the Stage 1.2 corridor checks. Absent = never local.
+   */
+  clipCtx?: BallClipCtx;
 }
 
 export interface EmitSwarfPassResult {
@@ -1061,11 +1135,17 @@ export interface EmitSwarfPassResult {
    * ceiling, ΔA/360/RPM — the adversaries measured the shipped
    * convention excluding it as the DOMINANT per-pass cost, ~293°/
    * patch ≈ 7s at the 6.6 RPM clamp. XY/Z rapids stay uncharged, the
-   * family convention).
+   * family convention). Stage 1.2: a LOCAL entry charges only the
+   * entry-height plunge, not the safe-plane depth.
    */
   estimatedMinutes: number;
   /** machine A at pass exit — thread into the next pass's startA */
   endA: number;
+  /**
+   * STAGE 1.2: the tool pose at exit (machine frame, tip z) — thread
+   * into the next strip's entryPose. Absent on empty patches.
+   */
+  exitPose?: { x: number; y: number; zTip: number };
 }
 
 /**
@@ -1164,16 +1244,42 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
   // over → plunge. All at the safe plane until the plunge; no rapid mixes Z
   // with X/Y/A (the pinned convention). ----
   const first = patch[0];
-  const fwd0 = ((attitudeOf(first) - (((a % 360) + 360) % 360)) % 360 + 360) % 360;
+  const att0 = attitudeOf(first);
+  const c0 = centerOf(first);
+  const tip0 = tipZOf(c0);
+  let fwd0 = ((att0 - (((a % 360) + 360) % 360)) % 360 + 360) % 360;
+  // STAGE 1.2 (the startA asymmetry, part 2): the forward-only entry wrap
+  // has a discontinuity AT the boundary — a stance sitting float-noise
+  // BEHIND the running A (−1e-10°) reads as +359.9999999999°, a phantom
+  // FULL-REVOLUTION rapid (charged at the rotary ceiling) that the
+  // corridor then rightly refuses, forcing the safe-plane fallback
+  // (measured: 21 strips on her knight at startA 0, 49 at 360 — which
+  // side trips it is pure float luck). A forward delta within 1e-6° of
+  // the full turn is noise on the SAME spoke: snap to zero.
+  if (360 - fwd0 < 1e-6) fwd0 = 0;
+  // STAGE 1.2 (the entry-cost recovery): thread the previous strip's exit
+  // pose → run the entry LOCAL (short plunge from the exit height) when
+  // the whole corridor clears the mesh — else fall back to the SAFE-PLANE
+  // entry. Ball family only (the corridor is the ball's two-band test);
+  // no clipCtx/entryPose → the classic full-depth entry, unchanged.
+  let entryH = safeZ;
+  if (ball && o.entryPose !== undefined && o.clipCtx !== undefined && o.entryPose.zTip < safeZ - 1e-9) {
+    if (entryCorridorClear(o.clipCtx, o.entryPose, a, fwd0, att0, c0, cells[first].p)) {
+      entryH = o.entryPose.zTip;
+    } else {
+      // rise to the safe plane first (pure Z, rapid): the low entry is
+      // blocked, the classic entry needs its classic height
+      moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+    }
+  }
   if (fwd0 > 1e-9) {
     a += fwd0;
     moves.push({ words: { a }, feed: 0, rapid: true }); // rapid — but ROTARY time is real time
     minutes += (fwd0 / 360) / MAX_ROTARY_RPM; // Stage 0.2: charge the A re-approach
   }
-  const c0 = centerOf(first);
   moves.push({ words: { x: c0.x, y: c0.y }, feed: 0, rapid: true });
-  moves.push({ words: { z: tipZOf(c0) }, feed: plungeFeed }); // pure-Z plunge (tip plane, Stage 0.4)
-  minutes += Math.max(0, safeZ - tipZOf(c0)) / plungeFeed;
+  moves.push({ words: { z: tip0 }, feed: plungeFeed }); // pure-Z plunge (tip plane, Stage 0.4)
+  minutes += Math.max(0, entryH - tip0) / plungeFeed;
 
   // ---- the sweep: one G93 XYZA move per remaining cell ----
   let prevCi = first;
@@ -1211,10 +1317,28 @@ export function emitSwarfPass(o: EmitSwarfPassOptions): EmitSwarfPassResult {
     prevP = p;
   }
 
-  // ---- exit: retract to the safe plane (pure Z) ----
-  moves.push({ words: { z: safeZ }, feed: 0, rapid: true });
+  // ---- exit: LOCAL rise (Stage 1.2, corridor-checked) when a clip ctx
+  // threads in and the way up is clear — the next strip's entry corridor
+  // starts from there; else the classic safe-plane retract ----
+  const last = patch[patch.length - 1];
+  const cL = centerOf(last);
+  const attL = attitudeOf(last);
+  const tipL = tipZOf(cL);
+  let exitH = safeZ;
+  if (ball && o.clipCtx !== undefined) {
+    const localH = tipL + (o.safeClearance ?? SAFE_CLEARANCE);
+    if (localH < safeZ - 1e-9 && riseClear(o.clipCtx, cL, attL, tipL, localH, cells[last].p)) {
+      exitH = localH;
+    }
+  }
+  moves.push({ words: { z: exitH }, feed: 0, rapid: true });
 
-  return { moves, estimatedMinutes: minutes, endA: a };
+  return {
+    moves,
+    estimatedMinutes: minutes,
+    endA: a,
+    exitPose: { x: cL.x, y: cL.y, zTip: exitH },
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -1351,8 +1475,11 @@ export interface BallClearanceOptions {
 /** the two-band capsule test's shared state — one BVH per mesh, reused
  *  by ballClearanceCheck's map pass AND the Stage 1 strip planner's
  *  per-edge re-verdict (the adversaries' G3 guard: a stance parked
- *  off-center inside the window is only honest if it re-clears). */
-interface BallClipCtx {
+ *  off-center inside the window is only honest if it re-clears).
+ *  STAGE 1.2: also the entry-corridor engine — makeBallClipCtx is
+ *  exported so the op case can build ONE context for the whole
+ *  emission and thread it into every emitSwarfPass. */
+export interface BallClipCtx {
   bvh: MeshBVH;
   /** the BufferGeometry backing the BVH — dispose after the last verdict */
   geo: THREE.BufferGeometry;
@@ -1371,7 +1498,7 @@ interface BallClipCtx {
   bb: THREE.Box3;
 }
 
-function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
+export function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
   const toolR = o.tool.diameter / 2;
   const flute = o.tool.fluteLength;
   if (!(toolR > 0)) throw new Error('bad tool: diameter must be positive');
@@ -1491,6 +1618,100 @@ function ballBandsClip(
     });
   }
   return hit;
+}
+
+/* ------------------------------------------------------------------ *
+ * STAGE 1.2 — THE ENTRY CORRIDOR (2026-11-13, the +35% recovery): the
+ * chord re-verdict made every ridge split re-enter from the SAFE
+ * PLANE — a full-depth plunge (measured mean 21mm at plunge feed =
+ * 51% of the op's minutes) plus a ping-ponging A charge (23%). A
+ * LOCAL re-entry (retract only to the strip's local exit height)
+ * recovers it — but only if every leg of the lower entry is proven
+ * against the mesh with the same two-band test that verdicts the
+ * stances: an unchecked shortcut would be exactly the deliberate-
+ * wrong-move class Stage 1.1 eliminated. Any clip anywhere in the
+ * corridor → the caller falls back to the SAFE-PLANE entry.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The LOCAL-entry corridor: (a) the A-swing under the tool PARKED at
+ * the previous strip's exit pose (the part rotates under a tip sitting
+ * only clearance above where it just cut), (b) the XY hop at that exit
+ * height to the new strip's first stance, (c) the final plunge down to
+ * the first contact (its own fan excluded — legal contact, the same
+ * allowance ballCellClips grants). Clears iff every sampled pose does.
+ * SAMPLING DENSITY (the acceptance probe's lesson, 2026-11-13): ≤2° of
+ * A swing and ≤0.5mm of path between samples — a 4-point check over a
+ * 44mm hop left 11mm gaps and the probe measured 0.55mm bites slipping
+ * through them. Anything the two-band test can see, the gate must see.
+ */
+const CORRIDOR_A_STEP_DEG = 2;
+const CORRIDOR_PATH_STEP_MM = 0.5;
+
+function entryCorridorClear(
+  ctx: BallClipCtx,
+  entry: { x: number; y: number; zTip: number },
+  aFrom: number,
+  fwd: number,
+  att0: number,
+  c0: { x: number; y: number; z: number },
+  contact0: { x: number; y: number; z: number },
+): boolean {
+  // (a) the A-swing: attitudes aFrom → aFrom+fwd, tool parked at entry.xy
+  const nA = Math.max(5, Math.ceil(Math.abs(fwd) / CORRIDOR_A_STEP_DEG));
+  for (let k = 1; k <= nA; k++) {
+    const att = aFrom + (fwd * k) / nA;
+    if (ballBandsClip(ctx, { x: entry.x, y: entry.y, z: entry.zTip + ctx.toolR }, att, 1e-3)) {
+      return false;
+    }
+  }
+  // (b) the XY hop at the entry height, part already at the new stance
+  const len = Math.hypot(c0.x - entry.x, c0.y - entry.y);
+  const nXY = Math.max(5, Math.ceil(len / CORRIDOR_PATH_STEP_MM));
+  for (let k = 0; k <= nXY; k++) {
+    const t = k / nXY;
+    const C = {
+      x: entry.x + (c0.x - entry.x) * t,
+      y: entry.y + (c0.y - entry.y) * t,
+      z: entry.zTip + ctx.toolR,
+    };
+    if (ballBandsClip(ctx, C, att0, 1e-3)) return false;
+  }
+  // (c) the plunge: entry height → the first contact, own fan excluded
+  const cTop = entry.zTip + ctx.toolR;
+  const drop = Math.abs(c0.z - cTop);
+  const nP = Math.max(4, Math.ceil(drop / CORRIDOR_PATH_STEP_MM));
+  for (let k = 1; k <= nP; k++) {
+    const C = {
+      x: c0.x,
+      y: c0.y,
+      z: cTop + ((c0.z - cTop) * k) / nP,
+    };
+    if (ballBandsClip(ctx, C, att0, 1e-3, contact0)) return false;
+  }
+  return true;
+}
+
+/** The LOCAL-exit rise: straight up from the last contact to the local
+ *  clearance height, the last cell's own fan excluded, sampled at the
+ *  corridor density. Clear → the strip may exit low and hand the pose
+ *  to the next strip's corridor. */
+function riseClear(
+  ctx: BallClipCtx,
+  cLast: { x: number; y: number; z: number },
+  attLast: number,
+  tipLast: number,
+  localH: number,
+  contact: { x: number; y: number; z: number },
+): boolean {
+  const cBot = tipLast + ctx.toolR;
+  const cTop = localH + ctx.toolR;
+  const nP = Math.max(3, Math.ceil((cTop - cBot) / CORRIDOR_PATH_STEP_MM));
+  for (let k = 1; k <= nP; k++) {
+    const C = { x: cLast.x, y: cLast.y, z: cBot + ((cTop - cBot) * k) / nP };
+    if (ballBandsClip(ctx, C, attLast, 1e-3, contact)) return false;
+  }
+  return true;
 }
 
 /**
