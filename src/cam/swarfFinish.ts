@@ -1496,6 +1496,12 @@ export interface BallClipCtx {
   closest: THREE.Vector3;
   p3: THREE.Vector3;
   bb: THREE.Box3;
+  /** the stock solid for the no-model clause (see CORRIDOR_STOCK_
+   *  TOLERANCE_MM): radius + the axial span the contact map covers */
+  stockR: number;
+  stockX0: number;
+  stockX1: number;
+  ray: THREE.Ray;
 }
 
 export function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
@@ -1535,6 +1541,13 @@ export function makeBallClipCtx(o: BallClearanceOptions): BallClipCtx {
     closest: new THREE.Vector3(),
     p3: new THREE.Vector3(),
     bb: new THREE.Box3(),
+    stockR: o.radius,
+    // the map grid covers exactly the stock's axial span (the contact
+    // map contract); nx·pitchX over-covers the true x1 by < pitchX,
+    // the conservative direction for the solid
+    stockX0: o.map.gx0,
+    stockX1: o.map.gx0 + o.map.nx * o.map.pitchX,
+    ray: new THREE.Ray(),
   };
 }
 
@@ -1561,14 +1574,17 @@ function ballCellClips(ctx: BallClipCtx, ci: number, attitudeDeg: number): boole
  * tool axis. `epsilon` is the graze allowance (band radius − closest mesh
  * distance must exceed it to count as a clip); `excludeP`, when present, is
  * a material-frame point whose contact neighborhood is legal touch, not
- * collision (the cell's own contact).
+ * collision (the cell's own contact). `dilate` (the D knob, corridor
+ * tests only) demands that much extra clearance from the MODEL — the
+ * stance verdicts and chord samples pass 0 and stay model-faithful.
  */
-function ballBandsClip(
+export function ballBandsClip(
   ctx: BallClipCtx,
   C: { x: number; y: number; z: number },
   attitudeDeg: number,
   epsilon: number,
   excludeP?: { x: number; y: number; z: number },
+  dilate = 0,
 ): boolean {
   const rotBack = indexedPointRotation(-attitudeDeg, ctx.axisZ);
   ctx.segStart.copy(rotBack({ x: C.x, y: C.y, z: C.z }));
@@ -1583,12 +1599,12 @@ function ballBandsClip(
     if (hit) break;
     ctx.seg.start.copy(s);
     ctx.seg.end.copy(e);
-    ctx.bb.min.x = C.x - r;
-    ctx.bb.max.x = C.x + r;
-    ctx.bb.min.y = Math.min(s.y, e.y) - r;
-    ctx.bb.max.y = Math.max(s.y, e.y) + r;
-    ctx.bb.min.z = Math.min(s.z, e.z) - r;
-    ctx.bb.max.z = Math.max(s.z, e.z) + r;
+    ctx.bb.min.x = C.x - r - dilate;
+    ctx.bb.max.x = C.x + r + dilate;
+    ctx.bb.min.y = Math.min(s.y, e.y) - r - dilate;
+    ctx.bb.max.y = Math.max(s.y, e.y) + r + dilate;
+    ctx.bb.min.z = Math.min(s.z, e.z) - r - dilate;
+    ctx.bb.max.z = Math.max(s.z, e.z) + r + dilate;
     ctx.bvh.shapecast({
       intersectsBounds: (box) => {
         if (hit) return false; // early-out once clipped
@@ -1608,8 +1624,9 @@ function ballBandsClip(
           return false;
         }
         const d = t.closestPointToSegment(ctx.seg, ctx.closest);
-        // graze allowance: exact-tangent triangles are legal contact
-        if (d < r - epsilon) {
+        // graze allowance: exact-tangent triangles are legal contact;
+        // the D knob's dilation sits on top of it (corridor tests only)
+        if (d < r - epsilon + dilate) {
           hit = true;
           return true;
         }
@@ -1639,7 +1656,10 @@ function ballBandsClip(
  * only clearance above where it just cut), (b) the XY hop at that exit
  * height to the new strip's first stance, (c) the final plunge down to
  * the first contact (its own fan excluded — legal contact, the same
- * allowance ballCellClips grants). Clears iff every sampled pose does.
+ * allowance ballCellClips grants). Every pose ALSO passes the D knob's
+ * gate (CORRIDOR_STOCK_TOLERANCE_MM): D of clearance from the model,
+ * and D from the stock solid wherever the model does not back it.
+ * Clears iff every sampled pose does.
  * SAMPLING DENSITY (the acceptance probe's lesson, 2026-11-13): ≤2° of
  * A swing and ≤0.5mm of path between samples — a 4-point check over a
  * 44mm hop left 11mm gaps and the probe measured 0.55mm bites slipping
@@ -1661,7 +1681,7 @@ function entryCorridorClear(
   const nA = Math.max(5, Math.ceil(Math.abs(fwd) / CORRIDOR_A_STEP_DEG));
   for (let k = 1; k <= nA; k++) {
     const att = aFrom + (fwd * k) / nA;
-    if (ballBandsClip(ctx, { x: entry.x, y: entry.y, z: entry.zTip + ctx.toolR }, att, 1e-3)) {
+    if (!corridorPoseClear(ctx, { x: entry.x, y: entry.y, z: entry.zTip + ctx.toolR }, att)) {
       return false;
     }
   }
@@ -1675,9 +1695,12 @@ function entryCorridorClear(
       y: entry.y + (c0.y - entry.y) * t,
       z: entry.zTip + ctx.toolR,
     };
-    if (ballBandsClip(ctx, C, att0, 1e-3)) return false;
+    if (!corridorPoseClear(ctx, C, att0)) return false;
   }
-  // (c) the plunge: entry height → the first contact, own fan excluded
+  // (c) the plunge: entry height → the first contact, own fan excluded.
+  // CUT-ADJACENT (dilate 0): the fallback plunges the same column from
+  // higher, and the stance at the bottom is already verified — the
+  // polish cuts through whatever stands over its own contact.
   const cTop = entry.zTip + ctx.toolR;
   const drop = Math.abs(c0.z - cTop);
   const nP = Math.max(4, Math.ceil(drop / CORRIDOR_PATH_STEP_MM));
@@ -1687,15 +1710,17 @@ function entryCorridorClear(
       y: c0.y,
       z: cTop + ((c0.z - cTop) * k) / nP,
     };
-    if (ballBandsClip(ctx, C, att0, 1e-3, contact0)) return false;
+    if (!corridorPoseClear(ctx, C, att0, contact0, 0)) return false;
   }
   return true;
 }
 
 /** The LOCAL-exit rise: straight up from the last contact to the local
  *  clearance height, the last cell's own fan excluded, sampled at the
- *  corridor density. Clear → the strip may exit low and hand the pose
- *  to the next strip's corridor. */
+ *  corridor density — CUT-ADJACENT, the classic graze contract (dilate
+ *  0, no stock clause: the fallback rises the same column). Clear →
+ *  the strip may exit low and hand the pose to the next strip's
+ *  corridor. */
 function riseClear(
   ctx: BallClipCtx,
   cLast: { x: number; y: number; z: number },
@@ -1709,9 +1734,114 @@ function riseClear(
   const nP = Math.max(3, Math.ceil((cTop - cBot) / CORRIDOR_PATH_STEP_MM));
   for (let k = 1; k <= nP; k++) {
     const C = { x: cLast.x, y: cLast.y, z: cBot + ((cTop - cBot) * k) / nP };
-    if (ballBandsClip(ctx, C, attLast, 1e-3, contact)) return false;
+    // CUT-ADJACENT (dilate 0): the classic exit rises the same column
+    if (!corridorPoseClear(ctx, C, attLast, contact, 0)) return false;
   }
   return true;
+}
+
+/**
+ * THE D KNOB (her ruling, 2026-11-16; not an exposed control): the
+ * corridor's assumed max standing stock over the model, mm. The
+ * Stage 1.2 corridor verified entry/exit legs against the MODEL only,
+ * so the roughing chain's standing stock (measured ~0.7mm commonly,
+ * to 10.9mm at undercuts; full shells in the waterlines' end gaps)
+ * was invisible to it — the sim flagged low hops through stock the
+ * corridor called clear. Conservative fix, both halves:
+ *
+ * (1) DILATION — every corridor pose must clear the MODEL by D, so
+ * assumed standing over the model (≤ D thick) can never reach the
+ * tool. The stance verdicts, chord samples and cuts are untouched:
+ * cuts stay model-faithful, stock-awareness gates only entry/exit.
+ *
+ * (2) THE NO-MODEL-SOLID CLAUSE — dilation alone cannot see the
+ * end-gap class: stock standing full-height where the waterlines
+ * could not reach, with no mesh surface to dilate against. Over a
+ * column the model does not back (no model surface within D below the
+ * tool surface), the FULL stock cylinder is treated as solid, D away
+ * from it, exactly as if it were the model.
+ *
+ * Either half refusing → the caller falls back to the SAFE-PLANE
+ * entry/exit (the classic pre-1.2 behavior): retract and travel high,
+ * never an unchecked low hop.
+ */
+export const CORRIDOR_STOCK_TOLERANCE_MM = 2;
+
+/** One corridor pose's combined gate. Transit legs (the A-swing, the XY
+ *  hop) pass `dilate` = D: the dilated two-band test against the mesh,
+ * then the no-model-solid clause against the stock. Cut-adjacent legs
+ *  (the plunge to the first contact, the rise from the last) pass 0 and
+ *  skip the stock clause: they traverse exactly the column the
+ *  safe-plane fallback would traverse from higher up, so refusing them
+ *  buys nothing — the polish cuts through whatever stands over its own
+ *  contact, and the stance itself is already verified at dilate 0. */
+function corridorPoseClear(
+  ctx: BallClipCtx,
+  C: { x: number; y: number; z: number },
+  attitudeDeg: number,
+  excludeP?: { x: number; y: number; z: number },
+  dilate = CORRIDOR_STOCK_TOLERANCE_MM,
+): boolean {
+  if (dilate > 0 && ballBandsClip(ctx, C, attitudeDeg, 1e-3, excludeP, dilate)) return false;
+  if (dilate <= 0 && ballBandsClip(ctx, C, attitudeDeg, 1e-3, excludeP)) return false;
+  if (dilate <= 0) return true;
+  return !corridorStockClips(ctx, C, attitudeDeg);
+}
+
+/**
+ * The no-model-solid clause at one machine tool pose: sample both band
+ * axes in the MATERIAL frame (the stock is static there) at the corridor
+ * density; where the tool surface comes within D of the stock solid, the
+ * column's radial ray must show SOME model surface at or below the tool's
+ * top. A surface there backs the column: remaining stock over it is
+ * assumed ≤ D thick (her knob), and whatever reaches the tool is the
+ * dilated mesh test's to catch. No surface at all — the end-gap class,
+ * stock standing full-height where the waterlines could not reach, with
+ * no mesh to dilate against — the FULL stock cylinder is treated as
+ * solid, D away from it, exactly as if it were the model. Known holes,
+ * accepted until the voxel-truth pilot replaces this: stock floating
+ * with air beneath it in a backed column (over a far-down surface), and
+ * any real stock thicker than D — both violate the knob's assumption,
+ * which is hers to set honestly.
+ */
+export function corridorStockClips(
+  ctx: BallClipCtx,
+  C: { x: number; y: number; z: number },
+  attitudeDeg: number,
+): boolean {
+  const D = CORRIDOR_STOCK_TOLERANCE_MM;
+  const rotBack = indexedPointRotation(-attitudeDeg, ctx.axisZ);
+  for (const [zFrom, zTo, r] of [
+    [C.z, C.z + ctx.toolR, ctx.toolR],
+    [C.z + ctx.toolR, C.z + ctx.flute, ctx.shaftR],
+  ] as const) {
+    const n = Math.max(2, Math.ceil((zTo - zFrom) / CORRIDOR_PATH_STEP_MM));
+    for (let k = 0; k <= n; k++) {
+      const q = rotBack({ x: C.x, y: C.y, z: zFrom + ((zTo - zFrom) * k) / n });
+      const rho = Math.hypot(q.y, q.z - ctx.axisZ);
+      // conservative distance to the capped stock solid: max() never
+      // overestimates (the sqrt of the corner case is larger), so any
+      // clip it reports is real or extra-conservative, never missed
+      const dr = rho > ctx.stockR ? rho - ctx.stockR : 0;
+      const da = Math.max(ctx.stockX0 - q.x, q.x - ctx.stockX1, 0);
+      if (Math.max(dr, da) - r >= D) continue; // clear of the stock solid
+      if (rho <= 1e-6) return true; // on the axis: inside solid, clip
+      // the column's radial ray, from the axis outward through q
+      ctx.ray.origin.set(q.x, 0, ctx.axisZ);
+      ctx.ray.direction.set(0, q.y / rho, (q.z - ctx.axisZ) / rho);
+      const hits = ctx.bvh.raycast(ctx.ray, THREE.DoubleSide);
+      let backed = false;
+      for (const h of hits) {
+        const m = Math.hypot(h.point.y, h.point.z - ctx.axisZ);
+        if (m <= Math.min(ctx.stockR + D, rho + r + 1e-6)) {
+          backed = true; // a model surface at/below the tool's top
+          break;
+        }
+      }
+      if (!backed) return true;
+    }
+  }
+  return false;
 }
 
 /**

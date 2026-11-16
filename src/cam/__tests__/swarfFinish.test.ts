@@ -479,6 +479,9 @@ import {
   fluteToolCenter,
   makeBallClipCtx,
   orderBallStripsByStance,
+  ballBandsClip,
+  corridorStockClips,
+  CORRIDOR_STOCK_TOLERANCE_MM,
   FLUTE_CLEAR,
   FLUTE_CLIPPED,
   segmentBallStrips,
@@ -2481,20 +2484,25 @@ describe('emitSwarfPass — Stage 1.2: local re-entry (the corridor)', () => {
     return { moves, minutes, count: ordered.length };
   };
 
-  it('the two-shelf job runs all-local: one exit per strip, every exit low, cheaper than the safe-plane entry', () => {
+  it('the two-shelf job: every exit local, one conservative transit fallback (the D knob), still cheaper than safe-plane', () => {
     const { tool, map, strips } = plan(twoShelves);
     expect(strips.patches.length).toBeGreaterThan(1);
     const zRapids = (m: Move[]) => m.filter((x) => x.rapid && x.words.z !== undefined);
     const local = emitAll(tool, map, strips.patches, true);
     const classic = emitAll(tool, map, strips.patches, false);
-    // one z-rapid per strip (its exit) — NO fallback rises anywhere
-    expect(zRapids(local.moves).length).toBe(local.count);
-    // every exit retracted only to its LOCAL clearance, not the safe plane
     const safeZ = AXIS_Z + 16 + SAFE;
-    for (const m of zRapids(local.moves)) {
-      expect(m.words.z!).toBeLessThan(safeZ - 1e-6);
+    // every strip exits LOCAL (one z-rapid per strip below the safe
+    // plane) — the cut-adjacent rise is exempt from the D gate
+    const exits = zRapids(local.moves).filter((m) => m.words.z! < safeZ - 1e-6);
+    expect(exits.length).toBe(local.count);
+    for (const m of exits) {
       expect(m.words.z!).toBeGreaterThan(AXIS_Z); // above the axis, sane
     }
+    // exactly ONE conservative fallback: an A-parked stance whose exit
+    // hangs over a column with no model inside the crown — full stock
+    // is assumed there and the low transit is refused (the knob's
+    // whole point; the fallback is the classic safe-plane entry)
+    expect(zRapids(local.moves).filter((m) => m.words.z! > safeZ - 1e-6).length).toBe(1);
     // and the classic (safe-plane) emission pays MORE minutes
     expect(local.minutes).toBeLessThan(classic.minutes);
   });
@@ -2526,5 +2534,106 @@ describe('emitSwarfPass — Stage 1.2: local re-entry (the corridor)', () => {
     // the fallback rise exists: at least one rapid went ALL THE WAY to the
     // safe plane mid-sequence (not the local exits, which stop low)
     expect(zRapids.filter((z) => z > safeZ - 1e-6).length).toBeGreaterThan(0);
+  });
+});
+
+describe('emitSwarfPass — the D knob (corridor stock tolerance, 2026-11-16)', () => {
+  const SAFE = SAFE_CLEARANCE;
+  const D = CORRIDOR_STOCK_TOLERANCE_MM;
+  /** a tube wrapping the axis (radius 8, spanning the stock): every
+   *  hop AND every A-swing column is model-backed — the all-local case
+   *  under the D knob (a partial model would leave the swing parked
+   *  over no-model columns inside the crown, and rightly fall back) */
+  const oneLowShelf = new Float32Array([
+    ...attr(new THREE.BoxGeometry(16, 4, 4).translate(0, 0, AXIS_Z + 3)),
+  ]);
+  /** two LOW shelves with an air gap between, deep inside the crown:
+   *  the shelf-to-shelf hop crosses a no-model column — full stock is
+   *  assumed there (the sim's end-gap class), the safe-plane fallback
+   *  must fire */
+  const twoLowShelves = new Float32Array([
+    ...attr(new THREE.BoxGeometry(6, 4, 4).translate(-4, 0, AXIS_Z + 3)),
+    ...attr(new THREE.BoxGeometry(6, 4, 4).translate(4, 0, AXIS_Z + 3)),
+  ]);
+  const tool = { ...TOOL(4, 20), type: 'ball' as const, shaftDiameter: 3.175 };
+  const mapOf = (positions: Float32Array) =>
+    buildContactMap({ positions, x0: -8, x1: 8, radius: 16, axisZ: AXIS_Z, thetaStepOver: 3 });
+  const ctxOf = (positions: Float32Array) =>
+    makeBallClipCtx({ positions, tool, map: mapOf(positions), axisZ: AXIS_Z, radius: 16 });
+  /** the op case's emission loop, mirrored (greedy order, one clip ctx,
+   *  exitPose threaded entry-to-entry) */
+  const emitAll = (positions: Float32Array) => {
+    const map = mapOf(positions);
+    const verdict = ballClearanceCheck({ positions, tool, map, axisZ: AXIS_Z, radius: 16 });
+    const strips = segmentBallStrips({ positions, tool, map, axisZ: AXIS_Z, radius: 16, verdict, startA: 0 });
+    const ordered = orderBallStripsByStance(strips.patches, 0);
+    const clipCtx = ctxOf(positions);
+    const moves: Move[] = [];
+    let minutes = 0;
+    let prev: { x: number; y: number; zTip: number } | undefined = undefined;
+    for (const p of ordered) {
+      const r = emitSwarfPass({
+        map, patch: p, tool, axisZ: AXIS_Z, radius: 16,
+        feed: 600, plungeFeed: 300, startA: 0, attitude: 'ball',
+        entryPose: prev, clipCtx,
+      });
+      moves.push(...r.moves);
+      minutes += r.estimatedMinutes;
+      prev = r.exitPose;
+    }
+    clipCtx.geo.dispose();
+    return { moves, minutes, count: ordered.length };
+  };
+  const zRapids = (moves: Move[]) => moves.filter((m) => m.rapid && m.words.z !== undefined);
+  const safeZ = AXIS_Z + 16 + SAFE;
+
+  it('cut-adjacent legs stay local inside the crown; unbacked transit is refused', () => {
+    const local = emitAll(oneLowShelf);
+    expect(local.count).toBeGreaterThan(1);
+    // every exit is LOCAL (below the safe plane) even though the tool
+    // is deep inside the crown — the rise is cut-adjacent, exempt
+    // from the D gate (the fallback would rise the same column)
+    const exits = zRapids(local.moves).filter((m) => m.words.z! < safeZ - 1e-6);
+    expect(exits.length).toBe(local.count);
+    for (const m of exits) {
+      expect(m.words.z!).toBeGreaterThan(AXIS_Z); // sane: above the axis
+    }
+    // and the unbacked transits are conservatively refused — full
+    // stock is assumed over the columns the shelf does not back
+    expect(zRapids(local.moves).filter((m) => m.words.z! > safeZ - 1e-6).length).toBeGreaterThan(0);
+  });
+
+  it('the air gap inside the crown reads as full stock: the safe-plane fallback fires', () => {
+    const local = emitAll(twoLowShelves);
+    expect(local.count).toBeGreaterThan(1);
+    // at least one mid-sequence rise went ALL THE WAY to the safe plane
+    expect(zRapids(local.moves).filter((m) => m.words.z! > safeZ - 1e-6).length).toBeGreaterThan(0);
+  });
+
+  it('the dilated two-band test demands D of clearance from the model (corridor poses only)', () => {
+    const ctx = ctxOf(oneLowShelf);
+    // over the shelf top (z = AXIS_Z+5): tool bottom at +t above it
+    const pose = (t: number) => ({ x: 0, y: 0, z: AXIS_Z + 5 + t + ctx.toolR });
+    // 1mm above the model: the stance/chord contract (dilate 0) allows,
+    // the corridor contract (dilate D) refuses
+    expect(ballBandsClip(ctx, pose(1), 0, 1e-3)).toBe(false);
+    expect(ballBandsClip(ctx, pose(1), 0, 1e-3, undefined, D)).toBe(true);
+    // 2.5mm clears both contracts; sub-D again only dilated
+    expect(ballBandsClip(ctx, pose(2.5), 0, 1e-3, undefined, D)).toBe(false);
+    expect(ballBandsClip(ctx, pose(1.5), 0, 1e-3, undefined, D)).toBe(true);
+    ctx.geo.dispose();
+  });
+
+  it('the no-model-solid clause: unbacked columns clip, backed and clear ones do not', () => {
+    const ctx = ctxOf(twoLowShelves);
+    // over the GAP column (x=0, no model in that column), inside the crown
+    expect(corridorStockClips(ctx, { x: 0, y: 0, z: AXIS_Z + 10 + ctx.toolR }, 0)).toBe(true);
+    // the same column, tool fully above the stock radius: clear
+    expect(corridorStockClips(ctx, { x: 0, y: 0, z: AXIS_Z + 16 + 2 + ctx.toolR }, 0)).toBe(false);
+    // backed: over the shelf (model at radius 5 in that column, tool at 10)
+    expect(corridorStockClips(ctx, { x: -4, y: 0, z: AXIS_Z + 10 + ctx.toolR }, 0)).toBe(false);
+    // beyond the stock's axial end, close enough to matter: conservative clip
+    expect(corridorStockClips(ctx, { x: 9, y: 0, z: AXIS_Z + 10 + ctx.toolR }, 0)).toBe(true);
+    ctx.geo.dispose();
   });
 });

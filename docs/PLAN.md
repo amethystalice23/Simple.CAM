@@ -1329,6 +1329,43 @@ organic surfaces, the boustrophedon weaver, the flat-bottom kernel
 Flank path, goldens, and the post untouched except 0.3's signed-ΔA
 and the G92.4 re-check. Roughing untouched.
 
+**THE D KNOB — corridor stock tolerance (2026-11-16, branch
+`feat/corridor-stock-tolerance`, her ruling: "be conservative and set
+it to 2mm", NOT an exposed control).** The Stage 1.2 corridor verified
+entry/exit legs against the MODEL only; the roughing chain's standing
+stock (measured ~0.7mm commonly, to 10.9mm at undercuts, full shells
+in the waterlines' end gaps) was invisible to it, so the sim flagged
+low hops through stock the corridor called clear (142 entryXY + 9
+retract flags on the knight job). The fix, constant D = 2mm in
+swarfFinish.ts, two halves — cuts, stance verdicts, and chord samples
+stay model-faithful (stock-awareness gates only entry/exit):
+
+1. DILATION — every TRANSIT pose (the A-swing under the parked tool,
+the XY hop at exit height) must clear the model by D, so assumed
+standing over the model (≤ D thick, her knob's premise) can never
+reach the tool.
+2. NO-MODEL-SOLID — where the tool comes within D of the stock
+cylinder, the column's radial ray must show some model surface at or
+below the tool's top: no surface at all (the end-gap class — stock
+standing full-height where the waterlines could not reach, no mesh to
+dilate against) reads as FULL stock, D away, exactly as if it were
+the model. Known holes, accepted until the voxel-truth pilot replaces
+the clause: stock floating with air beneath it in a backed column, and
+any real stock thicker than D — both violate the knob's premise, which
+is hers to set honestly. Inter-island air gaps read as full stock too
+(conservative false positives; her word).
+
+CUT-ADJACENT EXEMPTION — the plunge to the first contact and the rise
+from the last run the classic graze contract (dilate 0, own fan
+excluded, no stock clause): both traverse exactly the column the
+safe-plane fallback would traverse from higher up, so refusing them
+buys nothing — the polish cuts through whatever stands over its own
+contact. Either gate refusing → the safe-plane fallback, never an
+unchecked low hop. Acceptance: suite + nose-chunks (model, unchanged)
++ sim-flags (standing: the entry/retract classes should collapse;
+flags from standing thicker than 2mm are the knob's accepted residue,
+hers to tune or the pilot's to replace) + her field re-run.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
