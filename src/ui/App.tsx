@@ -215,9 +215,11 @@ export function App() {
   const openJobInputRef = useRef<HTMLInputElement>(null);
   /** changes since the last save/new/restore — gates the New Job confirm */
   const [dirty, setDirty] = useState(false);
-  /** startup restore is reading the autosave back (docs/TODO.md): the
-   * "Loading…" notice is up — flips false when the restore effect lands */
-  const [restoring, setRestoring] = useState(true);
+  /** the blocking-load splash's caption (docs/TODO.md): non-null from the
+   * first paint (startup restore) and while opening a job file — the
+   * splash covers the main-thread decode/parse/detection freeze and
+   * drops exactly when the loaded scene commits */
+  const [busyNote, setBusyNote] = useState<string | null>('restoring your last job');
   const lastSavedRef = useRef<string | null>(null); // fingerprint baseline
   /** fingerprint of the last AUTOSAVE written — identical re-runs (edits
    * that didn't change the saved content, or effect re-fires) skip the
@@ -1719,15 +1721,21 @@ export function App() {
     setDirty(false);
   };
 
-  /** Open a saved job file. */
+  /** Open a saved job file. The same splash as startup restore — reading
+   * a multi-MB save off disk, parsing it, and the detection pass are the
+   * same freeze; the splash shows through it and drops with the commit. */
   const openJob = async (file: File) => {
+    setBusyNote(`opening ${file.name}`);
     try {
-      applyJob(parseJobFile(await file.text()));
+      const text = await file.text(); // yields — the splash paints here
+      applyJob(parseJobFile(text));
       setTab('ops');
       setError(null);
       setStatusNote(null); // the fallback reports the freshly opened job
     } catch (e) {
       setError(`could not open job: ${String(e)}`);
+    } finally {
+      setBusyNote(null); // batches with applyJob's states — one commit
     }
   };
 
@@ -1805,30 +1813,26 @@ export function App() {
   };
 
   /** Restore the autosaved job once on mount (reload / browse away + back).
-   * A "Loading…" notice stays up for the whole restore (docs/TODO.md):
-   * reading the multi-MB autosave, decoding the embedded STL, and the
-   * feature-detection pass are all main-thread work that previously read
-   * as the app being stuck. The paint between the two awaits is the whole
-   * trick — the notice is on screen before the blocking decode starts. */
+   * The "Loading…" splash is on screen from the FIRST paint (busyNote's
+   * initial value) — before the IndexedDB read, the multi-MB base64
+   * decode, the STL parse, and the synchronous feature-detection pass,
+   * all main-thread work that previously read as the app being stuck.
+   * Clearing busyNote batches with applyJob's state updates into ONE
+   * commit, so the splash drops exactly when the restored scene paints. */
   useEffect(() => {
     void (async () => {
-      // let the first render PAINT before any blocking work — the notice
-      // must be visible before applyJob's decode/parse/detection run
-      await new Promise((r) => requestAnimationFrame(r));
+      // the async IndexedDB read yields here, so the browser paints the
+      // splash before this continuation resumes with the blocking work
       const job = await loadAutosave();
       if (job) {
         try {
           applyJob(job);
-          // applyJob's setState batch (incl. the geometry that triggers
-          // the synchronous detection memo) lands in one commit; yield so
-          // the "restored" render replaces the notice, not hides behind it
-          await new Promise((r) => requestAnimationFrame(r));
         } catch {
           // corrupt autosave — start fresh
         }
       }
       restoredRef.current = true;
-      setRestoring(false);
+      setBusyNote(null);
       setDirty(false); // triggers the autosave effect now that restore is done
     })();
     // mount-only by design: restore runs once before any autosave
@@ -2026,9 +2030,7 @@ export function App() {
             <TransportBar transport={transport} />
           )}
           <div className="drop-hint">
-            {restoring
-              ? 'Loading… restoring your last job (a big model takes a moment)'
-              : stepBusy
+            {stepBusy
               ? 'importing STEP… (tessellating — can take a few seconds)'
               : (statusNote ??
                 (geometry
@@ -2162,6 +2164,24 @@ export function App() {
           {error && <p className="error">{error}</p>}
         </aside>
       </main>
+      {/* the blocking-load splash (docs/TODO.md): on screen from the first
+         * paint until the restored/opened scene commits — the spinner and
+         * the sliding bar animate through the main-thread freeze, so the
+         * app reads as busy instead of stuck */}
+      {busyNote && (
+        <div className="restore-overlay" role="status" aria-label="Loading">
+          <div className="restore-card">
+            <div className="restore-spinner" aria-hidden />
+            <div className="restore-card-text">
+              <h2>Loading…</h2>
+              <p>{busyNote}</p>
+              <div className="restore-bar" aria-hidden>
+                <span />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {showAbout && <AboutBox onClose={() => setShowAbout(false)} />}
       {showHelp && <HelpDialog onClose={() => setShowHelp(false)} />}
       {suggestKnowledge && (

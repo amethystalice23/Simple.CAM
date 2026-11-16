@@ -1382,3 +1382,78 @@ button.linklike:hover { color: #fff; }
 .material-edit { border-top: 1px solid #31373e; margin-top: 10px; padding-top: 8px; }
 .material-edit h3 { margin: 0 0 6px; font-size: 13px; text-transform: none; letter-spacing: 0; color: #d8dde2; }
 .material-edit .origin-grid { grid-template-columns: 1fr; }
+
+/* ---- blocking-load splash (docs/TODO.md: startup restore + job open) ----
+   Covers the main-thread decode/parse/detection freeze. The spinner and
+   the sliding bar are CSS-only and indeterminate — the load steps are
+   monolithic synchronous calls with no progress hooks, so this is the
+   honest animation: alive, moving, no fake percentage. */
+.restore-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 220; /* above every dialog — nothing is clickable mid-restore */
+  background: rgba(8, 10, 12, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.restore-card {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  background: #1b1f24;
+  border: 1px solid #31373e;
+  border-radius: 8px;
+  padding: 18px 24px;
+  min-width: 300px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.restore-card h2 {
+  font-size: 14px;
+  margin: 0 0 2px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.restore-card p {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #8b949e;
+}
+.restore-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #31373e;
+  border-top-color: #9fd4ff;
+  border-radius: 50%;
+  animation: restore-spin 0.9s linear infinite;
+  flex: none;
+}
+@keyframes restore-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.restore-bar {
+  height: 4px;
+  background: #31373e;
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.restore-bar span {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: 2px;
+  background: #9fd4ff;
+  animation: restore-slide 1.1s ease-in-out infinite;
+}
+@keyframes restore-slide {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
