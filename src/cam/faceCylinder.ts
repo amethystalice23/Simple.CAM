@@ -126,7 +126,7 @@ export function faceCylinder(
   if (!op.cutBeyondStock && span < tool.diameter - 1e-9) {
     throw new Error(
       `channel width ${span.toFixed(2)}mm is narrower than the tool (Ø${tool.diameter}mm) — ` +
-        `widen the channel or enable "allow tail stock cut-over" to plunge-cut a tool-width channel at this X`,
+        `widen the channel or enable "cut past the stock edge" to plunge-cut a tool-width channel at this X`,
     );
   }
 

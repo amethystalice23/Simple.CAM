@@ -1160,3 +1160,212 @@ pre {
 .sim-warning { color: #e0a94f; }
 .sim-note { color: #9aa4ad; }
 .sim-ok { color: #7fae6f; }
+
+/* ---- Help viewer (top-bar "Help" → bundled user docs) ---- */
+/* the header affordance: teal, a reference not an action — set apart
+ * behind its own divider after the job-work buttons */
+.help-btn {
+  background: transparent;
+  color: #66d9c8;
+  border: 1px solid #2b6d61;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.help-btn:hover {
+  background: #1c3d37;
+  border-color: #66d9c8;
+  color: #8ff0e0;
+}
+.help-modal {
+  width: 980px;
+  max-width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 0 0;
+}
+.help-modal h2 {
+  padding: 0 16px;
+  margin-bottom: 10px;
+}
+.help-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  border-top: 1px solid #31373e;
+}
+.help-sidebar {
+  width: 210px;
+  flex: none;
+  border-right: 1px solid #31373e;
+  overflow-y: auto;
+  padding: 10px 8px 14px;
+}
+.help-group { margin-bottom: 10px; }
+.help-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7d8891;
+  padding: 0 8px 4px;
+}
+.help-page-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: #aeb7bf;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 5px;
+}
+.help-page-btn:hover { background: #31373e; color: #fff; }
+.help-page-btn.active {
+  background: color-mix(in srgb, #66d9c8 14%, #1b1f24);
+  color: #8ff0e0;
+}
+.help-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px 24px 32px;
+}
+.help-doc {
+  max-width: 720px;
+  margin: 0 auto;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.help-doc h1 { font-size: 20px; margin: 4px 0 10px; }
+/* axes chips: which machine modes an op/feature page's subject works
+ * in — teal when it's an option, amber when the 4th axis is required */
+.help-axes { display: flex; gap: 6px; margin: 0 0 6px; }
+.axis-chip {
+  font-size: 10.5px;
+  padding: 1px 9px;
+  border-radius: 10px;
+  background: #1c3d37;
+  border: 1px solid #2b6d61;
+  color: #66d9c8;
+}
+.axis-chip.required {
+  background: #3a311f;
+  border-color: #8a6a2e;
+  color: #ffd27f;
+}
+.help-doc h2 {
+  font-size: 15px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #d8dde2;
+  margin: 18px 0 6px;
+}
+.help-doc h3 { font-size: 13.5px; margin: 14px 0 4px; }
+.help-doc p { margin: 6px 0; }
+.help-doc ul, .help-doc ol { margin: 6px 0; padding-left: 22px; }
+.help-doc li { margin: 3px 0; }
+.help-doc a { color: #4d94c9; text-decoration: none; }
+.help-doc a:hover { text-decoration: underline; }
+.help-doc code {
+  background: #12161a;
+  border: 1px solid #31373e;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.help-doc pre {
+  background: #12161a;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.help-doc pre code { border: none; background: none; padding: 0; }
+.help-doc blockquote {
+  border-left: 3px solid #2e6f9e;
+  background: rgba(46, 111, 158, 0.08);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: #aeb7bf;
+}
+.help-doc table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  width: 100%;
+}
+.help-doc th, .help-doc td {
+  border: 1px solid #31373e;
+  padding: 5px 9px;
+  font-size: 12.5px;
+  text-align: left;
+}
+.help-doc th { background: #12161a; }
+.help-doc img {
+  max-width: 100%;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  margin: 0;
+}
+/* doc screenshots pop out full-resolution on click — zoom cursor plus a
+ * hover badge so the affordance is discoverable */
+.help-image {
+  position: relative;
+  display: block;
+  width: fit-content;
+  margin: 8px 0;
+  cursor: zoom-in;
+}
+.help-image:hover::after {
+  content: '⤢ click to enlarge';
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  background: rgba(20, 23, 26, 0.85);
+  color: #aeb7bf;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #31373e;
+  pointer-events: none;
+}
+.help-image:hover img { border-color: #2e6f9e; }
+.help-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* above the help modal's overlay */
+  background: rgba(8, 10, 12, 0.85);
+  display: flex;
+  overflow: auto;
+  padding: 32px;
+  cursor: zoom-out;
+}
+.help-lightbox img {
+  margin: auto; /* centers while the overlay scrolls oversized assets */
+  max-width: none; /* the full-resolution asset, not a fit */
+  border: 1px solid #31373e;
+  border-radius: 6px;
+}
+.help-missing-image { color: #7d8891; font-style: italic; }
+/* the dictionary popup: one glossary term's definition, dictionary-style,
+ * over the unchanged page — backdrop click dismisses, ✕ top-right */
+.help-term-overlay { cursor: default; }
+.help-term {
+  width: 560px;
+  max-width: 100%;
+  /* auto-height to fit the definition, scrolling after roughly half
+   * the old cap (was min(70vh, 640px)) */
+  max-height: min(35vh, 320px);
+  overflow-y: auto;
+  margin: auto; /* center in the flex overlay — it's not an img, so
+                 .help-lightbox img's margin:auto never applied */
+  z-index: 210; /* above the lightbox, below nothing */
+  cursor: default;
+}
+.help-term h2 {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 15px;
+}
+.help-term-doc { font-size: 12.5px; }
+.help-term-doc h3 { margin-top: 0; color: #d8dde2; font-size: 13.5px; }

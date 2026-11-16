@@ -651,7 +651,7 @@ function ParamFields(props: {
               checked={op.cutBeyondStock ?? false}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>allow tail stock cut-over</span>
+            <span>cut past the stock edge</span>
           </label>
         </>
       );
@@ -688,7 +688,7 @@ function ParamFields(props: {
               checked={op.cutBeyondStock ?? false}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>step over the edge</span>
+            <span>cut past the stock edge</span>
           </label>
         </>
       );
@@ -759,7 +759,7 @@ function ParamFields(props: {
               checked={op.cutBeyondStock}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>allow tail stock cut-over</span>
+            <span>cut past the stock edge</span>
           </label>
           <label
             className="check"
@@ -874,7 +874,7 @@ function ParamFields(props: {
               checked={op.cutBeyondStock ?? false}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>allow tail stock cut-over</span>
+            <span>cut past the stock edge</span>
           </label>
         </>
       );
@@ -1247,7 +1247,7 @@ function ParamFields(props: {
               checked={op.cutBeyondStock ?? false}
               onChange={(e) => upd({ cutBeyondStock: e.target.checked } as Partial<JobOp>)}
             />
-            <span>keep the loop past the stock edge</span>
+            <span>cut past the stock edge</span>
           </label>
         </>
       );

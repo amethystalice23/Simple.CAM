@@ -321,7 +321,7 @@ export function waterlineRough(o: WaterlineRoughOptions): WaterlineRoughResult {
   let reach: Vec2[][];
   if (o.clearToStock && silhouette.length > 0) {
     if (!o.footprint || o.footprint.length === 0) {
-      throw new Error('clear excess stock needs the stock footprint — turn off tail stock cut-over');
+      throw new Error('clear excess stock needs the stock footprint — turn off cut past the stock edge');
     }
     // the model must cast its shadow INSIDE the stock: a model placed off
     // the stock is nothing to rough, never a license to mill the whole blank
