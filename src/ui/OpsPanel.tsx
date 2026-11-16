@@ -66,6 +66,7 @@ function OpHelpPopup({ kind, onClose }: { kind: JobOp['kind']; onClose: () => vo
 import { NumberField } from './fields';
 import { SAFE_CLEARANCE } from '../cam/faceCylinder';
 import { isMultiTooth } from '../cam/threadMill';
+import { slotToolWidth } from '../cam/spiralCarve';
 import { getMaterial } from '../core/materials';
 import { cutAdvice, derivedTrochoidRates } from '../core/cutAdvisor';
 import { AE_FACTOR, trochoidDepthLegs } from '../cam/adaptive';
@@ -985,11 +986,16 @@ function ParamFields(props: {
           />
           <NumberField label="Strands (around 360°)" value={op.count} min={1} step={1} onCommit={(v) => upd({ count: Math.max(1, Math.round(v)) } as Partial<JobOp>)} />
           <NumberField label="Depth (mm)" value={op.depth} min={0.1} step={0.1} onCommit={(v) => upd({ depth: v } as Partial<JobOp>)} />
-          <NumberField label="Width (mm)" title="0 = just follow the lines — no width fan, the groove is the tool's own cut (V-bit knurling)" value={op.width} min={0} step={0.1} onCommit={(v) => upd({ width: v } as Partial<JobOp>)} />
+          <NumberField label="Width (mm)" title="The slot a single pass of a Ø=this tool would leave — filled with your tool as parallel channels plus rounded-end passes. 0 = just follow the lines (the groove is the tool's own cut, V-bit knurling)" value={op.width} min={0} step={0.1} onCommit={(v) => upd({ width: v } as Partial<JobOp>)} />
           {props.tool && op.width > 0 && op.width < props.tool.diameter - 1e-9 && (
             <InfoTip
               warn
               text={`a ${round2(props.tool.diameter)}mm tool can't follow a ${round2(op.width)}mm line — the groove comes out ~${round2(props.tool.diameter)}mm wide. Set 0 if you mean to just follow the lines`}
+            />
+          )}
+          {props.tool && op.width > Math.max(props.tool.diameter, slotToolWidth(props.tool, op.depth)) && (
+            <InfoTip
+              text={`filled as if one pass of a Ø${round2(op.width)} tool cut it: parallel channels spaced ≤ the tool's honest cut width (${round2(slotToolWidth(props.tool, op.depth))}mm at this depth${props.tool.type === 'flat' || props.tool.type === 'bull' ? '' : ' — ball/V tools keep their own wall profile'}), with rounded end passes`}
             />
           )}
           {op.width === 0 && (

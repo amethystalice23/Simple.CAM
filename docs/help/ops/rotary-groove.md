@@ -12,7 +12,7 @@ Cuts helical grooves around the stock — the spiral on a twist pen or a knurled
 
 A parametric op: you give it an X range and the groove's shape, and it cuts [helix](../glossary.md#helix) strands around the stock. The **spiral angle** sets how far off the circumferential direction the strands lean — 90° gives straight axial lines, low angles give shallow spirals, and anything between gives the twist. **Strands** cuts several grooves, evenly spaced around 360°.
 
-The depth is a ladder that re-traces the *same* groove at every level — never a mirrored one. Sweeps alternate direction and A returns along the helix, so the tool re-enters its own track instead of crossing fresh material sideways. **Width** fans parallel passes when you want a groove wider than the tool; 0 follows the lines, and a [V-bit](../glossary.md#v-bit) then knurls — the groove width comes from the depth and the bit's angle.
+The depth is a ladder that re-traces the *same* groove at every level — never a mirrored one. Sweeps alternate direction and A returns along the helix, so the tool re-enters its own track instead of crossing fresh material sideways. **Width** is a promise: the slot comes out exactly as if one pass of a Ø=width tool had cut it — flat sides, rounded ends, nothing left standing. Your tool fills it as parallel channels plus two rounded-end passes; 0 follows the lines instead, and a [V-bit](../glossary.md#v-bit) then knurls — the groove width comes from the depth and the bit's angle.
 
 Every X+A sweep runs in [G93](../glossary.md#g93) inverse-time; the plunges between levels run plain G94. The groove deliberately runs past the end faces — no 360° closing rings at the ends.
 
@@ -39,7 +39,7 @@ Every X+A sweep runs in [G93](../glossary.md#g93) inverse-time; the plunges betw
 ![The rotary groove op with its X span set, groove marks visible on the stock](../images/ops/rotary-groove-01-select.png)
 *Figure 1 — No features to pick: the groove is parametric, wound over whatever X span you give it.*
 
-3. **Shape the groove.** **Spiral angle** (0.1–90°), **Spin** (where strand 1 starts around the cylinder — it stacks additively with the [index](index.md) datum), **Strands**, **Depth**, **Width**. Width 0 follows the lines; width wider than the tool fans parallel passes. **Step down** splits deep grooves into levels; **Rotation** picks cw or ccw.
+3. **Shape the groove.** **Spiral angle** (0.1–90°), **Spin** (where strand 1 starts around the cylinder — it stacks additively with the [index](index.md) datum), **Strands**, **Depth**, **Width**. Width 0 follows the lines; a width wider than the tool's cut is filled as one Ø=width pass would cut it. **Step down** splits deep grooves into levels; **Rotation** picks cw or ccw.
 
 <!-- CAPTURE: the same Rotary groove op, panel expanded: Spiral angle
      45, Spin 0, Strands 3, Depth 1, Width 0, Rotation cw, Step down
@@ -67,3 +67,4 @@ Every X+A sweep runs in [G93](../glossary.md#g93) inverse-time; the plunges betw
 - **Set Surface Ø after turning.** A groove planned from the stock Ø but cut on a faced-down section starts each pass in air. Pick the faced surface's Ø — the ⇩ takes it from a rim.
 - **Strands and angle are independent.** Angle sets each strand's lean; strands set how many. A knurl is many strands at a shallow angle; a twist pen is one or two at a steeper one.
 - **Deep grooves climb down their own track.** The ladder retraces the same groove per level, so depth beyond the tool's reach is a step-down question, not a side-load one — see [Step over and step down](../concepts/step-over-and-step-down.md).
+- **A wide slot's tool matters at the walls.** The slot's outline is always the Ø=width promise; the wall profile is the tool's own. A flat or bull-nose end mill gives true parallel walls; a ball or V-bit fills the same outline but leaves its rounded or V-shaped profile on the walls and floor.

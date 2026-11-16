@@ -2420,8 +2420,8 @@ describe("'Finishing pass only' (Alice, 2026-10-26 — one explicit rough/finish
     const fin = generateJobOp(mk(true), scCtx);
     expect(rough.error).toBeNull();
     expect(fin.error).toBeNull();
-    expect(rough.summary).toContain('2 sweep(s)');
-    expect(fin.summary).toContain('1 sweep(s)');
+    expect(rough.summary).toContain('2 pass(es)');
+    expect(fin.summary).toContain('1 pass(es)');
     expect(fin.summary).toContain('finishing pass only');
   });
 
