@@ -23,6 +23,10 @@ export const OP_KIND_COLORS: Record<JobOp['kind'], string> = {
   threadMill: '#f5e050', // yellow
   // ---- rotary ops
   index: '#8d99a3', // gray — positions the stock, cuts nothing
+  // fixture (the DUMMY, 2026-11-19): the re-clamp divider. Deep
+  // blue-violet, deliberately unlike every cutting kind — the ops list
+  // must read "the world changed here", not "another pass".
+  fixture: '#5d6bb0',
   faceCylinder: '#4fc3f7', // sky
   cylChamfer: '#8fd05f', // lime
   spiralCarve: '#e91e8c', // magenta

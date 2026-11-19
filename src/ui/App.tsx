@@ -52,6 +52,7 @@ import { parseSvgPaths } from '../core/vectorImport';
 import {
   datumAngleBefore,
   generateJobOp,
+  IMPLICIT_FIXTURE_ID,
   metricPitch,
   newJobOp,
   OP_KINDS,
@@ -79,6 +80,7 @@ import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
 import { OpsPanel } from './OpsPanel';
+import { OP_KIND_COLORS } from './opColors';
 import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from './opSuggest';
 import { panelToolNumbers } from './toolAssignment';
 import { SuggestPopup } from './SuggestPopup';
@@ -242,6 +244,22 @@ export function App() {
   const [generated, setGenerated] = useState<Record<string, GeneratedOp>>({});
   const [editingOpId, setEditingOpId] = useState<string | null>(null);
   const [expandedOpId, setExpandedOpId] = useState<string | null>(null);
+  /** FIXTURE GROUPS (the fixture-ops spec's collapse): fixture-op ids whose
+   *  group is collapsed in the ops panel. A delete of the divider op clears
+   *  its entry; collapse state survives op edits within the group. */
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
+  /** preview OP FOCUS (the fixture-ops spec's per-op colours): the op whose
+   *  paths render full strength while every other op dims — set by panel
+   *  hover/selection; null = uniform. */
+  const [focusOpId, setFocusOpId] = useState<string | null>(null);
+  const toggleCollapse = (id: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   /** the last tool selected in any op — default for new operations */
   const [lastToolId, setLastToolId] = useState<string | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
@@ -1141,6 +1159,21 @@ export function App() {
     return { angle, axisZ: rotaryCalibrationOf(stock).axisZ };
   }, [ops, expandedOpId, stock]);
 
+  /** per-move OWNING-OP ids over the preview flatten — one entry per
+   *  previewMoves move, for the viewport's per-op-coloured paths (the
+   *  fixture-ops spec's preview legibility ask). Same walk as simToolOf. */
+  const previewOpIds = useMemo(() => {
+    let mi = 0;
+    const perMove: (string | null)[] = [];
+    for (const o of ops) {
+      if (hiddenOps.has(o.id)) continue;
+      const len = generated[o.id]?.moves.length ?? 0;
+      for (let k = 0; k < len; k++) perMove[mi + k] = o.id;
+      mi += len;
+    }
+    return perMove;
+  }, [ops, hiddenOps, generated]);
+
   /** the carve simulator's tool lookup: moveIndex → tool-table index over
    *  the SAME flatten the preview uses (previewMoves = visible ops'
    *  moves). buildToolSpec indexes the same table, so tool 0xffff (no
@@ -1978,6 +2011,11 @@ export function App() {
             fillShade={fillShade}
             primitives={primitives}
             previewMoves={previewMoves}
+            /** per-move owning-op ids + the focus op for the per-op
+             *  colours (the fixture-ops spec's preview legibility ask) */
+            previewOpIds={previewOpIds}
+            previewOpFocus={focusOpId}
+            opKindColors={OP_KIND_COLORS}
             playbackMove={
               // THE TRAIL RIDES THE WORKER'S TRUTH (Alice's 2026-10-29
               // pause report: the trail and the tool marker must sit
@@ -2116,6 +2154,26 @@ export function App() {
                 setOps((prev) => prev.map((o) => (o.id === op.id ? op : o)));
                 const before = ops.find((o) => o.id === op.id);
                 if (before && before.toolId !== op.toolId) setLastToolId(op.toolId);
+                // A NEW FIXTURE SECTION (Alice, 2026-11-19): converting an
+                // op to Fixture opens its group and collapses every earlier
+                // section — the previous setup's ops fold away and the new
+                // frame reads as the active one. The implicit fixture 1
+                // folds too, but only from the SECOND fixture on (the first
+                // one just makes the implicit header visible).
+                if (op.kind === 'fixture' && before && before.kind !== 'fixture') {
+                  setCollapsedGroups((prev) => {
+                    const next = new Set(prev);
+                    next.delete(op.id);
+                    const hadEarlier = ops.some((o) => o.kind === 'fixture' && o.id !== op.id);
+                    if (hadEarlier) {
+                      for (const o of ops) {
+                        if (o.kind === 'fixture' && o.id !== op.id) next.add(o.id);
+                      }
+                      next.add(IMPLICIT_FIXTURE_ID);
+                    }
+                    return next;
+                  });
+                }
               }}
               onSelectionIsChange={changeSelectionIs}
               picking={featurePick}
@@ -2128,6 +2186,8 @@ export function App() {
                 delete nextGen[id];
                 const nextHidden = new Set(hiddenOps);
                 nextHidden.delete(id);
+                const nextCollapsed = new Set(collapsedGroups);
+                nextCollapsed.delete(id); // a deleted divider drops its collapse too
                 setOps(nextOps);
                 if (carveSim.state.chunks.size > 0) {
                   // the carved overlay belongs to the whole move stream —
@@ -2138,6 +2198,7 @@ export function App() {
                 }
                 setGenerated(nextGen);
                 setHiddenOps(nextHidden);
+                setCollapsedGroups(nextCollapsed);
                 if (editingOpId === id) setEditingOpId(null);
                 if (expandedOpId === id) setExpandedOpId(null);
                 // drop the deleted op's preview NOW, not at the next recalc
@@ -2160,6 +2221,9 @@ export function App() {
               }}
               hiddenOps={hiddenOps}
               onToggleVisible={toggleOpVisible}
+              collapsedGroups={collapsedGroups}
+              onToggleCollapse={toggleCollapse}
+              onHoverOp={setFocusOpId}
             />
           )}
           {error && <p className="error">{error}</p>}

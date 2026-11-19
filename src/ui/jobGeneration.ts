@@ -164,7 +164,13 @@ export interface GenContext {
  * 4D Polish. The kind select draws a disabled separator line above
  * Index (OpsPanel) — the palette reads as two labeled sections.
  */
-export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolean }[] = [
+export const OP_KINDS: {
+  kind: JobOp['kind'];
+  label: string;
+  rotaryOnly?: boolean;
+  /** palette section — a labeled separator renders on section change */
+  section?: 'orientation' | 'rotary';
+}[] = [
   // ---- flat ops (3-axis and 4-axis) ----
   { kind: 'pocket', label: 'Pocket' },
   { kind: 'profile', label: 'Profile' },
@@ -175,16 +181,53 @@ export const OP_KINDS: { kind: JobOp['kind']; label: string; rotaryOnly?: boolea
   { kind: 'waterline', label: 'Waterline Contour' },
   { kind: 'rasterContour', label: 'Raster Contour' },
   { kind: 'threadMill', label: 'Thread mill' },
-  // ---- rotary ops (4-axis only) ----
-  { kind: 'index', label: 'Index', rotaryOnly: true },
-  { kind: 'faceCylinder', label: 'Rotary face', rotaryOnly: true },
-  { kind: 'cylChamfer', label: 'Rotary chamfer', rotaryOnly: true },
-  { kind: 'spiralCarve', label: 'Rotary groove', rotaryOnly: true },
-  { kind: 'thread', label: 'Rotary thread', rotaryOnly: true },
-  { kind: 'rotaryCarve', label: 'Rotary contour', rotaryOnly: true },
-  { kind: 'contour4d', label: '4D Contour', rotaryOnly: true },
-  { kind: 'swarfFinish', label: '4D Polish', rotaryOnly: true },
+  // ---- ORIENTATION (Alice, 2026-11-19): the frame-moving ops — Index
+  // rotates the stock within a setup, Fixture declares a new setup. Named
+  // "Orientation", not "4-axis only": the section's whole point spans
+  // modes (3-axis flip, 4-axis → 3-axis end-finish).
+  { kind: 'index', label: 'Index', rotaryOnly: true, section: 'orientation' },
+  // Fixture is available in BOTH modes — its whole point is switching
+  // between them (3-axis flip, 4-axis → 3-axis end-finish), so gating it
+  // to 4-axis like Index would block the 3-axis flip case entirely.
+  { kind: 'fixture', label: 'Fixture', section: 'orientation' },
+  // ---- rotary cutting ops (4-axis only) ----
+  { kind: 'faceCylinder', label: 'Rotary face', rotaryOnly: true, section: 'rotary' },
+  { kind: 'cylChamfer', label: 'Rotary chamfer', rotaryOnly: true, section: 'rotary' },
+  { kind: 'spiralCarve', label: 'Rotary groove', rotaryOnly: true, section: 'rotary' },
+  { kind: 'thread', label: 'Rotary thread', rotaryOnly: true, section: 'rotary' },
+  { kind: 'rotaryCarve', label: 'Rotary contour', rotaryOnly: true, section: 'rotary' },
+  { kind: 'contour4d', label: '4D Contour', rotaryOnly: true, section: 'rotary' },
+  { kind: 'swarfFinish', label: '4D Polish', rotaryOnly: true, section: 'rotary' },
 ];
+
+/**
+ * The IMPLICIT fixture 1 (Alice, 2026-11-19): every job starts in a setup —
+ * machine mode + WCS origin inherited from the Stock page. It has no stored
+ * op; the panel derives its header from the stock and shows it only once a
+ * real Fixture op exists (before that, the list reads as one flat section).
+ * The sentinel id keys the collapse state without colliding with real ops.
+ */
+export const IMPLICIT_FIXTURE_ID = '__fixture1';
+
+/** The named part poses a fixture op may declare — labels shared by the
+ * panel's select and the generation summary. */
+export const POSE_LABELS = {
+  none: 'pose unchanged',
+  flipX: 'flip 180° about X',
+  flipY: 'flip 180° about Y',
+  standVertical: 'stand vertical',
+  endForEnd: 'end-for-end',
+} as const;
+export const FIXTURE_POSES = Object.keys(POSE_LABELS) as (keyof typeof POSE_LABELS)[];
+export const REGISTRATION_LABELS = {
+  'stock-center': 'stock corner',
+  'l-bracket': 'L-bracket',
+  vise: 'vise',
+  pins: 'locating pins',
+} as const;
+export const FIXTURE_REGISTRATIONS = Object.keys(
+  REGISTRATION_LABELS,
+) as (keyof typeof REGISTRATION_LABELS)[];
 
 /**
  * The absolute A active when `opId` starts: the angle of the latest Index
@@ -477,6 +520,11 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
     }
     case 'index':
       return withRates({ ...base, kind, angle: 90 });
+    case 'fixture':
+      // DUMMY defaults: same mode the stock is in, no rotation, the
+      // corner registration — the common manual re-clamp. No rates: a
+      // re-clamp carries no cutting, so advisedOpRates never runs for it.
+      return { ...base, kind, pose: 'none', axisMode: stock.axisMode, registration: 'stock-center' };
     case 'profile':
       return withRates({
         ...base,
@@ -1229,6 +1277,18 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           minutes: 0,
           error: null,
           summary: `index A${op.angle}° (datum for the ops below)`,
+        };
+      }
+      case 'fixture': {
+        // DUMMY (PLAN.md "Fixture ops"): a frame declaration only — zero
+        // moves, zero minutes, nothing applied to the paths below it yet.
+        // The summary states the re-clamp honestly so the panel reads as
+        // a frame boundary, not a pass.
+        return {
+          moves: [],
+          minutes: 0,
+          error: null,
+          summary: `re-clamp: ${POSE_LABELS[op.pose]} · ${op.axisMode} · zero via ${REGISTRATION_LABELS[op.registration]}`,
         };
       }
       case 'faceCylinder': {

@@ -151,6 +151,20 @@ interface Props {
   primitives: Primitive[];
   /** generated moves to draw (PLAN.md "Toolpath preview") */
   previewMoves: Move[] | null;
+  /** per-move OWNING-OP ids over the preview flatten (same length as
+   *  previewMoves): drives the per-op colour split below. null entry =
+   *  a move with no owning op (never in practice — every move comes from
+   *  an op). */
+  previewOpIds: (string | null)[] | null;
+  /** the op whose paths render full strength while every other op dims
+   *  (panel hover/selection); null = uniform strength. The feed/rapid
+   *  split stays intact per group — colour encodes the OP, style the
+   *  cut/rapid class (the paths-layer convention kept). */
+  previewOpFocus: string | null;
+  /** op id → accent colour (OP_KIND_COLORS) — each op's paths draw in its
+   *  own colour; two ops of the same kind share a hue only when they
+   *  genuinely are the same kind. */
+  opKindColors: Record<string, string>;
   /**
    * THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): the transport's current
    * move while a playback highlights paths — null = the full-opacity static
@@ -265,6 +279,9 @@ export function Viewport({
   fillShade,
   primitives,
   previewMoves,
+  previewOpIds,
+  previewOpFocus,
+  opKindColors,
   playbackMove,
   slicePreview,
   viewDatum,
@@ -1801,16 +1818,14 @@ export function Viewport({
   }, [sources, stock, displayLayers.features, measureMode, opSelection, selColor, selectedObjectId, fillShade]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR.
-  // THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): while a playback
-  // highlights paths (playbackMove set), segments render by their move-
-  // distance from the transport's current move — current + next two at
-  // 50%, the three previous at 15/10/5%, everything older at a 4% floor —
-  // the full-opacity cloud becomes a readable ribbon of where the tool
-  // has just been and where it goes next. Alice's ceiling: no path line
-  // ever exceeds 50% (full opacity is the model's alone); rapids ride
-  // below their cut-class twin. Static preview (playbackMove null)
-  // keeps today's full-opacity render — a paused playback keeps the
-  // trail (the committed position drives it).
+  // PER-OP COLOURED (the fixture-ops spec's preview legibility ask,
+  // 2026-11-19): each op's moves draw in the op's OWN kind colour so
+  // paths answer to their op on screen — a fixture boundary reads as a
+  // colour shift across the divide. Feeds full-saturation, rapids dimmer
+  // (the cut/non-cut distinction survives the colour split); a focused
+  // op (panel hover/selection) renders at full strength while every
+  // other op dims to a ghost. Playback trail rendering (above) is
+  // untouched — it owns the simulation view.
   useEffect(() => {
     const group = featureGroupRef.current;
     if (!group || !previewMoves || !displayLayers.paths) return;
@@ -1827,12 +1842,53 @@ export function Viewport({
       return line;
     };
     const objects: THREE.LineSegments[] = [];
-    // THE PATHS LAYER IS THE FULL NEST, ALWAYS FULL OPACITY (Alice's
-    // 2026-10-29 correction: the trail is NOT part of the Paths view —
-    // that view exists to show every path at once; the trail lives with
-    // the simulation). Feed cuts amber, rapids red.
-    if (segs.feed.length > 0) objects.push(mk(segs.feed, 0xffd27f, 0.95, 8));
-    if (segs.rapid.length > 0) objects.push(mk(segs.rapid, 0xe05a5a, 0.9, 9));
+    const push = (pts: number[], color: number, opacity: number, order: number) => {
+      if (pts.length > 0) objects.push(mk(pts, color, opacity, order));
+    };
+    if (!previewOpIds || previewOpIds.length === 0) {
+      // no ownership data (older callers): the pre-split render
+      push(segs.feed, 0xffd27f, 0.95, 8);
+      push(segs.rapid, 0xe05a5a, 0.9, 9);
+    } else {
+      // bucket the segments per op: a segment joins op X's bucket when
+      // its move index maps to op X. Segments already exist in segment
+      // order; bucketing only regroups them.
+      const feeds = new Map<string, number[]>();
+      const rapids = new Map<string, number[]>();
+      const nFeed = segs.feedMoves.length;
+      for (let s = 0; s < nFeed; s++) {
+        const opId = previewOpIds[segs.feedMoves[s]] ?? null;
+        if (opId === null) continue; // ownership gap — draw nothing
+        const b = feeds.get(opId) ?? [];
+        b.push(
+          segs.feed[s * 6], segs.feed[s * 6 + 1], segs.feed[s * 6 + 2],
+          segs.feed[s * 6 + 3], segs.feed[s * 6 + 4], segs.feed[s * 6 + 5],
+        );
+        feeds.set(opId, b);
+      }
+      for (let s = 0; s < segs.rapidMoves.length; s++) {
+        const opId = previewOpIds[segs.rapidMoves[s]] ?? null;
+        if (opId === null) continue;
+        const b = rapids.get(opId) ?? [];
+        b.push(
+          segs.rapid[s * 6], segs.rapid[s * 6 + 1], segs.rapid[s * 6 + 2],
+          segs.rapid[s * 6 + 3], segs.rapid[s * 6 + 4], segs.rapid[s * 6 + 5],
+        );
+        rapids.set(opId, b);
+      }
+      const colorOf = (opId: string): number => {
+        const hex = opKindColors[opId];
+        return hex ? parseInt(hex.slice(1), 16) : 0xffd27f;
+      };
+      for (const [opId, pts] of feeds) {
+        const dim = previewOpFocus !== null && previewOpFocus !== opId;
+        push(pts, colorOf(opId), dim ? 0.06 : 0.95, dim ? 7 : 8);
+      }
+      for (const [opId, pts] of rapids) {
+        const dim = previewOpFocus !== null && previewOpFocus !== opId;
+        push(pts, colorOf(opId), dim ? 0.03 : 0.55, dim ? 7 : 9);
+      }
+    }
     return () => {
       for (const l of objects) {
         group.remove(l);
@@ -1840,7 +1896,7 @@ export function Viewport({
         (l.material as THREE.Material).dispose();
       }
     };
-  }, [previewMoves, displayLayers.paths, stock]);
+  }, [previewMoves, previewOpIds, previewOpFocus, opKindColors, displayLayers.paths, stock]);
 
   // slice-pocket cut plane (edge-tracing §5): a translucent violet quad at
   // the slice Z + the contour outline there, and a grab pill on the plane's

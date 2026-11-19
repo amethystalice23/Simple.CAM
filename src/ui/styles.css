@@ -540,6 +540,45 @@ button.secondary:disabled:hover { background: #31373e; }
 
 .op-panel { border: 1px solid #31373e; border-left: 3px solid var(--kind-color, #31373e); border-radius: 6px; margin: 6px 0; overflow: hidden; }
 .op-panel.dragging { opacity: 0.45; }
+
+/* ---- fixture divider (PLAN.md "Fixture ops", 2026-11-19): a re-clamp
+ * reads as a FRAME BOUNDARY, not another pass. Full-width band, tinted
+ * backdrop, its own row anatomy — deliberately louder than any op row. */
+.fixture-divider {
+  border: 1px solid color-mix(in srgb, var(--kind-color, #5d6bb0) 55%, #1b1f24);
+  background: color-mix(in srgb, var(--kind-color, #5d6bb0) 18%, #1b1f24);
+  border-radius: 6px;
+  margin: 14px 0 6px;
+  overflow: hidden;
+}
+.fixture-divider:first-child { margin-top: 6px; }
+/* the implicit fixture 1: quieter than a real re-clamp — it's the job's
+ * starting setup, not a frame change (Alice, 2026-11-19) */
+.fixture-divider.implicit {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--kind-color, #5d6bb0) 8%, #1b1f24);
+}
+.fixture-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  cursor: pointer;
+  user-select: none;
+  color: #d8dde2;
+}
+.fixture-bar:hover { background: color-mix(in srgb, var(--kind-color, #5d6bb0) 28%, #1b1f24); }
+.fixture-icon { color: var(--kind-color, #5d6bb0); font-size: 16px; line-height: 1; }
+.fixture-label {
+  color: var(--kind-color, #5d6bb0);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.fixture-summary { font-size: 12px; color: #b9c2cb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fixture-count { font-size: 11px; color: #7d8891; flex: none; }
+.fixture-body { padding: 4px 10px 10px; border-top: 1px solid color-mix(in srgb, var(--kind-color, #5d6bb0) 40%, #1b1f24); }
 .op-title {
   padding: 5px 8px 6px 5px;
   background: #1b1f24;

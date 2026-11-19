@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
   isDepthBearingJobOp,
   rotaryCalibrationOf,
@@ -14,10 +14,15 @@ import {
   defaultStepDown,
   defaultStepOver,
   engraveFillStepOver,
+  FIXTURE_POSES,
+  IMPLICIT_FIXTURE_ID,
+  FIXTURE_REGISTRATIONS,
   metricPitch,
   newJobOp,
   OP_KINDS,
+  POSE_LABELS,
   presetRates,
+  REGISTRATION_LABELS,
   toolPresetFor,
 } from './jobGeneration';
 import { panelToolNumbers } from './toolAssignment';
@@ -126,6 +131,14 @@ interface Props {
    *  parameters, the preview + export inputs empty until recalculated) */
   onClearToolpaths: () => void;
   onToggleExpanded: (id: string) => void;
+  /** FIXTURE OPS (the spec's collapse): fixture-op ids whose group is
+   *  collapsed — the divider row stays, the ops under it hide */
+  collapsedGroups: ReadonlySet<string>;
+  onToggleCollapse: (id: string) => void;
+  /** preview OP FOCUS (the spec's per-op colours): hovering a row focuses
+   *  its op's paths (every other op dims); null clears. App owns the
+   *  state — the viewport consumes it. */
+  onHoverOp: (id: string | null) => void;
 }
 
 /** "Ø4.0 hole · 10×4 +2 more" style snippet of an op's selected features. */
@@ -261,6 +274,159 @@ function IndexFields(props: {
       </div>
       <InfoTip text="the stock freezes at this A — every op below runs in the rotated frame" />
     </>
+  );
+}
+
+/** The fixture op's editor: pose + mode + registration. DUMMY — these
+ * values are recorded and displayed, not yet applied to generation. */
+function FixtureFields(props: {
+  op: Extract<JobOp, { kind: 'fixture' }>;
+  axisMode: AxisMode;
+  onChange: (op: JobOp) => void;
+}) {
+  const { op } = props;
+  const upd = (patch: Partial<typeof op>) => props.onChange({ ...op, ...patch } as JobOp);
+  return (
+    <>
+      <label className="field">
+        <span>Pose</span>
+        <select value={op.pose} onChange={(e) => upd({ pose: e.target.value as typeof op.pose })}>
+          {FIXTURE_POSES.map((p) => (
+            <option key={p} value={p}>
+              {POSE_LABELS[p]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span>Machine mode after re-clamp</span>
+        <select
+          value={op.axisMode}
+          onChange={(e) => upd({ axisMode: e.target.value as AxisMode })}
+        >
+          <option value="3-axis">3-axis</option>
+          <option value="4-axis">4-axis</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Re-zero by</span>
+        <select
+          value={op.registration}
+          onChange={(e) => upd({ registration: e.target.value as typeof op.registration })}
+        >
+          {FIXTURE_REGISTRATIONS.map((r) => (
+            <option key={r} value={r}>
+              {REGISTRATION_LABELS[r]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <InfoTip warn text="DUMMY — this re-clamp is not applied to the toolpaths yet; it records the setup and frames the ops list" />
+    </>
+  );
+}
+
+/** The IMPLICIT fixture 1's header (Alice, 2026-11-19): every job starts in
+ * a setup — machine mode + WCS origin inherited from the Stock page, nothing
+ * stored, nothing to desync. Rendered only once a real Fixture op exists, so
+ * before that the list reads as one flat section as it always did. */
+function ImplicitFixtureHeader(props: { stock: Stock; collapsed: boolean; onToggle: () => void }) {
+  const s = props.stock;
+  const origin = s.kind === 'box' ? s.origin : { x: s.xOrigin, y: 'min' as const, z: 'min' as const };
+  const originText =
+    s.kind === 'box'
+      ? `X ${origin.x} · Y ${origin.y} · Z ${origin.z}`
+      : `X ${s.xOrigin} · axis Z0`;
+  return (
+    <div
+      className="fixture-divider implicit"
+      style={{ ['--kind-color' as string]: OP_KIND_COLORS.fixture }}
+    >
+      <div className="fixture-bar" onClick={props.onToggle}>
+        <span className="fixture-icon" title="The job's starting setup — mode and origin come from the Stock page">⌁</span>
+        <span className="fixture-label">Fixture 1</span>
+        <span className="fixture-summary">
+          {props.stock.axisMode} · implicit — origin from the Stock page ({originText})
+        </span>
+        <span className="fixture-count">{props.collapsed ? '' : 'start setup'}</span>
+        <span className="op-title-gap" />
+        <button
+          type="button"
+          className="icon-btn"
+          title={props.collapsed ? 'Expand this fixture group' : 'Collapse this fixture group'}
+          onClick={(e) => {
+            e.stopPropagation(); // the bar's onClick would toggle AGAIN —
+            // double-toggle = no change (the flaky-smoke lesson)
+            props.onToggle();
+          }}
+        >
+          {props.collapsed ? '▸' : '▾'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A real Fixture op's divider row: the frame boundary between groups.
+ * Extracted from the map callback (the implicit fixture-1 header also
+ * renders one inline, so the JSX reads once). */
+function FixtureDivider(props: {
+  op: Extract<JobOp, { kind: 'fixture' }>;
+  gen: GeneratedOp | undefined;
+  collapsed: boolean;
+  count: number;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  onToggleCollapse: () => void;
+  onDelete: () => void;
+  onHover: (hovering: boolean) => void;
+  onChange: (op: JobOp) => void;
+}) {
+  const { gen } = props;
+  return (
+    <div
+      className="fixture-divider"
+      style={{ ['--kind-color' as string]: OP_KIND_COLORS.fixture }}
+      onMouseEnter={() => props.onHover(true)}
+      onMouseLeave={() => props.onHover(false)}
+    >
+      <div className="fixture-bar" onClick={props.onToggleExpanded}>
+        <span className="fixture-icon" title="Re-clamp — every op below runs in this frame">⌁</span>
+        <span className="fixture-label">Fixture</span>
+        <span className="fixture-summary">
+          {gen?.error ? 'calculation failed' : (gen?.summary ?? 'not calculated yet')}
+        </span>
+        <span className="fixture-count">{props.count} ops below</span>
+        <span className="op-title-gap" />
+        <button
+          type="button"
+          className="icon-btn"
+          title={props.collapsed ? 'Expand this fixture group' : 'Collapse this fixture group'}
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onToggleCollapse();
+          }}
+        >
+          {props.collapsed ? '▸' : '▾'}
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="Delete operation"
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onDelete();
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      {props.expanded && (
+        <div className="fixture-body">
+          <FixtureFields op={props.op} axisMode={props.op.axisMode} onChange={props.onChange} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -582,6 +748,10 @@ function ParamFields(props: {
           onFeaturePick={props.onFeaturePick}
           onChange={props.onChange}
         />
+      );
+    case 'fixture':
+      return (
+        <FixtureFields op={op} axisMode={props.axisMode} onChange={props.onChange} />
       );
     case 'faceCylinder':
       return (
@@ -1412,6 +1582,27 @@ export function OpsPanel(props: Props) {
   const [ratesOpenId, setRatesOpenId] = useState<string | null>(null);
   /** the op whose ⓘ help popup is open (one at a time) */
   const [helpOpId, setHelpOpId] = useState<string | null>(null);
+  /** FIXTURE DIVIDERS (the spec): drag reordering never crosses one (a
+   * divider's position defines which ops belong to which frame; moving ops
+   * across it is a semantic change, not a mouse gesture). Both the dragged
+   * op and the drop target must sit in the SAME group for the reorder to
+   * land. */
+  const sameFixtureGroup = (a: string, b: string): boolean => {
+    const ai = props.ops.findIndex((o) => o.id === a);
+    const bi = props.ops.findIndex((o) => o.id === b);
+    if (ai < 0 || bi < 0) return false;
+    // fixture ops never drag
+    const aIsFixture = props.ops[ai].kind === 'fixture';
+    const bIsFixture = props.ops[bi].kind === 'fixture';
+    if (aIsFixture || bIsFixture) return false;
+    // same group = both between the same pair of dividers (or before the
+    // first): walk to each op's divider count
+    let ga = 0;
+    for (let i = 0; i < ai; i++) if (props.ops[i].kind === 'fixture') ga++;
+    let gb = 0;
+    for (let i = 0; i < bi; i++) if (props.ops[i].kind === 'fixture') gb++;
+    return ga === gb;
+  };
 
   /** tool change re-derives the step defaults for the new cutter */
   const changeTool = (op: JobOp, toolId: string) => {
@@ -1524,17 +1715,97 @@ export function OpsPanel(props: Props) {
             .filter((e): e is { tool: Tool; n: number } => e.tool !== undefined)
             .sort((a, b) => a.n - b.n);
           const numOf = (id: string): number | null => toolNums.get(id) ?? null;
+          // FIXTURE GROUPS: which fixture header owns each op (the latest
+          // divider above it, or the IMPLICIT fixture 1 for everything
+          // before the first real divider). Fixture 1 always exists — it
+          // inherits mode + origin from the Stock page — but its header
+          // only renders once a real Fixture op is present (until then the
+          // list reads as one flat section, as it always did).
+          let curGroup: string = IMPLICIT_FIXTURE_ID;
+          const groupOf = new Map<string, string>();
+          const fixtureGroupSizes = new Map<string, number>();
+          for (const o of props.ops) {
+            if (o.kind === 'fixture') {
+              curGroup = o.id;
+              groupOf.set(o.id, curGroup);
+              fixtureGroupSizes.set(o.id, 0);
+            } else {
+              groupOf.set(o.id, curGroup);
+              fixtureGroupSizes.set(curGroup, (fixtureGroupSizes.get(curGroup) ?? 0) + 1);
+            }
+          }
+          const fixtureGroupId = (id: string): string => groupOf.get(id) ?? IMPLICIT_FIXTURE_ID;
+          // the implicit fixture-1 header renders ONCE, right before the
+          // first real Fixture op (or never, when no real Fixture exists —
+          // the list reads flat, as it always did)
+          let implicitHeaderShown = false;
           return props.ops.map((op, index) => {
           const gen = props.generated[op.id];
           const expanded = props.expandedOpId === op.id;
           const editing = props.editingOpId === op.id;
-          const tnum = op.kind === 'index' ? null : numOf(op.toolId);
+          const tnum = op.kind === 'index' || op.kind === 'fixture' ? null : numOf(op.toolId);
+          const opGroupId = op.kind === 'fixture' ? null : fixtureGroupId(op.id);
+          const collapsedGroup = opGroupId !== null && props.collapsedGroups.has(opGroupId);
+
+          // FIXTURE DIVIDER ROW (the fixture-ops spec): a re-clamp reads as
+          // a FRAME BOUNDARY, not another pass — full-width band, its own
+          // class, and the ops under it collapse as one group.
+          // The IMPLICIT fixture-1 header renders once, right before the
+          // first real Fixture op (Alice, 2026-11-19).
+          if (op.kind === 'fixture' && !implicitHeaderShown) {
+            implicitHeaderShown = true;
+            const implicitCollapsed = props.collapsedGroups.has(IMPLICIT_FIXTURE_ID);
+            return (
+              <Fragment key={`implicit:${op.id}`}>
+                <ImplicitFixtureHeader
+                  stock={props.stock}
+                  collapsed={implicitCollapsed}
+                  onToggle={() => props.onToggleCollapse(IMPLICIT_FIXTURE_ID)}
+                />
+                <FixtureDivider
+                  op={op}
+                  gen={gen}
+                  collapsed={props.collapsedGroups.has(op.id)}
+                  count={fixtureGroupSizes.get(op.id) ?? 0}
+                  expanded={expanded}
+                  onToggleExpanded={() => props.onToggleExpanded(op.id)}
+                  onToggleCollapse={() => props.onToggleCollapse(op.id)}
+                  onDelete={() => props.onDeleteOp(op.id)}
+                  onHover={(h) => props.onHoverOp(h ? op.id : null)}
+                  onChange={props.onChangeOp}
+                />
+              </Fragment>
+            );
+          }
+          if (op.kind === 'fixture') {
+            return (
+              <FixtureDivider
+                key={op.id}
+                op={op}
+                gen={gen}
+                collapsed={props.collapsedGroups.has(op.id)}
+                count={fixtureGroupSizes.get(op.id) ?? 0}
+                expanded={expanded}
+                onToggleExpanded={() => props.onToggleExpanded(op.id)}
+                onToggleCollapse={() => props.onToggleCollapse(op.id)}
+                onDelete={() => props.onDeleteOp(op.id)}
+                onHover={(h) => props.onHoverOp(h ? op.id : null)}
+                onChange={props.onChangeOp}
+              />
+            );
+          }
+          // A collapsible group hides the ops of this fixture group
+          if (collapsedGroup) return null;
           return (
             <div
               key={op.id}
               className={`op-panel${dragId === op.id ? ' dragging' : ''}`}
               // the kind's accent color drives the row's left bar + kind text
               style={{ ['--kind-color' as string]: OP_KIND_COLORS[op.kind] }}
+              // preview focus (the fixture-ops spec's per-op colours): the
+              // hovered op's paths render full strength, every other op dims
+              onMouseEnter={() => props.onHoverOp(op.id)}
+              onMouseLeave={() => props.onHoverOp(null)}
             >
               <div
                 className="op-title"
@@ -1542,7 +1813,10 @@ export function OpsPanel(props: Props) {
                 onDragStart={() => setDragId(op.id)}
                 onDragOver={(e) => {
                   e.preventDefault();
-                  if (dragId && dragId !== op.id) props.onReorder(dragId, op.id);
+                  // reorders never cross a fixture divider (same-group only)
+                  if (dragId && dragId !== op.id && sameFixtureGroup(dragId, op.id)) {
+                    props.onReorder(dragId, op.id);
+                  }
                 }}
                 onDragEnd={() => setDragId(null)}
                 onClick={() => props.onToggleExpanded(op.id)}
@@ -1565,13 +1839,17 @@ export function OpsPanel(props: Props) {
                   }}
                 >
                   {OP_KINDS.map((k, i) => [
-                    // a disabled separator line above the first rotary op
+                    // a disabled separator line at each section change
                     // (Alice, 2026-10-31): the palette reads as the FLAT
-                    // section, then the labeled 4-axis section. Native
-                    // disabled-option styling grays it; it cannot be picked.
-                    OP_KINDS[i - 1] && k.rotaryOnly && !OP_KINDS[i - 1].rotaryOnly ? (
+                    // section, then ORIENTATION (Index + Fixture — both
+                    // frame-moving ops), then the 4-axis-only cutting ops.
+                    // Native disabled-option styling grays it; it cannot
+                    // be picked.
+                    OP_KINDS[i - 1] &&
+                    k.section &&
+                    k.section !== OP_KINDS[i - 1].section ? (
                       <option key={`sep:${k.kind}`} disabled value="">
-                        — 4-axis only —
+                        {k.section === 'orientation' ? '— Orientation —' : '— 4-axis only —'}
                       </option>
                     ) : null,
                     <option

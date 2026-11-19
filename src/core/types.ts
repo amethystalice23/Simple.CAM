@@ -1070,6 +1070,24 @@ export type JobOp =
       angle: number;
     })
   | (JobOpBase & {
+      kind: 'fixture';
+      /**
+       * DUMMY (PLAN.md "Fixture ops", 2026-11-19): a NON-CUTTING frame
+       * declaration — the part is re-clamped, and every op AFTER this one
+       * generates in the new frame. The UI half of the spec only: the
+       * divider row, per-group collapse, per-op preview colours. No
+       * generator consumes these fields yet — pose/mode flips are NOT
+       * applied to paths, the sim, or the .nc. Zero moves, zero time
+       * (Index's class: positions nothing, cuts nothing).
+       */
+      /** named part pose — never a free rotation (the spec's field set) */
+      pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd';
+      /** machine mode after the re-clamp */
+      axisMode: AxisMode;
+      /** how the operator re-establishes zero — recorded, not verified */
+      registration: 'stock-center' | 'l-bracket' | 'vise' | 'pins';
+    })
+  | (JobOpBase & {
       kind: 'cylChamfer';
       /**
        * Chamfer edge circles around the stock axis (edge-tracing §6): one

@@ -111,6 +111,15 @@ export const OP_HELP: Record<JobOp['kind'], OpHelpDoc> = {
       'Shortest path — the axis never unwinds the turns earlier ops piled up.',
     ],
   },
+  fixture: {
+    what: 'Marks a re-clamp: the part comes out of the machine, goes back in differently, and everything below runs in the new frame. Each group exports as its own file, re-zeroed. DUMMY — the frame change is not applied to paths or g-code yet.',
+    points: [
+      'Pose — a named re-orientation of the stock and model together, never a free rotation.',
+      'Mode — 3-axis or 4-axis after the re-clamp (a 4-axis part stood up in a vice becomes a 3-axis job).',
+      'Registration — how you re-find zero: stock corner, L-bracket, vise, or locating pins.',
+      'Registration is recorded on the file, not verified — you do the probing, the machine trusts it.',
+    ],
+  },
   faceCylinder: {
     what: 'Turns the stock down to a target diameter over a stretch of its length — a lathe pass on the 4th axis.',
     points: [
