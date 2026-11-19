@@ -1413,12 +1413,14 @@ to today (fixture 1 is implicit: the stock as placed).
   ONE rigid body; flip-about-center derives from the stock dims (the
   box-derives-its-rotary-geometry precedent — stock edits cannot desync
   the setups, because there is only one stock).
-- **Registration** (her ruling: "3-axis has many modes") — a strategy,
-  recorded and documented in the file header, NEVER machine-verified:
-  L-bracket bottom-left (the common Z1 alignment tool), vise/clamp (the
-  operator zeroes), pins (the Z1 pin-location list is her data — import
-  as a generated module when this lands, the Makera-tools precedent),
-  stock-center (derived).
+- **Origin** (her ruling, 2026-11-19: the "re-zero by" strategy list named
+  operator tooling, never where zero lands) — the Stock page's own
+  Origin-in-stock controls, shaped by the stock: a box job the X/Y/Z
+  min/mid/max grid, a cylinder the single along-axis edge. null = inherit
+  the Stock page's origin (the implicit fixture 1's rule); recorded and
+  documented in the file header, NEVER machine-verified. The physical
+  strategy (L-bracket, vise, pins) stays the operator's business — the
+  Z1 pin-location list remains importable data when pin planning lands.
 
 **Export: one .nc per fixture group** (her ruling — a re-fixture means
 moving the part AND re-zeroing the WCS, so each file must stand alone):
