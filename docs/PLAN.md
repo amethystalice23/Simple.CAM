@@ -1391,6 +1391,77 @@ sim's polish "cut"-class flags are SHANK contacts (gouge=false,
 shank=true — the shank brushing standing), a separate pre-existing
 class, not the chord skin.
 
+## Fixture ops — one job, many setups (SPEC 2026-11-19; answers the item-6 gap)
+
+Her two cases are ONE primitive: the part moves between clamping setups,
+the machine frame resets, the ops list continues — what Index already
+does for A, generalized to the whole part pose + mode. A **fixture op**
+is a non-cutting frame declaration (the Index family): every op AFTER it
+generates in the new frame, every op before it in the stock's placement.
+Zero fixture ops = the ops list, save format, and output byte-identical
+to today (fixture 1 is implicit: the stock as placed).
+
+**Fields:**
+- **Mode** — '3-axis' or '4-axis'; a fixture may flip it. Her 4-axis →
+  3-axis end-finish case (thread end in the 4th-axis vice → rotary-mill
+  the flats → re-fixture vertical) is nearly free: a standing cylinder in
+  3-axis mode is already a fully specced stock placement (shape-vs-mode
+  above) — axis ∥ Z, centered X0/Y0, crown = top face, rotary calibration
+  unused.
+- **A named part pose**, never a free rotation: flip 180° about X, flip
+  about Y, stand vertical (axis X→Z), end-for-end. Stock + model move as
+  ONE rigid body; flip-about-center derives from the stock dims (the
+  box-derives-its-rotary-geometry precedent — stock edits cannot desync
+  the setups, because there is only one stock).
+- **Registration** (her ruling: "3-axis has many modes") — a strategy,
+  recorded and documented in the file header, NEVER machine-verified:
+  L-bracket bottom-left (the common Z1 alignment tool), vise/clamp (the
+  operator zeroes), pins (the Z1 pin-location list is her data — import
+  as a generated module when this lands, the Makera-tools precedent),
+  stock-center (derived).
+
+**Export: one .nc per fixture group** (her ruling — a re-fixture means
+moving the part AND re-zeroing the WCS, so each file must stand alone):
+each file carries its own prep header (the registration statement + the
+4-axis probe assumptions where A is used — the existing header machinery,
+per fixture) and its own tool comments; T-numbers CONTINUE across files
+(one job tool chain). The post splits at fixture ops. The parser (item
+13) reads each file and concatenates into the ONE job move list — move
+indices stay job-global for the sim.
+
+**One preview, one sim, one estimate** (her ruling): the material-frame
+grid and the display frame stay fixed at fixture 1's stock pose; the
+fixture transform composes into the tool-pose mapping exactly as A
+rotation does (the 180° column-bottom machinery already exists). The
+estimate sums per op across the whole job.
+
+**Preview legibility (her ask — general, not fixture-gated):** each op's
+moves render in a per-op COLOUR (palette by op order, composing with the
+existing feed/rapid distinction); ops-list hover/select ALPHAS every other
+op's moves down, the selected one at full opacity — moves answerable to
+their op on screen. Fixture boundaries read as colour shifts across the
+divide.
+
+**UI (her rulings):** a fixture op renders as a strong DIVIDER row in the
+ops list — background colour change, unmistakable as a frame boundary —
+and each fixture group COLLAPSES to its divider (the clutter fix). No
+fixture ops, no dividers: today's list.
+
+**NOT addressed (deliberate):** generators stay stock+model based — a
+fixture-2 op generates against pristine stock, not what fixture 1
+cleared (cross-op stock awareness stays parked with the 4D P1
+machinery; the sim is the honest instrument and the allowance stays a
+user knob). Her end-finish case is the easy one: the ends keep true
+stock, so crown-anchored depths are correct as-is. No clamp/vise
+GEOMETRY (item 11's strike stands — the fixture declares a frame, never
+a jaw model). Pin planning stays a suggestion row (the item-6
+"generate pins"/"flip work" pair composes as ordinary suggested ops).
+Registration recorded, not verified.
+
+Build split: cam-kernel (pose/frame plumbing, indexFrame generalization),
+post-processor (per-fixture split + headers + parser concatenation),
+viewport-ui (divider/collapse + per-op colours).
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
@@ -1434,6 +1505,9 @@ reference these numbers):
    parts via flip + re-registration; very popular on desktop CNCs.
    ALICE: not in her plans as a setup system, but achievable as a
    "generate pins" op + "flip work" op pair.
+   SPEC LANDED 2026-11-19 — see the fixture-ops section above: the
+   fixture op generalizes Index to the full part pose + mode; her
+   4-axis → 3-axis end-finish case drives it.
 7. **Image → relief (greyscale heightmap)** — photo-to-carve, both
    Makera Studio and Carveco have it; pairs naturally with the
    raster engine. ALICE (2026-10-28): import pops a bumpmap dialogue
