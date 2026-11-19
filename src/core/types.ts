@@ -1084,8 +1084,13 @@ export type JobOp =
       pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd';
       /** machine mode after the re-clamp */
       axisMode: AxisMode;
-      /** how the operator re-establishes zero — recorded, not verified */
-      registration: 'stock-center' | 'l-bracket' | 'vise' | 'pins';
+      /** where the new WCS origin sits IN the stock, in the Stock page's
+       * own vocabulary and shape (Alice, 2026-11-19: the "re-zero by"
+       * strategy list named operator tooling, never WHERE zero lands) —
+       * a box job carries the per-axis triple, a cylinder the single
+       * along-axis edge. null = inherit the Stock page's origin, same
+       * as the implicit fixture 1. Recorded, not verified. */
+      origin: OriginEdge | { x: OriginEdge; y: OriginEdge; z: OriginEdge } | null;
     })
   | (JobOpBase & {
       kind: 'cylChamfer';

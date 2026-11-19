@@ -5,7 +5,7 @@ import {
   type DepthBearingJobOp,
   type FeaturePickKind,
 } from '../core/types';
-import type { AxisMode, JobOp, OpRates, Primitive, Stock, Tool } from '../core/types';
+import type { AxisMode, JobOp, OpRates, OriginEdge, Primitive, Stock, Tool } from '../core/types';
 import { round2 } from '../core/types';
 import type { GeneratedOp } from './jobGeneration';
 import {
@@ -16,19 +16,19 @@ import {
   engraveFillStepOver,
   FIXTURE_POSES,
   IMPLICIT_FIXTURE_ID,
-  FIXTURE_REGISTRATIONS,
+  FIXTURE_ORIGINS,
   metricPitch,
   newJobOp,
   OP_KINDS,
   POSE_LABELS,
   presetRates,
-  REGISTRATION_LABELS,
   toolPresetFor,
 } from './jobGeneration';
 import { panelToolNumbers } from './toolAssignment';
 import { OP_KIND_COLORS } from './opColors';
 import { OP_HELP, opHelpLabel } from './opHelp';
 import { ToolPicker } from './ToolPicker';
+import { Segmented } from './fields';
 
 /** the ⓘ affordance — help lives behind it, never as dropped paragraphs
  * (2026-11-11); the warn variant marks URGENT live constraints */
@@ -277,15 +277,30 @@ function IndexFields(props: {
   );
 }
 
-/** The fixture op's editor: pose + mode + registration. DUMMY — these
+/** The fixture op's editor: pose + mode + origin. DUMMY — these
  * values are recorded and displayed, not yet applied to generation. */
 function FixtureFields(props: {
   op: Extract<JobOp, { kind: 'fixture' }>;
   axisMode: AxisMode;
+  /** the stock the job's frame 1 inherits from — shapes the origin
+   * controls (Alice, 2026-11-19): the box gets the X/Y/Z grid, the
+   * cylinder the single along-axis segmented control, both exactly as
+   * the Stock page draws them, with an inherit-from-Stock reset. */
+  stock: Stock;
   onChange: (op: JobOp) => void;
 }) {
   const { op } = props;
   const upd = (patch: Partial<typeof op>) => props.onChange({ ...op, ...patch } as JobOp);
+  const s = props.stock;
+  // the op's origin, read through the STOCK's shape: a box job edits a
+  // per-axis triple, a cylinder job the single along-axis edge — the same
+  // shapes the Stock page edits. null (inherit) or a wrong-shape leftover
+  // (a box save re-opened after a stock-kind flip) both fall back to the
+  // Stock page's own edges in the display.
+  const boxTriple =
+    op.origin !== null && typeof op.origin === 'object' ? op.origin : null;
+  const cylEdge: OriginEdge | null =
+    typeof op.origin === 'string' ? op.origin : null;
   return (
     <>
       <label className="field">
@@ -308,19 +323,46 @@ function FixtureFields(props: {
           <option value="4-axis">4-axis</option>
         </select>
       </label>
-      <label className="field">
-        <span>Re-zero by</span>
-        <select
-          value={op.registration}
-          onChange={(e) => upd({ registration: e.target.value as typeof op.registration })}
+      <div className="field">
+        <span>Origin in stock</span>
+        <div className="origin-grid">
+          {s.kind === 'box' ? (
+            /* the box: the Stock page's own X/Y/Z grid — one edge per axis.
+             * While inherited (null) the three Segmented mirror the Stock
+             * page's triple; the first edit freezes a full triple of its own. */
+            (['x', 'y', 'z'] as const).map((axis) => (
+              <div className="field" key={axis}>
+                <span>{axis.toUpperCase()}</span>
+                <Segmented
+                  options={FIXTURE_ORIGINS}
+                  value={(boxTriple ?? s.origin)[axis]}
+                  onChange={(v) => upd({ origin: { ...(boxTriple ?? s.origin), [axis]: v } })}
+                />
+              </div>
+            ))
+          ) : (
+            /* the cylinder: one along-axis edge, labeled as the Stock page
+             * labels it for the mode this re-clamp ends in (op.axisMode —
+             * a 4-axis cylinder stood up in a vice becomes a Z axis) */
+            <div className="field">
+              <span>{op.axisMode === '3-axis' ? 'Z0 along axis' : 'X0 along axis'}</span>
+              <Segmented
+                options={FIXTURE_ORIGINS}
+                value={cylEdge ?? s.xOrigin}
+                onChange={(v) => upd({ origin: v })}
+              />
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className={`icon-btn${op.origin === null ? ' active' : ''}`}
+          title="Zero inherits the Stock page's origin — same as the implicit fixture 1"
+          onClick={() => upd({ origin: null })}
         >
-          {FIXTURE_REGISTRATIONS.map((r) => (
-            <option key={r} value={r}>
-              {REGISTRATION_LABELS[r]}
-            </option>
-          ))}
-        </select>
-      </label>
+          Same as Stock
+        </button>
+      </div>
       <InfoTip warn text="DUMMY — this re-clamp is not applied to the toolpaths yet; it records the setup and frames the ops list" />
     </>
   );
@@ -389,6 +431,8 @@ function FixtureDivider(props: {
   collapsed: boolean;
   count: number;
   expanded: boolean;
+  /** the job's stock — shapes the fixture's origin controls (FixtureFields) */
+  stock: Stock;
   onToggleExpanded: () => void;
   onToggleCollapse: () => void;
   onDelete: () => void;
@@ -436,7 +480,7 @@ function FixtureDivider(props: {
       </div>
       {props.expanded && (
         <div className="fixture-body">
-          <FixtureFields op={props.op} axisMode={props.op.axisMode} onChange={props.onChange} />
+          <FixtureFields op={props.op} axisMode={props.op.axisMode} stock={props.stock} onChange={props.onChange} />
         </div>
       )}
     </div>
@@ -764,7 +808,7 @@ function ParamFields(props: {
       );
     case 'fixture':
       return (
-        <FixtureFields op={op} axisMode={props.axisMode} onChange={props.onChange} />
+        <FixtureFields op={op} axisMode={props.axisMode} stock={props.stock} onChange={props.onChange} />
       );
     case 'faceCylinder':
       return (
@@ -1786,6 +1830,7 @@ export function OpsPanel(props: Props) {
                 collapsed={props.collapsedGroups.has(op.id)}
                 count={fixtureGroupSizes.get(op.id) ?? 0}
                 expanded={expanded}
+                stock={props.stock}
                 onToggleExpanded={() => props.onToggleExpanded(op.id)}
                 onToggleCollapse={() => props.onToggleCollapse(op.id)}
                 onDelete={() => props.onDeleteOp(op.id)}

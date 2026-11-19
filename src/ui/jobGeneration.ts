@@ -219,15 +219,11 @@ export const POSE_LABELS = {
   endForEnd: 'end-for-end',
 } as const;
 export const FIXTURE_POSES = Object.keys(POSE_LABELS) as (keyof typeof POSE_LABELS)[];
-export const REGISTRATION_LABELS = {
-  'stock-center': 'stock corner',
-  'l-bracket': 'L-bracket',
-  vise: 'vise',
-  pins: 'locating pins',
-} as const;
-export const FIXTURE_REGISTRATIONS = Object.keys(
-  REGISTRATION_LABELS,
-) as (keyof typeof REGISTRATION_LABELS)[];
+/** The fixture's origin edges: where zero lands in the stock, spoken with
+ * the Stock page's own vocabulary (Alice, 2026-11-19 — the old "re-zero
+ * by" strategy list named operator tooling, never the origin it
+ * establishes). A box fixture carries one per axis, a cylinder one. */
+export const FIXTURE_ORIGINS = ['min', 'mid', 'max'] as const;
 
 /**
  * The absolute A active when `opId` starts: the angle of the latest Index
@@ -522,9 +518,9 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
       return withRates({ ...base, kind, angle: 90 });
     case 'fixture':
       // DUMMY defaults: same mode the stock is in, no rotation, the
-      // corner registration — the common manual re-clamp. No rates: a
+      // origin inherited from the Stock page (null). No rates: a
       // re-clamp carries no cutting, so advisedOpRates never runs for it.
-      return { ...base, kind, pose: 'none', axisMode: stock.axisMode, registration: 'stock-center' };
+      return { ...base, kind, pose: 'none', axisMode: stock.axisMode, origin: null };
     case 'profile':
       return withRates({
         ...base,
@@ -1283,12 +1279,19 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // DUMMY (PLAN.md "Fixture ops"): a frame declaration only — zero
         // moves, zero minutes, nothing applied to the paths below it yet.
         // The summary states the re-clamp honestly so the panel reads as
-        // a frame boundary, not a pass.
+        // a frame boundary, not a pass. Origin speaks in the Stock page's
+        // vocabulary: the box names its X/Y/Z edges, the cylinder its one.
+        const originText =
+          op.origin === null
+            ? 'origin inherits Stock'
+            : typeof op.origin === 'string'
+              ? `origin at ${op.origin}`
+              : `origin X ${op.origin.x} · Y ${op.origin.y} · Z ${op.origin.z}`;
         return {
           moves: [],
           minutes: 0,
           error: null,
-          summary: `re-clamp: ${POSE_LABELS[op.pose]} · ${op.axisMode} · zero via ${REGISTRATION_LABELS[op.registration]}`,
+          summary: `re-clamp: ${POSE_LABELS[op.pose]} · ${op.axisMode} · ${originText}`,
         };
       }
       case 'faceCylinder': {

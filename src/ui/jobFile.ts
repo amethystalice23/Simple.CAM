@@ -172,6 +172,28 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
       }
       return normalized;
     }
+    // fixture saves across the origin rework (Alice, 2026-11-19): the
+    // "re-zero by" registration strategy became the Origin-in-stock field,
+    // shaped by the stock (the box a per-axis triple, the cylinder one
+    // along-axis edge). Old saves carry `registration` — inherit (null).
+    // A saved origin of invalid shape (not null/edge/triple-of-edges)
+    // inherits too; a VALID but stock-mismatched shape cannot occur in a
+    // save file (the stock rides in the same file) — it only arises from
+    // a runtime stock-kind flip, and FixtureFields reads that as inherit.
+    if (op.kind === 'fixture') {
+      const raw = (op as { origin?: unknown }).origin;
+      const edgeOk = (e: unknown) => e === 'min' || e === 'mid' || e === 'max';
+      const ok =
+        raw === null ||
+        edgeOk(raw) ||
+        (typeof raw === 'object' &&
+          raw !== null &&
+          ['x', 'y', 'z'].every((a) => edgeOk((raw as Record<string, unknown>)[a])));
+      const { registration: _registrationEra, ...rest } = op as typeof op & {
+        registration?: unknown;
+      };
+      return { ...rest, origin: ok ? raw : null } as JobOp;
+    }
     // contour4d saves from the plan-only stage carried no clearToStock —
     // the excess clear is the DEFAULT (Alice 2026-10-29: without it the
     // rough strands waste columns around the part, and the chunks drop

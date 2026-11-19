@@ -116,8 +116,8 @@ export const OP_HELP: Record<JobOp['kind'], OpHelpDoc> = {
     points: [
       'Pose — a named re-orientation of the stock and model together, never a free rotation.',
       'Mode — 3-axis or 4-axis after the re-clamp (a 4-axis part stood up in a vice becomes a 3-axis job).',
-      'Registration — how you re-find zero: stock corner, L-bracket, vise, or locating pins.',
-      'Registration is recorded on the file, not verified — you do the probing, the machine trusts it.',
+      'Origin in stock — where the new zero lands: same edge options as the Stock page, or inherit them.',
+      'The origin is recorded on the file, not verified — you do the probing, the machine trusts it.',
     ],
   },
   faceCylinder: {
