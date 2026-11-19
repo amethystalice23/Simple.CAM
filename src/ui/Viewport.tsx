@@ -164,7 +164,9 @@ interface Props {
   /** op id → accent colour (OP_KIND_COLORS) — each op's paths draw in its
    *  own colour; two ops of the same kind share a hue only when they
    *  genuinely are the same kind. */
-  opKindColors: Record<string, string>;
+  /** per-op-ID colour map — each op's preview path draws in its OWN
+   *  headline colour (opColors has one entry per op ID, not per kind). */
+  opColors: Record<string, string>;
   /**
    * THE PLAYBACK TRAIL (Alice's spec, 2026-10-29): the transport's current
    * move while a playback highlights paths — null = the full-opacity static
@@ -281,7 +283,7 @@ export function Viewport({
   previewMoves,
   previewOpIds,
   previewOpFocus,
-  opKindColors,
+  opColors,
   playbackMove,
   slicePreview,
   viewDatum,
@@ -1821,34 +1823,50 @@ export function Viewport({
   // PER-OP COLOURED (the fixture-ops spec's preview legibility ask,
   // 2026-11-19): each op's moves draw in the op's OWN kind colour so
   // paths answer to their op on screen — a fixture boundary reads as a
-  // colour shift across the divide. Feeds full-saturation, rapids dimmer
-  // (the cut/non-cut distinction survives the colour split); a focused
-  // op (panel hover/selection) renders at full strength while every
-  // other op dims to a ghost. Playback trail rendering (above) is
-  // untouched — it owns the simulation view.
+  // colour shift across the divide. Alice, 2026-11-19: "the colour of the
+  // preview path should be the same colour as the Ops headline colour…
+  // distinguish the fast moves by making them dotted lines." Fat-line
+  // pipeline (LineSegments2/LineMaterial — the trail's approach): the
+  // LineBasicMaterial linewidth is driver-ignored, and dotted rapids need
+  // LineMaterial's dashed mode (per-segment computeLineDistances). Feeds
+  // full-saturation solids, rapids the same hue DOTTED; a focused op
+  // (panel hover/selection) renders at full strength while every other
+  // op dims to a ghost. Playback trail rendering (above) is untouched —
+  // it owns the simulation view.
   useEffect(() => {
     const group = featureGroupRef.current;
     if (!group || !previewMoves || !displayLayers.paths) return;
     const segs = movesToSegmentMoves(previewMoves, stock);
-    const mk = (pts: number[], color: number, opacity: number, order: number) => {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-      const line = new THREE.LineSegments(
-        g,
-        new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false }),
-      );
+    const mk = (pts: number[], color: number, opacity: number, dashed: boolean, order: number) => {
+      const g = new LineSegmentsGeometry();
+      g.setPositions(pts);
+      const m = new LineMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthTest: false,
+        linewidth: 3, // screen pixels — the trail renders 6; paths stay finer
+        dashed,
+        dashSize: 1.2, // world units (mm): dot pattern on rapids
+        gapSize: 1.0,
+      });
+      m.resolution.set(host.current?.clientWidth ?? 800, host.current?.clientHeight ?? 600);
+      const line = new LineSegments2(g, m);
+      // three 0.170: computeLineDistances lives on the OBJECT (it reads
+      // the geometry) — the dashed shader needs it per instance
+      if (dashed) line.computeLineDistances();
       line.renderOrder = order;
       group.add(line);
       return line;
     };
-    const objects: THREE.LineSegments[] = [];
-    const push = (pts: number[], color: number, opacity: number, order: number) => {
-      if (pts.length > 0) objects.push(mk(pts, color, opacity, order));
+    const objects: LineSegments2[] = [];
+    const push = (pts: number[], color: number, opacity: number, dashed: boolean, order: number) => {
+      if (pts.length > 0) objects.push(mk(pts, color, opacity, dashed, order));
     };
     if (!previewOpIds || previewOpIds.length === 0) {
       // no ownership data (older callers): the pre-split render
-      push(segs.feed, 0xffd27f, 0.95, 8);
-      push(segs.rapid, 0xe05a5a, 0.9, 9);
+      push(segs.feed, 0xffd27f, 0.95, false, 8);
+      push(segs.rapid, 0xe05a5a, 0.9, true, 9);
     } else {
       // bucket the segments per op: a segment joins op X's bucket when
       // its move index maps to op X. Segments already exist in segment
@@ -1877,16 +1895,16 @@ export function Viewport({
         rapids.set(opId, b);
       }
       const colorOf = (opId: string): number => {
-        const hex = opKindColors[opId];
+        const hex = opColors[opId];
         return hex ? parseInt(hex.slice(1), 16) : 0xffd27f;
       };
       for (const [opId, pts] of feeds) {
         const dim = previewOpFocus !== null && previewOpFocus !== opId;
-        push(pts, colorOf(opId), dim ? 0.06 : 0.95, dim ? 7 : 8);
+        push(pts, colorOf(opId), dim ? 0.06 : 0.95, false, dim ? 7 : 8);
       }
       for (const [opId, pts] of rapids) {
         const dim = previewOpFocus !== null && previewOpFocus !== opId;
-        push(pts, colorOf(opId), dim ? 0.03 : 0.55, dim ? 7 : 9);
+        push(pts, colorOf(opId), dim ? 0.03 : 0.6, true, dim ? 7 : 9);
       }
     }
     return () => {
@@ -1896,7 +1914,7 @@ export function Viewport({
         (l.material as THREE.Material).dispose();
       }
     };
-  }, [previewMoves, previewOpIds, previewOpFocus, opKindColors, displayLayers.paths, stock]);
+  }, [previewMoves, previewOpIds, previewOpFocus, opColors, displayLayers.paths, stock]);
 
   // slice-pocket cut plane (edge-tracing §5): a translucent violet quad at
   // the slice Z + the contour outline there, and a grab pill on the plane's

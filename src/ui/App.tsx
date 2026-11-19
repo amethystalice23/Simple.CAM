@@ -1174,6 +1174,16 @@ export function App() {
     return perMove;
   }, [ops, hiddenOps, generated]);
 
+  /** per-op-ID colour: each op's preview path draws in its OWN headline
+   * colour (Alice, 2026-11-19: "the colour of the preview path to be the
+   * same colour as the Ops headline colour"). opKindColors is keyed by
+   * KIND; the viewport needs OP ID → colour. */
+  const opIdColors = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const o of ops) m[o.id] = OP_KIND_COLORS[o.kind];
+    return m;
+  }, [ops]);
+
   /** the carve simulator's tool lookup: moveIndex → tool-table index over
    *  the SAME flatten the preview uses (previewMoves = visible ops'
    *  moves). buildToolSpec indexes the same table, so tool 0xffff (no
@@ -2015,7 +2025,7 @@ export function App() {
              *  colours (the fixture-ops spec's preview legibility ask) */
             previewOpIds={previewOpIds}
             previewOpFocus={focusOpId}
-            opKindColors={OP_KIND_COLORS}
+            opColors={opIdColors}
             playbackMove={
               // THE TRAIL RIDES THE WORKER'S TRUTH (Alice's 2026-10-29
               // pause report: the trail and the tool marker must sit

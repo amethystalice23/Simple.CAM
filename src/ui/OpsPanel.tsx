@@ -328,27 +328,35 @@ function FixtureFields(props: {
 
 /** The IMPLICIT fixture 1's header (Alice, 2026-11-19): every job starts in
  * a setup — machine mode + WCS origin inherited from the Stock page, nothing
- * stored, nothing to desync. Rendered only once a real Fixture op exists, so
+ * stored, nothing to desync. Looks exactly like a real Fixture divider (it
+ * IS the settings for the ops after it); the only difference is the expanded
+ * body: "Inherited from Stock definition" instead of the editable selects.
+ * Rendered at the TOP of the ops list once a real Fixture op exists, so
  * before that the list reads as one flat section as it always did. */
-function ImplicitFixtureHeader(props: { stock: Stock; collapsed: boolean; onToggle: () => void }) {
+function ImplicitFixtureHeader(props: {
+  stock: Stock;
+  collapsed: boolean;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  onToggleCollapse: () => void;
+}) {
   const s = props.stock;
-  const origin = s.kind === 'box' ? s.origin : { x: s.xOrigin, y: 'min' as const, z: 'min' as const };
   const originText =
     s.kind === 'box'
-      ? `X ${origin.x} · Y ${origin.y} · Z ${origin.z}`
+      ? `X ${s.origin.x} · Y ${s.origin.y} · Z ${s.origin.z}`
       : `X ${s.xOrigin} · axis Z0`;
   return (
     <div
       className="fixture-divider implicit"
       style={{ ['--kind-color' as string]: OP_KIND_COLORS.fixture }}
     >
-      <div className="fixture-bar" onClick={props.onToggle}>
+      <div className="fixture-bar" onClick={props.onToggleExpanded}>
         <span className="fixture-icon" title="The job's starting setup — mode and origin come from the Stock page">⌁</span>
         <span className="fixture-label">Fixture 1</span>
         <span className="fixture-summary">
-          {props.stock.axisMode} · implicit — origin from the Stock page ({originText})
+          {s.axisMode} · inherited from Stock definition ({originText})
         </span>
-        <span className="fixture-count">{props.collapsed ? '' : 'start setup'}</span>
+        <span className="fixture-count">start setup</span>
         <span className="op-title-gap" />
         <button
           type="button"
@@ -357,12 +365,17 @@ function ImplicitFixtureHeader(props: { stock: Stock; collapsed: boolean; onTogg
           onClick={(e) => {
             e.stopPropagation(); // the bar's onClick would toggle AGAIN —
             // double-toggle = no change (the flaky-smoke lesson)
-            props.onToggle();
+            props.onToggleCollapse();
           }}
         >
           {props.collapsed ? '▸' : '▾'}
         </button>
       </div>
+      {props.expanded && (
+        <div className="fixture-body">
+          <p className="hint">Inherited from Stock definition</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -1735,11 +1748,25 @@ export function OpsPanel(props: Props) {
             }
           }
           const fixtureGroupId = (id: string): string => groupOf.get(id) ?? IMPLICIT_FIXTURE_ID;
-          // the implicit fixture-1 header renders ONCE, right before the
-          // first real Fixture op (or never, when no real Fixture exists —
-          // the list reads flat, as it always did)
-          let implicitHeaderShown = false;
-          return props.ops.map((op, index) => {
+          // the implicit fixture-1 header renders at the TOP of the list
+          // once a real Fixture op exists (or never, when none does — the
+          // list reads flat, as it always did). It IS the settings for the
+          // ops after it, so it leads the ladder (Alice, 2026-11-19).
+          const hasRealFixture = props.ops.some((o) => o.kind === 'fixture');
+          const implicitHeader = hasRealFixture ? (
+            <ImplicitFixtureHeader
+              key="implicit-fixture-1"
+              stock={props.stock}
+              collapsed={props.collapsedGroups.has(IMPLICIT_FIXTURE_ID)}
+              expanded={props.expandedOpId === IMPLICIT_FIXTURE_ID}
+              onToggleExpanded={() => props.onToggleExpanded(IMPLICIT_FIXTURE_ID)}
+              onToggleCollapse={() => props.onToggleCollapse(IMPLICIT_FIXTURE_ID)}
+            />
+          ) : null;
+          return (
+            <Fragment>
+              {implicitHeader}
+              {props.ops.map((op, index) => {
           const gen = props.generated[op.id];
           const expanded = props.expandedOpId === op.id;
           const editing = props.editingOpId === op.id;
@@ -1750,33 +1777,6 @@ export function OpsPanel(props: Props) {
           // FIXTURE DIVIDER ROW (the fixture-ops spec): a re-clamp reads as
           // a FRAME BOUNDARY, not another pass — full-width band, its own
           // class, and the ops under it collapse as one group.
-          // The IMPLICIT fixture-1 header renders once, right before the
-          // first real Fixture op (Alice, 2026-11-19).
-          if (op.kind === 'fixture' && !implicitHeaderShown) {
-            implicitHeaderShown = true;
-            const implicitCollapsed = props.collapsedGroups.has(IMPLICIT_FIXTURE_ID);
-            return (
-              <Fragment key={`implicit:${op.id}`}>
-                <ImplicitFixtureHeader
-                  stock={props.stock}
-                  collapsed={implicitCollapsed}
-                  onToggle={() => props.onToggleCollapse(IMPLICIT_FIXTURE_ID)}
-                />
-                <FixtureDivider
-                  op={op}
-                  gen={gen}
-                  collapsed={props.collapsedGroups.has(op.id)}
-                  count={fixtureGroupSizes.get(op.id) ?? 0}
-                  expanded={expanded}
-                  onToggleExpanded={() => props.onToggleExpanded(op.id)}
-                  onToggleCollapse={() => props.onToggleCollapse(op.id)}
-                  onDelete={() => props.onDeleteOp(op.id)}
-                  onHover={(h) => props.onHoverOp(h ? op.id : null)}
-                  onChange={props.onChangeOp}
-                />
-              </Fragment>
-            );
-          }
           if (op.kind === 'fixture') {
             return (
               <FixtureDivider
@@ -2052,7 +2052,9 @@ export function OpsPanel(props: Props) {
               )}
             </div>
           );
-          });
+          })}
+        </Fragment>
+      );
         })()}
       </div>
       {props.ops.length > 0 && (
