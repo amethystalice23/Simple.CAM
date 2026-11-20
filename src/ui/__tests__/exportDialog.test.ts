@@ -8,6 +8,7 @@ import {
   clampToolNumber,
   condensedMinutes,
   countToolChanges,
+  fixtureSections,
   formatTimestamp,
   includeUnblocked,
   safeNamePart,
@@ -194,6 +195,71 @@ describe('buildExportFilename', () => {
       now: NOW,
     });
     expect(sanitizeFilename(name)).toBe(name);
+  });
+
+  it('appends _S<n> from the second section on; section 1 keeps the plain name', () => {
+    expect(
+      buildExportFilename({
+        modelName: 'part.stl',
+        minutes: 5,
+        axisMode: '3-axis',
+        now: NOW,
+        section: 1,
+      }),
+    ).toBe('part_TOP_5m_20261021123456.nc');
+    expect(
+      buildExportFilename({
+        modelName: 'part.stl',
+        minutes: 5,
+        axisMode: '3-axis',
+        now: NOW,
+        section: 2,
+      }),
+    ).toBe('part_S2_TOP_5m_20261021123456.nc');
+  });
+});
+
+describe('fixtureSections', () => {
+  const op = (id: string, kind: string): { id: string; kind: string; toolId: string } => ({
+    id,
+    kind,
+    toolId: 't1',
+  });
+
+  it('returns one null-fixture section when there are no fixture ops', () => {
+    const ops = [op('a', 'pocket'), op('b', 'profile')];
+    const s = fixtureSections(ops);
+    expect(s).toEqual([{ fixture: null, ops }]);
+  });
+
+  it('splits at fixture ops; the fixture binds to the ops AFTER it', () => {
+    const ops = [op('a', 'pocket'), op('f1', 'fixture'), op('b', 'profile')];
+    const s = fixtureSections(ops);
+    expect(s).toHaveLength(2);
+    expect(s[0].fixture).toBeNull();
+    expect(s[0].ops.map((o) => o.id)).toEqual(['a']);
+    expect(s[1].fixture?.kind).toBe('fixture');
+    expect(s[1].ops.map((o) => o.id)).toEqual(['b']);
+  });
+
+  it('index ops stay in the section they sit in; fixture ops never appear as rows', () => {
+    const ops = [op('i0', 'index'), op('a', 'pocket'), op('f1', 'fixture'), op('i1', 'index'), op('b', 'profile')];
+    const s = fixtureSections(ops);
+    expect(s).toHaveLength(2);
+    expect(s[0].ops.map((o) => o.id)).toEqual(['i0', 'a']);
+    expect(s[1].ops.map((o) => o.id)).toEqual(['i1', 'b']);
+  });
+
+  it('back-to-back fixtures: the empty one drops, the one with ops stays', () => {
+    const ops = [op('a', 'pocket'), op('f1', 'fixture'), op('f2', 'fixture'), op('b', 'profile')];
+    const s = fixtureSections(ops);
+    // f1's section is EMPTY — a re-clamp with no ops exports nothing, so
+    // its fixture op goes with it; f2 owns the ops that follow
+    expect(s).toHaveLength(2);
+    expect(s[0].fixture).toBeNull();
+    expect(s[0].ops.map((o) => o.id)).toEqual(['a']);
+    expect(s[1].fixture?.id).toBe('f2');
+    expect(s[1].ops.map((o) => o.id)).toEqual(['b']);
   });
 });
 

@@ -16,6 +16,7 @@ import {
   assignToolNumbers,
   buildExportFilename,
   countToolChanges,
+  fixtureSections,
   includeUnblocked,
   sanitizeFilename,
   setToolNumber,
@@ -50,6 +51,22 @@ function opLabel(kind: JobOp['kind']): string {
 /** Compact tool-type line for the row and the summary, e.g. `flat · Ø3.175`. */
 function toolTypeLabel(tool: Tool): string {
   return `${tool.type} · Ø${tool.diameter}`;
+}
+
+/** A human name for a fixture section's origin, for the file header's
+ *  registration statement: speaks the Stock page's own edge vocabulary. */
+function originWords(origin: { x: string; y: string; z: string } | string): string {
+  return typeof origin === 'string'
+    ? `origin at ${origin} edge`
+    : `origin X ${origin.x}, Y ${origin.y}, Z ${origin.z}`;
+}
+
+/** The origin the section's fixture declares, or null when it inherits
+ *  the Stock page's (the header says so instead). */
+function sectionOrigin(
+  fixture: { origin: unknown },
+): { x: string; y: string; z: string } | string | null {
+  return (fixture.origin as { x: string; y: string; z: string } | string | null) ?? null;
 }
 
 function stockSummary(stock: Stock): string {
@@ -108,9 +125,14 @@ export function ExportDialog(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.generated]);
 
-  /** the ops going into the file, in job order */
+  /** the ops going into the file, in job order — fixture ops included when
+   *  their section exports at all (they never generate moves; they are the
+   *  section boundaries the split below reads) */
   const includedOps = useMemo(
-    () => props.ops.filter((o) => included.has(o.id) && genOk(o.id)),
+    () =>
+      props.ops.filter(
+        (o) => o.kind === 'fixture' || (included.has(o.id) && genOk(o.id)),
+      ),
     [props.ops, props.generated, included],
   );
 
@@ -124,16 +146,8 @@ export function ExportDialog(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkedKey]);
 
-  /** distinct tools in the export, first-use order (same as the old preview
-   * post path), with their numbers parallel to the list */
-  const usedTools = useMemo(
-    () =>
-      [...new Set(includedOps.map((o) => o.toolId))]
-        .map((id) => props.tools.find((t) => t.id === id))
-        .filter((t): t is Tool => t !== undefined),
-    [includedOps, props.tools],
-  );
-  const usedToolNumbers = usedTools.map((t) => toolNumbers.get(t.id) ?? 1);
+  /** tool changes across the whole job, in job order (the footer's count) */
+  const toolChanges = countToolChanges(includedOps, toolNumbers);
 
   const totalMinutes = includedOps.reduce(
     (sum, o) => sum + (props.generated[o.id]?.minutes ?? 0),
@@ -181,32 +195,64 @@ export function ExportDialog(props: Props) {
 
   const exportAndDownload = () => {
     if (includedOps.length === 0) return;
-    // stamp each op's first move: 1-based position in THIS file, its label,
-    // and the controller tool number
-    const moves: Move[] = [];
-    includedOps.forEach((o, i) => {
-      moves.push(
-        ...stampOp(
-          props.generated[o.id].moves,
-          i + 1,
-          opLabel(o.kind),
-          toolNumbers.get(o.toolId) ?? 1,
-        ),
-      );
-    });
+    // fixture sections: one .nc per re-clamp, in job order (the fixture-ops
+    // spec's export split). The checkbox set (`included`) picks which ops
+    // export; empty sections drop out entirely.
     const name = sanitizeFilename(filename);
-    const nc = postCarvera({
-      moves,
-      tools: usedTools,
-      toolNumbers: usedToolNumbers,
-      options: { jobName: name.replace(/\.nc$/, '') },
+    const sections = fixtureSections(
+      includedOps as unknown as { id: string; kind: string; toolId: string }[],
+    ).filter((s) => s.ops.length > 0);
+    sections.forEach((section, sIndex) => {
+      // stamp each op's first move: 1-based position in THIS file, its label,
+      // and the controller tool number
+      const moves: Move[] = [];
+      section.ops.forEach((o, i) => {
+        moves.push(
+          ...stampOp(
+            props.generated[o.id].moves,
+            i + 1,
+            opLabel(o.kind),
+            toolNumbers.get(o.toolId) ?? 1,
+          ),
+        );
+      });
+      // this section's tools (first-use order) and their panel numbers
+      const tools = [...new Set(section.ops.map((o) => o.toolId))]
+        .map((id) => props.tools.find((t) => t.id === id))
+        .filter((t): t is Tool => t !== undefined);
+      const toolNums = tools.map((t) => toolNumbers.get(t.id) ?? 1);
+      // the fixture's origin statement: where zero lands for this setup
+      // (null = inherit the Stock page's origin; recorded, not verified)
+      const origin = section.fixture ? sectionOrigin(section.fixture) : null;
+      const originComment =
+        origin === null
+          ? '; WCS origin: same as Stock page (inherited)'
+          : `; WCS origin: ${originWords(origin)}`;
+      const nc = postCarvera({
+        moves,
+        tools,
+        toolNumbers: toolNums,
+        options: {
+          jobName: name.replace(/\.nc$/, ''),
+          fixtureNote: [
+            originComment,
+            section.fixture
+              ? `; re-clamp: pose ${section.fixture.pose}, mode ${section.fixture.axisMode}`
+              : `; setup: stock as placed (fixture 1)`,
+          ],
+        },
+      });
+      const sectionName =
+        sections.length > 1
+          ? name.replace(/(\.nc)?$/, '') + `_S${sIndex + 1}.nc`
+          : name;
+      const url = URL.createObjectURL(new Blob([nc], { type: 'text/plain' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = sectionName;
+      a.click();
+      URL.revokeObjectURL(url);
     });
-    const url = URL.createObjectURL(new Blob([nc], { type: 'text/plain' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
     props.onClose();
   };
 
@@ -320,8 +366,8 @@ export function ExportDialog(props: Props) {
           {props.ops.length === 0 && <p className="hint">add a toolpath first (Ops tab)</p>}
           <p className="hint export-totals">
             {includedOps.length} of {props.ops.length} ops ·{' '}
-            {countToolChanges(includedOps, toolNumbers)} tool change
-            {countToolChanges(includedOps, toolNumbers) === 1 ? '' : 's'} · ~
+            {toolChanges} tool change
+            {toolChanges === 1 ? '' : 's'} · ~
             {totalMinutes.toFixed(1)} min estimated cut time
           </p>
         </div>

@@ -1430,6 +1430,14 @@ per fixture) and its own tool comments; T-numbers CONTINUE across files
 (one job tool chain). The post splits at fixture ops. The parser (item
 13) reads each file and concatenates into the ONE job move list — move
 indices stay job-global for the sim.
+EXPORT LEG LANDED 2026-11-20: fixtureSections (src/ui/exportDialog.ts)
+splits the checked ops at fixture ops (an empty section drops — a
+re-clamp exports nothing by itself); ExportDialog posts one .nc per
+section, each with a fixtureNote header (the WCS-origin statement from
+the fixture op's origin field, the re-clamp's pose/mode) emitted by the
+post via the fixtureNote option; multi-section names carry `_S<n>`.
+Still open: the parser/concatenation (item 13) and T-number continuity
+enforcement across files.
 
 **One preview, one sim, one estimate** (her ruling): the material-frame
 grid and the display frame stay fixed at fixture 1's stock pose; the

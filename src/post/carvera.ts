@@ -20,6 +20,10 @@ export interface PostOptions {
   /** emit the calibration-assumption header: 'comment' (default) | 'active' | 'none' */
   prepHeader: 'comment' | 'active' | 'none';
   jobName: string;
+  /** per-fixture-section header lines (the fixture-ops spec): the WCS
+   *  origin statement and the re-clamp note — verbatim comment lines,
+   *  emitted right after the tool comments. */
+  fixtureNote?: string[];
 }
 
 /** Assemble a motion line with its trailing comment, keeping the WHOLE
@@ -217,6 +221,11 @@ export function postCarvera(input: PostInput): string {
   lines.push(`; simple.cam v0.0.1 — job "${opts.jobName}"`);
   lines.push(`; generated ${new Date().toISOString()}`);
   lines.push(...toolComments(input.tools, input.toolNumbers));
+  if (opts.fixtureNote) {
+    for (const line of opts.fixtureNote) {
+      lines.push(line.startsWith(';') ? line : `; ${line}`);
+    }
+  }
   if (opts.prepHeader !== 'none' && anyA) {
     lines.push('; ---- prep assumptions (run in controller before this job) ----');
     lines.push(active('M465.1            ; 4th-axis stock leveling/twist via probe'));

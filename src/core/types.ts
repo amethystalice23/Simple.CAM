@@ -1072,13 +1072,15 @@ export type JobOp =
   | (JobOpBase & {
       kind: 'fixture';
       /**
-       * DUMMY (PLAN.md "Fixture ops", 2026-11-19): a NON-CUTTING frame
-       * declaration — the part is re-clamped, and every op AFTER this one
-       * generates in the new frame. The UI half of the spec only: the
-       * divider row, per-group collapse, per-op preview colours. No
-       * generator consumes these fields yet — pose/mode flips are NOT
-       * applied to paths, the sim, or the .nc. Zero moves, zero time
-       * (Index's class: positions nothing, cuts nothing).
+       * NON-CUTTING frame declaration (PLAN.md "Fixture ops", 2026-11-19):
+       * the part is re-clamped, and every op AFTER this one generates in
+       * the new frame. Display consumes the fields fully (divider row,
+       * per-group collapse, per-op preview colours, the section's frame);
+       * the EXPORT splits one .nc per fixture section with the section's
+       * own origin. Generation is the kernel pose-plumbing leg: paths,
+       * the sim, and machine semantics still use the pristine stock
+       * frame. Zero moves, zero time (Index's class: positions nothing,
+       * cuts nothing).
        */
       /** named part pose — never a free rotation (the spec's field set) */
       pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd';

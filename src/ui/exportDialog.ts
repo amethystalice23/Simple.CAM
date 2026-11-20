@@ -6,7 +6,7 @@
  * everything here is pure so the assignment/sanitizing rules get tests.
  */
 
-import type { AxisMode, Move } from '../core/types';
+import type { AxisMode, JobOp, Move, OriginEdge } from '../core/types';
 
 /** Clamp a user-typed tool number: integer ≥ 1 (garbage becomes 1). */
 export function clampToolNumber(n: number): number {
@@ -135,6 +135,19 @@ export function stampOp(
   ];
 }
 
+// ---- fixture sections (the fixture-ops spec's one-.nc-per-setup export) ----
+
+/** Fixture fields the export needs from a fixture op, isolated so ops[]
+ * can stay the loose { kind, toolId } shape the pure helpers take. */
+interface FixtureOp {
+  kind: 'fixture';
+  id: string;
+  toolId: string;
+  pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd';
+  axisMode: AxisMode;
+  origin: OriginEdge | { x: OriginEdge; y: OriginEdge; z: OriginEdge } | null;
+}
+
 /** File-name-safe fragment: whitespace runs become '-', everything outside
  * [A-Za-z0-9._+-] (spaces included after the run collapse, parens, Ø, °,
  * path separators…) is dropped. */
@@ -158,6 +171,39 @@ export function formatTimestamp(d: Date): string {
  * the deduped op labels of the checked ops joined by '-' ("ops" when none),
  * and TOP/MULT follows the stock axis mode (3-axis/4-axis).
  */
+export interface ExportSection {
+  fixture: FixtureOp | null;
+  ops: { id: string; kind: JobOp['kind']; toolId: string }[];
+}
+
+/**
+ * Split an op list into fixture sections. A FIXTURE op starts a new
+ * section (its frame binds to the ops AFTER it); INDEX ops stay with the
+ * section they sit in — their A-datum rapid is part of the section's
+ * move list, not a cut. Zero fixture ops → one section, `fixture: null`
+ * — today's export unchanged.
+ */
+export function fixtureSections(
+  ops: readonly { id: string; kind: string; toolId: string }[],
+): ExportSection[] {
+  const sections: ExportSection[] = [{ fixture: null, ops: [] }];
+  for (const op of ops) {
+    if (op.kind === 'fixture') {
+      sections.push({ fixture: op as unknown as FixtureOp, ops: [] });
+    } else {
+      sections[sections.length - 1].ops.push(op as ExportSection['ops'][number]);
+    }
+  }
+  return sections.filter((s) => s.fixture === null || s.ops.length > 0);
+}
+
+/**
+ * Suggested export file name, MakeraStudio style:
+ * `<modelBase>_<opsDescriptor>_<TOP|MULT>_<YYYYMMDDHHmmss>.nc` — modelBase is
+ * the STL file name sans extension ("job" without a model), opsDescriptor is
+ * the deduped op labels of the checked ops joined by '-' ("ops" when none),
+ * and TOP/MULT follows the stock axis mode (3-axis/4-axis).
+ */
 export function buildExportFilename(input: {
   /** loaded STL file name; null = no model */
   modelName: string | null;
@@ -165,11 +211,16 @@ export function buildExportFilename(input: {
   minutes: number;
   axisMode: AxisMode;
   now?: Date;
+  /** section ordinal (1-based) among the EXPORTED files — appended as
+   *  `_S<n>` from the SECOND section on (a single-setup job keeps today's
+   *  name unchanged) */
+  section?: number;
 }): string {
   const modelBase =
     safeNamePart(input.modelName ? input.modelName.replace(/\.[^.]*$/, '') : '') || 'job';
   const axisTag = input.axisMode === '4-axis' ? 'MULT' : 'TOP';
-  return `${modelBase}_${axisTag}_${condensedMinutes(input.minutes)}_${formatTimestamp(input.now ?? new Date())}.nc`;
+  const suffix = input.section !== undefined && input.section > 1 ? `_S${input.section}` : '';
+  return `${modelBase}${suffix}_${axisTag}_${condensedMinutes(input.minutes)}_${formatTimestamp(input.now ?? new Date())}.nc`;
 }
 
 /**

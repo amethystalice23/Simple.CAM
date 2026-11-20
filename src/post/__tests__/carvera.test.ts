@@ -103,6 +103,40 @@ describe('carvera post-processor', () => {
     expect(indexOnly).toContain('G10 L20 P0 A0');
   });
 
+  it('emits fixtureNote lines after the tool comments, ; prefix added when missing', () => {
+    const nc = postCarvera({
+      moves: [{ words: { x: 0, y: 0, z: -1 }, feed: 300 }],
+      tools: [tool],
+      options: {
+        jobName: 'fixture-note-test',
+        fixtureNote: [
+          '; WCS origin: X min, Y mid, Z max',
+          're-clamp: pose flipX, mode 3-axis',
+        ],
+      },
+    });
+    const header = nc.split('G90 G21')[0];
+    expect(header).toContain('; WCS origin: X min, Y mid, Z max');
+    // a bare note line gains the comment prefix
+    expect(header).toContain('; re-clamp: pose flipX, mode 3-axis');
+    // the note lands in the HEADER (before the modal line), after the tool comments
+    const lines = header.trim().split('\n');
+    const noteIdx = lines.findIndex((l) => l.includes('WCS origin'));
+    const toolCommentIdx = lines.findIndex((l) => l.startsWith(';@MKR|TOOL'));
+    expect(noteIdx).toBeGreaterThan(0);
+    if (toolCommentIdx >= 0) expect(noteIdx).toBeGreaterThan(toolCommentIdx);
+  });
+
+  it('emits no fixture lines when the option is absent (single-setup jobs unchanged)', () => {
+    const nc = postCarvera({
+      moves: [{ words: { x: 0 }, feed: 300 }],
+      tools: [tool],
+      options: { jobName: 'plain-test' },
+    });
+    expect(nc).not.toContain('WCS origin');
+    expect(nc).not.toContain('re-clamp');
+  });
+
   it('never emits a G93 feed line without F (firmware halts otherwise)', () => {
     let inG93 = false;
     const offenders: string[] = [];
