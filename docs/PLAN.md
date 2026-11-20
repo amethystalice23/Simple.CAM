@@ -1655,6 +1655,20 @@ shortest-path so the sim and estimate stop paying the phantom unwind
 handled it); the VIEWPORT path preview still draws IR moves, so the
 wind-then-return spiral remains visible there until this item lands
 (display-only; the sim was the lying part).
+ITEM 13 LANDED 2026-11-20: the parser (src/post/ncParser.ts,
+parseCarveraNc) reads the posted text back — Move[] IR with
+firmware-exact G92.4 semantics, loud failures on anything ambiguous;
+golden round-trips Move-for-Move, all 23 corpus files parse
+(src/post/__tests__/ncParser.test.ts; every parser assumption is
+tabulated in docs/firmware-notes.md). buildPostedStream
+(src/ui/postedMoves.ts) stamps ops exactly as Export does, posts,
+parses back, and re-derives the tool lookup from the file's own
+T-numbers plus a step-down array re-indexed onto the parsed stream —
+App.tsx feeds the sim, transport clock, toolOf and step-down from it.
+Remaining from the original item: the per-op TIME ESTIMATES still run
+on IR (the generator's own minutes — the sim clock is now honest); the
+viewport PREVIEW path still draws IR moves (display-only; the winding
+spiral remains visible there by design until a follow-up).
 
 Remaining Makera-Studio parity gaps (the raison d'être is parity then
 some): DXF + STEP import (they have both), image import/trace-to-
