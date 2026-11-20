@@ -227,14 +227,17 @@ export const FIXTURE_ORIGINS = ['min', 'mid', 'max'] as const;
 
 /**
  * The absolute A active when `opId` starts: the angle of the latest Index
- * op preceding it (0 before any indexing). Index ops themselves establish
+ * op preceding it (0 before any indexing), STOPPED at the latest fixture
+ * — the part left the machine, so the A pile above the re-clamp is gone
+ * (the fixture-ops spec's datum barrier). Index ops themselves establish
  * the datum for everything after them.
  */
 export function datumAngleBefore(ops: JobOp[], opId: string): number {
   let angle = 0;
   for (const op of ops) {
     if (op.id === opId) break;
-    if (op.kind === 'index') angle = op.angle;
+    if (op.kind === 'fixture') angle = 0;
+    else if (op.kind === 'index') angle = op.angle;
   }
   return angle;
 }

@@ -1449,6 +1449,25 @@ ops list — background colour change, unmistakable as a frame boundary —
 and each fixture group COLLAPSES to its divider (the clutter fix). No
 fixture ops, no dividers: today's list.
 
+**Display frames (her rulings, 2026-11-19 — "re-orient the model so the
+side we're operating on is upwards"):** the open op renders in the frame
+its FIXTURE section declares, one display matrix. The MODE FLIP IS THE
+STAND-UP: a fixture set to 3-axis on a 4-axis cylinder stands the part
+in the display — axis ∥ Z, centered X0/Y0, RIGHT END (+X) UP (her
+GHM9 adapter: the Ø10 bore mouth faces the sky, ready to bore) — and
+3-axis → 4-axis lies it back down the inverse way. A box never
+re-places (it only gains/loses A). A FIXTURE IS A DATUM BARRIER: the
+part left the machine, so the A pile above a re-clamp is gone —
+opening a fixture shows its own declared frame, A=0, not the index
+rotation above it (her report: "pose-unchanged = model rotates 180°" —
+the stale A=180 from the Index leaking through). Poses turn the PLACED
+part in place about its center (a standing part turns over about a
+horizontal axis; a lying one rolls about its length); each fixture is
+a FRESH clamp — sections never compound. Index datums still pivot about
+the stock axis inside a 4-axis section. Display only: generation keeps
+the pristine frame until the kernel pose-plumbing leg
+(placement.ts displayFrameFor + the tests pin the numbers).
+
 **NOT addressed (deliberate):** generators stay stock+model based — a
 fixture-2 op generates against pristine stock, not what fixture 1
 cleared (cross-op stock awareness stays parked with the 4D P1

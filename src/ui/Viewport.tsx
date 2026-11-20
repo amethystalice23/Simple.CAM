@@ -187,11 +187,14 @@ interface Props {
     rotate: ((p: { x: number; y: number; z: number }) => THREE.Vector3) | null;
     onZChange: (z: number) => void;
   } | null;
-  /** the open op's cutting frame (edge-tracing §5): the part renders
-   * rotated to this index datum; null = A0. Everything part-relative
-   * (stock, model, overlays, preview) rotates together; the grid and axes
+  /** the open op's cutting frame (edge-tracing §5 + the fixture-ops spec):
+   * pristine machine coords → the frame the open op cuts in, as ONE matrix —
+   * fixtures' mode re-placements and poses compose first (a re-clamp resets
+   * the A pile), then the section's index datums. null = identity: the
+   * part renders at the stock's own placement. Everything part-relative
+   * (stock, model, overlays, preview) moves together; the grid and axes
    * stay machine. */
-  viewDatum: { angle: number; axisZ: number } | null;
+  displayFrame: THREE.Matrix4 | null;
   /** the active one-shot pick kind (edge-tracing §5): during a pick only
    * the pickable feature kinds highlight — edges never flash, and the Ø
    * pick shows circles alone. Null = normal measure mode. */
@@ -286,7 +289,7 @@ export function Viewport({
   opColors,
   playbackMove,
   slicePreview,
-  viewDatum,
+  displayFrame,
   pickKind,
   facePreview,
   threadPreview,
@@ -353,23 +356,16 @@ export function Viewport({
   /** labels for the selected features, one per pick */
   const selLabelsRef = useRef<(HTMLDivElement | null)[]>([]);
   const distLabelRef = useRef<HTMLDivElement | null>(null);
-  /** A=0-frame overlay point → WORLD under the current datum view: the
-   * SAME rotation the datum group carries (Viewport must test features
-   * where they RENDER, not where they sat before the index — the
-   * indexed-drill hover/selection bug). Identity when the datum is A0. */
-  const viewDatumRef = useRef(viewDatum);
-  viewDatumRef.current = viewDatum;
+  /** pristine-frame overlay point → WORLD under the current display frame:
+   * the SAME matrix the datum group carries (Viewport must test features
+   * where they RENDER, not where they sat in the pristine frame — the
+   * indexed-drill hover/selection bug, generalized to fixture frames).
+   * Identity when no frame is active. */
+  const displayFrameRef = useRef(displayFrame);
+  displayFrameRef.current = displayFrame;
   const datumToWorld = (p: THREE.Vector3): THREE.Vector3 => {
-    const vd = viewDatumRef.current;
-    if (!vd) return p;
-    const th = vd.angle * D2R;
-    // the group's transform: world = off + R·(p − off), off = (0,0,axisZ)
-    const z = p.z - vd.axisZ;
-    return new THREE.Vector3(
-      p.x,
-      p.y * Math.cos(th) - z * Math.sin(th),
-      p.y * Math.sin(th) + z * Math.cos(th) + vd.axisZ,
-    );
+    const m = displayFrameRef.current;
+    return m ? p.clone().applyMatrix4(m) : p;
   };
 
   // ---- projection: perspective (default) or orthographic ----
@@ -1214,27 +1210,28 @@ export function Viewport({
     model.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
   }, [transform, stock]);
 
-  // The open op's cutting frame (edge-tracing §5): the part-relative
-  // group renders rotated to the op's index datum — a right-hand rotation
-  // about the stock axis (y=0, z=axisZ), the exact inverse of the
-  // preview's per-op un-rotation, so toolpaths land at their true machine
-  // positions. A0 when no panel is open.
+  // The open op's cutting frame: the part-relative group renders through
+  // the composed display matrix — fixtures' mode re-placements (a 4-axis
+  // cylinder stood up in a vice) and poses first, then the section's index
+  // datums, all as ONE matrix (edge-tracing §5 + the fixture-ops spec).
+  // Identity when nothing is open.
   useEffect(() => {
     const g = datumGroupRef.current;
     if (!g) return;
-    const th = (viewDatum?.angle ?? 0) * D2R;
-    if (th === 0) {
+    if (!displayFrame) {
+      // identity: hand-compose the identity matrix — with
+      // matrixAutoUpdate false (set below, on a previous run) the
+      // rotation/position setters would not recompute g.matrix
+      g.matrixAutoUpdate = true;
       g.rotation.set(0, 0, 0);
       g.position.set(0, 0, 0);
+      g.updateMatrix();
       return;
     }
-    // pivot about the line through (y=0, z=axisZ) along X:
-    // world = off + R·(local − off)  ⇒  position = off − R·off
-    const off = new THREE.Vector3(0, 0, viewDatum!.axisZ);
-    const p = off.clone().applyEuler(new THREE.Euler(th, 0, 0));
-    g.rotation.set(th, 0, 0);
-    g.position.copy(off).sub(p);
-  }, [viewDatum, stock]);
+    g.matrixAutoUpdate = false;
+    g.matrix.copy(displayFrame);
+    g.matrixWorldNeedsUpdate = true;
+  }, [displayFrame, stock]);
 
   // ---- carve simulator: chunk meshes in the stock frame ----
   // The grid IS the display frame (un-rotated stock at A=0 — the same

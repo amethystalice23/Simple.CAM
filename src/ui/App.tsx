@@ -67,7 +67,8 @@ import { isHeavyGenOp } from './genWorkerProtocol';
 import { GEN_CANCELLED, useGenWorker } from './useGenWorker';
 import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
-import { stockTopZ } from './placement';
+import * as THREE from 'three';
+import { displayFrameFor, sectionMode, stockTopZ } from './placement';
 import { decimateForDetection } from '../cam/decimate';
 import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
@@ -394,10 +395,11 @@ export function App() {
   };
 
   /** a feature's height in an op's cutting frame: the datum established by
-   * the latest Index op preceding it in the sequence */
+   * the latest Index op preceding it in the sequence — 4-axis SECTIONS
+   * only (a fixture may re-declare mode; 3-axis sections have no A) */
   const featureDepthInFrame = (op: JobOp, p: Vector3): number => {
     const angle = datumAngleBefore(ops, op.id);
-    if (stock.axisMode === '4-axis' && angle !== 0) {
+    if (sectionMode(stock, ops as { kind: string; id: string }[], op.id) === '4-axis' && angle !== 0) {
       return indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ)(p).z;
     }
     return p.z;
@@ -932,7 +934,10 @@ export function App() {
     const op = ops.find((o) => o.id === expandedOpId);
     if (!geometry || !op || op.kind !== 'slicePocket') return null;
     const crown = stockTopZ(stock);
-    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    // index datums apply about the STOCK axis in 4-axis sections; a fixture
+    // section in 3-axis mode has no A (the barrier drops the pile above it)
+    const sec4 = sectionMode(stock, ops as { kind: string; id: string }[], op.id) === '4-axis';
+    const angle = sec4 ? datumAngleBefore(ops, op.id) : 0;
     return {
       z: crown - op.sliceDepth,
       rotate:
@@ -961,7 +966,7 @@ export function App() {
     if (!op || op.kind !== 'threadMill' || op.featureIds.length === 0) return null;
     if (op.endDepth <= op.startDepth) return null;
     const crown = stockTopZ(stock);
-    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    const angle = sectionMode(stock, ops as { kind: string; id: string }[], op.id) === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
     const rotate =
       angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
     for (const part of splitSelection(sources, op.featureIds)) {
@@ -1124,7 +1129,7 @@ export function App() {
   const pocketPreview = useMemo(() => {
     const op = ops.find((o) => o.id === expandedOpId);
     if (!op || op.kind !== 'pocket' || op.featureIds.length === 0) return null;
-    const angle = stock.axisMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    const angle = sectionMode(stock, ops as { kind: string; id: string }[], op.id) === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
     const rotate =
       angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
     const out: { regions: Vec2[][]; selectionZ: number }[] = [];
@@ -1144,19 +1149,32 @@ export function App() {
     return out.length > 0 ? out : null;
   }, [ops, expandedOpId, sources, stock]);
 
-  /** the open op's cutting frame: the viewport shows the part rotated to
-   * the index datum established above that op — A0 when nothing is open
-   * (edge-tracing §5 "view follows the datum") */
-  const viewDatum = useMemo(() => {
-    if (stock.axisMode !== '4-axis' || expandedOpId === null) return null;
+  /** the open op's cutting frame: the viewport shows the part in the frame
+   * its FIXTURE section declares (mode re-placement + pose, composed in
+   * order) plus the section's index datums — a re-clamp RESETS the A pile
+   * (the fixture-ops spec's datum barrier). Identity (null) when nothing
+   * is open (edge-tracing §5 "view follows the datum", generalized). */
+  const displayFrame = useMemo(() => {
+    if (expandedOpId === null) return null;
     const op = ops.find((o) => o.id === expandedOpId);
     if (!op) return null;
-    // an OPEN INDEX op shows its own angle as already applied — editing
-    // the number turns the live view; every other op shows the datum
-    // established above it
-    const angle = op.kind === 'index' ? op.angle : datumAngleBefore(ops, op.id);
-    if (angle === 0) return null;
-    return { angle, axisZ: rotaryCalibrationOf(stock).axisZ };
+    // an OPEN INDEX op shows its own angle as already applied — editing the
+    // number turns the live view. A FIXTURE's own display IS its declared
+    // frame (a fresh clamp: mode + pose, A=0 — its own barrier applies to
+    // itself). Every other op shows the datum established above it, which
+    // datumAngleBefore resets at each fixture.
+    const idxAngle =
+      op.kind === 'index' ? op.angle :
+      op.kind === 'fixture' ? 0 :
+      datumAngleBefore(ops, op.id);
+    const base = displayFrameFor(stock, ops as { kind: string; id: string }[], op.id);
+    if (idxAngle === 0) return base;
+    // the section's index datums, applied in the section's placed frame
+    const axisZ = rotaryCalibrationOf(stock).axisZ;
+    const rot = new THREE.Matrix4().makeTranslation(0, 0, axisZ)
+      .multiply(new THREE.Matrix4().makeRotationX(idxAngle * Math.PI / 180))
+      .multiply(new THREE.Matrix4().makeTranslation(0, 0, -axisZ));
+    return base ? rot.multiply(base) : rot;
   }, [ops, expandedOpId, stock]);
 
   /** per-move OWNING-OP ids over the preview flatten — one entry per
@@ -2039,7 +2057,7 @@ export function App() {
               carveSim.state.progress ? carveSim.state.progress.move : null
             }
             slicePreview={slicePreview}
-            viewDatum={viewDatum}
+            displayFrame={displayFrame}
             pickKind={featurePick?.kind ?? null}
             facePreview={facePreview}
             threadPreview={threadPreview}

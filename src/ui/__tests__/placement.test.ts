@@ -230,3 +230,94 @@ describe('empty mesh never snaps a transform to NaN/Infinity', () => {
     expect(t.position.x).toBeCloseTo(50); // extent 0, target the stock mid
   });
 });
+
+// ---- fixture display frames (the fixture-ops spec, 2026-11-19) ----
+//
+// displayFrameFor composes each fixture's mode re-placement + pose into
+// ONE display matrix for the op being opened. Her GHM9 case drives the
+// numbers: a Ø16.4 20mm 4-axis cylinder (axisZ 0), fixture → 3-axis stands
+// it up (the +X end rises to +Z), so the bore at the right end faces up.
+
+import { displayFrameFor } from '../placement';
+
+type FixtureOp = { kind: 'fixture'; id: string; pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd'; axisMode: '3-axis' | '4-axis' };
+type AnyOp = { kind: string; id: string };
+
+/** her adapter stock: Ø16.4 × 20, lying along X, centered on the axis */
+const adapter: Stock = {
+  kind: 'cylinder',
+  length: 20,
+  xOrigin: 'min',
+  calibration: { aOriginDeg: 0, axisZ: 0, effectiveRadius: 8.2 },
+  axisMode: '4-axis',
+  materialId: 'delrin',
+};
+
+function fixture(id: string, axisMode: '3-axis' | '4-axis', pose: FixtureOp['pose'] = 'none'): FixtureOp {
+  return { kind: 'fixture', id, pose, axisMode };
+}
+
+describe('displayFrameFor: the fixture datum barrier', () => {
+  it('no fixtures = identity (the stock placement is the display frame)', () => {
+    expect(displayFrameFor(adapter, [], 'op-1')).toBeNull();
+    expect(displayFrameFor(adapter, [{ kind: 'pocket', id: 'op-1' }], 'op-1')).toBeNull();
+  });
+
+  it('a same-mode fixture with pose unchanged is identity too', () => {
+    const ops: AnyOp[] = [fixture('f1', '4-axis'), { kind: 'pocket', id: 'op-1' }];
+    expect(displayFrameFor(adapter, ops, 'op-1')).toBeNull();
+  });
+
+  it('the fixture op itself composes its own frame (4→3 stands the part up)', () => {
+    // the +X end (machine x=20) rises to standing +Z=20 (xOrigin 'min':
+    // z spans 0..20, right end up top — the bore mouth faces the sky);
+    // the pristine (10,0,0) axis midpoint lands at standing (0,0,10)
+    const ops: AnyOp[] = [fixture('f1', '3-axis')];
+    const m = displayFrameFor(adapter, ops, 'f1');
+    expect(m).not.toBeNull();
+    const p = new THREE.Vector3(20, 0, 0).applyMatrix4(m!);
+    expect(p.x).toBeCloseTo(0);
+    expect(p.y).toBeCloseTo(0);
+    expect(p.z).toBeCloseTo(20);
+    const c = new THREE.Vector3(10, 0, 0).applyMatrix4(m!);
+    expect(c.x).toBeCloseTo(0);
+    expect(c.y).toBeCloseTo(0);
+    expect(c.z).toBeCloseTo(10);
+  });
+
+  it('ops AFTER the fixture inherit its frame; ops before keep the stock frame', () => {
+    const ops: AnyOp[] = [{ kind: 'pocket', id: 'op-1' }, fixture('f1', '3-axis'), { kind: 'pocket', id: 'op-2' }];
+    expect(displayFrameFor(adapter, ops, 'op-1')).toBeNull();
+    const m = displayFrameFor(adapter, ops, 'op-2');
+    expect(m).not.toBeNull();
+    // same fresh-clamp placement as the fixture's own (right end → +Z=20)
+    expect(new THREE.Vector3(20, 0, 0).applyMatrix4(m!).z).toBeCloseTo(20);
+  });
+
+  it('the SECOND fixture replaces the first — a fresh clamp, not a compound', () => {
+    // f1 stands up, f2 flips back down: the part returns to its stock
+    // placement (a re-clamp, not a rotation of a rotation — the frame
+    // is declared per section, not composed across re-clamps)
+    const ops: AnyOp[] = [fixture('f1', '3-axis'), { kind: 'pocket', id: 'op-1' }, fixture('f2', '4-axis'), { kind: 'pocket', id: 'op-2' }];
+    const m = displayFrameFor(adapter, ops, 'op-2');
+    // 4-axis mode on a cylinder lying along X: identity placement
+    expect(m).toBeNull();
+  });
+
+  it('poses compose on the placed frame about the placed part center', () => {
+    // stand up (f1 3-axis) then flip 180° about machine X — a standing
+    // part turning over about the horizontal axis through its center:
+    // the top (standing z=20) drops to z=0, the bore mouth faces down
+    const ops: AnyOp[] = [fixture('f1', '3-axis', 'flipX')];
+    const m = displayFrameFor(adapter, ops, 'f1');
+    const p = new THREE.Vector3(20, 0, 0).applyMatrix4(m!);
+    expect(p.x).toBeCloseTo(0);
+    expect(p.y).toBeCloseTo(0);
+    expect(p.z).toBeCloseTo(0);
+  });
+
+  it('a box stock never re-places on mode flips (a box only gains/loses A)', () => {
+    const boxOps: AnyOp[] = [fixture('f1', '4-axis'), { kind: 'pocket', id: 'op-1' }];
+    expect(displayFrameFor(boxStock, boxOps, 'op-1')).toBeNull();
+  });
+});
