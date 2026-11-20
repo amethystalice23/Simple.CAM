@@ -84,6 +84,7 @@ import { OpsPanel } from './OpsPanel';
 import { OP_KIND_COLORS } from './opColors';
 import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from './opSuggest';
 import { panelToolNumbers } from './toolAssignment';
+import { buildPostedStream } from './postedMoves';
 import { SuggestPopup } from './SuggestPopup';
 import { StockPanel } from './StockPanel';
 import { ToolPanel } from './ToolPanel';
@@ -233,16 +234,33 @@ export function App() {
   const autosavedModelRef = useRef<Uint8Array | null>(null);
   const restoredRef = useRef(false); // autosave waits for the mount restore
   const [previewMoves, setPreviewMoves] = useState<Move[] | null>(null);
-  /** the carve simulator's transport playback clock (2026-10-27): over the
-   *  SAME move stream the sim ran (previewMoves) — a completed sim + the
-   *  Simulation tick show the bar; Clear/new job/model drop dispose the
-   *  sim and the transport resets with it (its running/build effect drops
-   *  the clock state). Declared after previewMoves' useState; hooks stay
-   *  unconditionally called. */
-  const transport = useSimTransport(carveSim, previewMoves);
   /** the job: ordered operations, each with its own selection and params */
   const [ops, setOps] = useState<JobOp[]>([]);
   const [generated, setGenerated] = useState<Record<string, GeneratedOp>>({});
+  /** the POSTED move stream (item 13: simulate the posted g-code, not the
+   *  IR): built from the ops list exactly as Export does — stamp → post →
+   *  parse — so the sim and the transport clock see what the machine
+   *  executes, post behaviors included (G92.4 shrinks, short-way anchors).
+   *  Null until ops generate. */
+  const postedStream = useMemo(() => {
+    const postable = ops
+      .filter((o) => (generated[o.id]?.moves.length ?? 0) > 0)
+      .map((o) => ({
+        kind: o.kind,
+        toolId: o.toolId,
+        moves: generated[o.id]?.moves ?? [],
+        stepDown: simStepDownFor(o),
+      }));
+    if (postable.length === 0) return null;
+    return buildPostedStream(postable, tools, panelToolNumbers(ops));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ops/generated/tool deps; simStepDownFor is pure
+  }, [ops, generated, tools]);
+  /** the carve simulator's transport playback clock (2026-10-27): over the
+   *  SAME move stream the sim ran — a completed sim + the Simulation tick
+   *  show the bar; Clear/new job/model drop dispose the sim and the
+   *  transport resets with it (its running/build effect drops the clock
+   *  state). The clock runs the POSTED stream when the sim did (item 13). */
+  const transport = useSimTransport(carveSim, postedStream?.moves ?? previewMoves);
   const [editingOpId, setEditingOpId] = useState<string | null>(null);
   const [expandedOpId, setExpandedOpId] = useState<string | null>(null);
   /** FIXTURE GROUPS (the fixture-ops spec's collapse): fixture-op ids whose
@@ -2325,9 +2343,9 @@ export function App() {
         <SimulateDialog
           stock={stock}
           tools={tools}
-          moves={previewMoves ?? []}
-          toolOf={simToolOf}
-          stepDown={simStepDown}
+          moves={postedStream?.moves ?? previewMoves ?? []}
+          toolOf={postedStream?.toolOf ?? simToolOf}
+          stepDown={postedStream?.stepDown ?? simStepDown}
           sim={carveSim}
           onRun={() => {
             setShowSim(true); // the Simulation layer goes on with the run
