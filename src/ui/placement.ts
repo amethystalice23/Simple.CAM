@@ -221,17 +221,25 @@ export function alignToStock(
 // own (pristine) frame until the kernel pose-plumbing leg.
 
 /**
- * The stock's center as its placement puts it in a given MODE: a 3-axis
- * cylinder stands (axis ∥ Z, centered X0/Y0, z span from xOrigin); a
- * 4-axis one lies along X on the rotation axis. A box never moves.
+ * The stock's center as a fixture places it, in a MODE and along an ORIGIN
+ * edge: a 3-axis cylinder stands (axis ∥ Z, centered X0/Y0, the edge
+ * placing machine Z0 along its height); a 4-axis one lies along X on the
+ * rotation axis. A box never moves.
  */
-function placedCenter(stock: Stock, mode: '3-axis' | '4-axis'): THREE.Vector3 {
+function placedCenter(
+  stock: Stock,
+  mode: '3-axis' | '4-axis',
+  origin: OriginEdge | null,
+): THREE.Vector3 {
+  // null = inherit the Stock page's origin for this mode's own placement
+  const edge: OriginEdge =
+    origin ?? (stock.kind === 'cylinder' ? stock.xOrigin : stock.origin.x);
   if (stock.kind === 'cylinder') {
     if (mode === '3-axis') {
-      const [z0, z1] = originSpan(stock.xOrigin, stock.length);
+      const [z0, z1] = originSpan(edge, stock.length);
       return new THREE.Vector3(0, 0, (z0 + z1) / 2);
     }
-    const [x0, x1] = originSpan(stock.xOrigin, stock.length);
+    const [x0, x1] = originSpan(edge, stock.length);
     return new THREE.Vector3((x0 + x1) / 2, 0, stock.calibration.axisZ);
   }
   const [x0, x1] = stockSpan(stock, 'x');
@@ -244,21 +252,26 @@ function placedCenter(stock: Stock, mode: '3-axis' | '4-axis'): THREE.Vector3 {
  * The re-placement a mode flip carries: 4-axis → 3-axis stands a lying
  * cylinder up (its +X end rises to +Z); 3-axis → 4-axis lies it back down
  * the exact inverse way. A box or a same-mode fixture never moves — a box
- * only gains/loses the A axis; its placement is the placement.
+ * only gains/loses the A axis; its placement is the placement. The
+ * fixture's ORIGIN edge drives where the new mode's machine 0 sits along
+ * the part (Z0 on the standing top face is the probed default — see
+ * fixtureOrigin). Every re-clamp starts from the PRISTINE part, so `from`
+ * is always the stock's placement; `to` is this fixture's own.
  */
 export function modePlacementMatrix(
   stock: Stock,
   from: '3-axis' | '4-axis',
   to: '3-axis' | '4-axis',
+  fromOrigin: OriginEdge | null,
+  toOrigin: OriginEdge | null,
 ): THREE.Matrix4 | null {
   if (stock.kind !== 'cylinder' || from === to) return null;
   // the stand-up roll: −90° about machine +Y tips +X up to +Z (the RIGHT
-  // end rises: with xOrigin 'min' the right end sits at standing z=length,
-  // the bore mouth faces the sky — her adapter's case). Lying back down
-  // is the inverse (+90°). placed(p) = c_to + R·(p − c_from).
+  // end rises). Lying back down is the inverse (+90°).
+  // placed(p) = c_to + R·(p − c_from).
   const rot = new THREE.Matrix4().makeRotationY(from === '4-axis' ? -Math.PI / 2 : Math.PI / 2);
-  const cf = placedCenter(stock, from);
-  const ct = placedCenter(stock, to);
+  const cf = placedCenter(stock, from, fromOrigin);
+  const ct = placedCenter(stock, to, toOrigin);
   return new THREE.Matrix4()
     .makeTranslation(ct.x, ct.y, ct.z)
     .multiply(rot)
@@ -274,10 +287,11 @@ export function modePlacementMatrix(
 export function poseMatrix(
   stock: Stock,
   mode: '3-axis' | '4-axis',
+  origin: OriginEdge | null,
   pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd',
 ): THREE.Matrix4 | null {
   if (pose === 'none' || pose === 'standVertical') return null;
-  const c = placedCenter(stock, mode);
+  const c = placedCenter(stock, mode, origin);
   const axis =
     pose === 'flipX' ? new THREE.Vector3(1, 0, 0) :
     pose === 'flipY' ? new THREE.Vector3(0, 1, 0) :
@@ -312,12 +326,37 @@ export function sectionMode(
 }
 
 /**
+ * The fixture's own ORIGIN edge for its section's placement: null (inherit
+ * the Stock page's origin) resolves per mode — a 4-axis section inherits
+ * the stock's X0 choice as-is, but a 3-axis section on a 4-axis stock
+ * STANDS the part, and the natural 3-axis zero is the TOP FACE (Z0 on top
+ * — the z-probeable surface; her ruling 2026-11-20: "you are likely to
+ * want Z0 to be the top as thats something you can z-probe"). A box stock
+ * keeps its triple; a 3-axis stock inherits as-is.
+ */
+export function fixtureOrigin(
+  stock: Stock,
+  sectionAxisMode: '3-axis' | '4-axis',
+  origin: OriginEdge | { x: OriginEdge; y: OriginEdge; z: OriginEdge } | null,
+): OriginEdge | { x: OriginEdge; y: OriginEdge; z: OriginEdge } {
+  if (origin !== null) return origin;
+  if (stock.kind === 'cylinder' && stock.axisMode === '4-axis' && sectionAxisMode === '3-axis') {
+    return 'max'; // Z0 on the standing top face
+  }
+  if (stock.kind === 'cylinder') return stock.xOrigin;
+  return stock.origin;
+}
+
+/**
  * The display frame one op renders in: its FIXTURE section's fresh clamp —
  * the mode re-placement then the pose, in that order (the pose turns the
- * placed part in place). The latest fixture at-or-above the op owns the
- * frame; the op's own fixture counts (opening a Fixture shows its setup,
- * like opening an Index shows its own angle). Ops before any fixture
- * render in the stock's placement. Returns null when that is identity.
+ * placed part in place). Every re-clamp starts from the PRISTINE part (it
+ * left the machine — sections never compound), so the placement's `from`
+ * side is always the stock's own. The latest fixture at-or-above the op
+ * owns the frame; the op's own fixture counts (opening a Fixture shows its
+ * setup, like opening an Index shows its own angle). Ops before any
+ * fixture render in the stock's placement. Returns null when that is
+ * identity.
  */
 export function displayFrameFor(
   stock: Stock,
@@ -328,15 +367,37 @@ export function displayFrameFor(
   let frame: THREE.Matrix4 | null = null;
   for (const op of ops) {
     if (op.kind === 'fixture') {
-      // a FRESH clamp: mode placement first, then the pose about the
-      // part's center in the fixture's own placed frame
+      // a FRESH clamp of the pristine part: mode placement first (the
+      // fixture's own origin driving the new mode's zero, defaulting per
+      // fixtureOrigin — 4→3 stands with Z0 on top, the z-probeable face),
+      // then the pose about the placed part's center
       const f = op as unknown as {
         kind: 'fixture';
         pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd';
         axisMode: '3-axis' | '4-axis';
+        origin: OriginEdge | { x: OriginEdge; y: OriginEdge; z: OriginEdge } | null | undefined;
       };
-      const place = modePlacementMatrix(stock, stock.axisMode, f.axisMode);
-      const turn = poseMatrix(stock, f.axisMode, f.pose);
+      // a save from before the origin field (or a half-built op literal)
+      // reads as inherit (null) — never as undefined noise
+      const fOrigin = f.origin ?? null;
+      // resolve the inherit default FIRST so the placement and the pose
+      // agree (4→3 stands with Z0 on top, the z-probeable face)
+      const afterOrigin = fixtureOrigin(stock, f.axisMode, fOrigin);
+      const place = modePlacementMatrix(
+        stock,
+        stock.axisMode,
+        f.axisMode,
+        stock.kind === 'cylinder' ? stock.xOrigin : stock.origin.x,
+        typeof afterOrigin === 'string' ? afterOrigin : afterOrigin.x,
+      );
+      // a box never re-places (modePlacementMatrix null), but its POSE
+      // still applies — a box part turns over in a vise like any other
+      const turn = poseMatrix(
+        stock,
+        f.axisMode,
+        typeof afterOrigin === 'string' ? afterOrigin : null,
+        f.pose ?? 'none',
+      );
       frame =
         place && turn ? new THREE.Matrix4().multiplyMatrices(turn, place) :
         place ?? turn ?? null;

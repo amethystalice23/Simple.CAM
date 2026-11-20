@@ -24,6 +24,7 @@ import {
   presetRates,
   toolPresetFor,
 } from './jobGeneration';
+import { fixtureOrigin } from './placement';
 import { panelToolNumbers } from './toolAssignment';
 import { OP_KIND_COLORS } from './opColors';
 import { OP_HELP, opHelpLabel } from './opHelp';
@@ -343,12 +344,19 @@ function FixtureFields(props: {
           ) : (
             /* the cylinder: one along-axis edge, labeled as the Stock page
              * labels it for the mode this re-clamp ends in (op.axisMode —
-             * a 4-axis cylinder stood up in a vice becomes a Z axis) */
+             * a 4-axis cylinder stood up in a vice becomes a Z axis). While
+             * inherited (null) the Segmented mirrors the RESOLVED default —
+             * a 4→3 stand-up defaults Z0 to the TOP FACE (max, the
+             * z-probeable surface); anything else inherits the stock's
+             * X0 choice. */
             <div className="field">
               <span>{op.axisMode === '3-axis' ? 'Z0 along axis' : 'X0 along axis'}</span>
               <Segmented
                 options={FIXTURE_ORIGINS}
-                value={cylEdge ?? s.xOrigin}
+                value={
+                  cylEdge ??
+                  fixtureOrigin(s, op.axisMode, null) as OriginEdge
+                }
                 onChange={(v) => upd({ origin: v })}
               />
             </div>
@@ -357,10 +365,16 @@ function FixtureFields(props: {
         <button
           type="button"
           className={`icon-btn${op.origin === null ? ' active' : ''}`}
-          title="Zero inherits the Stock page's origin — same as the implicit fixture 1"
+          title={
+            op.origin === null
+              ? s.kind === 'cylinder' && s.axisMode === '4-axis' && op.axisMode === '3-axis'
+                ? 'Inherited: Z0 sits on the standing top face — the z-probeable surface (set an edge to override)'
+                : 'Zero inherits the Stock page\'s origin — same as the implicit fixture 1'
+              : 'Back to the inherited default'
+          }
           onClick={() => upd({ origin: null })}
         >
-          Same as Stock
+          {op.origin === null ? 'Inherited' : 'Same as Stock'}
         </button>
       </div>
       <InfoTip warn text="DUMMY — this re-clamp is not applied to the toolpaths yet; it records the setup and frames the ops list" />

@@ -269,20 +269,20 @@ describe('displayFrameFor: the fixture datum barrier', () => {
   });
 
   it('the fixture op itself composes its own frame (4→3 stands the part up)', () => {
-    // the +X end (machine x=20) rises to standing +Z=20 (xOrigin 'min':
-    // z spans 0..20, right end up top — the bore mouth faces the sky);
-    // the pristine (10,0,0) axis midpoint lands at standing (0,0,10)
+    // the +X end (machine x=20) rises to standing z=0 — the default origin
+    // is MAX (Z0 on the top face, the z-probeable surface; span z -20..0),
+    // so the right end sits AT Z0 up top, the bore mouth facing the sky
     const ops: AnyOp[] = [fixture('f1', '3-axis')];
     const m = displayFrameFor(adapter, ops, 'f1');
     expect(m).not.toBeNull();
     const p = new THREE.Vector3(20, 0, 0).applyMatrix4(m!);
     expect(p.x).toBeCloseTo(0);
     expect(p.y).toBeCloseTo(0);
-    expect(p.z).toBeCloseTo(20);
+    expect(p.z).toBeCloseTo(0);
     const c = new THREE.Vector3(10, 0, 0).applyMatrix4(m!);
     expect(c.x).toBeCloseTo(0);
     expect(c.y).toBeCloseTo(0);
-    expect(c.z).toBeCloseTo(10);
+    expect(c.z).toBeCloseTo(-10);
   });
 
   it('ops AFTER the fixture inherit its frame; ops before keep the stock frame', () => {
@@ -290,30 +290,33 @@ describe('displayFrameFor: the fixture datum barrier', () => {
     expect(displayFrameFor(adapter, ops, 'op-1')).toBeNull();
     const m = displayFrameFor(adapter, ops, 'op-2');
     expect(m).not.toBeNull();
-    // same fresh-clamp placement as the fixture's own (right end → +Z=20)
-    expect(new THREE.Vector3(20, 0, 0).applyMatrix4(m!).z).toBeCloseTo(20);
+    // same fresh-clamp placement as the fixture's own (right end at Z0)
+    expect(new THREE.Vector3(20, 0, 0).applyMatrix4(m!).z).toBeCloseTo(0);
   });
 
   it('the SECOND fixture replaces the first — a fresh clamp, not a compound', () => {
-    // f1 stands up, f2 flips back down: the part returns to its stock
-    // placement (a re-clamp, not a rotation of a rotation — the frame
-    // is declared per section, not composed across re-clamps)
+    // f1 stands up, f2 lies back down — but each is a FRESH clamp of the
+    // pristine part: f2's frame is NOT f1's inverse, it is the identity
+    // (4-axis mode on the lying stock). Sections never compound.
     const ops: AnyOp[] = [fixture('f1', '3-axis'), { kind: 'pocket', id: 'op-1' }, fixture('f2', '4-axis'), { kind: 'pocket', id: 'op-2' }];
-    const m = displayFrameFor(adapter, ops, 'op-2');
-    // 4-axis mode on a cylinder lying along X: identity placement
-    expect(m).toBeNull();
+    const m2 = displayFrameFor(adapter, ops, 'op-2');
+    expect(m2).toBeNull();
+    // and f1's own frame is untouched by what came after it
+    const m1 = displayFrameFor(adapter, ops, 'f1');
+    expect(m1).not.toBeNull();
   });
 
   it('poses compose on the placed frame about the placed part center', () => {
-    // stand up (f1 3-axis) then flip 180° about machine X — a standing
-    // part turning over about the horizontal axis through its center:
-    // the top (standing z=20) drops to z=0, the bore mouth faces down
+    // stand up (f1 3-axis, default origin MAX → Z0 on the standing top
+    // face, span z -20..0, right end at z=0) then flip 180° about machine
+    // X through the placed center (0,0,-10): the right end drops to
+    // z=-20, the bore mouth faces the table
     const ops: AnyOp[] = [fixture('f1', '3-axis', 'flipX')];
     const m = displayFrameFor(adapter, ops, 'f1');
     const p = new THREE.Vector3(20, 0, 0).applyMatrix4(m!);
     expect(p.x).toBeCloseTo(0);
     expect(p.y).toBeCloseTo(0);
-    expect(p.z).toBeCloseTo(0);
+    expect(p.z).toBeCloseTo(-20);
   });
 
   it('a box stock never re-places on mode flips (a box only gains/loses A)', () => {
