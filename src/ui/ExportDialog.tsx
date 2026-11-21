@@ -18,6 +18,8 @@ import {
   countToolChanges,
   fixtureSections,
   includeUnblocked,
+  mergeFixtureFiles,
+  refixturePauseMove,
   sanitizeFilename,
   setToolNumber,
   stampOp,
@@ -64,9 +66,9 @@ function originWords(origin: { x: string; y: string; z: string } | string): stri
 /** The origin the section's fixture declares, or null when it inherits
  *  the Stock page's (the header says so instead). */
 function sectionOrigin(
-  fixture: { origin: unknown },
+  fixture: { origin: unknown } | null,
 ): { x: string; y: string; z: string } | string | null {
-  return (fixture.origin as { x: string; y: string; z: string } | string | null) ?? null;
+  return (fixture?.origin as { x: string; y: string; z: string } | string | null) ?? null;
 }
 
 function stockSummary(stock: Stock): string {
@@ -195,61 +197,83 @@ export function ExportDialog(props: Props) {
 
   const exportAndDownload = () => {
     if (includedOps.length === 0) return;
-    // fixture sections: one .nc per re-clamp, in job order (the fixture-ops
-    // spec's export split). The checkbox set (`included`) picks which ops
-    // export; empty sections drop out entirely.
+    // fixture sections → export FILES (the 2026-11-21 ruling): a same-mode
+    // re-clamp stays in one .nc with a synthetic re-fixture M6 hold in
+    // between; only a MODE change (3↔4-axis) splits the file. The checkbox
+    // set (`included`) picks which ops export; empty sections drop out.
     const name = sanitizeFilename(filename);
     const sections = fixtureSections(
       includedOps as unknown as { id: string; kind: string; toolId: string }[],
     ).filter((s) => s.ops.length > 0);
-    sections.forEach((section, sIndex) => {
-      // stamp each op's first move: 1-based position in THIS file, its label,
-      // and the controller tool number
+    const files = mergeFixtureFiles(
+      sections,
+      props.stock.axisMode,
+      (fixture) => {
+        const origin = sectionOrigin(fixture);
+        const originComment =
+          origin === null
+            ? 'WCS origin: same as Stock page (inherited)'
+            : `WCS origin: ${originWords(origin)}`;
+        return `re-fixture: pose ${fixture?.pose ?? 'none'}, mode ${fixture?.axisMode ?? props.stock.axisMode} — ${originComment}`;
+      },
+    );
+    files.forEach((file, fIndex) => {
+      // stamp each op's first move: 1-based position in THIS file, its
+      // label, and the controller tool number; a re-fixture pause opens
+      // every merged section. Index ops inherit the previous cutting op's
+      // number (stamped inline — an A-axis rapid never prompts a change).
       const moves: Move[] = [];
-      section.ops.forEach((o, i) => {
-        moves.push(
-          ...stampOp(
-            props.generated[o.id].moves,
-            i + 1,
-            opLabel(o.kind),
-            toolNumbers.get(o.toolId) ?? 1,
-          ),
-        );
+      let opNumber = 0;
+      let prevCutNum: number | undefined;
+      file.sections.forEach((section, si) => {
+        if (si > 0) {
+          opNumber++;
+          moves.push(refixturePauseMove(opNumber, file.pauses[si] ?? 're-fixture'));
+        }
+        section.ops.forEach((o) => {
+          opNumber++;
+          const num =
+            o.kind === 'index' ? (prevCutNum ?? toolNumbers.get(o.toolId) ?? 1) : toolNumbers.get(o.toolId) ?? 1;
+          if (o.kind !== 'index') prevCutNum = num;
+          moves.push(...stampOp(props.generated[o.id].moves, opNumber, opLabel(o.kind), num));
+        });
       });
-      // this section's tools (first-use order) and their panel numbers
-      const tools = [...new Set(section.ops.map((o) => o.toolId))]
+      // this file's tools (first-use order) and their panel numbers
+      const tools = [...new Set(file.sections.flatMap((s) => s.ops.map((o) => o.toolId)))]
         .map((id) => props.tools.find((t) => t.id === id))
         .filter((t): t is Tool => t !== undefined);
       const toolNums = tools.map((t) => toolNumbers.get(t.id) ?? 1);
-      // the fixture's origin statement: where zero lands for this setup
-      // (null = inherit the Stock page's origin; recorded, not verified)
-      const origin = section.fixture ? sectionOrigin(section.fixture) : null;
-      const originComment =
-        origin === null
-          ? '; WCS origin: same as Stock page (inherited)'
-          : `; WCS origin: ${originWords(origin)}`;
+      // the file's setup notes: one per section, its origin statement
+      const fixtureNote = file.sections.flatMap((section) => {
+        const origin = section.fixture ? sectionOrigin(section.fixture) : null;
+        const originComment =
+          origin === null
+            ? '; WCS origin: same as Stock page (inherited)'
+            : `; WCS origin: ${originWords(origin)}`;
+        return [
+          originComment,
+          section.fixture
+            ? `; re-clamp: pose ${section.fixture.pose}, mode ${section.fixture.axisMode}`
+            : `; setup: stock as placed (fixture 1)`,
+        ];
+      });
       const nc = postCarvera({
         moves,
         tools,
         toolNumbers: toolNums,
         options: {
           jobName: name.replace(/\.nc$/, ''),
-          fixtureNote: [
-            originComment,
-            section.fixture
-              ? `; re-clamp: pose ${section.fixture.pose}, mode ${section.fixture.axisMode}`
-              : `; setup: stock as placed (fixture 1)`,
-          ],
+          fixtureNote,
         },
       });
-      const sectionName =
-        sections.length > 1
-          ? name.replace(/(\.nc)?$/, '') + `_S${sIndex + 1}.nc`
+      const fileName =
+        files.length > 1
+          ? name.replace(/(\.nc)?$/, '') + `_S${fIndex + 1}.nc`
           : name;
       const url = URL.createObjectURL(new Blob([nc], { type: 'text/plain' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = sectionName;
+      a.download = fileName;
       a.click();
       URL.revokeObjectURL(url);
     });
@@ -310,6 +334,7 @@ export function ExportDialog(props: Props) {
               g !== undefined && g.error === null
                 ? `${g.minutes.toFixed(1)} min`
                 : '—';
+            const frameOp = op.kind === 'fixture' || op.kind === 'index';
             return (
               <div key={op.id} className={`export-row${ok ? '' : ' dim'}`}>
                 <input
@@ -323,10 +348,21 @@ export function ExportDialog(props: Props) {
                 <span className="export-kind">{opLabel(op.kind)}</span>
                 <span
                   className="export-toolno"
-                  title="Controller tool number, shown on the machine's tool-change prompt — match your physical tool slot. Ops sharing a tool share the number."
+                  title={
+                    frameOp
+                      ? 'A frame op — no tool, no number; it declares the setup the ops below run in'
+                      : "Controller tool number, shown on the machine's tool-change prompt — match your physical tool slot. Ops sharing a tool share the number."
+                  }
                 >
-                  {num === undefined ? (
-                    <span className="export-no-tool" title="No number until an op using this tool is checked">
+                  {frameOp || num === undefined ? (
+                    <span
+                      className="export-no-tool"
+                      title={
+                        frameOp
+                          ? 'A frame op carries no tool'
+                          : 'No number until an op using this tool is checked'
+                      }
+                    >
                       —
                     </span>
                   ) : (

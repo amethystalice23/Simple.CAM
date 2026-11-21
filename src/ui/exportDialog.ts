@@ -7,6 +7,9 @@
  */
 
 import type { AxisMode, JobOp, Move, OriginEdge } from '../core/types';
+import { REFIXTURE_TOOL_NUMBER } from '../core/types';
+
+export { REFIXTURE_TOOL_NUMBER };
 
 /** Clamp a user-typed tool number: integer ≥ 1 (garbage becomes 1). */
 export function clampToolNumber(n: number): number {
@@ -51,15 +54,18 @@ export function setToolNumber(
  * order: loading the FIRST op's tool counts (the spindle starts with
  * whatever was in it before), then every switch to a different controller
  * tool number. Ops sharing a number (same tool, or two tools a human
- * numbered alike) do not prompt in between.
+ * numbered alike) do not prompt in between. FRAME ops (index/fixture — no
+ * kind read as a cutting op) never prompt: they carry no tool change of
+ * their own, and the in-file re-fixture pause is not a tool load.
  */
 export function countToolChanges(
-  ops: readonly { toolId: string }[],
+  ops: readonly { kind?: string; toolId: string }[],
   toolNumbers: ReadonlyMap<string, number>,
 ): number {
   let changes = 0;
   let prev: number | undefined;
   for (const op of ops) {
+    if (op.kind === 'index' || op.kind === 'fixture') continue;
     const num = toolNumbers.get(op.toolId) ?? 1;
     if (prev === undefined || num !== prev) changes++;
     prev = num;
@@ -135,6 +141,24 @@ export function stampOp(
   ];
 }
 
+/**
+ * In-file re-fixture pause: a wordless cut move with the RE-FIXTURE tool
+ * tag. The post turns it into the pseudo-tool's T M6 block — the machine
+ * holds with the controller dialog reading the note; the operator turns
+ * the part over, re-zeros, presses continue. Emitted at every fixture
+ * boundary that does NOT split the file (see mergeFixtureFiles — a mode
+ * change splits, a same-mode re-clamp pauses in place).
+ */
+export function refixturePauseMove(opNumber: number, note: string): Move {
+  return {
+    words: {},
+    feed: 0,
+    rapid: false,
+    comment: note,
+    op: { number: opNumber, name: 'Re-fixture', toolNumber: REFIXTURE_TOOL_NUMBER },
+  };
+}
+
 // ---- fixture sections (the fixture-ops spec's one-.nc-per-setup export) ----
 
 /** Fixture fields the export needs from a fixture op, isolated so ops[]
@@ -195,6 +219,66 @@ export function fixtureSections(
     }
   }
   return sections.filter((s) => s.fixture === null || s.ops.length > 0);
+}
+
+/** The mode a section runs in: its fixture's declared mode, or the stock's
+ * (fixture 1). The FILE-SPLIT rule reads this — see mergeFixtureFiles. */
+export function sectionAxisMode(
+  section: ExportSection,
+  stockMode: '3-axis' | '4-axis',
+): '3-axis' | '4-axis' {
+  return section.fixture?.axisMode ?? stockMode;
+}
+
+/**
+ * Group the fixture sections into EXPORT FILES (Alice's 2026-11-21
+ * ruling): one tool set is laid out before the job begins, so the T chain
+ * is job-wide; and a same-mode re-clamp does not need a new .nc — the
+ * machine holds at a synthetic "Re-fixture" T M6 (the controller's
+ * tool-change popup doubles as the "please turn over" prompt), the
+ * operator flips and re-zeros, and continue finishes the file.
+ *
+ * A MODE change (3↔4-axis) still splits: the WCS lands in a wildly
+ * different place — the 4th-axis machinery cannot be co-sited with
+ * end-work clamping — so no pause carries that; each mode's sections go
+ * to their own file. 4-axis end-for-end re-clamps MERGE (the user
+ * realigns the turned stock to the origin — their task, never a gate;
+ * selective export stays the escape hatch for separate files).
+ *
+ * Back-to-back same-mode fixtures stay DISTINCT pauses (each carries its
+ * own pose/origin note), only the FILE boundary merges.
+ */
+export interface ExportFile {
+  /** the sections in this file, in job order */
+  sections: ExportSection[];
+  /** the re-clamp notes of every boundary WITHIN this file, aligned to
+   * `sections[i]` — notes[i] is the pause that PRECEDES sections[i]
+   * (null for sections[0], which starts the file) */
+  pauses: (string | null)[];
+}
+
+export function mergeFixtureFiles(
+  sections: readonly ExportSection[],
+  stockMode: '3-axis' | '4-axis',
+  noteOf: (fixture: FixtureOp | null) => string,
+): ExportFile[] {
+  const files: ExportFile[] = [];
+  let current: ExportFile | null = null;
+  let currentMode: '3-axis' | '4-axis' | null = null;
+  for (const section of sections) {
+    const mode = sectionAxisMode(section, stockMode);
+    if (current === null || mode !== currentMode) {
+      if (current) files.push(current);
+      current = { sections: [section], pauses: [null] };
+      currentMode = mode;
+    } else {
+      // same mode: merge into the file, a re-fixture pause at the boundary
+      current.sections.push(section);
+      current.pauses.push(noteOf(section.fixture));
+    }
+  }
+  if (current) files.push(current);
+  return files;
 }
 
 /**

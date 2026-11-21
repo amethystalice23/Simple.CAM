@@ -12,7 +12,7 @@
  */
 
 import type { FeedMode, Move, Tool } from '../core/types';
-import { isSimultaneous } from '../core/types';
+import { isSimultaneous, REFIXTURE_TOOL_NUMBER } from '../core/types';
 
 export interface PostOptions {
   /** emit G92.4 A0 after A-coordinating sequences (default true) */
@@ -221,6 +221,15 @@ export function postCarvera(input: PostInput): string {
   lines.push(`; simple.cam v0.0.1 — job "${opts.jobName}"`);
   lines.push(`; generated ${new Date().toISOString()}`);
   lines.push(...toolComments(input.tools, input.toolNumbers));
+  // the synthetic RE-FIXTURE pseudo-tool's header: the controller's M6
+  // popup and legend read the TOOL table's `name`, so the turn-over
+  // prompt must say "Re-fixture", not "T999". Header-only — no entry in
+  // input.tools (it exists in no one's physical set-out set).
+  if (input.moves.some((m) => m.op?.toolNumber === REFIXTURE_TOOL_NUMBER)) {
+    lines.push(
+      `;@MKR|TOOL|number=${REFIXTURE_TOOL_NUMBER}|id=refixture|name=Re-fixture|type=Flat End|handlediameter=0|sticklength=0|shoulderlength=0|flutelength=0|diameter=0|tipdiameter=0|cornerradius=0|angle=0|halfAngle=0`,
+    );
+  }
   if (opts.fixtureNote) {
     for (const line of opts.fixtureNote) {
       lines.push(line.startsWith(';') ? line : `; ${line}`);
@@ -285,6 +294,18 @@ export function postCarvera(input: PostInput): string {
   };
 
   for (const m of input.moves) {
+    // A WORDLESS tagged move with no laser power is the RE-FIXTURE PAUSE
+    // (the synthetic M6 hold that doubles as the "please turn over" prompt):
+    // it emits no motion line, and the op boundary below carries the whole
+    // effect (the T M6 block). Laser beam-off moves are also wordless but
+    // carry `power` — they must keep emitting their `G1 S0`.
+    const wordless =
+      m.words.x === undefined &&
+      m.words.y === undefined &&
+      m.words.z === undefined &&
+      m.words.a === undefined &&
+      m.arc === undefined &&
+      m.power === undefined;
     // Handle toolpath transition markers and tool changes
     if (m.op) {
       const prevOp = st.lastOp;
@@ -342,9 +363,30 @@ export function postCarvera(input: PostInput): string {
           (_, i) => (input.toolNumbers?.[i] ?? i + 1) === currentToolNum,
         );
         const isLaser = toolIdx !== -1 && input.tools[toolIdx].type === 'laser';
+        // the synthetic RE-FIXTURE tool (999): a pseudo-tool outside the
+        // physical set-out set — the M6 hold is the turn-over pause, the
+        // controller's popup shows its TOOL-header name. It needs no tool
+        // record and no spindle/motion handling of its own.
+        const isRefixture = currentToolNum === REFIXTURE_TOOL_NUMBER;
 
         if (!prevToolNum || currentToolNum !== prevToolNum) {
-          if (isLaser) {
+          if (isRefixture) {
+            // the re-fixture pause: spindle off, then the M6 hold. The
+            // operator turns the part over, re-zeros, presses continue; the
+            // next op's block re-emits S M3 (st.lastSpindle reset below).
+            // The pause move's comment rides HERE — the wordless move
+            // emits no motion line for it to travel on.
+            if (st.lastSpindle !== -1) {
+              lines.push('M5');
+              lines.push('');
+            }
+            lines.push(`; T${currentToolNum}-Re-fixture`);
+            if (m.comment) lines.push(`; ${m.comment}`);
+            lines.push('');
+            lines.push(`T${currentToolNum} M6`);
+            lines.push('');
+            st.lastSpindle = -1;
+          } else if (isLaser) {
             // laser module: fitted and length-probed machine-side — no
             // T M6, no tool comment, no TOOL header. M321 enters laser
             // mode (applying the G92.5 offset, so coordinates need no
@@ -399,6 +441,8 @@ export function postCarvera(input: PostInput): string {
     }
 
     const simultaneous = isSimultaneous(m);
+    // the re-fixture pause carries no words — everything below is motion
+    if (wordless) continue;
     // arcs have no G93 form: the IR forbids `a` on an arc move, and the
     // emission path below hardcodes G94 for them — a violation here is a
     // generator bug, caught rather than mis-emitted

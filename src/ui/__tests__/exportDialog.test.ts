@@ -11,6 +11,8 @@ import {
   fixtureSections,
   formatTimestamp,
   includeUnblocked,
+  mergeFixtureFiles,
+  refixturePauseMove,
   safeNamePart,
   sanitizeFilename,
   setToolNumber,
@@ -408,5 +410,142 @@ describe('countToolChanges', () => {
   it('is 0 with no ops and falls back to T1 for an unnumbered tool', () => {
     expect(countToolChanges([], nums)).toBe(0);
     expect(countToolChanges([{ toolId: 'unknown' }, { toolId: 'unknown' }], nums)).toBe(1);
+  });
+
+  it('frame ops (index/fixture) never prompt — they carry no tool of their own', () => {
+    // pocket → index → pocket: no change between the pockets
+    expect(
+      countToolChanges(
+        [
+          { kind: 'pocket', toolId: 'flat6' },
+          { kind: 'index', toolId: 'drill3' },
+          { kind: 'pocket', toolId: 'flat6' },
+        ],
+        nums,
+      ),
+    ).toBe(1);
+    // a fixture between two different tools is still one switch
+    expect(
+      countToolChanges(
+        [
+          { kind: 'pocket', toolId: 'flat6' },
+          { kind: 'fixture', toolId: 'vbit' },
+          { kind: 'profile', toolId: 'vbit' },
+        ],
+        nums,
+      ),
+    ).toBe(2);
+  });
+});
+
+describe('mergeFixtureFiles', () => {
+  /** fixture op shaped for the pure helpers (pose/mode/origin) */
+  const fx = (id: string, axisMode: '3-axis' | '4-axis') =>
+    ({ id, kind: 'fixture', toolId: 't1', pose: 'flipX', axisMode, origin: null }) as const;
+  const op = (id: string, kind = 'pocket'): { id: string; kind: string; toolId: string } => ({
+    id,
+    kind,
+    toolId: 't1',
+  });
+
+  it('no fixtures → one file, one section, no pauses', () => {
+    const sections = fixtureSections([op('a'), op('b')]);
+    const files = mergeFixtureFiles(sections, '3-axis', () => 'note');
+    expect(files).toHaveLength(1);
+    expect(files[0].sections).toHaveLength(1);
+    expect(files[0].pauses).toEqual([null]);
+  });
+
+  it('same-mode re-clamps merge into ONE file with a pause at each boundary', () => {
+    const ops = [op('a'), fx('f1', '3-axis'), op('b'), fx('f2', '3-axis'), op('c')];
+    const files = mergeFixtureFiles(fixtureSections(ops), '3-axis', (f) => `note:${f?.id}`);
+    expect(files).toHaveLength(1);
+    expect(files[0].sections.map((s) => s.fixture?.id ?? null)).toEqual([null, 'f1', 'f2']);
+    expect(files[0].pauses).toEqual([null, 'note:f1', 'note:f2']);
+  });
+
+  it('a mode change splits the file — 3↔4-axis WCS jumps cannot ride a pause', () => {
+    const ops = [op('a'), fx('f1', '4-axis'), op('b'), fx('f2', '3-axis'), op('c')];
+    const files = mergeFixtureFiles(fixtureSections(ops), '3-axis', () => 'note');
+    expect(files).toHaveLength(3);
+    // file 1: stock's own mode; file 2: the 4-axis section; file 3: back to 3
+    expect(files[0].sections).toHaveLength(1);
+    expect(files[1].sections.map((s) => s.fixture?.axisMode)).toEqual(['4-axis']);
+    expect(files[2].sections.map((s) => s.fixture?.axisMode)).toEqual(['3-axis']);
+  });
+
+  it('consecutive same-mode re-clamps stay distinct pauses (each carries its own note)', () => {
+    const ops = [op('a'), fx('f1', '3-axis'), fx('f2', '3-axis'), op('b')];
+    // f1 has no ops — fixtureSections drops its section entirely
+    const files = mergeFixtureFiles(fixtureSections(ops), '3-axis', (f) => `note:${f?.id}`);
+    expect(files).toHaveLength(1);
+    expect(files[0].pauses).toEqual([null, 'note:f2']);
+  });
+
+  it('4-axis end-for-end re-clamps merge (the stock realignment is the user’s task, not a gate)', () => {
+    const ops = [op('a'), fx('f1', '4-axis'), op('b')];
+    const files = mergeFixtureFiles(fixtureSections(ops), '4-axis', () => 'note');
+    expect(files).toHaveLength(1);
+    expect(files[0].pauses).toEqual([null, 'note']);
+  });
+});
+
+describe('refixturePauseMove + post', () => {
+  const cut = (x = 5): Move => ({ words: { x, z: -1 }, feed: 100 });
+
+  it('the post turns the pause into a T999 M6 hold with no motion line', () => {
+    const moves = [
+      ...stampOp([cut()], 1, 'Pocket', 1),
+      refixturePauseMove(2, 're-fixture: pose flipX'),
+      ...stampOp([cut(10)], 3, 'Profile', 2),
+    ];
+    const nc = postCarvera({
+      moves,
+      tools: [
+        { id: 't1', name: 'Flat', type: 'flat', diameter: 6, spindleRpm: 18000 },
+        { id: 't2', name: 'V', type: 'vbit', diameter: 3.175, vAngle: 90, tipDiameter: 0.1, spindleRpm: 12000 },
+      ],
+      toolNumbers: [1, 2],
+    });
+    // the pseudo-tool's change block, its header, and NO motion line for it
+    expect(nc).toContain(';@MKR|TOOL|number=999|id=refixture|name=Re-fixture');
+    expect(nc).toContain('T999 M6');
+    // the pause note rides as a comment near the hold
+    expect(nc).toContain('re-fixture: pose flipX');
+    // the op marker sequence: 1, 2 (pause), 3
+    expect(nc).toContain(';@MKR|TOOLPATH_START|toolpath_number=2');
+    expect(nc).toContain(';@MKR|TOOLPATH_START|toolpath_number=3');
+    // no stray G1 with only an F (the pause must not emit a feed line)
+    expect(nc).not.toMatch(/^G1 F/m);
+  });
+
+  it('a spindle running across the pause stops and restarts after it', () => {
+    const cutM: Move = { words: { x: 5, z: -1 }, feed: 100, spindleRpm: 18000 };
+    const moves = [
+      ...stampOp([cutM], 1, 'Pocket', 1),
+      refixturePauseMove(2, 'turn over'),
+      ...stampOp([{ ...cutM, words: { x: 8, z: -1 } }], 3, 'Pocket 2', 2),
+    ];
+    const nc = postCarvera({
+      moves,
+      tools: [
+        { id: 't1', name: 'Flat', type: 'flat', diameter: 6, spindleRpm: 18000 },
+        { id: 't2', name: 'V', type: 'vbit', diameter: 3.175, vAngle: 90, tipDiameter: 0.1, spindleRpm: 12000 },
+      ],
+      toolNumbers: [1, 2],
+    });
+    // M5 before the pause's T999 M6, and the next op re-emits S M3
+    expect(nc.indexOf('M5')).toBeLessThan(nc.indexOf('T999 M6'));
+    expect(nc.indexOf('T999 M6')).toBeLessThan(nc.indexOf('S18000 M3', nc.indexOf('T999 M6')));
+  });
+
+  it('no 999 header when no pause rides the moves', () => {
+    const moves = [...stampOp([cut()], 1, 'Pocket', 1)];
+    const nc = postCarvera({
+      moves,
+      tools: [{ id: 't1', name: 'Flat', type: 'flat', diameter: 6, spindleRpm: 18000 }],
+      toolNumbers: [1],
+    });
+    expect(nc).not.toContain('number=999');
   });
 });

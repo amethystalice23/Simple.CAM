@@ -86,11 +86,17 @@ export function buildPostedStream(
   exportTools.forEach((t, i) => {
     toolNumberByToolId.set(t.id, toolNumbers.get(t.id) ?? i + 1);
   });
+  /** the previous cutting op's stamped number (index inheritance) */
+  let prevCutNum: number | undefined;
 
   ops.forEach((o, i) => {
-    stampedList.push(
-      ...stampOp(o.moves, i + 1, opLabel(o.kind), toolNumberByToolId.get(o.toolId) ?? 1),
-    );
+    // index ops carry no tool of their own: inherit the previous cutting
+    // op's number so the A-axis rapid never prompts a tool change (the
+    // same rule the export dialog stamps)
+    const own = toolNumberByToolId.get(o.toolId);
+    const num = o.kind === 'index' ? (prevCutNum ?? own ?? 1) : (own ?? 1);
+    if (o.kind !== 'index') prevCutNum = num;
+    stampedList.push(...stampOp(o.moves, i + 1, opLabel(o.kind), num));
   });
 
   const nc = postCarvera({

@@ -150,6 +150,18 @@ export function isSimultaneous(m: Move): boolean {
   return w.a !== undefined && (w.x !== undefined || w.y !== undefined || w.z !== undefined);
 }
 
+/**
+ * The fixed controller tool number of the synthetic RE-FIXTURE pause tool
+ * (Alice, 2026-11-21): a same-mode re-clamp stays in one .nc, and the
+ * machine-side M6 hold doubles as the "please turn over" prompt — the
+ * controller's popup shows the TOOL-header name. A header-only pseudo-tool
+ * rides the T-table without existing in the physical set-out set; the
+ * number must sit far outside any real slot range (the LASER module owns
+ * 8888, so this is 999). Lives here so the post (emission) and the UI
+ * (stamping) share one constant with the Move IR it parameterizes.
+ */
+export const REFIXTURE_TOOL_NUMBER = 999;
+
 export type FeedMode = 'G93' | 'G94';
 
 /**
