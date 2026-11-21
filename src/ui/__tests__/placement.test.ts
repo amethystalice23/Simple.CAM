@@ -238,7 +238,7 @@ describe('empty mesh never snaps a transform to NaN/Infinity', () => {
 // numbers: a Ø16.4 20mm 4-axis cylinder (axisZ 0), fixture → 3-axis stands
 // it up (the +X end rises to +Z), so the bore at the right end faces up.
 
-import { displayFrameFor, sectionCrownZ, sectionFixtureId } from '../placement';
+import { displayFrameFor, sectionCrownZ, sectionFixtureId, sectionMode } from '../placement';
 
 type FixtureOp = { kind: 'fixture'; id: string; pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd'; axisMode: '3-axis' | '4-axis' };
 type AnyOp = { kind: string; id: string };
@@ -377,5 +377,30 @@ describe('sectionCrownZ: the crown in the op\'s section frame', () => {
     expect(sectionFixtureId(ops, 'op-1')).toBe('f1');
     expect(sectionFixtureId(ops, 'f2')).toBe('f2');
     expect(sectionFixtureId(ops, 'op-2')).toBe('f2');
+  });
+});
+
+// ---- sectionMode: the op's OWN fixture counts (2026-11-21) ----
+//
+// sectionCtxByOp builds each section's entry from the FIRST op that hits
+// the cache — the fixture op itself. Its walk used to break on the id
+// match before processing the fixture's declaration, so the entry read
+// the STOCK's mode and poisoned every op in the section with it — her
+// bore pocket clamped to the 4-axis lying footprint rectangle and cut
+// HALF the disc (tool center X ≥ 0 only).
+
+describe('sectionMode: the op\'s own fixture counts', () => {
+  it('a FIXTURE op runs in the mode IT declares, ops after it inherit it', () => {
+    const ops: AnyOp[] = [fixture('f1', '3-axis'), { kind: 'pocket', id: 'op-1' }];
+    expect(sectionMode(adapter, ops, 'f1')).toBe('3-axis');
+    expect(sectionMode(adapter, ops, 'op-1')).toBe('3-axis');
+    // the stock's own mode stays untouched for ops before any fixture
+    expect(sectionMode(adapter, ops, null)).toBe('4-axis');
+  });
+
+  it('a same-mode fixture keeps the stock mode (the standing-stock case)', () => {
+    const ops: AnyOp[] = [fixture('f1', '4-axis'), { kind: 'pocket', id: 'op-1' }];
+    expect(sectionMode(adapter, ops, 'f1')).toBe('4-axis');
+    expect(sectionMode(adapter, ops, 'op-1')).toBe('4-axis');
   });
 });

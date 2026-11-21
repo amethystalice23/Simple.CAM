@@ -318,10 +318,16 @@ export function sectionMode(
   let mode: '3-axis' | '4-axis' = stock.axisMode;
   if (opId === null) return mode;
   for (const op of ops) {
-    if (op.id === opId) break;
+    // the op's OWN fixture counts (the displayFrameFor rule): a FIXTURE op
+    // runs in the mode IT declares. The id-match break sits BELOW the
+    // fixture check — before this, a fixture op's own sectionMode read the
+    // STOCK's mode, and the section-context cache (built from the fixture
+    // op first) poisoned every op in its section with it — her bore pocket
+    // clamped to the 4-axis lying footprint rectangle and cut half a disc.
     if (op.kind === 'fixture') {
       mode = (op as unknown as { axisMode: '3-axis' | '4-axis' }).axisMode;
     }
+    if (op.id === opId) break;
   }
   return mode;
 }

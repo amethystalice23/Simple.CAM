@@ -1487,6 +1487,13 @@ shared array per section; a reference change is the re-clamp boundary —
 the A pile resets, no sweep crosses). Rotary gates read the SECTION
 mode, not the stock's. Her GHM9 job recalculates clean: 11 ops, zero
 failures (the probe: probes/fixture-frame-smoke.mjs).
+FIX FOLLOW-UP 2026-11-21 (her half-circle report): sectionMode's walk
+broke on the id match BEFORE processing the op's own fixture — the
+FIXTURE op built its section's cached context with the STOCK's mode,
+poisoning every op in the section: the pocket's footprint clamp fell to
+the 4-axis lying rectangle and cut HALF the bore disc (tool center X≥0
+only). The own-fixture rule (displayFrameFor's semantics) fixes it; the
+export probe now shows full-circle coverage (X −3.41..3.41).
 
 **NOT addressed (deliberate):** generators stay stock+model based — a
 fixture-2 op generates against pristine stock, not what fixture 1
