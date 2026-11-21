@@ -552,6 +552,15 @@ button.secondary:disabled:hover { background: #31373e; }
   overflow: hidden;
 }
 .fixture-divider:first-child { margin-top: 6px; }
+/* the per-section add row (Alice, 2026-11-21): every fixture section ends
+ * with its own + Add / + Suggest pair, right where a new op will appear —
+ * quieter than the divider bands, set off by a dashed rule above */
+.section-add {
+  margin: 2px 0 10px;
+  padding-top: 7px;
+  border-top: 1px dashed #31373e;
+}
+.section-add button { padding: 4px 10px; font-size: 11px; }
 /* the implicit fixture 1: quieter than a real re-clamp — it's the job's
  * starting setup, not a frame change (Alice, 2026-11-19) */
 .fixture-divider.implicit {

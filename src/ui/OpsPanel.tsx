@@ -26,6 +26,7 @@ import {
 } from './jobGeneration';
 import { fixtureOrigin } from './placement';
 import { panelToolNumbers } from './toolAssignment';
+import { sectionLabel } from './opsSections';
 import { OP_KIND_COLORS } from './opColors';
 import { OP_HELP, opHelpLabel } from './opHelp';
 import { ToolPicker } from './ToolPicker';
@@ -94,13 +95,19 @@ interface Props {
   primitives: Primitive[];
   /** short feature description by id, for the title-bar snippet */
   featureLabels: Record<string, string>;
-  onAddOp: () => void;
-  /** arm the suggest-ops picker (docs/PLAN.md "Suggest ops", round 1):
-   *  the next viewport feature pick opens the knowledge popup instead of
-   *  selecting — App owns the state; the panel only arms and labels it */
-  onSuggestOps: () => void;
-  /** the picker is waiting for a click — the button labels itself live */
-  suggestArmed: boolean;
+  /** add a toolpath at the END of one fixture section (its id — the implicit
+   *  fixture 1's for the start setup). The panel's add rows pass the section
+   *  they sit under; App splices before that section's next divider. */
+  onAddOp: (sectionId: string) => void;
+  /** arm the suggest-ops picker (docs/PLAN.md "Suggest ops", round 1) for
+   *  one fixture section: the next viewport feature pick opens the
+   *  knowledge popup instead of selecting, and the checked suggestions land
+   *  at that section's end — App owns the state; the panel only arms and
+   *  labels it */
+  onSuggestOps: (sectionId: string) => void;
+  /** the armed pick's TARGET SECTION id, null when idle — the section's own
+   *  + Suggest button labels itself live */
+  suggestArmed: string | null;
   onChangeOp: (op: JobOp) => void;
   /** floor/rim switch — re-prefills the depth boxes from the selection */
   onSelectionIsChange: (op: JobOp, value: 'floor' | 'rim') => void;
@@ -497,6 +504,43 @@ function FixtureDivider(props: {
           <FixtureFields op={props.op} axisMode={props.op.axisMode} stock={props.stock} onChange={props.onChange} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** The per-section add row (Alice, 2026-11-21): every fixture section ends
+ * with its own toolpath buttons, so a new op can land in ANY section — the
+ * pair sits exactly where the op will appear, right under the section's ops.
+ * The suggest picker arms for this section; its suggestions land here too.
+ * Hidden while the section is collapsed, like its ops. */
+function SectionAddRow(props: {
+  /** the section this row adds into (the implicit fixture 1's id for the
+   *  start setup) */
+  sectionId: string;
+  /** "Fixture 2" style — button titles read it back */
+  label: string;
+  /** this section's suggest pick is armed — its button labels itself live */
+  armed: boolean;
+  onAddOp: (sectionId: string) => void;
+  onSuggestOps: (sectionId: string) => void;
+}) {
+  return (
+    <div className="section-add buttons">
+      <button
+        type="button"
+        title={`New toolpath at the end of ${props.label} — it generates in this fixture's frame`}
+        onClick={() => props.onAddOp(props.sectionId)}
+      >
+        + Add toolpath
+      </button>
+      <button
+        type="button"
+        className={`suggest-btn${props.armed ? ' armed' : ''}`}
+        title={`Pick a feature in the viewport — the detector tells you what it measured and which operations could drive it; suggestions land in ${props.label}`}
+        onClick={() => props.onSuggestOps(props.sectionId)}
+      >
+        {props.armed ? '◉ picking — click a feature' : '+ Suggest toolpath'}
+      </button>
     </div>
   );
 }
@@ -1653,27 +1697,11 @@ export function OpsPanel(props: Props) {
   const [ratesOpenId, setRatesOpenId] = useState<string | null>(null);
   /** the op whose ⓘ help popup is open (one at a time) */
   const [helpOpId, setHelpOpId] = useState<string | null>(null);
-  /** FIXTURE DIVIDERS (the spec): drag reordering never crosses one (a
-   * divider's position defines which ops belong to which frame; moving ops
-   * across it is a semantic change, not a mouse gesture). Both the dragged
-   * op and the drop target must sit in the SAME group for the reorder to
-   * land. */
-  const sameFixtureGroup = (a: string, b: string): boolean => {
-    const ai = props.ops.findIndex((o) => o.id === a);
-    const bi = props.ops.findIndex((o) => o.id === b);
-    if (ai < 0 || bi < 0) return false;
-    // fixture ops never drag
-    const aIsFixture = props.ops[ai].kind === 'fixture';
-    const bIsFixture = props.ops[bi].kind === 'fixture';
-    if (aIsFixture || bIsFixture) return false;
-    // same group = both between the same pair of dividers (or before the
-    // first): walk to each op's divider count
-    let ga = 0;
-    for (let i = 0; i < ai; i++) if (props.ops[i].kind === 'fixture') ga++;
-    let gb = 0;
-    for (let i = 0; i < bi; i++) if (props.ops[i].kind === 'fixture') gb++;
-    return ga === gb;
-  };
+  // DRAG REORDERING CROSSES FIXTURE DIVIDERS (Alice, 2026-11-21 — the
+  // per-section add rows landed the same day): dropping an op on a target in
+  // another section re-homes it — it regenerates in that section's frame,
+  // the same frame-aware presentation the generators already run. Fixture
+  // ops themselves still never drag: their position IS the frame boundary.
 
   /** tool change re-derives the step defaults for the new cutter */
   const changeTool = (op: JobOp, toolId: string) => {
@@ -1759,19 +1787,6 @@ export function OpsPanel(props: Props) {
       {helpOpId && (
         <OpHelpPopup kind={props.ops.find((o) => o.id === helpOpId)!.kind} onClose={() => setHelpOpId(null)} />
       )}
-      <div className="buttons">
-        <button type="button" onClick={props.onAddOp}>
-          + Add toolpath
-        </button>
-        <button
-          type="button"
-          className={`suggest-btn${props.suggestArmed ? ' armed' : ''}`}
-          title="Pick a feature in the viewport — the detector tells you what it measured and which operations could drive it"
-          onClick={props.onSuggestOps}
-        >
-          {props.suggestArmed ? '◉ picking — click a feature' : '+ Suggest toolpath'}
-        </button>
-      </div>
       {props.ops.length === 0 && (
         <p className="hint">add a toolpath, then select features on the Model tab</p>
       )}
@@ -1806,6 +1821,30 @@ export function OpsPanel(props: Props) {
             }
           }
           const fixtureGroupId = (id: string): string => groupOf.get(id) ?? IMPLICIT_FIXTURE_ID;
+          // THE PER-SECTION ADD ROW (Alice, 2026-11-21): every section ends
+          // with its own + Add / + Suggest pair — the buttons sit exactly
+          // where a new op will appear, so any fixture can grow, not just
+          // the last. Hidden while the section is collapsed (its ops hide
+          // too — expand to add).
+          const addRow = (sectionId: string) =>
+            props.collapsedGroups.has(sectionId) ? null : (
+              <SectionAddRow
+                key={`add:${sectionId}`}
+                sectionId={sectionId}
+                label={sectionLabel(props.ops, sectionId)}
+                armed={props.suggestArmed === sectionId}
+                onAddOp={props.onAddOp}
+                onSuggestOps={props.onSuggestOps}
+              />
+            );
+          // the LAST section (the whole stack's tail): last op's group, or
+          // the last divider itself when a divider ends the list
+          const lastOp = props.ops[props.ops.length - 1];
+          const lastSection = lastOp
+            ? lastOp.kind === 'fixture'
+              ? lastOp.id
+              : fixtureGroupId(lastOp.id)
+            : IMPLICIT_FIXTURE_ID;
           // the implicit fixture-1 header renders at the TOP of the list
           // once a real Fixture op exists (or never, when none does — the
           // list reads flat, as it always did). It IS the settings for the
@@ -1836,21 +1875,33 @@ export function OpsPanel(props: Props) {
           // a FRAME BOUNDARY, not another pass — full-width band, its own
           // class, and the ops under it collapse as one group.
           if (op.kind === 'fixture') {
+            // the PREVIOUS section's add row: this divider closes that
+            // section, so its buttons render just above the band (an empty
+            // section's row sits right under its own divider)
+            const above =
+              index > 0
+                ? props.ops[index - 1].kind === 'fixture'
+                  ? props.ops[index - 1].id
+                  : (groupOf.get(props.ops[index - 1].id) ?? IMPLICIT_FIXTURE_ID)
+                : IMPLICIT_FIXTURE_ID;
             return (
-              <FixtureDivider
-                key={op.id}
-                op={op}
-                gen={gen}
-                collapsed={props.collapsedGroups.has(op.id)}
-                count={fixtureGroupSizes.get(op.id) ?? 0}
-                expanded={expanded}
-                stock={props.stock}
-                onToggleExpanded={() => props.onToggleExpanded(op.id)}
-                onToggleCollapse={() => props.onToggleCollapse(op.id)}
-                onDelete={() => props.onDeleteOp(op.id)}
-                onHover={(h) => props.onHoverOp(h ? op.id : null)}
-                onChange={props.onChangeOp}
-              />
+              <Fragment key={op.id}>
+                {addRow(above)}
+                <FixtureDivider
+                  key={op.id}
+                  op={op}
+                  gen={gen}
+                  collapsed={props.collapsedGroups.has(op.id)}
+                  count={fixtureGroupSizes.get(op.id) ?? 0}
+                  expanded={expanded}
+                  stock={props.stock}
+                  onToggleExpanded={() => props.onToggleExpanded(op.id)}
+                  onToggleCollapse={() => props.onToggleCollapse(op.id)}
+                  onDelete={() => props.onDeleteOp(op.id)}
+                  onHover={(h) => props.onHoverOp(h ? op.id : null)}
+                  onChange={props.onChangeOp}
+                />
+              </Fragment>
             );
           }
           // A collapsible group hides the ops of this fixture group
@@ -1872,8 +1923,9 @@ export function OpsPanel(props: Props) {
                 onDragStart={() => setDragId(op.id)}
                 onDragOver={(e) => {
                   e.preventDefault();
-                  // reorders never cross a fixture divider (same-group only)
-                  if (dragId && dragId !== op.id && sameFixtureGroup(dragId, op.id)) {
+                  // crosses fixture dividers too (Alice, 2026-11-21): the
+                  // drop re-homes the dragged op into this op's section
+                  if (dragId && dragId !== op.id) {
                     props.onReorder(dragId, op.id);
                   }
                 }}
@@ -2112,6 +2164,7 @@ export function OpsPanel(props: Props) {
             </div>
           );
           })}
+          {addRow(lastSection)}
         </Fragment>
       );
         })()}

@@ -1551,6 +1551,19 @@ Build split: cam-kernel (pose/frame plumbing, indexFrame generalization),
 post-processor (per-fixture split + headers + parser concatenation),
 viewport-ui (divider/collapse + per-op colours).
 
+**PER-SECTION ADD ROWS + CROSS-DIVIDER DRAG (her 2026-11-21 follow-up):**
+the + Add / + Suggest pair moved from above the ops list to the END of
+EVERY fixture section — the buttons sit exactly where the new op appears,
+so any fixture can grow, not just the last (src/ui/opsSections.ts:
+sectionEndIndex/sectionLabel, shared by the panel's rows and App's
+insertions so the two never disagree; a new op or checked suggestions land
+before the clicked section's next divider; the pair hides with a collapsed
+section). Drag reordering crosses dividers now: a drop re-homes the dragged
+op into the target's section and it regenerates in that frame — her call
+("dragging won't cross the Fixture barrier" left no way into earlier
+fixtures); fixture dividers themselves still never drag, their position IS
+the frame boundary.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
