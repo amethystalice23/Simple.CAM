@@ -657,19 +657,89 @@ function indexFrame(
 }
 
 /**
- * The ops that may run in a FRAMED (re-clamped) section: the 2.5D feature
- * ops (their selection resolves through the section frame — the kernel
- * pose-plumbing leg) plus the frame declarations themselves. Everything
- * else — the rotary kernels, the mesh slicers, artwork — generates
- * against the pristine stock/mesh and CANNOT be right in a re-clamp:
- * it fails loud instead of emitting paths in the wrong frame.
+ * Present MODEL POSITIONS to a mesh-slicing op (slice-pocket, waterline,
+ * raster contour) in the op's cutting frame — the re-clamped section's WCS
+ * when one is in effect, else the index-datum rotation alone. The slicers
+ * are frame-blind: positions in, positions out, never knowing the part
+ * was re-clamped (the fixture-ops pose-plumbing, Alice 2026-11-21: the
+ * engine runs exactly as it was, the WCS moves around it).
  */
-const SECTION_FRAME_OPS = new Set(['pocket', 'profile', 'drill', 'chamfer', 'threadMill', 'index', 'fixture']);
+function presentPositions(
+  ctx: GenContext,
+): { positions: Float32Array; rotate?: (p: { x: number; y: number; z: number }) => import('three').Vector3 } {
+  const { rotate } = cuttingRotate(ctx);
+  const positions0 = transformedPositions(ctx.geometry!, ctx.transform);
+  if (!rotate) return { positions: positions0 };
+  const out = new Float32Array(positions0.length);
+  for (let i = 0; i < positions0.length; i += 3) {
+    const v = rotate({
+      x: positions0[i],
+      y: positions0[i + 1],
+      z: positions0[i + 2],
+    });
+    out[i] = v.x;
+    out[i + 1] = v.y;
+    out[i + 2] = v.z;
+  }
+  return { positions: out, rotate };
+}
+
+/**
+ * The stock's BOTTOM Z in the op's cutting frame: the frame-mapped
+ * minimum when a re-clamped section is in effect (a standing section's
+ * bottom is the frame's own plane — the pristine lying bottom is wrong
+ * by the whole re-clamp), else the stock's own span. The waterline
+ * ladder and the raster's waste floor clamp against it.
+ */
+function stockBottomOf(ctx: GenContext): number {
+  const [z0, z1] = stockSpan(ctx.stock, 'z');
+  if (!ctx.sectionFrame) return z0;
+  const [x0, x1] = stockSpan(ctx.stock, 'x');
+  const [y0, y1] = stockSpan(ctx.stock, 'y');
+  let minZ = Infinity;
+  for (const x of [x0, x1]) {
+    for (const y of [y0, y1]) {
+      for (const z of [z0, z1]) {
+        const v = ctx.sectionFrame({ x, y, z });
+        if (v.z < minZ) minZ = v.z;
+      }
+    }
+  }
+  return minZ;
+}
+
+/**
+ * The ops that may run in a FRAMED (re-clamped) section (the pose-plumbing
+ * completion, Alice 2026-11-21: "the engine runs exactly as it was, the
+ * WCS moves around it" — generation PRESENTS the stock/selection/model in
+ * the section's frame and the generators stay frame-blind): the 2.5D
+ * feature ops + the mesh-slicer ops (slice-pocket, waterline, raster —
+ * positions presented via the cutting frame) + cylChamfer (edge circles
+ * mapped) + engrave's FLAT artwork (wrapped stays loud-fail inside the
+ * op) + the stock-parametric rotary ops (face cylinder, spiral carve,
+ * thread — a 4-axis section's re-clamp keeps the axis-fixed calibration;
+ * the A datum already resets at the fixture barrier, and the X fields
+ * author against the section's re-zeroed WCS). Still failing loud:
+ * rotary contour/4D carve/swarf (their cross-orientation standing state
+ * is the 4D roadmap), engrave wrapped.
+ */
+const SECTION_FRAME_OPS = new Set([
+  'pocket', 'profile', 'drill', 'chamfer', 'threadMill', 'index', 'fixture',
+  'slicePocket', 'waterline', 'rasterContour', 'cylChamfer', 'engrave',
+  'faceCylinder', 'spiralCarve', 'thread',
+]);
 
 /** the mode the op's SECTION runs in (GenContext.sectionMode ?? the stock's). */
 function sectionModeOf(ctx: GenContext): '3-axis' | '4-axis' {
   return ctx.sectionMode ?? ctx.stock.axisMode;
 }
+
+/** The 4-axis section gate's refusal message: honest about WHERE the mode
+ * is wrong — the section a re-clamp declared, not the Stock tab. */
+const fourAxisGate = (what: string, ctx: GenContext): string =>
+  sectionModeOf(ctx) !== ctx.stock.axisMode
+    ? `${what} needs a 4-axis section — this re-clamped fixture declared ${sectionModeOf(ctx)} (flip the fixture's mode, or move the op above it)`
+    : `${what} needs 4-axis mode (Stock tab)`;
 
 /** the stock crown Z in the op's section frame (depths anchor to it). */
 function crownOf(ctx: GenContext): number {
@@ -1329,22 +1399,23 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
     const material = getMaterial(ctx.stock.materialId);
     const { feed, plungeFeed } = feedsFor(tool, material, op.rates);
 
-    // the kernel pose-plumbing gate: a re-clamped section carries its own
-    // machine frame, and only the SECTION_FRAME_OPS resolve their targets
-    // through it. The rest generate against the pristine stock/mesh — in a
-    // re-clamp that is the wrong frame, so refuse loudly (the honest
-    // alternative to quietly wrong paths).
+    // the kernel pose-plumbing gate: a re-clamped section presents the
+    // stock/selection/model in its own machine frame, and only the
+    // SECTION_FRAME_OPS are plumbed for that presentation. The rest
+    // (rotary contour / 4D carve / swarf — their cross-orientation
+    // standing state is the 4D roadmap) generate against the pristine
+    // stock/mesh — in a re-clamp that is the wrong frame, so refuse
+    // loudly (the honest alternative to quietly wrong paths).
     if (ctx.sectionFrame && !SECTION_FRAME_OPS.has(op.kind)) {
       return fail(
-        'this op cannot run in a re-clamped (fixture) section yet — the ' +
-          'section frame reaches the 2.5D feature ops; move it above the ' +
-          'fixture or plan it as its own setup',
+        'this op cannot run in a re-clamped (fixture) section yet — move it ' +
+          'above the fixture or plan it as its own setup',
       );
     }
 
     switch (op.kind) {
       case 'index': {
-        if (sectionModeOf(ctx) !== '4-axis') return fail('indexing needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail(fourAxisGate('indexing', ctx));
         // shortest rotation to the datum spoke from wherever the axis sits —
         // never unwind the previous ops' accumulated pile
         const target = ctx.startA + shortestATo(op.angle, ctx.startA);
@@ -1382,7 +1453,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         };
       }
       case 'faceCylinder': {
-        if (sectionModeOf(ctx) !== '4-axis') return fail('face cylinder needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail(fourAxisGate('face cylinder', ctx));
         // the op's own explicit fields: Start/End X and the target Ø,
         // hand-set or filled by the ⇩ pick-from-feature modes
         const res = faceCylinder(
@@ -1421,7 +1492,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
       }
 
       case 'spiralCarve': {
-        if (sectionModeOf(ctx) !== '4-axis') return fail('spiral carving needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail(fourAxisGate('spiral carving', ctx));
         try {
           const res = spiralCarve(
             {
@@ -1476,7 +1547,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
       }
 
       case 'thread': {
-        if (sectionModeOf(ctx) !== '4-axis') return fail('threading needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail(fourAxisGate('threading', ctx));
         try {
           // finishing-only collapses the groove depth ladder to the full
           // depth (single groove sweep per start + the spring pass)
@@ -1671,24 +1742,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             'end depth must be at or below start depth, and the allowance must leave something to cut',
           );
         }
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
-        const positions = rotate
-          ? (() => {
-              const out = new Float32Array(positions0.length);
-              for (let i = 0; i < positions0.length; i += 3) {
-                const v = rotate({
-                  x: positions0[i],
-                  y: positions0[i + 1],
-                  z: positions0[i + 2],
-                });
-                out[i] = v.x;
-                out[i + 1] = v.y;
-                out[i + 2] = v.z;
-              }
-              return out;
-            })()
-          : positions0;
+        // The part sits in the op's cutting frame (a re-clamped section's
+        // WCS, or the index-datum rotation) — the slicer is frame-blind.
+        const { positions } = presentPositions(ctx);
         const slice = sliceAtZ(positions, crown - op.sliceDepth);
         if (slice.contours.length === 0) {
           return fail(
@@ -1817,25 +1873,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // the part.
         if (!ctx.geometry) return fail('needs a loaded model — the rough targets it');
         const crown = crownOf(ctx);
-        const stockBottom = stockSpan(ctx.stock, 'z')[0];
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
-        const positions = rotate
-          ? (() => {
-              const out = new Float32Array(positions0.length);
-              for (let i = 0; i < positions0.length; i += 3) {
-                const v = rotate({
-                  x: positions0[i],
-                  y: positions0[i + 1],
-                  z: positions0[i + 2],
-                });
-                out[i] = v.x;
-                out[i + 1] = v.y;
-                out[i + 2] = v.z;
-              }
-              return out;
-            })()
-          : positions0;
+        const stockBottom = stockBottomOf(ctx);
+        const { positions } = presentPositions(ctx);
         // model extent in the cutting frame: the ladder runs crown → model
         // floor, clamped at the stock bottom (below it is the fixture)
         let modelMinZ = Infinity;
@@ -1975,7 +2014,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // orientations that actually cut. The datum-discipline stamp in
         // generateJobOp hands the borrowed datum back at the end.
         const crown = crownOf(ctx);
-        const stockBottom = stockSpan(ctx.stock, 'z')[0];
+        const stockBottom = stockBottomOf(ctx);
         const moves: Move[] = [];
         let minutes = 0;
         let roughs = 0;
@@ -2161,25 +2200,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // the datum rotation maps the part into the cutting frame.
         if (!ctx.geometry) return fail('needs a loaded model — the surface pass targets it');
         const crown = crownOf(ctx);
-        const stockBottom = stockSpan(ctx.stock, 'z')[0];
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
-        const positions0 = transformedPositions(ctx.geometry, ctx.transform);
-        const positions = rotate
-          ? (() => {
-              const out = new Float32Array(positions0.length);
-              for (let i = 0; i < positions0.length; i += 3) {
-                const v = rotate({
-                  x: positions0[i],
-                  y: positions0[i + 1],
-                  z: positions0[i + 2],
-                });
-                out[i] = v.x;
-                out[i + 1] = v.y;
-                out[i + 2] = v.z;
-              }
-              return out;
-            })()
-          : positions0;
+        const stockBottom = stockBottomOf(ctx);
+        const { positions } = presentPositions(ctx);
         // model floor in the cutting frame — the clear-excess waste floor
         // (the same plane the waterline ladder bottoms at; the stock bottom
         // clamps it when the model hangs below)
@@ -2252,7 +2274,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           return fail('rotary contour needs cylinder stock (Stock tab)');
         }
         if (sectionModeOf(ctx) !== '4-axis') {
-          return fail('rotary contour needs 4-axis mode (Stock tab)');
+          return fail(fourAxisGate('rotary contour', ctx));
         }
         const cal = rotaryCalibrationOf(ctx.stock);
         const [sx0, sx1] = stockSpan(ctx.stock, 'x');
@@ -2351,7 +2373,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           return fail('the 4D finish needs cylinder stock (Stock tab)');
         }
         if (sectionModeOf(ctx) !== '4-axis') {
-          return fail('the 4D finish needs 4-axis mode (Stock tab)');
+          return fail(fourAxisGate('the 4D finish', ctx));
         }
         if (tool.type !== 'flat' && tool.type !== 'corn' && tool.type !== 'ball') {
           return fail(
@@ -2750,7 +2772,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
 
       case 'cylChamfer': {
         if (sectionModeOf(ctx) !== '4-axis') {
-          return fail('cylinder chamfer needs 4-axis mode (Stock tab)');
+          return fail(fourAxisGate('cylinder chamfer', ctx));
         }
         if (tool.type !== 'vbit' && tool.type !== 'ball') {
           return fail(
@@ -2766,6 +2788,13 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
         if (error) return fail(error);
         const cal = rotaryCalibrationOf(ctx.stock);
+        // the edge circles present in the op's cutting frame (a re-clamped
+        // section's WCS): the fixture pose may mirror X (flipX/endForEnd),
+        // so the ring's machine X maps through it. The index DATUM alone
+        // stays deliberately unapplied (datum-invariant: a rotation about
+        // the stock axis maps an on-axis circle to itself) — but a section
+        // FRAME is applied whenever one is in effect.
+        const { rotate: secRotate } = ctx.sectionFrame ? { rotate: ctx.sectionFrame } : {};
         const edges: CylChamferEdge[] = [];
         for (const part of parts) {
           const src = cylChamferTargetsFromSelection(
@@ -2774,7 +2803,19 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             part.source.transform,
             cal,
           );
-          if (src) edges.push(...src.edges);
+          if (src) {
+            if (secRotate) {
+              for (const e of src.edges) {
+                // the circle's CENTER sits on the rotation axis (y=0,
+                // z=axisZ); the pose maps it along the axis — its mapped
+                // X is the ring's section-WCS X (on-axis stays on-axis)
+                const v = secRotate({ x: e.x, y: 0, z: cal.axisZ });
+                edges.push({ x: v.x, diameter: e.diameter });
+              }
+            } else {
+              edges.push(...src.edges);
+            }
+          }
         }
         if (edges.length === 0) return fail(SEL);
         // finishing-only collapses each edge's radial ladder to one level at
@@ -2930,14 +2971,29 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
         if (error) return fail(error);
         // the frame is the ARTWORK's own, inherited per source — and one
-        // op cuts in one frame. Flat paths land in the indexed cutting
-        // frame (rotated like every flat op); wrapped paths are part-
-        // ABSOLUTE: the artwork's angular position is set in the Model
-        // tab, so the cut deliberately IGNORES the index rotation — an
-        // Index op before the engrave only changes the machine's approach
-        // (startA), never where on the part the artwork cuts.
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        // op cuts in one frame. Flat paths land in the op's CUTTING frame
+        // (a re-clamped section's WCS, or the index-datum rotation — like
+        // every flat op); wrapped paths are part-ABSOLUTE: the artwork's
+        // angular position is set in the Model tab, so the cut deliberately
+        // IGNORES the index rotation — an Index op before the engrave only
+        // changes the machine's approach (startA), never where on the part
+        // the artwork cuts. A WRAPPED artwork in a framed section stays
+        // loud-fail: its θ authoring cannot be re-presented without the
+        // pose's angular mapping, and no job has asked for it yet.
+        const { rotate } = cuttingRotate(ctx);
         const axisZ = rotaryCalibrationOf(ctx.stock).axisZ;
+        if (ctx.sectionFrame) {
+          for (const part of parts) {
+            const aw = part.source.artworkFrame;
+            if (aw?.kind === 'wrapped') {
+              return fail(
+                'wrapped artwork cannot run in a re-clamped (fixture) section yet — ' +
+                  'flat artwork presents in the section frame, wrapped does not; ' +
+                  'plan it above the fixture or as its own setup',
+              );
+            }
+          }
+        }
         const flatPaths: { x: number; y: number }[][] = [];
         const wrappedPaths: { x: number; y: number }[][] = [];
         // the FILL candidates: selected paths both closed and painted

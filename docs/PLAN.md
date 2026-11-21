@@ -1516,6 +1516,25 @@ poisoning every op in the section: the pocket's footprint clamp fell to
 the 4-axis lying rectangle and cut HALF the bore disc (tool center X≥0
 only). The own-fixture rule (displayFrameFor's semantics) fixes it; the
 export probe now shows full-circle coverage (X −3.41..3.41).
+POSE-PLUMBING COMPLETED 2026-11-21 (her architectural ruling: "just
+change the frame of reference… the engine runs exactly as it was, the
+WCS moves around it" — generation PRESENTS the stock/selection/model in
+the section's frame; the generators stay frame-blind): SECTION_FRAME_OPS
+now admits the mesh-slicer ops (slicePocket, waterline, rasterContour —
+presentPositions maps the model through the cutting frame), cylChamfer
+(edge circles mapped through the section frame; the X under
+flipX/endForEnd follows), engrave's FLAT artwork (the shared
+cuttingRotate path; WRAPPED stays loud-fail — its θ authoring cannot be
+re-presented through a pose), and the stock-parametric rotary ops
+(faceCylinder, spiralCarve, thread — a 4-axis re-clamp keeps the
+axis-fixed calibration, the A datum resets at the barrier, and the X
+fields author against the section's re-zeroed WCS; moves emit in it
+directly). stockBottomOf maps the stock's bottom through the section
+frame (a standing section's ladder clamps at the frame's own plane, not
+the pristine lying bottom). The mode-gate message names the SECTION when
+a fixture declared it (not the Stock tab). Still failing loud:
+rotaryCarve/contour4d/swarfFinish (cross-orientation standing state —
+the 4D roadmap) and engrave wrapped.
 
 **NOT addressed (deliberate):** generators stay stock+model based — a
 fixture-2 op generates against pristine stock, not what fixture 1

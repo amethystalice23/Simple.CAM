@@ -3165,9 +3165,10 @@ describe('generation in a fixture (re-clamped) section', () => {
     expect(pts.some((m) => Math.abs(Math.hypot(m.words.x!, m.words.y!) - 4) < 0.05)).toBe(true);
   });
 
-  it('ops the frame does not reach fail LOUD in a re-clamped section', () => {
-    // a rotary op after a 3-axis fixture: the pristine-mode gate would pass
-    // (the STOCK is 4-axis) — the section gate must refuse instead
+  it('a rotary op in a 3-AXIS re-clamped section fails naming the SECTION', () => {
+    // the fixture flipped the mode: the refusal must blame the re-clamp
+    // (and tell the user what to do), not the Stock tab — the pristine
+    // stock IS 4-axis here
     const faceOp = {
       kind: 'faceCylinder',
       id: 'op-rot',
@@ -3179,12 +3180,13 @@ describe('generation in a fixture (re-clamped) section', () => {
       stepOver: 2,
       finishAllowance: 0,
       rotation: 0,
-      pattern: null,
+      pattern: 'vertical',
       finishingOnly: false,
       cutBeyondStock: true,
     } as unknown as JobOp;
     const res = generateJobOp(faceOp, sectionCtx());
-    expect(res.error).toMatch(/cannot run in a re-clamped/);
+    expect(res.error).toMatch(/4-axis section/);
+    expect(res.error).toMatch(/fixture declared 3-axis/);
     // and a 3-axis STOCK with no fixture keeps today's mode gate (the
     // section gate only tightens; it never loosens the stock gate)
     const flatStockCtx: GenContext = {
@@ -3197,6 +3199,42 @@ describe('generation in a fixture (re-clamped) section', () => {
     expect(flat.error).toMatch(/needs 4-axis mode/);
   });
 
+  it('a rotary op RUNS in a 4-axis re-clamped section (same cylinder, new WCS)', () => {
+    // the re-clamp keeps the axis-fixed calibration (the axis is the
+    // machine's hardware): the face op generates exactly as it would in
+    // the stock's own frame — same ring geometry, emitted in the
+    // section's WCS for the .nc, mapped back for display by the walkers
+    const faceOp = {
+      kind: 'faceCylinder',
+      id: 'op-rot',
+      toolId: 't1',
+      targetDiameter: 40,
+      xStart: 0,
+      xEnd: 10,
+      stepDown: 1,
+      stepOver: 2,
+      finishAllowance: 0,
+      rotation: 0,
+      pattern: 'vertical',
+      finishingOnly: false,
+      cutBeyondStock: true,
+    } as unknown as JobOp;
+    const ctx4 = { ...sectionCtx(), sectionMode: '4-axis' as const };
+    const res = generateJobOp(faceOp, ctx4);
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(0);
+    // the pristine (fixture-less) generation must produce IDENTICAL moves:
+    // the 4-axis re-clamp presents the same stock to the frame-blind engine
+    const pristine = generateJobOp(faceOp, {
+      ...ctx,
+      stock: cylStock,
+      geometry: null,
+      features: null,
+    });
+    expect(pristine.error).toBeNull();
+    expect(res.moves).toEqual(pristine.moves);
+  });
+
   it('the fixture op itself zeroes the A pile (the datum barrier)', () => {
     const res = generateJobOp(fixtureOp as unknown as JobOp, {
       ...ctx,
@@ -3206,5 +3244,190 @@ describe('generation in a fixture (re-clamped) section', () => {
     expect(res.error).toBeNull();
     expect(res.moves).toEqual([]);
     expect(res.finalA).toBe(0);
+  });
+
+  it('mesh-slicer ops present the model in the section frame (slice-pocket)', () => {
+    // THE PRESENTATION CONTRACT (the frame moves around the engine): a
+    // framed section's slice-pocket on the ORIGINAL model must equal a
+    // pristine generation on the SAME MODEL PRE-ROTATED by the frame —
+    // the slicer is frame-blind, positions in, positions out.
+    const slice: JobOp = {
+      id: 'op-slice-sec',
+      toolId: 't3',
+      featureIds: [],
+      kind: 'slicePocket',
+      regionMode: 'inside',
+      sliceDepth: 2,
+      startDepth: 0,
+      endDepth: 2,
+      allowance: 0,
+      stepDown: 1,
+      stepOver: 2,
+      floorFeatureId: null,
+      clearToStock: false,
+      tabs: null,
+    };
+    // the frame: a half-turn roll about the stock axis (the flipX pose of
+    // a lying part), applied to the model's positions on the pristine side
+    const roll = new THREE.Matrix4().makeRotationX(Math.PI);
+    const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const rolled = new THREE.BufferGeometry();
+    rolled.setAttribute(
+      'position',
+      new THREE.BufferAttribute(
+        (() => {
+          const out = new Float32Array(pos.array.length);
+          for (let i = 0; i < pos.array.length; i += 3) {
+            const v = new THREE.Vector3(pos.array[i], pos.array[i + 1], pos.array[i + 2]).applyMatrix4(roll);
+            out[i] = v.x;
+            out[i + 1] = v.y;
+            out[i + 2] = v.z;
+          }
+          return out;
+        })(),
+        3,
+      ),
+    );
+    const framed = generateJobOp(slice, {
+      ...ctx,
+      stock: cylStock,
+      geometry,
+      features: null,
+      datumAngle: 0,
+      startA: 0,
+      sectionFrame: (p: { x: number; y: number; z: number }) =>
+        new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(roll),
+      sectionMode: '4-axis' as const,
+      // both sides share ONE crown number (a section property); the rolled
+      // plate's caps sit at z 4…6, so crown 7 + slice 2 cuts at z 5, inside
+      crownZ: 7,
+    });
+    const pristine = generateJobOp(slice, {
+      ...ctx,
+      stock: cylStock,
+      geometry: rolled,
+      features: null,
+      datumAngle: 0,
+      startA: 0,
+      crownZ: 7,
+    });
+    expect(pristine.error).toBeNull();
+    expect(framed.error).toBeNull();
+    expect(framed.moves).toEqual(pristine.moves);
+  });
+
+  it('cylChamfer presents its edge circles through the section frame', () => {
+    // a flipX re-clamp rolls the lying cylinder half a turn — the on-axis
+    // rim circle stays on-axis, its X unchanged (the flip is about the
+    // axis for a lying part); the chamfer ring must generate identically
+    const fixtureFlipX = { ...fixtureOp, pose: 'flipX' as const, axisMode: '4-axis' as const };
+    const opsFlip = [fixtureFlipX, { kind: 'pocket', id: 'op-sec' }] as unknown as {
+      kind: string;
+      id: string;
+    }[];
+    const frame = displayFrameFor(cylStock, opsFlip, 'op-sec')!;
+    const chamferEdge = {
+      kind: 'cylChamfer',
+      id: 'op-ch',
+      toolId: 't5',
+      depth: 0,
+      stepDown: 1,
+      rotation: 'ccw' as const,
+      finishingOnly: false,
+      featureIds: [farRimId],
+    } as unknown as JobOp;
+    const framed = generateJobOp(chamferEdge, {
+      ...ctx,
+      stock: cylStock,
+      tools: [...ctx.tools, chamferTool],
+      geometry: null,
+      features: null,
+      sources: boreSources,
+      datumAngle: 0,
+      startA: 0,
+      sectionFrame: (p: { x: number; y: number; z: number }) =>
+        new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(frame),
+      sectionMode: '4-axis' as const,
+    });
+    expect(framed.error).toBeNull();
+    // the ring emits at the rim's section-frame X — the flip about the
+    // stock axis maps the on-axis circle to itself (X unchanged)
+    const pristine = generateJobOp(chamferEdge, {
+      ...ctx,
+      stock: cylStock,
+      tools: [...ctx.tools, chamferTool],
+      geometry: null,
+      features: null,
+      sources: boreSources,
+      datumAngle: 0,
+      startA: 0,
+    });
+    expect(pristine.error).toBeNull();
+    expect(framed.moves).toEqual(pristine.moves);
+  });
+
+  it('engrave: FLAT artwork generates in a framed section, WRAPPED refuses', () => {
+    // a flat artwork primitive on the crown; the framed section presents
+    // it through the cutting frame like every flat op (the paths rotate,
+    // the engraving plane follows)
+    const art: Primitive = {
+      kind: 'artwork',
+      id: 'prim-eng',
+      paths: [[{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 0, y: 10 }]],
+      pathMeta: [{ closed: false, filled: false }],
+      width: 20,
+      height: 10,
+      presentation: 'flat',
+      wrapDiameter: 16,
+      wrapAngle: 90,
+      transform: identityTransform(),
+    };
+    const vbitTool: Tool = {
+      id: 't-eng', name: 'engraver', type: 'vbit',
+      diameter: 3.175, vAngle: 30, tipDiameter: 0.1, spindleRpm: 18000,
+    };
+    const engOp: JobOp = {
+      kind: 'engrave',
+      id: 'op-eng-sec',
+      toolId: 't-eng',
+      featureIds: ['p:prim-eng:path:0'],
+      depth: 0.2,
+      stepDown: 1,
+    } as unknown as JobOp;
+    const framedCtx = (sources: ReturnType<typeof sourcesFor>): GenContext => ({
+      ...ctx,
+      stock: cylStock,
+      tools: [...ctx.tools, vbitTool],
+      geometry: null,
+      features: null,
+      sources,
+      datumAngle: 0,
+      startA: 0,
+      sectionFrame: (p: { x: number; y: number; z: number }) =>
+        new THREE.Vector3(p.x, p.y, p.z), // identity pose-'none' mapping
+      sectionMode: '4-axis' as const,
+    });
+    const flat = generateJobOp(engOp, framedCtx(sourcesFor(null, null, identityTransform(), [art])));
+    expect(flat.error).toBeNull();
+    expect(flat.moves.length).toBeGreaterThan(0);
+    // the WRAPPED presentation refuses in a framed section (its θ
+    // authoring cannot be re-presented through a pose)
+    const wrapped: Primitive = { ...art, id: 'prim-eng-w', presentation: 'wrapped' };
+    const wrappedOp: JobOp = { ...engOp, featureIds: ['p:prim-eng-w:path:0'] } as JobOp;
+    const refused = generateJobOp(
+      wrappedOp,
+      framedCtx(sourcesFor(null, null, identityTransform(), [wrapped])),
+    );
+    expect(refused.error).toMatch(/wrapped artwork cannot run in a re-clamped/);
+    // and with NO section frame, the wrapped artwork keeps today's behavior
+    const stockFrameCtx: GenContext = {
+      ...framedCtx(sourcesFor(null, null, identityTransform(), [wrapped])),
+      sectionFrame: undefined,
+      sectionMode: undefined,
+    };
+    const stockRes = generateJobOp(wrappedOp, stockFrameCtx);
+    // generates as today (no refusal, no re-clamp message — error: null
+    // or an honest non-frame complaint at worst)
+    expect(String(stockRes.error)).not.toMatch(/re-clamped/);
   });
 });
