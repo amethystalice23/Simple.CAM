@@ -41,7 +41,10 @@ export interface CarveSim {
   send: (msg: { type: 'carve'; throughMove: number } | { type: 'reset' }) => void;
   /** kick off a run: builds the worker, sends setup + carve-to-end.
    *  moveStepDown (optional): per-move op step-down for the 3-class
-   *  classification; omitted = one-pitch default everywhere. */
+   *  classification; omitted = one-pitch default everywhere.
+   *  moveFrame (optional): per-move INVERSE fixture-section frame (16
+   *  column-major elements, null = fixture 1) so re-clamped sections carve
+   *  the fixture-1 grid where they physically cut. */
   run: (
     moves: Move[],
     toolOf: (moveIndex: number) => number,
@@ -50,6 +53,7 @@ export interface CarveSim {
     pitch?: number,
     startZ?: number,
     moveStepDown?: Float32Array,
+    moveFrame?: (readonly number[] | null)[],
   ) => void;
   /** stop the worker and drop the overlay (the Clear button) */
   dispose: () => void;
@@ -96,6 +100,7 @@ export function useCarveSim(): CarveSim {
       pitch?: number,
       startZ?: number,
       moveStepDown?: Float32Array,
+      moveFrame?: (readonly number[] | null)[],
     ) => {
       workerRef.current?.terminate();
       const worker = new Worker(new URL('../sim/carveWorker.ts', import.meta.url), {
@@ -152,7 +157,7 @@ export function useCarveSim(): CarveSim {
           // down, and a new run replaces it.
         }
       };
-      worker.postMessage({ type: 'setup', setup: { stock, tools, moves, moveTool, pitch, startZ, moveStepDown }, token });
+      worker.postMessage({ type: 'setup', setup: { stock, tools, moves, moveTool, pitch, startZ, moveStepDown, moveFrame }, token });
     },
     [],
   );

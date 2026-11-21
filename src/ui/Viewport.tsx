@@ -156,6 +156,13 @@ interface Props {
    *  a move with no owning op (never in practice — every move comes from
    *  an op). */
   previewOpIds: (string | null)[] | null;
+  /** per-move INVERSE fixture-section frames over the same flatten (16
+   *  column-major elements, null = fixture 1): a re-clamped section's
+   *  moves map back through their section's frame so the paths draw on
+   *  the fixture-1 stock they cut. ONE SHARED ARRAY PER SECTION — a
+   *  reference change between neighbours is the re-clamp boundary (no
+   *  segment crosses it; the A pile restarts). */
+  previewFrames?: (readonly number[] | null)[];
   /** the op whose paths render full strength while every other op dims
    *  (panel hover/selection); null = uniform strength. The feed/rapid
    *  split stays intact per group — colour encodes the OP, style the
@@ -285,6 +292,7 @@ export function Viewport({
   primitives,
   previewMoves,
   previewOpIds,
+  previewFrames,
   previewOpFocus,
   opColors,
   playbackMove,
@@ -1488,7 +1496,7 @@ export function Viewport({
   useEffect(() => {
     const datum = datumGroupRef.current;
     if (!datum || !previewMoves || playbackMove === null || !displayLayers.simulation) return;
-    const segs = movesToSegmentMoves(previewMoves, stock);
+    const segs = movesToSegmentMoves(previewMoves, stock, previewFrames);
     const cur = playbackMove;
     // the SHORT cluster: Δmove ∈ [−3, +2]. Map each Δ to its opacity.
     const band = (d: number): number | null => {
@@ -1555,7 +1563,7 @@ export function Viewport({
         (l.material as THREE.Material).dispose();
       }
     };
-  }, [previewMoves, playbackMove, displayLayers.simulation, stock]);
+  }, [previewMoves, previewFrames, playbackMove, displayLayers.simulation, stock]);
 
   // sim mode: the carved chunks replace the translucent stock, and the
   // Layer visibility (the Layers dropdown): Stock/Model ticks, and the
@@ -1833,7 +1841,7 @@ export function Viewport({
   useEffect(() => {
     const group = featureGroupRef.current;
     if (!group || !previewMoves || !displayLayers.paths) return;
-    const segs = movesToSegmentMoves(previewMoves, stock);
+    const segs = movesToSegmentMoves(previewMoves, stock, previewFrames);
     const mk = (pts: number[], color: number, opacity: number, dashed: boolean, order: number) => {
       const g = new LineSegmentsGeometry();
       g.setPositions(pts);
@@ -1911,7 +1919,7 @@ export function Viewport({
         (l.material as THREE.Material).dispose();
       }
     };
-  }, [previewMoves, previewOpIds, previewOpFocus, opColors, displayLayers.paths, stock]);
+  }, [previewMoves, previewOpIds, previewFrames, previewOpFocus, opColors, displayLayers.paths, stock]);
 
   // slice-pocket cut plane (edge-tracing §5): a translucent violet quad at
   // the slice Z + the contour outline there, and a grab pill on the plane's

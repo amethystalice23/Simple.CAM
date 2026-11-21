@@ -16,6 +16,12 @@
  * value in radians (never normalized; trig is periodic). 3-axis is
  * identity with axis (0, 0, −1).
  *
+ * A move emitted in a RE-CLAMPED (fixture) section carries its section's
+ * own WCS: `moveFrame[mi]` (the section frame's INVERSE, one shared array
+ * per section) maps it back into the stock-frame grid first, and a frame
+ * change between neighbours is the re-clamp boundary — the A pile
+ * restarts and no sweep crosses it (the kernel pose-plumbing leg).
+ *
  * Subdivision bounds every swept voxel kernel step: linear samples at ≤
  * pitch/2 mm AND rotary chord steps at Δθ ≤ (pitch/2)/rSurface radians
  * (rSurface = effectiveRadius; at r = 20mm, pitch 0.25 that is ~0.36° per
@@ -47,6 +53,38 @@ export interface Pose {
  *  stockTopZ + this so the first rapid never dips inside the crown. */
 export const SIM_PARK_CLEARANCE = 5;
 
+/**
+ * Apply one inverse section-frame matrix (16 column-major elements —
+ * THREE.Matrix4.toArray order) to a point / vector. Pure math: poses.ts
+ * stays three.js-free.
+ */
+function framePt(
+  f: readonly number[],
+  x: number,
+  y: number,
+  z: number,
+): [number, number, number] {
+  return [
+    f[0] * x + f[4] * y + f[8] * z + f[12],
+    f[1] * x + f[5] * y + f[9] * z + f[13],
+    f[2] * x + f[6] * y + f[10] * z + f[14],
+  ];
+}
+
+/** The same frame's rotation part only — for direction vectors. */
+function frameVec(
+  f: readonly number[],
+  x: number,
+  y: number,
+  z: number,
+): [number, number, number] {
+  return [
+    f[0] * x + f[4] * y + f[8] * z,
+    f[1] * x + f[5] * y + f[9] * z,
+    f[2] * x + f[6] * y + f[10] * z,
+  ];
+}
+
 export function movesToPoses(
   moves: Move[],
   stock: Stock,
@@ -56,6 +94,16 @@ export function movesToPoses(
    *  macro's park). Default derives a sane value from the calibration so
    *  tests can omit it; production passes stockTopZ(stock). */
   startZ: number = rotaryCalibrationOf(stock).axisZ + rotaryCalibrationOf(stock).effectiveRadius + SIM_PARK_CLEARANCE,
+  /**
+   * Per move: the INVERSE of the move's fixture-section frame (16
+   * column-major elements), null = the stock's own placement (fixture 1).
+   * A re-clamped section emits its moves in its own WCS; the grid carves
+   * the fixture-1 material, so each pose maps back through the inverse
+   * (the kernel pose-plumbing leg, mirroring toolpathPreview). ONE SHARED
+   * ARRAY PER SECTION: a reference change between neighbours is the
+   * re-clamp boundary — the A pile restarts and no sweep crosses it.
+   */
+  moveFrame?: (readonly number[] | null)[],
 ): Pose[] {
   const rotary = stock.axisMode === '4-axis';
   const axisZ = rotary ? rotaryCalibrationOf(stock).axisZ : 0;
@@ -86,24 +134,39 @@ export function movesToPoses(
     mi: number,
     rapid: boolean,
   ) => {
+    const f = moveFrame ? (moveFrame[mi] ?? null) : null;
     if (rotary) {
       const th = (ma * Math.PI) / 180;
       const cos = Math.cos(th);
       const sin = Math.sin(th);
-      const zrel = mz - axisZ;
+      // machine → material: the section's INVERSE frame FIRST (a re-clamp
+      // emits its moves in its own WCS), then the A un-rotation — both for
+      // the tip point and the tool axis (the spindle stays −Z in the
+      // section's machine frame; the material sees it as F⁻¹ of that)
+      const [px, py, pz] = f ? framePt(f, mx, my, mz) : [mx, my, mz];
+      const [ax0, ay0, az0] = f ? frameVec(f, 0, 0, -1) : [0, 0, -1];
+      const zrel = pz - axisZ;
+      const ay = ay0 * cos + az0 * sin;
+      const az = -ay0 * sin + az0 * cos;
       poses.push({
-        x: mx,
-        y: my * cos + zrel * sin,
-        z: -my * sin + zrel * cos + axisZ,
-        ax: 0,
-        ay: -sin,
-        az: -cos,
+        x: px,
+        y: py * cos + zrel * sin,
+        z: -py * sin + zrel * cos + axisZ,
+        ax: ax0,
+        ay,
+        az,
         tool,
         moveIndex: mi,
         rapid,
       });
     } else {
-      poses.push({ x: mx, y: my, z: mz, ax: 0, ay: 0, az: -1, tool, moveIndex: mi, rapid });
+      if (f) {
+        const [px, py, pz] = framePt(f, mx, my, mz);
+        const [ax, ay, az] = frameVec(f, 0, 0, -1);
+        poses.push({ x: px, y: py, z: pz, ax, ay, az, tool, moveIndex: mi, rapid });
+      } else {
+        poses.push({ x: mx, y: my, z: mz, ax: 0, ay: 0, az: -1, tool, moveIndex: mi, rapid });
+      }
     }
   };
 
@@ -113,6 +176,15 @@ export function movesToPoses(
     pos.y = m.words.y ?? pos.y;
     pos.z = m.words.z ?? pos.z;
     pos.a = m.words.a ?? pos.a;
+
+    // a RE-CLAMP boundary (the move's section changed): the A pile
+    // restarts at the section's own words, and no sweep crosses the
+    // fixture — the tool went to park and the part physically moved
+    if (moveFrame && mi > 0 && (moveFrame[mi] ?? null) !== (moveFrame[mi - 1] ?? null)) {
+      pos.a = m.words.a ?? 0;
+      prevM = { ...pos };
+      continue;
+    }
 
     // pure-A RAPID (an Index op): the stock rotates, the tool moves
     // nowhere and cuts nothing — no pose, but the datum shifts

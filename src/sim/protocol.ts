@@ -31,6 +31,13 @@ export interface SimSetup {
    *  0 / absent = default (one voxel pitch — a finish pass may skin one
    *  cell). Drives the sim's 3-class removal classification. */
   moveStepDown?: Float32Array;
+  /** per move: the INVERSE of the move's fixture-section frame (16
+   *  column-major elements), null = the stock's own placement (fixture 1)
+   *  — movesToPoses maps each pose back through it so the grid carves the
+   *  fixture-1 material. ONE SHARED ARRAY PER SECTION: a reference change
+   *  between neighbours is the re-clamp boundary. Absent entirely = the
+   *  whole stream runs in fixture 1 (today's behavior). */
+  moveFrame?: (readonly number[] | null)[];
 }
 
 export type ClientMsg =

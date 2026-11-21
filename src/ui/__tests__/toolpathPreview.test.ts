@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import type { Move, Stock } from '../../core/types';
 import { faceCylinder } from '../../cam/faceCylinder';
 import { spiralCarve } from '../../cam/spiralCarve';
@@ -364,5 +365,49 @@ describe('movesToSegments — Move.arc tessellation (2026-11-12)', () => {
     expect(mid[2]).toBeGreaterThan(-5);
     expect(mid[2]).toBeLessThan(5);
     expect(n).toBeGreaterThan(1);
+  });
+});
+
+// ---- fixture-section frames (the kernel pose-plumbing leg, 2026-11-21) ----
+//
+// A re-clamped section emits its moves in its own WCS; the preview maps
+// each move back through its section's INVERSE frame so paths draw on the
+// fixture-1 stock. ONE SHARED ARRAY PER SECTION: a reference change
+// between neighbours is the re-clamp boundary — no segment crosses it.
+
+describe('movesToSegments: fixture-section frames', () => {
+  /** a stand-in section frame: pure +30mm Z translation (section coords =
+   *  pristine + 30z), inverse = −30z */
+  const invEls = new THREE.Matrix4().makeTranslation(0, 0, 30).invert().toArray() as number[];
+
+  it('maps a framed move back through its section\'s inverse frame', () => {
+    const moves: Move[] = [
+      { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true }, // section 1: position
+      { words: { x: 10 }, feed: 100 }, // section 1: sweep at pristine z5
+      { words: { x: 0, y: 0, z: 35 }, feed: 0, rapid: true }, // SECTION 2: position (machine z35 = pristine 5)
+      { words: { x: 10 }, feed: 100 }, // section 2: sweep in SECTION coords
+      { words: { x: 0, y: 5 }, feed: 100 }, // section 2: another sweep
+    ];
+    const moveFrame: (readonly number[] | null)[] = [null, null, invEls, invEls, invEls];
+    const segs = movesToSegments(moves, cylinderStock, moveFrame);
+    // the section-1 sweep draws at machine (0,0,5)→(10,0,5) (frame null)
+    expect(segs.feed.slice(0, 6)).toEqual([0, 0, 5, 10, 0, 5]);
+    // the boundary rapid draws nothing (it positions across the re-clamp)
+    expect(segs.rapid).toEqual([]);
+    // the first SECTION-2 move after the boundary positions only (no
+    // segment crosses the re-clamp); the NEXT one draws at MATERIALIZED
+    // z: (10,0,35)→(0,5,35) machine maps to (10,0,5)→(0,5,5)
+    expect(segs.feed.length / 6).toBe(2);
+    expect(segs.feed.slice(6, 12)).toEqual([10, 0, 5, 0, 5, 5]);
+  });
+
+  it('no moveFrame = today\'s byte-identical behavior (fixture 1)', () => {
+    const moves: Move[] = [
+      { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 10 }, feed: 100 },
+    ];
+    const a = movesToSegments(moves, cylinderStock);
+    const b = movesToSegments(moves, cylinderStock, [null, null]);
+    expect(a).toEqual(b);
   });
 });

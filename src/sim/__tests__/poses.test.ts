@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { movesToPoses, moveDurations } from '../poses';
 import type { Move, Stock } from '../../core/types';
 
@@ -335,5 +336,71 @@ describe('movesToPoses — Move.arc tessellation (2026-11-12)', () => {
       expect(p.rapid).toBe(false);
       expect(p.tool).toBe(3);
     }
+  });
+});
+
+// ---- fixture-section frames (the kernel pose-plumbing leg, 2026-11-21) ----
+//
+// A re-clamped section emits its moves in its own WCS; the grid carves the
+// fixture-1 material, so each pose maps back through the move's INVERSE
+// section frame. ONE SHARED ARRAY PER SECTION: a reference change between
+// neighbours is the re-clamp boundary — the A pile restarts and no sweep
+// crosses it.
+
+describe('movesToPoses — fixture-section frames', () => {
+  /** a stand-in section frame: pure +30mm Z translation; inverse = −30z */
+  const invEls = new THREE.Matrix4().makeTranslation(0, 0, 30).invert().toArray() as number[];
+
+  it('maps framed poses back into the fixture-1 material frame', () => {
+    const moves: Move[] = [
+      { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true }, // section 1: position
+      { words: { x: 10 }, feed: 100 }, // section 1: sweep at pristine z5
+      { words: { x: 0, y: 0, z: 35 }, feed: 0, rapid: true }, // SECTION 2 position (machine z35)
+      { words: { x: 10 }, feed: 100 }, // section 2: sweep in SECTION coords
+    ];
+    const moveFrame: (readonly number[] | null)[] = [null, null, invEls, invEls];
+    const poses = movesToPoses(moves, flatStock, () => 0, 0.5, 45, moveFrame);
+    // section 1: machine = material (no frame)
+    const p1 = poses.filter((p) => p.moveIndex === 1);
+    expect(p1.length).toBeGreaterThan(0);
+    expect(p1[p1.length - 1].z).toBeCloseTo(5); // material z5, NOT 35
+    // the boundary position emits nothing (no sweep crosses the re-clamp)
+    expect(poses.some((p) => p.moveIndex === 2)).toBe(false);
+    // section 2's sweep maps BACK through the inverse: machine z35 carves
+    // the material at z 35−30 = 5
+    const p3 = poses.filter((p) => p.moveIndex === 3);
+    expect(p3.length).toBeGreaterThan(0);
+    expect(p3[0].z).toBeCloseTo(5);
+    expect(p3[p3.length - 1].z).toBeCloseTo(5);
+    expect(p3[p3.length - 1].x).toBeCloseTo(10);
+    // the 3-axis tool axis is untouched by a pure translation
+    expect(p3[0].az).toBeCloseTo(-1);
+  });
+
+  it('the A pile RESETS at the re-clamp boundary (the datum barrier)', () => {
+    // a 4-axis stock: section 1 indexes to A90; the section-2 moves after
+    // the boundary must NOT un-rotate by the dead pile
+    const moves: Move[] = [
+      { words: { a: 90 }, feed: 0, rapid: true }, // section 1: index (invisible)
+      { words: { x: 5, y: 0, z: 20 }, feed: 0, rapid: true }, // SECTION 2 position
+      { words: { y: 10 }, feed: 100 }, // section 2: sweep at machine (5, 10, 20)
+    ];
+    const moveFrame: (readonly number[] | null)[] = [null, invEls, invEls];
+    const poses = movesToPoses(moves, cylStock, () => 0, 0.5, 45, moveFrame);
+    const p2 = poses.filter((p) => p.moveIndex === 2);
+    expect(p2.length).toBeGreaterThan(0);
+    // material = F⁻¹(machine) with NO un-rotation (a reset to 0): y10 z −10
+    expect(p2[p2.length - 1].y).toBeCloseTo(10);
+    expect(p2[p2.length - 1].z).toBeCloseTo(-10);
+  });
+
+  it('no moveFrame = today\'s behavior (fixture 1, byte-identical)', () => {
+    const moves: Move[] = [
+      { words: { x: 0, y: 0, z: 5 }, feed: 0, rapid: true },
+      { words: { x: 10 }, feed: 100 },
+    ];
+    const a = movesToPoses(moves, flatStock, () => 0, 0.5);
+    const b = movesToPoses(moves, flatStock, () => 0, 0.5, 45, [null, null]);
+    expect(a).toEqual(b);
   });
 });

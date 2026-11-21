@@ -216,9 +216,10 @@ export function alignToStock(
 // 3-axis standing cylinder — axis ∥ Z, centered X0/Y0, right end +X up
 // top), then the pose turns it in place about the placed part's center.
 // A fixture RESETS the index datums (datumAngleBefore's barrier: the A
-// pile above a re-clamp is gone). These are DISPLAY maps: pristine
-// machine coords → the frame the open op cuts in. Generation keeps its
-// own (pristine) frame until the kernel pose-plumbing leg.
+// pile above a re-clamp is gone). These maps are pristine machine coords
+// → the frame the op cuts in; GENERATION composes the same map since the
+// kernel pose-plumbing leg (2026-11-21) — the moves a section emits are
+// its own machine coords (the operator re-zeros the WCS at the re-clamp).
 
 /**
  * The stock's center as a fixture places it, in a MODE and along an ORIGIN
@@ -323,6 +324,54 @@ export function sectionMode(
     }
   }
   return mode;
+}
+
+/**
+ * The id of the FIXTURE op that owns an op's section — the latest fixture
+ * at-or-above it (the op's own fixture counts, matching displayFrameFor),
+ * null when the op runs in the stock's own placement (section 1).
+ */
+export function sectionFixtureId(
+  ops: readonly { kind: string; id: string }[],
+  opId: string | null,
+): string | null {
+  if (opId === null) return null;
+  let fx: string | null = null;
+  for (const op of ops) {
+    if (op.kind === 'fixture') fx = op.id;
+    if (op.id === opId) break;
+  }
+  return fx;
+}
+
+/**
+ * The section's crown Z (generation-side, the kernel pose-plumbing leg):
+ * the top of the stock AS the op's fixture places it. A 3-axis section
+ * stands the cylinder — the crown is the standing top face per the
+ * FIXTURE's resolved origin edge (not the Stock page's xOrigin); a box
+ * fixture may re-zero Z (its z-edge); a lying (4-axis) cylinder keeps the
+ * stock's own crown (a pose flip preserves the top — every pose is a
+ * half-turn about the part center). null = the stock's own crown.
+ */
+export function sectionCrownZ(
+  stock: Stock,
+  ops: readonly { kind: string; id: string }[],
+  opId: string | null,
+): number | null {
+  const fxId = sectionFixtureId(ops, opId);
+  if (fxId === null) return null;
+  const fx = ops.find((o) => o.id === fxId) as unknown as {
+    axisMode: '3-axis' | '4-axis';
+    origin: OriginEdge | { x: OriginEdge; y: OriginEdge; z: OriginEdge } | null | undefined;
+  };
+  const origin = fx.origin ?? null;
+  if (stock.kind === 'cylinder') {
+    if (fx.axisMode === '4-axis') return null; // lying crown = the stock's own
+    const edge = fixtureOrigin(stock, '3-axis', origin) as OriginEdge;
+    return originSpan(edge, stock.length)[1];
+  }
+  const triple = fixtureOrigin(stock, fx.axisMode, origin) as { x: OriginEdge; y: OriginEdge; z: OriginEdge };
+  return originSpan(triple.z, stock.sizeZ)[1];
 }
 
 /**

@@ -241,7 +241,7 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
   if (run && msg.token !== run.token) return; // stale generation
   if (msg.type === 'setup') {
     stopTimer(run);
-    const { stock, tools, moves, moveTool, pitch, startZ, moveStepDown } = msg.setup;
+    const { stock, tools, moves, moveTool, pitch, startZ, moveStepDown, moveFrame } = msg.setup;
     const grid = new VoxelGrid(stock, pitch ?? derivePitch(stock));
     const specs = tools.map((t: Tool) => {
       try {
@@ -257,6 +257,7 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
       (mi: number) => moveTool[mi] ?? 0xffff,
       grid.pitch,
       startZ,
+      moveFrame,
     );
     const pitchUsed = grid.pitch;
     run = {

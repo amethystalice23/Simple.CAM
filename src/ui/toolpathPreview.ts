@@ -45,16 +45,46 @@ export interface PreviewSegmentMoves {
   rapidMoves: number[];
 }
 
-export function movesToSegments(moves: Move[], stock: Stock | null): PreviewSegments {
-  return segmentize(moves, stock);
+export function movesToSegments(
+  moves: Move[],
+  stock: Stock | null,
+  moveFrame?: (readonly number[] | null)[],
+): PreviewSegments {
+  return segmentize(moves, stock, moveFrame);
 }
 
-export function movesToSegmentMoves(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
-  const s = segmentize(moves, stock);
+export function movesToSegmentMoves(
+  moves: Move[],
+  stock: Stock | null,
+  moveFrame?: (readonly number[] | null)[],
+): PreviewSegmentMoves {
+  const s = segmentize(moves, stock, moveFrame);
   return { feed: s.feed, rapid: s.rapid, feedMoves: s.feedMoves, rapidMoves: s.rapidMoves };
 }
 
-function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
+/**
+ * Apply one inverse section-frame matrix (16 column-major elements —
+ * THREE.Matrix4.toArray order) to a point. Pure math here: toolpathPreview
+ * stays three.js-free.
+ */
+function framePt(
+  f: readonly number[],
+  x: number,
+  y: number,
+  z: number,
+): [number, number, number] {
+  return [
+    f[0] * x + f[4] * y + f[8] * z + f[12],
+    f[1] * x + f[5] * y + f[9] * z + f[13],
+    f[2] * x + f[6] * y + f[10] * z + f[14],
+  ];
+}
+
+function segmentize(
+  moves: Move[],
+  stock: Stock | null,
+  moveFrame?: (readonly number[] | null)[],
+): PreviewSegmentMoves {
   const rotary = stock?.axisMode === '4-axis';
   const axisZ = rotary ? rotaryCalibrationOf(stock).axisZ : 0;
   // Modal start: X/Y unknown (the first move only positions — nothing draws
@@ -102,6 +132,29 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
     const zrel = z - axisZ;
     return [y * Math.cos(th) + zrel * Math.sin(th), -y * Math.sin(th) + zrel * Math.cos(th) + axisZ];
   };
+  /**
+   * One move's MACHINE point → the DISPLAY frame: the move's own inverse
+   * SECTION frame first (a re-clamped section emits its moves in its own
+   * WCS — the fixture's), then the accumulated-A un-rotation. `moveFrame`
+   * is one SHARED array per section (or null for the stock's own), so a
+   * reference change between moves is the re-clamp boundary.
+   */
+  const frameOf = (mi: number) => (moveFrame ? (moveFrame[mi] ?? null) : null);
+  const disp = (
+    mi: number,
+    th: number,
+    x: number,
+    y: number,
+    z: number,
+  ): [number, number, number] => {
+    const f = frameOf(mi);
+    const [px, py, pz] = f ? framePt(f, x, y, z) : [x, y, z];
+    // 3-axis stock draws raw (no A un-rotation); the section frame above
+    // applies in every mode
+    if (!rotary) return [px, py, pz];
+    const [dy, dz] = toDisplay(th, py, pz);
+    return [px, dy, dz];
+  };
 
   /** Max degrees of rotation per drawn chord — finer would only cost
    * geometry for no visible gain on a 25mm-scale cylinder. */
@@ -129,6 +182,16 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
     pos.z = m.words.z ?? pos.z;
     pos.a = m.words.a ?? pos.a;
 
+    // a RE-CLAMP boundary (the move's section changed): the A pile
+    // restarts at the section's own words, and no segment crosses the
+    // fixture — the tool went to park and the part physically moved
+    if (moveFrame && mi > 0 && frameOf(mi) !== frameOf(mi - 1)) {
+      pos.a = m.words.a ?? 0;
+      prev = null;
+      prevM = { ...pos };
+      continue;
+    }
+
     // a pure-A RAPID move (an Index op) rotates the stock, not the tool:
     // it cuts nothing, moves nothing in XYZ, and only sets the A the flat
     // moves after it un-rotate by. An A-only FEED move is a cut (a vertical
@@ -150,8 +213,8 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
       // the parked tool position to the new datum so the next segment
       // starts where the machine actually is.
       if (prev) {
-        const [dy, dz] = toDisplay((pos.a * Math.PI) / 180, prevM.y, prevM.z);
-        prev = { x: prevM.x, y: dy, z: dz };
+        const [dx, dy, dz] = disp(mi, (pos.a * Math.PI) / 180, prevM.x, prevM.y, prevM.z);
+        prev = { x: dx, y: dy, z: dz };
       }
       continue;
     }
@@ -189,14 +252,11 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
           const mx = cx + r * Math.cos(ang);
           const my = cy + r * Math.sin(ang);
           const mz = prevM.z + (pos.z - prevM.z) * t;
-          let [dy, dz] = [my, mz];
-          if (rotary) {
-            [dy, dz] = toDisplay((pos.a * Math.PI) / 180, my, mz);
-          }
+          const [dx, dy, dz] = disp(mi, (pos.a * Math.PI) / 180, mx, my, mz);
           if (prev) {
-            emit(target, targetMoves, mi, prev.x, prev.y, prev.z, mx, dy, dz);
+            emit(target, targetMoves, mi, prev.x, prev.y, prev.z, dx, dy, dz);
           }
-          prev = { x: mx, y: dy, z: dz };
+          prev = { x: dx, y: dy, z: dz };
         }
       }
       prevM = { ...pos };
@@ -215,23 +275,17 @@ function segmentize(moves: Move[], stock: Stock | null): PreviewSegmentMoves {
         const my = from.y + (pos.y - from.y) * t;
         const mz = from.z + (pos.z - from.z) * t;
         const ma = from.a + da * t;
-        const [dy, dz] = toDisplay((ma * Math.PI) / 180, my, mz);
-        emit(target, targetMoves, mi, prev.x, prev.y, prev.z, mx, dy, dz);
-        prev = { x: mx, y: dy, z: dz };
+        const [dx, dy, dz] = disp(mi, (ma * Math.PI) / 180, mx, my, mz);
+        emit(target, targetMoves, mi, prev.x, prev.y, prev.z, dx, dy, dz);
+        prev = { x: dx, y: dy, z: dz };
       }
     } else {
-      let x = pos.x;
-      let y = pos.y;
-      let z = pos.z;
-      if (isRotary) {
-        // rotary move: un-rotate by its own accumulated A
-        [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
-      } else if (rotary) {
-        // flat move: un-rotate by the stock's current A (the index op's
-        // angle for indexed jobs, the pass angle mid-facing) so it draws
-        // where the material actually is. A=0 (or flat stock) is identity.
-        [y, z] = toDisplay((pos.a * Math.PI) / 180, pos.y, pos.z);
-      }
+      // flat or rotary move: un-rotate by the stock's current A (the index
+      // op's angle for indexed jobs, the pass angle mid-facing) so it draws
+      // where the material actually is, in the move's own section frame.
+      // A=0 (or flat stock) is identity; disp applies the section frame
+      // first when the move runs in a re-clamped section.
+      const [x, y, z] = disp(mi, (pos.a * Math.PI) / 180, pos.x, pos.y, pos.z);
       if (prev) {
         emit(target, targetMoves, mi, prev.x, prev.y, prev.z, x, y, z);
       }

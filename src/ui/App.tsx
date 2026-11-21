@@ -68,7 +68,7 @@ import { GEN_CANCELLED, useGenWorker } from './useGenWorker';
 import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import * as THREE from 'three';
-import { displayFrameFor, sectionMode, stockTopZ } from './placement';
+import { displayFrameFor, sectionCrownZ, sectionFixtureId, sectionMode, stockTopZ } from './placement';
 import { decimateForDetection } from '../cam/decimate';
 import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
@@ -242,6 +242,124 @@ export function App() {
    *  parse — so the sim and the transport clock see what the machine
    *  executes, post behaviors included (G92.4 shrinks, short-way anchors).
    *  Null until ops generate. */
+  /**
+   * Per-OP fixture-section contexts (the kernel pose-plumbing leg,
+   * 2026-11-21): generation cuts a re-clamped op in its section's own
+   * machine frame — the fresh-clamp matrix (displayFrameFor: mode
+   * placement + pose) with the section's index datum composed after it,
+   * the same composition the viewport displays. One SHARED ENTRY PER
+   * SECTION (keyed by the section's fixture op): the frame's inverse
+   * stays referentially equal across a section's ops, which the sim and
+   * preview walkers read as their re-clamp boundary. Section 1 (no
+   * fixture above) carries nulls — a fixture-less job stays
+   * byte-identical end to end.
+   */
+  const sectionCtxByOp = useMemo(() => {
+    const opsLite = ops as readonly { kind: string; id: string }[];
+    interface SectionCtx {
+      /** the section's FIXTURE frame (null = the stock's own placement).
+       *  The per-op index DATUM is NOT here — it is per-op (an Index inside
+       *  a section changes it for the ops after), composed at generation. */
+      frame: THREE.Matrix4 | null;
+      /** the frame's INVERSE as 16 elements (null with frame) — shared per
+       *  section: the sim/preview per-move arrays (their walkers handle
+       *  datums through the accumulated A, as ever) */
+      frameInvEls: readonly number[] | null;
+      sectionMode: '3-axis' | '4-axis';
+      /** the section's crown Z (depth boxes author against it) */
+      crownZ: number;
+    }
+    const bySection = new Map<string, SectionCtx>();
+    const out = new Map<string, SectionCtx>();
+    for (const op of ops) {
+      const secId = sectionFixtureId(opsLite, op.id) ?? '__stock';
+      let sec = bySection.get(secId);
+      if (!sec) {
+        const frame = displayFrameFor(stock, opsLite, op.id);
+        sec = {
+          frame,
+          frameInvEls: frame ? (frame.clone().invert().toArray() as number[]) : null,
+          sectionMode: sectionMode(stock, opsLite, op.id),
+          crownZ: sectionCrownZ(stock, opsLite, op.id) ?? stockTopZ(stock),
+        };
+        bySection.set(secId, sec);
+      }
+      out.set(op.id, sec);
+    }
+    return out;
+  }, [ops, stock]);
+
+  /** a feature's height in an op's cutting frame — its SECTION's fresh
+   *  clamp, then the section's index datum (per-op), the same composition
+   *  generation cuts in and the viewport displays. */
+  const featureDepthInFrame = (op: JobOp, p: Vector3): number => {
+    const sec = sectionCtxByOp.get(op.id);
+    const angle = sec?.sectionMode === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
+    let v = new THREE.Vector3(p.x, p.y, p.z);
+    if (sec?.frame) v = v.applyMatrix4(sec.frame);
+    if (angle !== 0) v = indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ)(v);
+    return v.z;
+  };
+
+  /**
+   * The GENERATION section context for one op (threaded into GenContext /
+   * the worker payload): the section's fixture frame composed with the
+   * op's own index datum — the frame the op's moves are emitted in (its
+   * own WCS, the one the operator re-zeros at the re-clamp). Section 1
+   * (fixture-less) passes no frame: generation's own index-datum path is
+   * byte-identical today's behavior.
+   */
+  const genSectionCtxOf = (opId: string) => {
+    const sec = sectionCtxByOp.get(opId);
+    if (!sec) return {};
+    const angle = sec.sectionMode === '4-axis' ? datumAngleBefore(ops, opId) : 0;
+    const rot =
+      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    const frameFn = sec.frame
+      ? (p: { x: number; y: number; z: number }) => {
+          const v = new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(sec.frame!);
+          return rot ? rot(v) : v;
+        }
+      : undefined;
+    // the same composition as a 16-element matrix, for the worker payload
+    let frameEls: number[] | undefined;
+    if (sec.frame) {
+      frameEls =
+        angle === 0
+          ? (sec.frame.toArray() as number[])
+          : new THREE.Matrix4()
+              .makeTranslation(0, 0, rotaryCalibrationOf(stock).axisZ)
+              .multiply(new THREE.Matrix4().makeRotationX((angle * Math.PI) / 180))
+              .multiply(new THREE.Matrix4().makeTranslation(0, 0, -rotaryCalibrationOf(stock).axisZ))
+              .multiply(sec.frame.clone())
+              .toArray() as number[];
+    }
+    return { sectionFrame: frameFn, sectionFrameEls: frameEls, sectionMode: sec.sectionMode, crownZ: sec.crownZ };
+  };
+
+  /**
+   * The GHOST previews' cutting-frame rotate (fixture section frame ∘ the
+   * op's index datum) — the same composition generation resolves
+   * selections through, composed ALWAYS (unlike the generation context,
+   * which carries a frame only for an actual re-clamp and keeps
+   * fixture-less jobs on its own index-datum path). undefined = identity.
+   */
+  const previewRotateOf = (opId: string) => {
+    const sec = sectionCtxByOp.get(opId);
+    if (!sec) return undefined;
+    const angle = sec.sectionMode === '4-axis' ? datumAngleBefore(ops, opId) : 0;
+    const rot =
+      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    if (!sec.frame) return rot;
+    return (p: { x: number; y: number; z: number }) => {
+      const v = new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(sec.frame!);
+      return rot ? rot(v) : v;
+    };
+  };
+
+  /** the crown Z in the op's section frame (ghost previews + depth boxes). */
+  const previewCrownOf = (opId: string) => sectionCtxByOp.get(opId)?.crownZ ?? stockTopZ(stock);
+
   const postedStream = useMemo(() => {
     const postable = ops
       .filter((o) => (generated[o.id]?.moves.length ?? 0) > 0)
@@ -250,11 +368,14 @@ export function App() {
         toolId: o.toolId,
         moves: generated[o.id]?.moves ?? [],
         stepDown: simStepDownFor(o),
+        // the op's section INVERSE frame (null = fixture 1): the sim maps
+        // each parsed pose back through it — one shared array per section
+        frameInv: sectionCtxByOp.get(o.id)?.frameInvEls ?? null,
       }));
     if (postable.length === 0) return null;
     return buildPostedStream(postable, tools, panelToolNumbers(ops));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ops/generated/tool deps; simStepDownFor is pure
-  }, [ops, generated, tools]);
+  }, [ops, generated, tools, sectionCtxByOp]);
   /** the carve simulator's transport playback clock (2026-10-27): over the
    *  SAME move stream the sim ran — a completed sim + the Simulation tick
    *  show the bar; Clear/new job/model drop dispose the sim and the
@@ -410,17 +531,6 @@ export function App() {
     if (r.kind === 'circle') return xf((r.feature as CircleFeature).center);
     if (r.kind === 'plane') return xf((r.feature as PlaneFeature).point);
     return null;
-  };
-
-  /** a feature's height in an op's cutting frame: the datum established by
-   * the latest Index op preceding it in the sequence — 4-axis SECTIONS
-   * only (a fixture may re-declare mode; 3-axis sections have no A) */
-  const featureDepthInFrame = (op: JobOp, p: Vector3): number => {
-    const angle = datumAngleBefore(ops, op.id);
-    if (sectionMode(stock, ops as { kind: string; id: string }[], op.id) === '4-axis' && angle !== 0) {
-      return indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ)(p).z;
-    }
-    return p.z;
   };
 
   /** a feature's RADIUS about the stock axis in machine space — the
@@ -743,7 +853,6 @@ export function App() {
     }
     if (editingOpId) {
       const p = featureMachinePoint(id);
-      const crown = stockTopZ(stock);
       setOps((prev) =>
         prev.map((o) => {
           if (o.id !== editingOpId) return o;
@@ -754,18 +863,20 @@ export function App() {
           if (o.featureIds.length === 0 && o.kind === 'threadMill') {
             // the rim/wall/facet click resolves the whole thread spec: Ø,
             // inside/outside, the rim depth — and the thread length when
-            // the click was the cylinder wall itself
+            // the click was the cylinder wall itself. Depth/crown in the
+            // op's own section frame (the kernel pose-plumbing leg)
             next = prefillThreadMill(
               next as Extract<JobOp, { kind: 'threadMill' }>,
               sources,
               id,
-              crown,
+              previewCrownOf(o.id),
               datumAngleBefore(ops, o.id),
               stock,
+              previewRotateOf(o.id),
             );
           }
           if (o.featureIds.length === 0 && p) {
-            next = prefillDepths(next, featureDepthInFrame(o, p), crown);
+            next = prefillDepths(next, featureDepthInFrame(o, p), previewCrownOf(o.id));
           }
           return next;
         }),
@@ -983,10 +1094,10 @@ export function App() {
     const op = ops.find((o) => o.id === expandedOpId);
     if (!op || op.kind !== 'threadMill' || op.featureIds.length === 0) return null;
     if (op.endDepth <= op.startDepth) return null;
-    const crown = stockTopZ(stock);
-    const angle = sectionMode(stock, ops as { kind: string; id: string }[], op.id) === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
-    const rotate =
-      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    // the ghost resolves in the op's own cutting frame — its section's
+    // fresh clamp, then its index datum (the same map generation cuts in)
+    const crown = previewCrownOf(op.id);
+    const rotate = previewRotateOf(op.id);
     for (const part of splitSelection(sources, op.featureIds)) {
       let src;
       try {
@@ -1006,7 +1117,7 @@ export function App() {
       }
     }
     return null;
-  }, [ops, expandedOpId, sources, stock]);
+  }, [ops, expandedOpId, sources, stock, sectionCtxByOp]);
 
   /** the expanded rotary op's intended result (edge-tracing §5): the
    * violet ghost cylinder about the stock axis — a spiral carve adds its
@@ -1147,9 +1258,9 @@ export function App() {
   const pocketPreview = useMemo(() => {
     const op = ops.find((o) => o.id === expandedOpId);
     if (!op || op.kind !== 'pocket' || op.featureIds.length === 0) return null;
-    const angle = sectionMode(stock, ops as { kind: string; id: string }[], op.id) === '4-axis' ? datumAngleBefore(ops, op.id) : 0;
-    const rotate =
-      angle !== 0 ? indexedPointRotation(angle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    // the ghost resolves through the op's own cutting frame (its section's
+    // fresh clamp + its index datum) — the same map generation cuts in
+    const rotate = previewRotateOf(op.id);
     const out: { regions: Vec2[][]; selectionZ: number }[] = [];
     for (const part of splitSelection(sources, op.featureIds)) {
       try {
@@ -1165,7 +1276,7 @@ export function App() {
       }
     }
     return out.length > 0 ? out : null;
-  }, [ops, expandedOpId, sources, stock]);
+  }, [ops, expandedOpId, sources, stock, sectionCtxByOp]);
 
   /** the open op's cutting frame: the viewport shows the part in the frame
    * its FIXTURE section declares (mode re-placement + pose, composed in
@@ -1209,6 +1320,28 @@ export function App() {
     }
     return perMove;
   }, [ops, hiddenOps, generated]);
+
+  /**
+   * Per-move SECTION frames over the SAME preview flatten: each move's
+   * owning op's section INVERSE frame (16 elements, null = fixture 1 —
+   * the stock's own placement). The viewport maps each segment back
+   * through it so a re-clamped section's paths draw on the fixture-1
+   * stock they cut (the kernel pose-plumbing leg). ONE SHARED ARRAY PER
+   * SECTION (sectionCtxByOp guarantees it) — the walkers read a
+   * reference change as the re-clamp boundary.
+   */
+  const previewFrames = useMemo(() => {
+    let mi = 0;
+    const perMove: (readonly number[] | null)[] = [];
+    for (const o of ops) {
+      if (hiddenOps.has(o.id)) continue;
+      const fi = sectionCtxByOp.get(o.id)?.frameInvEls ?? null;
+      const len = generated[o.id]?.moves.length ?? 0;
+      for (let k = 0; k < len; k++) perMove[mi + k] = fi;
+      mi += len;
+    }
+    return perMove;
+  }, [ops, hiddenOps, generated, sectionCtxByOp]);
 
   /** per-op-ID colour: each op's preview path draws in its OWN headline
    * colour (Alice, 2026-11-19: "the colour of the preview path to be the
@@ -1291,6 +1424,9 @@ export function App() {
   ): Promise<GeneratedOp | null> => {
     const label = OP_KINDS.find((k) => k.kind === op.kind)?.label ?? op.kind;
     setGenNote(`Generating ${label}${where ? ` (${where})` : ''}…`);
+    // the op's fixture-section frame (the kernel pose-plumbing leg): the
+    // worker rebuilds the point map from the composed elements
+    const sec = genSectionCtxOf(op.id);
     try {
       const result = await genWorker.generate(geometry!, {
         op,
@@ -1304,6 +1440,9 @@ export function App() {
         startA: a,
         prevRpm,
         standing,
+        sectionFrameEls: sec.sectionFrameEls,
+        sectionMode: sec.sectionMode,
+        crownZ: sec.crownZ,
       });
       return genWorker.currentToken() === token ? result : null;
     } catch (err) {
@@ -1340,12 +1479,16 @@ export function App() {
         result = await generateOffThread(token, o, a, datum, prevRpm, `op ${index}/${ops.length}`, standing);
         if (result === null) return; // superseded while the worker ran
       } else {
+        const sec = genSectionCtxOf(o.id);
         result = generateJobOp(o, {
           ...genCtx,
           datumAngle: datum,
           startA: a,
           prevRpm,
           standing,
+          sectionFrame: sec.sectionFrame,
+          sectionMode: sec.sectionMode,
+          crownZ: sec.crownZ,
         });
       }
       next[o.id] = result;
@@ -1356,7 +1499,11 @@ export function App() {
       // flows into the next op's context (the kernel ignores it for non-
       // rotary ops; re-index happens inside rotaryCarve at its datum)
       if (result.standing) standing = result.standing;
+      // Index establishes the datum for the ops after it; a FIXTURE resets
+      // it (the barrier — the A pile above a re-clamp is gone). Matches
+      // datumAngleBefore, which recalcOne reads.
       if (o.kind === 'index') datum = o.angle;
+      else if (o.kind === 'fixture') datum = 0;
     }
     setGenNote(null);
     if (genWorker.currentToken() !== token) return; // superseded at the wire
@@ -1401,11 +1548,20 @@ export function App() {
       if (haveStartA && prevRpm !== undefined) break;
     }
     const datum = datumAngleBefore(ops, id);
+    const sec = genSectionCtxOf(id);
     let result: GeneratedOp | null;
     if (isHeavyGenOp(op) && geometry) {
       result = await generateOffThread(token, op, startA, datum, prevRpm);
     } else {
-      result = generateJobOp(op, { ...genCtx, datumAngle: datum, startA, prevRpm });
+      result = generateJobOp(op, {
+        ...genCtx,
+        datumAngle: datum,
+        startA,
+        prevRpm,
+        sectionFrame: sec.sectionFrame,
+        sectionMode: sec.sectionMode,
+        crownZ: sec.crownZ,
+      });
     }
     if (result === null || genWorker.currentToken() !== token) return; // superseded
     setGenNote(null);
@@ -1515,9 +1671,9 @@ export function App() {
     if (op.kind !== 'threadMill') return;
     const prepTool = tools.find((t) => t.type === 'flat') ?? tools[0];
     if (!prepTool) return;
-    const datum = datumAngleBefore(ops, op.id);
-    const rotate =
-      datum !== 0 ? indexedPointRotation(datum, rotaryCalibrationOf(stock).axisZ) : undefined;
+    // the prep inserts into the thread-mill's OWN section (right above it):
+    // resolve the bore through the same cutting frame it will generate in
+    const rotate = previewRotateOf(op.id);
     // the modeled bore/boss radius from the op's own selection
     let radius: number | null = null;
     for (const part of splitSelection(sources, op.featureIds)) {
@@ -1596,7 +1752,7 @@ export function App() {
   const changeSelectionIs = (op: JobOp, value: 'floor' | 'rim') => {
     let next: JobOp = { ...op, selectionIs: value } as JobOp;
     const p = op.featureIds.length > 0 ? featureMachinePoint(op.featureIds[0]) : null;
-    if (p) next = prefillDepths(next, featureDepthInFrame(op, p), stockTopZ(stock));
+    if (p) next = prefillDepths(next, featureDepthInFrame(op, p), previewCrownOf(op.id));
     setOps((prev) => prev.map((o) => (o.id === op.id ? next : o)));
   };
 
@@ -2060,6 +2216,9 @@ export function App() {
             /** per-move owning-op ids + the focus op for the per-op
              *  colours (the fixture-ops spec's preview legibility ask) */
             previewOpIds={previewOpIds}
+            /** per-move SECTION frames (inverse, null = fixture 1) — the
+             *  paths of a re-clamped section draw on the fixture-1 stock */
+            previewFrames={previewFrames}
             previewOpFocus={focusOpId}
             opColors={opIdColors}
             playbackMove={
@@ -2346,6 +2505,7 @@ export function App() {
           moves={postedStream?.moves ?? previewMoves ?? []}
           toolOf={postedStream?.toolOf ?? simToolOf}
           stepDown={postedStream?.stepDown ?? simStepDown}
+          frames={postedStream?.frameInv ?? previewFrames}
           sim={carveSim}
           onRun={() => {
             setShowSim(true); // the Simulation layer goes on with the run

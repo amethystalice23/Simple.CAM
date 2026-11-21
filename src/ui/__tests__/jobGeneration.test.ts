@@ -8,6 +8,7 @@ import { detectFeatures } from '../../cam/features';
 import { opEdgeSource, sourcesFor } from '../featureSources';
 import { normalizeJobOps } from '../jobFile';
 import type { Primitive } from '../../core/types';
+import { displayFrameFor, sectionCrownZ } from '../placement';
 import {
   datumAngleBefore,
   advisedOpRates,
@@ -3063,5 +3064,147 @@ describe('swarfFinish — the true 4D finish (milestone 4 wiring)', () => {
     // datum-return A move may follow it — at that plane, by contract)
     const lastZ = zRapids[zRapids.length - 1];
     expect(lastZ.words.z).toBeCloseTo(safeZ, 6);
+  });
+});
+
+// ---- generation in a fixture section (the kernel pose-plumbing leg,
+// 2026-11-21) ----
+//
+// Her GHM9 outer_barrel_adapter case: a Ø10 bore COAXIAL with the lying
+// cylinder (along the rotation axis X) cannot be pocketed in the pristine
+// frame — the frame gate correctly refuses ("parallel to the rotation
+// axis"). A FIXTURE declaring 3-axis stands the part up; the section's
+// frame composed into the feature resolution turns the same rim into a
+// machine-Z-normal disc and the pocket generates — in the SECTION's
+// machine coords (its own WCS, the one the operator re-zeros at the
+// re-clamp).
+
+describe('generation in a fixture (re-clamped) section', () => {
+  /** the Ø10 bore lying along the stock axis, as a primitive: local X =
+   *  machine X (identity rotation), centered on the axis (axisZ 0) */
+  const borePrim: Primitive = {
+    kind: 'cylinder',
+    id: 'prim-bore',
+    diameter: 10,
+    length: 80,
+    original: { diameter: 10, length: 80 },
+    transform: {
+      position: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  };
+  const boreSources = sourcesFor(null, null, identityTransform(), [borePrim]);
+  /** the far rim circle: center machine x=+40, axis along X (the stock axis) */
+  const farRimId = boreSources[0].features.circles.find(
+    (c) => Math.abs(c.center.x - 40) < 1e-6 && !c.arcs,
+  )!.id;
+
+  const fixtureOp = {
+    kind: 'fixture',
+    id: 'f1',
+    toolId: 't1',
+    pose: 'none',
+    axisMode: '3-axis' as const,
+    origin: 'max' as const,
+  };
+  const pocket = {
+    ...pocketOp,
+    id: 'op-sec',
+    featureIds: [farRimId],
+    startDepth: 0,
+    endDepth: 20.1,
+    stepDown: 1,
+    stepOver: 1.6,
+  };
+  const opsLite = [fixtureOp, pocket] as unknown as { kind: string; id: string }[];
+
+  /** the section context App threads: the fixture frame as a point map,
+   *  the section mode, and the section crown */
+  const sectionCtx = (): GenContext => {
+    const frame = displayFrameFor(cylStock, opsLite, pocket.id)!;
+    return {
+      ...ctx,
+      stock: cylStock,
+      geometry: null,
+      features: null,
+      sources: boreSources,
+      datumAngle: 0,
+      startA: 0,
+      sectionFrame: (p: { x: number; y: number; z: number }) =>
+        new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(frame),
+      sectionMode: '3-axis',
+      crownZ: sectionCrownZ(cylStock, opsLite, pocket.id)!,
+    };
+  };
+
+  it('the PRISTINE frame refuses the coaxial rim (the bug report)', () => {
+    const res = generateJobOp(pocket, {
+      ...ctx,
+      stock: cylStock,
+      geometry: null,
+      features: null,
+      sources: boreSources,
+    });
+    expect(res.error).toMatch(/parallel to the rotation axis/);
+    expect(res.moves).toEqual([]);
+  });
+
+  it('the section frame stands the rim up and the pocket generates', () => {
+    const res = generateJobOp(pocket, sectionCtx());
+    expect(res.error).toBeNull();
+    expect(res.moves.length).toBeGreaterThan(0);
+    // crown Z0 ON the standing top face (origin max): cuts run BELOW zero
+    // and reach the op's floor −20.1 (20.1 deep through the 80mm stock)
+    const zs = res.moves.map((m) => m.words.z).filter((z): z is number => z !== undefined);
+    expect(zs.some((z) => z > -0.05)).toBe(true); // the first level at the rim
+    expect(Math.min(...zs)).toBeLessThanOrEqual(-20); // reaches the floor
+    // the disc stands CENTERED on X0/Y0 (the lying axis rises to Z):
+    // tool-center passes run at the Ø10 rim minus the Ø2 tool's radius 1
+    const pts = res.moves.filter((m) => m.words.x !== undefined && m.words.y !== undefined);
+    expect(pts.some((m) => Math.abs(Math.hypot(m.words.x!, m.words.y!) - 4) < 0.05)).toBe(true);
+  });
+
+  it('ops the frame does not reach fail LOUD in a re-clamped section', () => {
+    // a rotary op after a 3-axis fixture: the pristine-mode gate would pass
+    // (the STOCK is 4-axis) — the section gate must refuse instead
+    const faceOp = {
+      kind: 'faceCylinder',
+      id: 'op-rot',
+      toolId: 't1',
+      targetDiameter: 40,
+      xStart: 0,
+      xEnd: 10,
+      stepDown: 1,
+      stepOver: 2,
+      finishAllowance: 0,
+      rotation: 0,
+      pattern: null,
+      finishingOnly: false,
+      cutBeyondStock: true,
+    } as unknown as JobOp;
+    const res = generateJobOp(faceOp, sectionCtx());
+    expect(res.error).toMatch(/cannot run in a re-clamped/);
+    // and a 3-axis STOCK with no fixture keeps today's mode gate (the
+    // section gate only tightens; it never loosens the stock gate)
+    const flatStockCtx: GenContext = {
+      ...ctx,
+      stock: { ...cylStock, axisMode: '3-axis' },
+      geometry: null,
+      features: null,
+    };
+    const flat = generateJobOp(faceOp, flatStockCtx);
+    expect(flat.error).toMatch(/needs 4-axis mode/);
+  });
+
+  it('the fixture op itself zeroes the A pile (the datum barrier)', () => {
+    const res = generateJobOp(fixtureOp as unknown as JobOp, {
+      ...ctx,
+      stock: cylStock,
+      startA: 180,
+    });
+    expect(res.error).toBeNull();
+    expect(res.moves).toEqual([]);
+    expect(res.finalA).toBe(0);
   });
 });

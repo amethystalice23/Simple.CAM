@@ -75,6 +75,16 @@ export interface GenPayload {
    *  op (plain data — structured clone carries it). Only rotaryCarve
    *  consumes it; genWorkerContext maps it into the worker's GenContext. */
   standing?: import('../cam/rotaryCarve').StandingGrid;
+  /** The op's FIXTURE-section frame (the kernel pose-plumbing leg), as
+   *  the composed matrix's 16 elements — pristine machine coords → the
+   *  section's machine coords (mode placement + pose + the section's
+   *  index datum). Absent = the stock's own placement. genWorkerContext
+   *  rebuilds the point map from the elements. */
+  sectionFrameEls?: number[];
+  /** the mode the op's SECTION runs in (absent = the stock's own) */
+  sectionMode?: '3-axis' | '4-axis';
+  /** the section's crown Z (absent = the stock's own — stockTopZ) */
+  crownZ?: number;
 }
 
 export type GenClientMsg = { type: 'seed'; seed: GenSeed } | ({ type: 'generate' } & GenPayload);

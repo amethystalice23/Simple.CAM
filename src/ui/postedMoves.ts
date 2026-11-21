@@ -34,6 +34,12 @@ export interface PostedOpInput {
   moves: Move[];
   /** the op's intended DOC (the IR sim's per-op step-down); 0 = default */
   stepDown: number;
+  /** the op's section INVERSE fixture frame (16 column-major elements,
+   *  null = the stock's own placement) — moves of a re-clamped section
+   *  carry that section's WCS; the sim maps poses back through this so
+   *  the grid carves the fixture-1 material. ONE SHARED ARRAY PER SECTION
+   *  so boundary walkers can compare by reference. */
+  frameInv?: readonly number[] | null;
 }
 
 export interface PostedStream {
@@ -46,6 +52,9 @@ export interface PostedStream {
   /** per-move op step-down aligned to the PARSED move indices (the same
    *  values the IR-indexed array carries, re-indexed onto this stream) */
   stepDown: Float32Array;
+  /** per PARSED move: the owning op's section INVERSE fixture frame
+   *  (16 elements, null = fixture 1) — the sim's moveFrame. */
+  frameInv: (readonly number[] | null)[];
 }
 
 /**
@@ -93,32 +102,39 @@ export function buildPostedStream(
 
   // parsed move → tool table index: the T numbers the parser recovered
   // from the file, mapped back through the tools table; and the same walk
-  // spreads each op's intended DOC over its parsed moves (the op tag sits
-  // on the first move of the span)
+  // spreads each op's intended DOC and section frame over its parsed moves
+  // (the op tag sits on the first move of the span)
   const table: number[] = new Array(parsed.moves.length).fill(0xffff);
   const stepDown = new Float32Array(parsed.moves.length);
+  const frameInv: (readonly number[] | null)[] = new Array(parsed.moves.length).fill(null);
   const toolIndexByNumber = new Map<number, number>();
   exportTools.forEach((t, i) => {
     toolIndexByNumber.set(toolNumberByToolId.get(t.id) ?? i + 1, i);
   });
-  // op number → the input op's step-down (1-based stamps)
+  // op number → the input op's step-down + section frame (1-based stamps)
   const stepByOpNumber = new Map<number, number>();
-  ops.forEach((o, i) => stepByOpNumber.set(i + 1, o.stepDown));
+  const frameByOpNumber = new Map<number, readonly number[] | null>();
+  ops.forEach((o, i) => {
+    stepByOpNumber.set(i + 1, o.stepDown);
+    frameByOpNumber.set(i + 1, o.frameInv ?? null);
+  });
 
   for (let mi = 0; mi < parsed.moves.length; mi++) {
     const op = parsed.moves[mi].op;
     if (!op) continue;
     const ti = toolIndexByNumber.get(op.toolNumber);
     const sd = stepByOpNumber.get(op.number) ?? 0;
+    const fi = frameByOpNumber.get(op.number) ?? null;
     // stamp the op's whole span (the tag sits on its first move only)
     let j = mi;
     while (j < parsed.moves.length) {
       if (ti !== undefined) table[j] = ti;
       stepDown[j] = sd;
+      frameInv[j] = fi;
       const next = parsed.moves[j + 1];
       if (next?.op) break; // the next op's first move
       j++;
     }
   }
-  return { moves: parsed.moves, toolOf: (mi) => table[mi] ?? 0xffff, nc, stepDown };
+  return { moves: parsed.moves, toolOf: (mi) => table[mi] ?? 0xffff, nc, stepDown, frameInv };
 }

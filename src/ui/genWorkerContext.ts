@@ -32,6 +32,14 @@ export function buildWorkerGenContext(
     primitives: payload.primitives,
     sources: oe ? [...sources, oe] : sources,
     datumAngle: payload.datumAngle,
+    sectionFrame: payload.sectionFrameEls
+      ? (p) =>
+          new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(
+            new THREE.Matrix4().fromArray(payload.sectionFrameEls!),
+          )
+      : undefined,
+    sectionMode: payload.sectionMode,
+    crownZ: payload.crownZ,
     prevRpm: payload.prevRpm,
     standing: payload.standing,
   };

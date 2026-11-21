@@ -238,7 +238,7 @@ describe('empty mesh never snaps a transform to NaN/Infinity', () => {
 // numbers: a Ø16.4 20mm 4-axis cylinder (axisZ 0), fixture → 3-axis stands
 // it up (the +X end rises to +Z), so the bore at the right end faces up.
 
-import { displayFrameFor } from '../placement';
+import { displayFrameFor, sectionCrownZ, sectionFixtureId } from '../placement';
 
 type FixtureOp = { kind: 'fixture'; id: string; pose: 'none' | 'flipX' | 'flipY' | 'standVertical' | 'endForEnd'; axisMode: '3-axis' | '4-axis' };
 type AnyOp = { kind: string; id: string };
@@ -322,5 +322,60 @@ describe('displayFrameFor: the fixture datum barrier', () => {
   it('a box stock never re-places on mode flips (a box only gains/loses A)', () => {
     const boxOps: AnyOp[] = [fixture('f1', '4-axis'), { kind: 'pocket', id: 'op-1' }];
     expect(displayFrameFor(boxStock, boxOps, 'op-1')).toBeNull();
+  });
+});
+
+// ---- sectionCrownZ (the kernel pose-plumbing leg, 2026-11-21) ----
+//
+// Generation in a re-clamped section anchors depth boxes to the crown AS
+// THE SECTION PLACES IT: a 3-axis fixture on a lying cylinder stands it,
+// so the crown is the standing top face per the FIXTURE's origin edge —
+// not the Stock page's xOrigin.
+
+describe('sectionCrownZ: the crown in the op\'s section frame', () => {
+  const fx = (id: string, axisMode: '3-axis' | '4-axis', origin: any = null): any => ({
+    kind: 'fixture',
+    id,
+    pose: 'none',
+    axisMode,
+    origin,
+  });
+
+  it('no fixture above = null (the stock\'s own crown)', () => {
+    expect(sectionCrownZ(adapter, [{ kind: 'pocket', id: 'op-1' }], 'op-1')).toBeNull();
+    expect(sectionCrownZ(adapter, [], null)).toBeNull();
+  });
+
+  it('a 3-axis fixture stands the cylinder: crown = the standing top per the fixture\'s origin', () => {
+    // origin null resolves MAX (the z-probeable top face): span z −20…0 → top 0
+    const ops = [fx('f1', '3-axis'), { kind: 'pocket', id: 'op-1' }];
+    expect(sectionCrownZ(adapter, ops, 'op-1')).toBe(0);
+    // an explicit origin re-places machine Z0: min → span 0…20 → top 20
+    const opsMin = [fx('f1', '3-axis', 'min'), { kind: 'pocket', id: 'op-1' }];
+    expect(sectionCrownZ(adapter, opsMin, 'op-1')).toBe(20);
+    // ops BEFORE the fixture keep the stock's own crown
+    expect(sectionCrownZ(adapter, [{ kind: 'pocket', id: 'op-0' }, ...ops], 'op-0')).toBeNull();
+  });
+
+  it('a 4-axis fixture keeps the lying crown (null) — poses preserve the top', () => {
+    const ops = [fx('f1', '4-axis'), { kind: 'pocket', id: 'op-1' }];
+    expect(sectionCrownZ(adapter, ops, 'op-1')).toBeNull();
+  });
+
+  it('a box fixture may re-zero Z: crown = the span top of the resolved z-edge', () => {
+    // boxStock origin z=max (span −20…0 → top 0); fixture z=min → span 0…20 → top 20
+    const ops = [fx('f1', '3-axis', { x: 'mid', y: 'mid', z: 'min' }), { kind: 'pocket', id: 'op-1' }];
+    expect(sectionCrownZ(boxStock, ops, 'op-1')).toBe(20);
+    // null origin inherits → the stock's own top
+    const opsNull = [fx('f1', '3-axis'), { kind: 'pocket', id: 'op-1' }];
+    expect(sectionCrownZ(boxStock, opsNull, 'op-1')).toBe(0);
+  });
+
+  it('sectionFixtureId: the latest fixture at-or-above, null before any', () => {
+    const ops = [{ kind: 'pocket', id: 'op-0' }, fx('f1', '3-axis'), { kind: 'pocket', id: 'op-1' }, fx('f2', '4-axis'), { kind: 'pocket', id: 'op-2' }];
+    expect(sectionFixtureId(ops, 'op-0')).toBeNull();
+    expect(sectionFixtureId(ops, 'op-1')).toBe('f1');
+    expect(sectionFixtureId(ops, 'f2')).toBe('f2');
+    expect(sectionFixtureId(ops, 'op-2')).toBe('f2');
   });
 });

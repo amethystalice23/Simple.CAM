@@ -29,6 +29,9 @@ interface Props {
   toolOf: (moveIndex: number) => number;
   /** per-move op step-down (the 3-class classification's tolerance) */
   stepDown: Float32Array;
+  /** per-move INVERSE fixture-section frame (16 elements, null = fixture
+   *  1) — a re-clamped section's moves carve the fixture-1 grid through it */
+  frames?: (readonly number[] | null)[];
   sim: CarveSim;
   /** Run was pressed: dismiss the dialog, turn the Simulation layer on */
   onRun: () => void;
@@ -80,7 +83,7 @@ export function SimulateDialog(props: Props) {
                 className="primary"
                 disabled={moveCount === 0}
                 onClick={() => {
-                  props.sim.run(props.moves, props.toolOf, props.stock, props.tools, pitch ?? undefined, stockTopZ(props.stock) + SIM_PARK_CLEARANCE, props.stepDown);
+                  props.sim.run(props.moves, props.toolOf, props.stock, props.tools, pitch ?? undefined, stockTopZ(props.stock) + SIM_PARK_CLEARANCE, props.stepDown, props.frames);
                   props.onRun();
                 }}
               >

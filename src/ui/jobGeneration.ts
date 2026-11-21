@@ -125,6 +125,23 @@ export interface GenContext {
    * latest Index op preceding it in the job sequence (0 = flat) */
   datumAngle: number;
   /**
+   * The op's FIXTURE section (the kernel pose-plumbing leg, 2026-11-21):
+   * the fresh-clamp frame as a point map pristine machine coords → the
+   * section's machine coords — displayFrameFor's matrix (mode placement +
+   * pose) with the section's index datum rotation composed after it, the
+   * same composition the viewport displays. Absent = the stock's own
+   * placement, and a fixture-less job generates byte-identically. Only
+   * the 2.5D FEATURE ops (pocket/profile/drill/chamfer/threadMill) may
+   * run in a framed section; the rest fail loud (see SECTION_FRAME_OPS).
+   */
+  sectionFrame?: (p: { x: number; y: number; z: number }) => THREE.Vector3;
+  /** the mode the op's SECTION runs in (absent = the stock's own). Rotary
+   * ops and indexing require a 4-axis SECTION, not just a 4-axis stock. */
+  sectionMode?: '3-axis' | '4-axis';
+  /** the stock crown Z in the op's section frame (absent = the stock's
+   * own crown — stockTopZ). Depth boxes are authored against it. */
+  crownZ?: number;
+  /**
    * P1 cross-orientation standing material (the 4D carve): the standing
    * grid from the previous rotaryCarve op, as the recalculation pass
    * threads it — physical radius still standing per (x,θ) cell,
@@ -564,14 +581,13 @@ function clearanceResult(
   feed: number,
   plungeFeed: number,
   ctx: GenContext,
-  datumRotated: boolean,
 ): { moves: Move[]; minutes: number; passes: number } | null {
   // the keep-out steps out by the RADIAL stock: the profile's SIGNED side
   // allowance (the 2026-28 split), the slice-pocket's single allowance.
   // Negative never shrinks it (the raw guard) — conservative.
   const radial = op.kind === 'profile' ? op.sideAllowance : op.allowance;
   const keepOut = radial > 0 ? offsetOutward(contours, radial) : contours;
-  const regions = difference(stockFootprint(ctx.stock, datumRotated), keepOut);
+  const regions = difference(sectionFootprintOf(ctx), keepOut);
   if (regions.length === 0) return null;
   try {
     const res = pocket2d(
@@ -638,6 +654,52 @@ function indexFrame(
     throw new Error('indexing needs 4-axis mode — the job has an index datum without it');
   }
   return { rotate: indexedPointRotation(datumAngle, rotaryCalibrationOf(stock).axisZ) };
+}
+
+/**
+ * The ops that may run in a FRAMED (re-clamped) section: the 2.5D feature
+ * ops (their selection resolves through the section frame — the kernel
+ * pose-plumbing leg) plus the frame declarations themselves. Everything
+ * else — the rotary kernels, the mesh slicers, artwork — generates
+ * against the pristine stock/mesh and CANNOT be right in a re-clamp:
+ * it fails loud instead of emitting paths in the wrong frame.
+ */
+const SECTION_FRAME_OPS = new Set(['pocket', 'profile', 'drill', 'chamfer', 'threadMill', 'index', 'fixture']);
+
+/** the mode the op's SECTION runs in (GenContext.sectionMode ?? the stock's). */
+function sectionModeOf(ctx: GenContext): '3-axis' | '4-axis' {
+  return ctx.sectionMode ?? ctx.stock.axisMode;
+}
+
+/** the stock crown Z in the op's section frame (depths anchor to it). */
+function crownOf(ctx: GenContext): number {
+  return ctx.crownZ ?? stockTopZ(ctx.stock);
+}
+
+/**
+ * The stock footprint as the op's SECTION places it: a 3-axis section
+ * stands the cylinder, so its clamp silhouette is the standing circle at
+ * X0/Y0 (stockFootprint's own 3-axis reading); otherwise the stock's own.
+ */
+function sectionFootprintOf(ctx: GenContext): Vec2[][] {
+  if (ctx.stock.kind === 'cylinder' && sectionModeOf(ctx) === '3-axis') {
+    return stockFootprint({ ...ctx.stock, axisMode: '3-axis' }, false);
+  }
+  return stockFootprint(ctx.stock, ctx.datumAngle !== 0);
+}
+
+/**
+ * The cutting-frame point map for a feature op: its section's fresh clamp
+ * (the fixture frame, datum rotation composed inside it) when one is in
+ * effect, else today's index-datum rotation alone. Feature selections
+ * resolve through this — a bore rim coaxial with a lying cylinder reads
+ * as machine-Z-normal once its section stands the part up.
+ */
+function cuttingRotate(
+  ctx: GenContext,
+): { rotate?: (p: { x: number; y: number; z: number }) => import('three').Vector3 } {
+  if (ctx.sectionFrame) return { rotate: ctx.sectionFrame };
+  return indexFrame(ctx.datumAngle, ctx.stock);
 }
 
 /**
@@ -1057,11 +1119,15 @@ export function prefillThreadMill(
   crown: number,
   datumAngle: number,
   stock: Stock,
+  /** the op's SECTION cutting-frame map (fixture frame ∘ index datum —
+   *  the kernel pose-plumbing leg); overrides the datum-only rotation */
+  sectionRotate?: (p: { x: number; y: number; z: number }) => THREE.Vector3,
 ): Extract<JobOp, { kind: 'threadMill' }> {
   const parts = splitSelection(sources, [featureId]);
   if (parts.length === 0) return op;
   const rotate =
-    datumAngle !== 0 ? indexedPointRotation(datumAngle, rotaryCalibrationOf(stock).axisZ) : undefined;
+    sectionRotate ??
+    (datumAngle !== 0 ? indexedPointRotation(datumAngle, rotaryCalibrationOf(stock).axisZ) : undefined);
   let targets: ReturnType<typeof threadTargetsFromSelection>;
   try {
     targets = threadTargetsFromSelection(
@@ -1211,6 +1277,11 @@ export function generateJobOp(op: JobOp, ctx: GenContext): GeneratedOp {
     // the Index op IS the datum move: its move targets the new angle
     finalA = lastA;
   }
+  if (op.kind === 'fixture') {
+    // the re-clamp ZEROES the A pile (the datum barrier — the part left the
+    // machine): an Index op in the NEXT section continues from A0
+    finalA = 0;
+  }
   const stamped: GeneratedOp = { ...res, finalA };
   // index ops position the stock; failed ops cut nothing — neither carries
   // cutting time, so neither carries overhead
@@ -1258,9 +1329,22 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
     const material = getMaterial(ctx.stock.materialId);
     const { feed, plungeFeed } = feedsFor(tool, material, op.rates);
 
+    // the kernel pose-plumbing gate: a re-clamped section carries its own
+    // machine frame, and only the SECTION_FRAME_OPS resolve their targets
+    // through it. The rest generate against the pristine stock/mesh — in a
+    // re-clamp that is the wrong frame, so refuse loudly (the honest
+    // alternative to quietly wrong paths).
+    if (ctx.sectionFrame && !SECTION_FRAME_OPS.has(op.kind)) {
+      return fail(
+        'this op cannot run in a re-clamped (fixture) section yet — the ' +
+          'section frame reaches the 2.5D feature ops; move it above the ' +
+          'fixture or plan it as its own setup',
+      );
+    }
+
     switch (op.kind) {
       case 'index': {
-        if (ctx.stock.axisMode !== '4-axis') return fail('indexing needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail('indexing needs 4-axis mode (Stock tab)');
         // shortest rotation to the datum spoke from wherever the axis sits —
         // never unwind the previous ops' accumulated pile
         const target = ctx.startA + shortestATo(op.angle, ctx.startA);
@@ -1298,7 +1382,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         };
       }
       case 'faceCylinder': {
-        if (ctx.stock.axisMode !== '4-axis') return fail('face cylinder needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail('face cylinder needs 4-axis mode (Stock tab)');
         // the op's own explicit fields: Start/End X and the target Ø,
         // hand-set or filled by the ⇩ pick-from-feature modes
         const res = faceCylinder(
@@ -1337,7 +1421,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
       }
 
       case 'spiralCarve': {
-        if (ctx.stock.axisMode !== '4-axis') return fail('spiral carving needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail('spiral carving needs 4-axis mode (Stock tab)');
         try {
           const res = spiralCarve(
             {
@@ -1392,7 +1476,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
       }
 
       case 'thread': {
-        if (ctx.stock.axisMode !== '4-axis') return fail('threading needs 4-axis mode (Stock tab)');
+        if (sectionModeOf(ctx) !== '4-axis') return fail('threading needs 4-axis mode (Stock tab)');
         try {
           // finishing-only collapses the groove depth ladder to the full
           // depth (single groove sweep per start + the spring pass)
@@ -1451,7 +1535,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const SEL = 'select features (circles or flat faces)';
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
         if (error) return fail(error);
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const { rotate } = cuttingRotate(ctx);
         const regions: Vec2[][] = [];
         const circles: { cx: number; cy: number; r: number }[] = [];
         let sawHole = false;
@@ -1483,7 +1567,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           return fail('select either faces or holes for this operation, not both');
         }
         if (regions.length === 0) return fail(SEL);
-        const crown = stockTopZ(ctx.stock);
+        const crown = crownOf(ctx);
         const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
         if (!range) {
           return fail(
@@ -1547,8 +1631,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // stock, ON = the stock dilated by one step-over (a region that
             // reaches the stock edge steps over it the same way)
             footprint: op.cutBeyondStock === false
-              ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
-              : offsetOutward(stockFootprint(ctx.stock, ctx.datumAngle !== 0), op.stepOver),
+              ? sectionFootprintOf(ctx)
+              : offsetOutward(sectionFootprintOf(ctx), op.stepOver),
           },
           tool,
           // derived chip-thinning rates (spec step 3): applied only while
@@ -1580,7 +1664,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // ROTATED positions at machine Z — the same convention as every
         // other indexed op (features mapped through the datum).
         if (!ctx.geometry) return fail('needs a loaded model — the slice comes from it');
-        const crown = stockTopZ(ctx.stock);
+        const crown = crownOf(ctx);
         const range = cutRange(op.startDepth, op.endDepth, op.allowance, crown);
         if (!range) {
           return fail(
@@ -1693,7 +1777,6 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // finishing-only mode
             op.finishingOnly ? ({ ...op, stepDown: finStep } as typeof op) : op,
             tool, slice.contours, range, op.stepOver, feed, plungeFeed, ctx,
-            ctx.datumAngle !== 0,
           );
           if (cleared) {
             moves = moves.concat(cleared.moves);
@@ -1733,7 +1816,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // its own orientation's geometry, and the rough can never free
         // the part.
         if (!ctx.geometry) return fail('needs a loaded model — the rough targets it');
-        const crown = stockTopZ(ctx.stock);
+        const crown = crownOf(ctx);
         const stockBottom = stockSpan(ctx.stock, 'z')[0];
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const positions0 = transformedPositions(ctx.geometry, ctx.transform);
@@ -1842,7 +1925,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // picks the angles. The whole loaded model is the target, like
         // the waterline; no selection, no user-chosen orientations.
         if (!ctx.geometry) return fail('needs a loaded model — the plan targets it');
-        if (ctx.stock.axisMode !== '4-axis') {
+        if (sectionModeOf(ctx) !== '4-axis') {
           return fail('the 4D contour needs 4-axis stock — it rotates the part between roughing angles');
         }
         if (!(op.orientStep > 0) || op.orientStep >= 360) {
@@ -1891,7 +1974,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // machine A pile only ever grows by shortest-path hops between
         // orientations that actually cut. The datum-discipline stamp in
         // generateJobOp hands the borrowed datum back at the end.
-        const crown = stockTopZ(ctx.stock);
+        const crown = crownOf(ctx);
         const stockBottom = stockSpan(ctx.stock, 'z')[0];
         const moves: Move[] = [];
         let minutes = 0;
@@ -2077,7 +2160,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // 4-axis indexed like the waterline op (Alice's 2026-10-25 call):
         // the datum rotation maps the part into the cutting frame.
         if (!ctx.geometry) return fail('needs a loaded model — the surface pass targets it');
-        const crown = stockTopZ(ctx.stock);
+        const crown = crownOf(ctx);
         const stockBottom = stockSpan(ctx.stock, 'z')[0];
         const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
         const positions0 = transformedPositions(ctx.geometry, ctx.transform);
@@ -2168,7 +2251,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (ctx.stock.kind !== 'cylinder') {
           return fail('rotary contour needs cylinder stock (Stock tab)');
         }
-        if (ctx.stock.axisMode !== '4-axis') {
+        if (sectionModeOf(ctx) !== '4-axis') {
           return fail('rotary contour needs 4-axis mode (Stock tab)');
         }
         const cal = rotaryCalibrationOf(ctx.stock);
@@ -2267,7 +2350,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         if (ctx.stock.kind !== 'cylinder') {
           return fail('the 4D finish needs cylinder stock (Stock tab)');
         }
-        if (ctx.stock.axisMode !== '4-axis') {
+        if (sectionModeOf(ctx) !== '4-axis') {
           return fail('the 4D finish needs 4-axis mode (Stock tab)');
         }
         if (tool.type !== 'flat' && tool.type !== 'corn' && tool.type !== 'ball') {
@@ -2462,7 +2545,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const SEL = 'select holes (interior circles)';
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
         if (error) return fail(error);
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const { rotate } = cuttingRotate(ctx);
         const targets: DrillOp['targets'] = [];
         for (const part of parts) {
           const t = drillTargetsFromSelection(
@@ -2502,7 +2585,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const SEL = 'select features (circles or flat faces)';
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
         if (error) return fail(error);
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const { rotate } = cuttingRotate(ctx);
         const contours: Vec2[][] = [];
         const circles: { cx: number; cy: number; r: number }[] = [];
         let sawHole = false;
@@ -2537,7 +2620,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           return fail('select either faces or holes for this operation, not both');
         }
         if (contours.length === 0) return fail(SEL);
-        const crown = stockTopZ(ctx.stock);
+        const crown = crownOf(ctx);
         // BOTTOM allowance raises the floor (forced ≥ 0 — a negative bottom
         // would cut below the declared floor); SIDE is the radial one,
         // SIGNED: negative steps the tool-center path INSIDE the contour,
@@ -2581,7 +2664,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // through mid-loop) — the loop is never clipped. OFF clamps the
             // wall pass to the stock: open spans at the edge.
             footprint: op.cutBeyondStock === false
-              ? stockFootprint(ctx.stock, ctx.datumAngle !== 0)
+              ? sectionFootprintOf(ctx)
               : undefined,
           },
           tool,
@@ -2594,7 +2677,6 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // the waste frame rides the same collapsed ladder
             op.finishingOnly ? ({ ...op, stepDown: finStep } as typeof op) : op,
             tool, contours, range, defaultStepOver(tool), feed, plungeFeed, ctx,
-            ctx.datumAngle !== 0,
           );
           if (cleared) {
             moves = moves.concat(cleared.moves);
@@ -2630,7 +2712,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const SEL = 'select circles or flat faces to chamfer';
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
         if (error) return fail(error);
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const { rotate } = cuttingRotate(ctx);
         const loops: ChamferLoop[] = [];
         for (const part of parts) {
           const src = chamferTargetsFromSelection(
@@ -2667,7 +2749,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
       }
 
       case 'cylChamfer': {
-        if (ctx.stock.axisMode !== '4-axis') {
+        if (sectionModeOf(ctx) !== '4-axis') {
           return fail('cylinder chamfer needs 4-axis mode (Stock tab)');
         }
         if (tool.type !== 'vbit' && tool.type !== 'ball') {
@@ -2756,7 +2838,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           'wall, or the flat face around it';
         const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
         if (error) return fail(error);
-        const { rotate } = indexFrame(ctx.datumAngle, ctx.stock);
+        const { rotate } = cuttingRotate(ctx);
         const resolved: ThreadSourceTarget[] = [];
         for (const part of parts) {
           try {
@@ -2789,7 +2871,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
                 'flip Inside/Outside or split the ops',
           );
         }
-        const crown = stockTopZ(ctx.stock);
+        const crown = crownOf(ctx);
         const topZ = crown - op.startDepth;
         const depth = op.endDepth - op.startDepth;
         if (!(depth > 0)) {

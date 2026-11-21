@@ -1475,6 +1475,18 @@ a FRESH clamp — sections never compound. Index datums still pivot about
 the stock axis inside a 4-axis section. Display only: generation keeps
 the pristine frame until the kernel pose-plumbing leg
 (placement.ts displayFrameFor + the tests pin the numbers).
+KERNEL POSE-PLUMBING LANDED 2026-11-21: GenContext carries the op's
+SECTION frame (the fixture matrix + its index datum, App composes one
+point map), the section mode and the section crown; the 2.5D feature
+ops (pocket/profile/drill/chamfer/threadMill) resolve selections and
+EMIT MOVES in the section's own WCS — the .nc for each section runs
+as-is. The rotary kernels, mesh slicers and artwork FAIL LOUD in a
+framed section (SECTION_FRAME_OPS in jobGeneration). The sim/preview
+walkers map each move back through its section's INVERSE frame (one
+shared array per section; a reference change is the re-clamp boundary —
+the A pile resets, no sweep crosses). Rotary gates read the SECTION
+mode, not the stock's. Her GHM9 job recalculates clean: 11 ops, zero
+failures (the probe: probes/fixture-frame-smoke.mjs).
 
 **NOT addressed (deliberate):** generators stay stock+model based — a
 fixture-2 op generates against pristine stock, not what fixture 1
