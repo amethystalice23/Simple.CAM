@@ -203,6 +203,44 @@ describe('nc parser: post→parse→post Move-for-Move', () => {
     );
   });
 
+  it('round-trips a same-mode re-fixture pause (T999 M6 hold, no motion)', () => {
+    // the merge-rule export shape: two same-mode sections in one file,
+    // the wordless pause between them. The post emits the T999 block but NO
+    // motion line for the pause — the parsed stream must carry exactly the
+    // two cutting ops' moves, and the re-fixture op tag must parse with
+    // its tool number so the sim's tool lookup stays honest.
+    const nc = postCarvera({
+      moves: [
+        { words: { x: 5, z: -1 }, feed: 100, op: { number: 1, name: 'Pocket', toolNumber: 1 } },
+        {
+          words: {},
+          feed: 0,
+          comment: 're-fixture: pose flipX',
+          op: { number: 2, name: 'Re-fixture', toolNumber: 999 },
+        },
+        { words: { x: 10, z: -1 }, feed: 100, op: { number: 3, name: 'Profile', toolNumber: 2 } },
+      ],
+      tools: [tool, { id: 't2', name: 'vbit', type: 'vbit', diameter: 3.175, spindleRpm: 12000 }],
+      toolNumbers: [1, 2],
+      options: { jobName: 'refix-pause', prepHeader: 'none' },
+    });
+    expect(nc).toContain('T999 M6');
+    expect(nc).not.toMatch(/^G1 F/m); // no feed-only motion line for the pause
+    const { moves: parsed, ops } = parseCarveraNc(nc);
+    // two cutting moves, no phantom pause motion, no phantom Y0 mid-file
+    const cutting = parsed.filter((m) => Object.keys(m.words).length > 0);
+    expect(cutting).toHaveLength(2);
+    expect(parsed[0].op?.number).toBe(1);
+    expect(parsed[1].op?.number).toBe(3); // the pause stamps nothing
+    expect(ops.map((o) => o.number)).toEqual([1, 2, 3]);
+    // The pause is MOTIONLESS so the parse drops it (nothing emitted to
+    // read back) — the honest contract, not a loss: the sim carves moves,
+    // and a pause cuts nothing. The pause lives in the EXPORTED file's
+    // T999 M6 block, where the machine holds and the operator turns the
+    // part over.
+    expect(parsed.some((m) => m.op?.toolNumber === 999)).toBe(false);
+  });
+
   it('round-trips G93 coordinated X+A and Z+A sweeps with F on every line', () => {
     roundTrip(
       [

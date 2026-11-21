@@ -1422,22 +1422,44 @@ to today (fixture 1 is implicit: the stock as placed).
   strategy (L-bracket, vise, pins) stays the operator's business — the
   Z1 pin-location list remains importable data when pin planning lands.
 
-**Export: one .nc per fixture group** (her ruling — a re-fixture means
-moving the part AND re-zeroing the WCS, so each file must stand alone):
-each file carries its own prep header (the registration statement + the
-4-axis probe assumptions where A is used — the existing header machinery,
-per fixture) and its own tool comments; T-numbers CONTINUE across files
-(one job tool chain). The post splits at fixture ops. The parser (item
-13) reads each file and concatenates into the ONE job move list — move
-indices stay job-global for the sim.
+**Export: one .nc per MODE GROUP** (her 2026-11-21 refinement of the
+2026-11-19 one-per-fixture ruling — the tool set is laid out once before
+the job, indexing and re-fixturing must never renumber it): T-numbers
+are JOB-WIDE (one tool chain, panel-derived, frame ops burn nothing) and
+same-mode fixture sections MERGE into one file carrying a synthetic
+RE-FIXTURE PAUSE at each boundary — a header-only pseudo-tool (T999,
+`name=Re-fixture`; the laser owns 8888) whose `T999 M6` is the
+machine-side hold: the controller pops its tool-change dialog reading
+"Re-fixture", the operator turns the part over, re-zeros per the note
+(the pause comment + the file's fixtureNote carry pose + WCS origin),
+and continue finishes the file. Only a 3↔4-axis MODE change still splits
+(`_S<n>` files) — the WCS lands in a wildly different place there (4th
+axis machinery cannot be co-sited with end-work clamping), and no pause
+carries that. 4-axis end-for-end re-clamps MERGE: realigning the turned
+stock to the chosen origin is the user's task, never a gate ("we won't
+stop them — they are always free to selectively export toolpaths so
+they are separate .nc files"). A MODE-split file pair keeps the
+job-wide chain (T1 in file 1, T2 in file 2, never restarted). Each file
+carries its own prep header (the registration statement + the 4-axis
+probe assumptions where A is used) and its own tool comments.
 EXPORT LEG LANDED 2026-11-20: fixtureSections (src/ui/exportDialog.ts)
 splits the checked ops at fixture ops (an empty section drops — a
 re-clamp exports nothing by itself); ExportDialog posts one .nc per
 section, each with a fixtureNote header (the WCS-origin statement from
 the fixture op's origin field, the re-clamp's pose/mode) emitted by the
 post via the fixtureNote option; multi-section names carry `_S<n>`.
-Still open: the parser/concatenation (item 13) and T-number continuity
-enforcement across files.
+T-NUMBER CONTINUITY + RE-FIXTURE PAUSE LANDED 2026-11-21: mergeFixtureFiles
+groups the sections by mode (pauses = the merged boundaries' notes);
+refixturePauseMove stamps the wordless T999 move, the post emits its
+pseudo-tool header + M5 + T M6 hold (a wordless powerless tagged move
+emits NO motion line — laser beam-off `G1 S0` moves carry power and are
+untouched); panelToolNumbers skips fixture ops (index ops already did);
+index ops INHERIT the previous cutting op's T when stamped (an A-axis
+positioning rapid never prompts a tool change — the export walk and the
+sim's buildPostedStream share the rule); countToolChanges and the
+dialog's rows treat frame ops as numberless. Parser pin: the pause is
+motionless, so parse-back drops it — the sim carves moves, the pause
+cuts nothing; the hold lives in the exported file.
 
 **One preview, one sim, one estimate** (her ruling): the material-frame
 grid and the display frame stay fixed at fixture 1's stock pose; the
