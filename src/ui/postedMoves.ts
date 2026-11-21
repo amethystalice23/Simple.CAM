@@ -20,7 +20,12 @@ import { postCarvera } from '../post/carvera';
 import { parseCarveraNc } from '../post/ncParser';
 import { stampOp } from './exportDialog';
 import { OP_KINDS } from './jobGeneration';
+import { moveDurations } from '../sim/poses';
 import type { Move, Tool } from '../core/types';
+
+/** Spindle spin-up/down rate, RPM per second — the same constant
+ * jobGeneration's overheadMinutes charges ramps at. */
+const SPINDLE_RAMP_RPM_PER_SEC = 1800;
 
 /** Kind label for stamping (matches the export dialog's opLabel). */
 function opLabel(kind: string): string {
@@ -28,6 +33,9 @@ function opLabel(kind: string): string {
 }
 
 export interface PostedOpInput {
+  /** the op's job id — threaded to the parsed stream so preview paths
+   *  stay answerable to their op row (per-op colouring, hover focus) */
+  id: string;
   /** the op's kind — for the stamp name */
   kind: string;
   toolId: string;
@@ -55,6 +63,18 @@ export interface PostedStream {
   /** per PARSED move: the owning op's section INVERSE fixture frame
    *  (16 elements, null = fixture 1) — the sim's moveFrame. */
   frameInv: (readonly number[] | null)[];
+  /** per input OP, in order: its MACHINE minutes over the parsed stream —
+   * the move durations the machine will actually spend (cutting, rapids,
+   * and the spindle ramp), with the post's G92.4 shrinks and short-way
+   * aliases already inside the coordinates. Aligned to `ops` (one entry
+   * per input op; ops that generated nothing carry 0). The estimate
+   * surfaces read THIS instead of the generator IR's figure — item 13's
+   * "the machine executes the nc" honesty, applied to time. */
+  opMinutes: number[];
+  /** per PARSED move: the owning op's job id (the threaded op id) —
+   * aligns the viewport's per-op colour split onto the posted stream the
+   * preview draws. */
+  moveOpIds: (string | null)[];
 }
 
 /**
@@ -113,6 +133,7 @@ export function buildPostedStream(
   const table: number[] = new Array(parsed.moves.length).fill(0xffff);
   const stepDown = new Float32Array(parsed.moves.length);
   const frameInv: (readonly number[] | null)[] = new Array(parsed.moves.length).fill(null);
+  const moveOpIds: (string | null)[] = new Array(parsed.moves.length).fill(null);
   const toolIndexByNumber = new Map<number, number>();
   exportTools.forEach((t, i) => {
     toolIndexByNumber.set(toolNumberByToolId.get(t.id) ?? i + 1, i);
@@ -120,9 +141,11 @@ export function buildPostedStream(
   // op number → the input op's step-down + section frame (1-based stamps)
   const stepByOpNumber = new Map<number, number>();
   const frameByOpNumber = new Map<number, readonly number[] | null>();
+  const idByOpNumber = new Map<number, string>();
   ops.forEach((o, i) => {
     stepByOpNumber.set(i + 1, o.stepDown);
     frameByOpNumber.set(i + 1, o.frameInv ?? null);
+    idByOpNumber.set(i + 1, o.id);
   });
 
   for (let mi = 0; mi < parsed.moves.length; mi++) {
@@ -131,16 +154,70 @@ export function buildPostedStream(
     const ti = toolIndexByNumber.get(op.toolNumber);
     const sd = stepByOpNumber.get(op.number) ?? 0;
     const fi = frameByOpNumber.get(op.number) ?? null;
+    const oid = idByOpNumber.get(op.number) ?? null;
     // stamp the op's whole span (the tag sits on its first move only)
     let j = mi;
     while (j < parsed.moves.length) {
       if (ti !== undefined) table[j] = ti;
       stepDown[j] = sd;
       frameInv[j] = fi;
+      moveOpIds[j] = oid;
       const next = parsed.moves[j + 1];
       if (next?.op) break; // the next op's first move
       j++;
     }
   }
-  return { moves: parsed.moves, toolOf: (mi) => table[mi] ?? 0xffff, nc, stepDown, frameInv };
+
+  // ---- per-op MACHINE minutes over the parsed stream (item 13's estimate
+  // leg): motion via the sim's own duration model (G93 inverse-time exact,
+  // G94 path/feed, arcs at true length, rapids at axis rates), plus the
+  // spindle ramp |Δrpm| charged to the op that stamps the new speed —
+  // against the PREVIOUS op's stamp (job-walk semantics, the same rule
+  // jobGeneration's overheadMinutes applies: a cold spindle charges from
+  // 0, back-to-back same-speed ops charge nothing). The post's
+  // shrink/alias/counter machinery is already IN the parsed coordinates —
+  // these minutes are what the machine spends.
+  const durations = moveDurations(parsed.moves);
+  const opMinutes: number[] = ops.map(() => 0);
+  let prevRpm: number | undefined = undefined; // job-wide, walks op to op
+  for (let mi = 0; mi < parsed.moves.length; mi++) {
+    const op = parsed.moves[mi].op;
+    if (!op) continue;
+    const spanEnd = (() => {
+      let j = mi;
+      while (j + 1 < parsed.moves.length && !parsed.moves[j + 1].op) j++;
+      return j;
+    })();
+    let sum = 0;
+    for (let j = mi; j <= spanEnd; j++) {
+      sum += durations[j];
+    }
+    // the op's stamped spindle: the parse attaches the S M3 stamp to the
+    // first move AFTER the line (parser pendingSpindle), which is often
+    // not the op's first move — scan the span for the first stamp
+    const opRpm = (() => {
+      for (let j = mi; j <= spanEnd; j++) {
+        const rpm = parsed.moves[j].spindleRpm;
+        if (rpm !== undefined) return rpm;
+      }
+      return undefined;
+    })();
+    if (opRpm !== undefined) {
+      sum += Math.abs(opRpm - (prevRpm ?? 0)) / SPINDLE_RAMP_RPM_PER_SEC / 60;
+      prevRpm = opRpm;
+    }
+    // the op's index in the passed list = its stamped number − 1 (the
+    // stamp walk numbers them 1, 2, 3… in input order)
+    const opIdx = op.number - 1;
+    if (opIdx >= 0 && opIdx < opMinutes.length) opMinutes[opIdx] = sum;
+  }
+  return {
+    moves: parsed.moves,
+    toolOf: (mi) => table[mi] ?? 0xffff,
+    nc,
+    stepDown,
+    frameInv,
+    opMinutes,
+    moveOpIds,
+  };
 }

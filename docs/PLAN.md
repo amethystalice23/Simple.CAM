@@ -1706,10 +1706,24 @@ tabulated in docs/firmware-notes.md). buildPostedStream
 parses back, and re-derives the tool lookup from the file's own
 T-numbers plus a step-down array re-indexed onto the parsed stream —
 App.tsx feeds the sim, transport clock, toolOf and step-down from it.
-Remaining from the original item: the per-op TIME ESTIMATES still run
-on IR (the generator's own minutes — the sim clock is now honest); the
-viewport PREVIEW path still draws IR moves (display-only; the winding
-spiral remains visible there by design until a follow-up).
+FOLLOW-UPS LANDED 2026-11-21 (branch feat/posted-estimates-preview): the
+per-op TIME ESTIMATES now run on the POSTED stream — buildPostedStream
+computes opMinutes (motion via the sim's moveDurations model: G93
+inverse-time exact, G94 path/feed, arcs at true length, rapids at axis
+rates; plus the spindle ramp |Δrpm| charged job-walk style against the
+previous op's stamp, cold from 0) and App threads them to the export
+dialog, whose rows/total read them (falling back to the IR figure while
+nothing posted); the ops-panel SUMMARIES deliberately keep the
+generator's cutting-only figure (generation feedback, not machine
+time). The VIEWPORT PREVIEW now draws the POSTED stream — App routes
+postedStream.moves (with its moveOpIds threading and frameInv arrays)
+to the Viewport's previewMoves/previewOpIds/previewFrames, so the
+winding spiral's phantom unwind no longer draws and the playback trail
+sits on the same moves as the transport clock. The posted stream follows
+the preview's hidden-op semantics (only shown ops post — the same rule
+the IR-indexed sim companions apply). One legal unowned parsed move: the
+file's opening G0 Y0 centerline rapid, emitted before the first
+TOOLPATH_START — the viewport draws nothing for it, by design.
 
 Remaining Makera-Studio parity gaps (the raison d'être is parity then
 some): DXF + STEP import (they have both), image import/trace-to-

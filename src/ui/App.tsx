@@ -361,9 +361,13 @@ export function App() {
   const previewCrownOf = (opId: string) => sectionCtxByOp.get(opId)?.crownZ ?? stockTopZ(stock);
 
   const postedStream = useMemo(() => {
+    // the posted stream follows the PREVIEW's semantics — only ops that are
+    // shown (simToolOf/simStepDown honor hiddenOps the same way): the sim
+    // carves what's on screen, and the preview draws this same stream
     const postable = ops
-      .filter((o) => (generated[o.id]?.moves.length ?? 0) > 0)
+      .filter((o) => !hiddenOps.has(o.id) && (generated[o.id]?.moves.length ?? 0) > 0)
       .map((o) => ({
+        id: o.id,
         kind: o.kind,
         toolId: o.toolId,
         moves: generated[o.id]?.moves ?? [],
@@ -375,7 +379,22 @@ export function App() {
     if (postable.length === 0) return null;
     return buildPostedStream(postable, tools, panelToolNumbers(ops));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ops/generated/tool deps; simStepDownFor is pure
-  }, [ops, generated, tools, sectionCtxByOp]);
+  }, [ops, hiddenOps, generated, tools, sectionCtxByOp]);
+  /** per-op MACHINE minutes from the posted stream (item 13's estimate
+   * leg): the ops in `ops` order, one figure per op (0 for ops that
+   * generated nothing) — the export dialog's rows and total read these,
+   * not the generator IR's minutes, so the estimate carries the post's
+   * shrink/alias machinery. Falls back to IR minutes when posting is
+   * unavailable (nothing generated yet). */
+  const postedMinutes = useMemo(() => {
+    const byId = new Map<string, number>();
+    if (postedStream) {
+      const postable = ops.filter((o) => (generated[o.id]?.moves.length ?? 0) > 0);
+      postable.forEach((o, i) => byId.set(o.id, postedStream.opMinutes[i] ?? 0));
+    }
+    return byId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postedStream, ops, generated]);
   /** the carve simulator's transport playback clock (2026-10-27): over the
    *  SAME move stream the sim ran — a completed sim + the Simulation tick
    *  show the bar; Clear/new job/model drop dispose the sim and the
@@ -806,6 +825,16 @@ export function App() {
   // suggestions, for probes/suggest-add-smoke.mjs
   (window as unknown as { __suggestTools?: unknown }).__suggestTools = suggestTools;
   (window as unknown as { __suggestKnowledge?: unknown }).__suggestKnowledge = suggestKnowledge;
+  // smoke-driver hook (the __scene pattern): the posted stream's summary —
+  // parsed move count, per-op minutes, and the moveOpIds threading — for
+  // probes (posted-estimates-preview-smoke.mjs)
+  (window as unknown as { __postedStream?: unknown }).__postedStream = postedStream
+    ? {
+        nMoves: postedStream.moves.length,
+        opMinutes: postedStream.opMinutes,
+        moveOpIds: postedStream.moveOpIds,
+      }
+    : null;
   /** add the CHECKED suggestions (round 2, docs/PLAN.md item 14): each
    *  becomes a real op appended to the list — an Index suggestion first
    *  (the sheet orders it at the head), the cutting ops after it with
@@ -2212,13 +2241,20 @@ export function App() {
             selectionIsOp={editingOpId !== null || expandedOpId !== null}
             fillShade={fillShade}
             primitives={primitives}
-            previewMoves={previewMoves}
+            /** THE PREVIEW DRAWS THE POSTED STREAM (item 13's display leg,
+             *  2026-11-21): the post's G92.4 shrink/short-way alias is what
+             *  the machine travels, so the winding spiral no longer draws
+             *  its phantom unwind. Falls back to the IR flatten when
+             *  nothing posted (recalc pending). */
+            previewMoves={postedStream?.moves ?? previewMoves}
             /** per-move owning-op ids + the focus op for the per-op
-             *  colours (the fixture-ops spec's preview legibility ask) */
-            previewOpIds={previewOpIds}
+             *  colours (the fixture-ops spec's preview legibility ask) —
+             *  the posted stream's own threading when it drives the
+             *  preview */
+            previewOpIds={postedStream?.moveOpIds ?? previewOpIds}
             /** per-move SECTION frames (inverse, null = fixture 1) — the
              *  paths of a re-clamped section draw on the fixture-1 stock */
-            previewFrames={previewFrames}
+            previewFrames={postedStream?.frameInv ?? previewFrames}
             previewOpFocus={focusOpId}
             opColors={opIdColors}
             playbackMove={
@@ -2471,6 +2507,7 @@ export function App() {
           ops={ops}
           tools={tools}
           generated={generated}
+          postedMinutes={postedMinutes}
           stock={stock}
           modelName={geometry ? modelName : null}
           onRecalcOne={recalcOne}

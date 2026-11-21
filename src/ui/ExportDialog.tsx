@@ -30,6 +30,12 @@ interface Props {
   ops: JobOp[];
   tools: Tool[];
   generated: Record<string, GeneratedOp>;
+  /** per-op MACHINE minutes from the posted stream (item 13): opId → the
+   *  minutes the machine will actually spend — cutting, rapids, spindle
+   *  ramp, with the post's G92.4 shrink/alias machinery inside. Rows and
+   *  totals read THIS, falling back to the IR's `generated.minutes` when
+   *  an op has no posted figure (nothing posted yet). */
+  postedMinutes: ReadonlyMap<string, number>;
   stock: Stock;
   /** loaded STL file name; null = no model (summary says "no model") */
   modelName: string | null;
@@ -151,8 +157,18 @@ export function ExportDialog(props: Props) {
   /** tool changes across the whole job, in job order (the footer's count) */
   const toolChanges = countToolChanges(includedOps, toolNumbers);
 
+  /** per-op minutes: the POSTED stream's machine figure when it exists
+   *  (item 13 — the estimate carries the post's shrink/alias machinery),
+   *  else the IR's figure */
+  const minutesOf = (opId: string): number | null => {
+    const posted = props.postedMinutes.get(opId);
+    if (posted !== undefined) return posted;
+    const g = props.generated[opId];
+    return g !== undefined && g.error === null ? g.minutes : null;
+  };
+
   const totalMinutes = includedOps.reduce(
-    (sum, o) => sum + (props.generated[o.id]?.minutes ?? 0),
+    (sum, o) => sum + (minutesOf(o.id) ?? 0),
     0,
   );
 
@@ -329,10 +345,12 @@ export function ExportDialog(props: Props) {
             const tool = props.tools.find((t) => t.id === op.toolId);
             const num = toolNumbers.get(op.toolId);
             const problem = g?.error ?? 'no moves generated';
-            /** the row's own honest estimate — '—' when it never generated */
+            /** the row's own honest estimate — '—' when it never generated;
+             *  the posted stream's machine minutes when it exists */
+            const mins = minutesOf(op.id);
             const time =
-              g !== undefined && g.error === null
-                ? `${g.minutes.toFixed(1)} min`
+              mins !== null
+                ? `${mins.toFixed(1)} min`
                 : '—';
             const frameOp = op.kind === 'fixture' || op.kind === 'index';
             return (
