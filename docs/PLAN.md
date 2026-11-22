@@ -1780,6 +1780,163 @@ bitmap import (beta.13): halftone dots artwork mode. The parked
 laser design is DEAD per the verdict above — vectorized halftone is
 the only laser-image mode this project will have.
 
+## Competitor CAM survey (2026-11-22 — six projects, research → candidates)
+
+Survey of six alternate CAM projects sharing our idea space: ChipCutter
+(MIT/Apache, readable), Camcraft (Apache, readable), SolidCraft (MIT/Apache
+— CAD only, no CAM), OpenChuckCAM (**AGPL — description-only, docs
+included**), PhysCAD (closed, description-only), RotatoCAM (closed,
+description-only; its example post scripts are unlicensed — tainted).
+Full research record with per-source findings, formulas, and URL list:
+`reference/competitor-cam-survey-2026-11-22.md` (gitignored, unpublished).
+Items are S-numbered (S for survey) to keep the 2026-10-28 gap-analysis
+numbering stable. Verdicts PENDING unless noted — Alice adjudicates what
+goes on the plan vs the ideas bucket.
+
+Cheap/correctness items, convergent across ≥2 independent sources:
+
+- **S1. G93 A-rate clamp audit + post backstop** (trivial/small) — three
+  independent implementations converge: segment time = max(surface time,
+  ΔA / max deg-min), so a coordinated move at small radius never commands
+  A past its ceiling. We already clamp via `MAX_ROTARY_RPM` in
+  swarfFinish/spiralCarve/faceCylinder; the gap is uniformity across every
+  coordinated-A generator plus a post-level backstop so it can't regress.
+- **S2. 4D finish-pass quality details** (small, lands in the in-flight
+  work) — Camcraft's pivot law (ladders planned as BALL CENTERS, stream
+  locates the tip: `tip = center − r·pose` — rotating about the tip stands
+  the ball a full radius off the wall; their shipped bug); Camcraft's link
+  law (pass-to-pass links on a laid bar = radial retract → angular index
+  → radial plunge, never a Z lift); OpenChuckCAM's knob set (lead angle
+  −30..30°, largest tilt 10°, largest angle step 5°, report largest tilt
+  used; surfaces the pass can't follow refused-and-listed by area, not
+  cut badly); ChipCutter's slope-compensated stepover (local flank cos φ)
+  and recursive chord-sagitta subdivision. ChipCutter's warning that
+  voxel/heightmap grid corners cause staircase lifts reads as a risk for
+  the voxel-truth pilot.
+- **S3. Flute-reach checks at part ends / beside walls** (small/medium) —
+  RotatoCAM SHIPPED this bug (cutter 1.9× past flute length into the
+  rougher's end collar, 132 entries); OpenChuckCAM bounds it as a per-path
+  check over existing stock ("a bound, not a measurement"); Camcraft has
+  the drill-reach law. Addresses valley-partial fragility + the wide-groove
+  contract; warn-don't-block compatible.
+- **S4. Read-back + replay verification at export** (medium) — re-parse the
+  written file, replay, compare against the plan (OpenChuckCAM: tip
+  0.0007 mm, A 0.0005°; mismatch refuses the write). We already hold the
+  pinned `ncParser` — wiring it into export verifies every job's
+  semantics where goldens only pin enumerated cases.
+- **S5. M6 return-position hazard audit** (trivial to check) — Camcraft's
+  Carvera post records that the firmware ends every M6 with `G53 G0
+  Z<clearance>` then returns to the machine X/Y the M6 arrived at, so the
+  first move after a tool change must never be a diagonal from an
+  unknown position. Verify against `docs/makera-dialect.md` + our post's
+  post-M6 behavior; if it holds it's a post rule + golden test. Other
+  dialect facts to cross-check while there: mm-only (G20 halts), M2 not
+  M30, dwell G4 P seconds, T0 = probe.
+- **S6. Machine-profile validation warnings** (small) — PhysCAD: "a setup
+  that won't fit travel won't post"; ChipCutter ships harvestable Carvera
+  profile data (verify against Makera specs — they're alpha); OpenChuckCAM
+  carries confirmed/unconfirmed provenance per profile value. Wire
+  travel/feed/RPM limits + the 61-char rule into post-time WARNINGS
+  (not gates) named per op.
+
+Medium items, roadmap-adjacent:
+
+- **S7. Holding tabs** (small/medium) — four sources converge, each with a
+  piece: ChipCutter's triangular ramped profile (no dwell marks), Camcraft's
+  geometry-sized bridges, OpenChuckCAM's rotary head/tail zones, PhysCAD's
+  setup-level construct every op rides over. NOT the rejected fixture
+  modeling — uncut material, no modeled bodies. Prerequisite for
+  through-cut flip work.
+- **S8. Drilling (spot/peck) + helical bore + bolt-circle patterns**
+  (medium) — no drilling op exists at all today; ChipCutter has the full
+  spec (tip breakthrough compensation, TSP hole ordering), RotatoCAM's
+  drill_pattern covers bolt-circle/grid/rotary-indexed. Generate-pins
+  needs pin drilling — design together with S9.
+- **S9. Generate-pins refinements** (small add-on to the planned op) —
+  ChipCutter's wizard: pin positions strictly outside the 2D silhouette,
+  strictly 180°-flip-invariant (< 1e-9 mm), optional poka-yoke asymmetry
+  so the part only seats one way. Write into the spec before building.
+- **S10. V-carve flat depth law + modes** (medium) — wrapped V-carve
+  landed (`c32bffc`); the survey adds the flat 2D side: medial-axis depth
+  via inscribed-circle radius (`depth = r/tan(θ/2)`, closed-form
+  tangent-circle shrink, Ma/Bae/Choi 2012), Sides One (fill the shape) vs
+  Both (groove along a centerline, flat-bottom where the V can't reach),
+  max-depth cap with flat-bottom clearing rings, a clearing endmill kept
+  in step, inlay/male mirrored mode; Camcraft's per-move re-measure
+  safety law + the sim subtlety that branch crossings are legal at one
+  depth (crossing check needs a V-carve mode).
+- **S11. Sim verdict upgrades** (small/medium) — PhysCAD's verdict line +
+  click-to-jump-to-offending-move; RotatoCAM's on-surface/leftover/gouged
+  deviation coloring (leftover is our missing third); ChipCutter's
+  quantitative metrology (excess/gouge volume, RMS/MAE, P95, in-tolerance
+  %, worst-cell location, per-op progression) — doubles as a regression
+  instrument for our own generators. Pure analysis/UI over the existing
+  voxel sim.
+
+Ideas bucket (bigger or later):
+
+- **S12. Wrap-space rotary roughing + axis fit from mesh normals**
+  (large) — Camcraft: fit the rotation axis from facet normals
+  (normal lines anchored at circumcenters), develop the surface onto a
+  cylinder, run pocket ladders in that frame (ρ plays Z); seam closure,
+  seam relocation, world exit at ρ + tool radius. The axis fit also
+  detects a modelled thread's pitch and hand, and lets the cylinder
+  canvas adopt any user mesh. The natural roughing partner to the 4D
+  finish pass for arbitrary meshes.
+- **S13. Measured-engagement principle for the adaptive-clearing spec**
+  (medium, spec amendment) — Camcraft measures every emitted cut on
+  in-process stock before keeping it (engagement max/location/distribution
+  reported; overload capped and NAMED, then fallback ladder). Adopt the
+  measure-don't-assert principle into the spec.
+- **S14. Short-move block-time model** (medium) — OpenChuckCAM: minimum
+  block time (Z1 measured 7 ms over WiFi) + planner window (32); report
+  or slow down without touching geometry. Pairs with the 61-char limit
+  and the entryXY sim-flag work.
+- **S15. Arc-preserving offsets + biarc fitting** (medium) — SolidCraft's
+  closed PR: offset lines-and-arcs exactly so walls emit as G2/G3 arcs,
+  not chord spam; Camcraft's biarc refit (Bolton 1975). Fights the
+  61-char limit and controller look-ahead.
+- **S16. Probing ops → auto WCS** (small/medium) — PhysCAD Probe Stock +
+  Camcraft probing-as-IR; Carvera has a probe + auto tool setter. Needs
+  Carvera probe-macro verification first; replaces "measure and type" in
+  the fixture-ops flow.
+- **S17. Setup sheets with SHA-256 + change-order tool list** (small) —
+  OpenChuckCAM/ChipCutter/Camcraft; operator hashes the program file at
+  the machine. Cheap traceability for a blind-file controller.
+- **S18. Small remainder** — mill_flats (index N times, face each side;
+  thin preset over indexed 4-axis); no-windup raster finishing (A stays
+  0–360°, alternative to G92.4 unwinding); multi-offset single-program
+  posting; engagement-aware feed optimization post-pass (corner
+  slowdown for the 200 W spindle); dogbones/T-bones; Hershey single-line
+  engraving fonts; grid copies; wrapped backplot must subdivide
+  coordinated rotary moves (big-ΔA G1 draws the wrap, not a chord).
+
+Hard rules and confirmations from the survey (do not re-litigate):
+
+- **PATENT LANDMINE: view-cube corner/edge clicking** (Autodesk; PhysCAD
+  removed it until 2029). Our three.js viewport stays face-click only.
+- **No code-loading post plugin system, ever** (RotatoCAM executes
+  `~/.rotatocam/posts/*.py` at startup) — RCE territory in a web app.
+- **Rest machining reconfirmed struck-off** by competitor field data
+  (OpenChuckCAM: 51 mm³ removed for 3,661 moves; output depends on sim
+  stock, breaks when an earlier op changes). **Fixture modeling
+  reconfirmed struck-off** (RotatoCAM's own docs: a drawn chuck "is not
+  proof that every collision is checked"; their held-region/tabs approach
+  validates our lightweight direction).
+- **Blocking posture rejected**: several targets gate export on ticked
+  warnings; we take the diagnostic quality (named refusals, numbers,
+  locations), never the gate — warn-don't-block stands.
+- **Dialect caution**: Z1 has no G93 (OpenChuckCAM's feed rules don't
+  transfer); PathPilot semantics need Carvera-firmware verification;
+  harvested machine constants get checked against Makera's published
+  specs before shipping.
+- **Competitive position**: we are ahead of all six on Carvera 4th-axis
+  support (PhysCAD's rotary is Labs-half-built; Camcraft's Carvera post
+  is 3-axis-only and they refuse freeform carvings on A; RotatoCAM's
+  Carvera post is experimental/unqualified; OpenChuckCAM is Z1-only).
+  Rotary post facts still come only from our goldens + mill-tested
+  examples.
+
 ## License policy (hard rule)
 
 Project license: MIT. Code may be taken only from MIT/BSL/Apache/LGPL
