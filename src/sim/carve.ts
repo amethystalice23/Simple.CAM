@@ -261,7 +261,33 @@ function carvePose(
   let maxX = -Infinity;
   let maxY = -Infinity;
   let maxZ = -Infinity;
-  for (const [px, py, pz] of localCorners) {
+  // PER-BOX AABBs: the FLUTE box (corners 0..7) and the SHANK box (the
+  // appended corners 8..15, only when spec.shankTop > b[5]). Each scan is bounded
+  // and air-skipped by ITS OWN box — the tool solids are contained in
+  // their boxes, so a cell whose center is outside the box cannot be
+  // inside the solid (exact skip, byte-identical flags). The old single
+  // full-tool AABB (flute ∪ shank, the footprint inflated by
+  // shankRadius ≥ fluteRadius) made the FLUTE scan walk the shank's
+  // footprint on every pose and the shank scan walk cells far below the
+  // shank band: measured on the knight @0.25, the two scans' wasted
+  // walking was ~9s of a 20s carve — for 19 shank-contact moves. The
+  // flute scan's air-skip ("tool entirely above the material") tightens
+  // from the full-tool minZ to the flute box's minZ by the same
+  // containment argument. */
+  let fMinX = Infinity;
+  let fMinY = Infinity;
+  let fMinZ = Infinity;
+  let fMaxX = -Infinity;
+  let fMaxY = -Infinity;
+  let fMaxZ = -Infinity;
+  let shankMinX = Infinity;
+  let shankMinY = Infinity;
+  let shankMinZ = Infinity;
+  let shankMaxX = -Infinity;
+  let shankMaxY = -Infinity;
+  let shankMaxZ = -Infinity;
+  for (let ci = 0; ci < localCorners.length; ci++) {
+    const [px, py, pz] = localCorners[ci];
     const wx = pose.x + px * lxX + py * lyX + pz * lzX;
     const wy = pose.y + px * lxY + py * lyY + pz * lzY;
     const wz = pose.z + px * lxZ + py * lyZ + pz * lzZ;
@@ -271,6 +297,21 @@ function carvePose(
     if (wy > maxY) maxY = wy;
     if (wz < minZ) minZ = wz;
     if (wz > maxZ) maxZ = wz;
+    if (ci < 8) {
+      if (wx < fMinX) fMinX = wx;
+      if (wx > fMaxX) fMaxX = wx;
+      if (wy < fMinY) fMinY = wy;
+      if (wy > fMaxY) fMaxY = wy;
+      if (wz < fMinZ) fMinZ = wz;
+      if (wz > fMaxZ) fMaxZ = wz;
+    } else {
+      if (wx < shankMinX) shankMinX = wx;
+      if (wx > shankMaxX) shankMaxX = wx;
+      if (wy < shankMinY) shankMinY = wy;
+      if (wy > shankMaxY) shankMaxY = wy;
+      if (wz < shankMinZ) shankMinZ = wz;
+      if (wz > shankMaxZ) shankMaxZ = wz;
+    }
   }
 
   const [i0, j0, k0] = grid.worldToCell(minX, minY, minZ);
@@ -278,11 +319,17 @@ function carvePose(
   if (i1r < 0 || j1r < 0 || k1r < 0 || i0 > grid.nx - 1 || j0 > grid.ny - 1 || k0 > grid.nz - 1) {
     return;
   }
-  const iStart = Math.max(0, i0);
-  const jStart = Math.max(0, j0);
-  const iEnd = Math.min(i1r, grid.nx - 1);
-  const jEnd = Math.min(j1r, grid.ny - 1);
-  const kEnd = Math.min(k1r, grid.nz - 1);
+  // the flute scan's cell ranges: the FLUTE box only (with no shank box
+  // the flute box IS the full AABB, so this is byte-identical to v1 for
+  // shank-less specs)
+  const [fi0, fj0, fk0] = grid.worldToCell(fMinX, fMinY, fMinZ);
+  const [fi1r, fj1r, fk1r] = grid.worldToCell(fMaxX, fMaxY, fMaxZ);
+  const iStart = Math.max(0, fi0);
+  const jStart = Math.max(0, fj0);
+  const iEnd = Math.min(fi1r, grid.nx - 1);
+  const jEnd = Math.min(fj1r, grid.ny - 1);
+  const kEnd = Math.min(fk1r, grid.nz - 1);
+  const kLoFlute = Math.max(0, fk0);
 
   // per-move baseline: the standing surfaces BEFORE this move carves (first
   // pose of the move), so subdivided poses all compare against the same
@@ -430,16 +477,16 @@ function carvePose(
       if (top < 0) continue; // empty column — nothing to carve
       const qx = grid.originX + (i + 0.5) * grid.pitch - pose.x;
       const topCenterZ = grid.originZ + (top + 0.5) * grid.pitch;
-      if (minZ > topCenterZ) continue; // tool entirely above the material — air-skip
+      if (fMinZ > topCenterZ) continue; // flute box entirely above the material — air-skip
       // classification reference: the PRE-MOVE standing ends of this column
       const baseTop = baselineTop[j * nx + i];
       const baseTopZ = baseTop >= 0 ? grid.originZ + (baseTop + 0.5) * grid.pitch : -Infinity;
       const baseBot = baselineBot[j * nx + i];
       const baseBotZ = baseBot < grid.nz ? grid.originZ + (baseBot + 0.5) * grid.pitch : Infinity;
-      // scan from the column top down to the AABB's low cell; the inside
-      // test bounds both depth (flute) and radius per cell
+      // scan from the column top down to the FLUTE box's low cell; the
+      // inside test bounds both depth (flute) and radius per cell
       const kHi = Math.min(kEnd, top);
-      const kLo = Math.max(0, k0);
+      const kLo = kLoFlute;
       for (let k = kHi; k >= kLo; k--) {
         const idx = i + nx * (j + ny * k);
         if (occ[idx] === 0) continue;
@@ -540,17 +587,33 @@ function carvePose(
 
   // shank contact scan: cells ABOVE the flute in the shank solid that still
   // hold material — marked red, NOT removed (shanks don't cut); the MOVE is
-  // counted once as a collision
+  // counted once as a collision. Bounded to the SHANK BOX on all three axes
+  // and air-skipped per column (the shank solid is contained in its rotated
+  // box, so a cell whose center is outside the box, or in a column whose
+  // top material sits below the box's low corner, cannot be inside the
+  // solid — identical flags, far less walking). Measured on the knight
+  // @0.25: the unbounded scan was ~6.6s of a 20s carve for 19 contact moves.
   if (spec.shankTop > b[5] && spec.shankRadius > 0) {
+    const [si0, sj0] = grid.worldToCell(shankMinX, shankMinY, shankMinZ);
+    const [si1r, sj1r] = grid.worldToCell(shankMaxX, shankMaxY, shankMaxZ);
+    const iS = Math.max(0, si0);
+    const jS = Math.max(0, sj0);
+    const iSE = Math.min(si1r, grid.nx - 1);
+    const jSE = Math.min(sj1r, grid.ny - 1);
+    const kLoShank = Math.max(0, Math.floor((shankMinZ - grid.originZ) / grid.pitch));
+    const kHiShank = Math.floor((shankMaxZ - grid.originZ) / grid.pitch);
     let poseCollision = false;
-    for (let j = jStart; j <= jEnd; j++) {
+    for (let j = jS; j <= jSE; j++) {
       const qy = grid.originY + (j + 0.5) * grid.pitch - pose.y;
-      for (let i = iStart; i <= iEnd; i++) {
+      for (let i = iS; i <= iSE; i++) {
         const top = columnTop[j * nx + i];
         if (top < 0) continue;
+        // the shank band sits entirely above this column's material — air-skip
+        const topCenterZ = grid.originZ + (top + 0.5) * grid.pitch;
+        if (shankMinZ > topCenterZ) continue;
         const qx = grid.originX + (i + 0.5) * grid.pitch - pose.x;
-        const kHi = Math.min(kEnd, top);
-        const kLo = Math.max(0, k0);
+        const kHi = Math.min(kHiShank, top);
+        const kLo = kLoShank;
         for (let k = kHi; k >= kLo; k--) {
           const idx = i + nx * (j + ny * k);
           if (occ[idx] === 0 || ghost[idx] === 2) continue;

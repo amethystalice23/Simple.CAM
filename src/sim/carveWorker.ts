@@ -26,7 +26,7 @@ import type { Move, Stock, Tool } from '../core/types';
 /** build stamp — the `ready` message carries it so the client can PROVE
  *  which worker version is running (the 2026-10-25 gaps debugging: a
  *  stale dev-server worker copy was a live suspect) */
-const SIM_BUILD = 'b13-lasermark';
+const SIM_BUILD = 'b14-simperf';
 
 /** cooperative-slice budget, ms — the CARVE stays within one of these per
  *  slice so the worker yields often enough to serve control messages
@@ -39,6 +39,19 @@ const SIM_BUILD = 'b13-lasermark';
  *  control-message check by that slice, and batching keeps the main
  *  thread from flooding. */
 const SLICE_MS = 8;
+/** per-chunk re-mesh throttle, ms: a chunk carved CONTINUOUSLY by a long
+ * pass used to re-mesh EVERY 8ms slice (measured on the knight @0.25:
+ * 22,375 re-meshes over 544 chunks, worst chunk 139× — 43.5s of a 63s
+ * run, the flush not the carve dominated wall-clock). A chunk now
+ * re-meshes at most this often; the end-of-run and park drains (force
+ * below) still mesh every dirty chunk, so the display lags at most one
+ * throttle window behind the tool and nothing ages to end-of-run. A
+ * skipped chunk STAYS dirty (the flag is only cleared by an actual
+ * mesh), so the next flush picks it up — the drain is always complete. */
+const CHUNK_REMESH_MS = 250;
+/** chunk id → performance.now() of its last mesh (throttle state; reset
+ * on setup/reset — a fresh run re-meshes everything at once) */
+let lastMeshAt = new Map<number, number>();
 /** chunks per batched `chunks` message (each ~4ms to mesh on a 32³ grid —
  *  the batching is what protects the main thread: one state update per
  *  batch, not per chunk) */
@@ -126,20 +139,28 @@ function postChunks(r: RunState, batch: { chunk: ChunkMesh; transfer: Transferab
   post({ token: r.token, type: 'chunks', chunks }, transfer);
 }
 
-/** re-mesh every dirty chunk, batched — UNBUDGETED on purpose: the display
- * must keep pace with the carve (each slice's dirt is fully cleared
- * within that slice, batched ~32 per post). A budget here outpaced
- * nothing: the carve dirties chunks faster than a bounded flush clears
- * them, and the growing backlog aged upper layers solid on screen until
- * the end-of-run drain (Alice's 2026-10-26 report: "certain layers get
- * left solid until the end of this op"). The coupon CRAWL was never the
+/** re-mesh dirty chunks, batched — UNBUDGETED on purpose: the display
+ * must keep pace with the carve. A budget here starved the display —
+ * carving dirties chunks faster than a bounded flush clears them, and
+ * the growing backlog aged upper layers solid on screen until the
+ * end-of-run drain (Alice's 2026-10-26 report: "certain layers get left
+ * solid until the end of this op"). The coupon CRAWL was never the
  * flush's cost — it was per-chunk posts + the Viewport rebuilding every
- * mesh per post, both fixed; batching is the guard. */
-function flushChunks(r: RunState) {
+ * mesh per post, both fixed; batching is the guard. The per-chunk
+ * THROTTLE (CHUNK_REMESH_MS) is the wall-clock fix for the opposite
+ * extreme — a chunk re-meshed every slice it was dirtied (139× on one
+ * knight chunk): now at most once per window, with `force` draining
+ * everything at run end and every park so the pause-state display is
+ * always complete. */
+function flushChunks(r: RunState, force = false) {
   const ids = r.grid.dirtyChunkIds();
+  const now = performance.now();
   let batch: { chunk: ChunkMesh; transfer: Transferable[] }[] = [];
   for (let i = 0; i < ids.length; i++) {
-    batch.push(meshChunk(r, ids[i]));
+    const id = ids[i];
+    if (!force && now - (lastMeshAt.get(id) ?? -Infinity) < CHUNK_REMESH_MS) continue;
+    batch.push(meshChunk(r, id));
+    lastMeshAt.set(id, now);
     if (batch.length >= CHUNK_BATCH) {
       postChunks(r, batch);
       batch = [];
@@ -172,12 +193,14 @@ function slice(r: RunState) {
     r.cursor++;
     if (performance.now() - t0 > SLICE_MS) break;
   }
-  flushChunks(r);
   const total = r.poses.length ? r.poses[r.poses.length - 1].moveIndex + 1 : 0;
   const atEnd = r.cursor >= r.poses.length;
   // reachedTarget: the cursor sits on a pose BEYOND the armed target — the
   // carve is done for this target and the worker should park
   const reachedTarget = !atEnd && r.poses[r.cursor].moveIndex > r.target;
+  // FULL drain at run end AND at every park (throttled otherwise): the
+  // pause-state display must be complete, not ≤250ms stale
+  flushChunks(r, atEnd || reachedTarget);
   post({
     type: 'progress',
     token: r.token,
@@ -241,6 +264,7 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
   if (run && msg.token !== run.token) return; // stale generation
   if (msg.type === 'setup') {
     stopTimer(run);
+    lastMeshAt = new Map();
     const { stock, tools, moves, moveTool, pitch, startZ, moveStepDown, moveFrame } = msg.setup;
     const grid = new VoxelGrid(stock, pitch ?? derivePitch(stock));
     const specs = tools.map((t: Tool) => {
@@ -319,6 +343,7 @@ self.onmessage = (e: MessageEvent<ClientMsg>) => {
   }
   if (msg.type === 'reset') {
     stopTimer(run);
+    lastMeshAt = new Map();
     // rebuild from the saved setup — the grid has no refill (a fresh
     // VoxelGrid IS the refill; stock shapes are cheap to re-fill, and a
     // fresh grid also zeroes the ghost classification)
