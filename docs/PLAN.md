@@ -244,6 +244,83 @@ same ImportedArtwork as SVG so the artwork primitive and all ops
 apply unchanged). Remaining: pocket-region hookup for fills, and a
 browser eyeball of the wrapped artwork before first metal.
 
+### Laser raster engrave — dithered bitmap artwork (SPEC 2026-11-23; supersedes the 2026-10-28 halftone-only verdict)
+
+Ground truth, measured from the corpus 2026-11-23:
+`examples/MakeraStudio_TOP_20260926153254.nc` (Z1 "Laser Image") —
+1-bit DITHERED raster at CONSTANT power (S0.3/S0.0 only, 52,279 G1s,
+no per-move modulation), constant-velocity serpentine with zero
+mid-raster rapids (all travel = `G1 S0.0` at raster feed), 0.1 mm
+pitch, run-coalesced (~8.7 px/run), flat only. Full write-up in
+`docs/makera-dialect.md` §"Laser Image" — that file is the golden
+reference for the post's raster emission. The 2026-10-28 "vectorized
+halftone is the only laser-image mode" verdict is SUPERSEDED: the
+machine's own software raster-dithers, and per-move-S greyscale
+(proven unnecessary for v1) is re-opened as a calibrated phase 2 below.
+
+Three pieces (Alice's 2026-11-23 design, conversation-shaped):
+
+1. **`'bitmap'` artwork primitive** — one feature carrying the
+   grayscale `GrayBitmap` (`bitmapImport.ts`, already the shared
+   heightmap/halftone input) + face dims + the import dialog's
+   rotate/scale knobs. Never exploded into paths, nothing
+   path-selectable inside it. The import dialog gains a THIRD tab —
+   Heightmap / Halftone (vector, unchanged, still the mill answer) /
+   **Dithered bitmap** — with the method list applied at the OP, not
+   baked: dither is material-dependent intent, the artwork stays
+   grayscale. Halftone-source vector artwork also stops being
+   per-path selectable (selection granularity = the whole artwork).
+   **Dither methods** (published algorithms, described-only — license
+   policy safe): error diffusion — Atkinson (DEFAULT for photos; 6/8
+   error, punchy mids), Floyd–Steinberg, Jarvis-Judice-Ninke, Stucki,
+   Burkes, Sierra; ordered Bayer 8×8 (no dot-gain propagation,
+   repeatable); halftone screen — `halftone.ts`'s coverage curve
+   REUSED as a per-pixel threshold (dot placement, not dot shape; the
+   circle-vector emission is the degenerate mill case and stays).
+2. **`rasterEngrave` op** — laser-only, accepts ONLY bitmap artworks.
+   Resample to a pixel-pitch knob (0.1 mm default), serpentine rows
+   along the machine's fast X (the engraveFill idiom), run-coalesce,
+   emit constant-feed G1s with `S<power>`/`S0.0` mirroring the dialect
+   exactly (beam-off spans travel at raster feed — constant speed, no
+   mid-raster rapids; one `G0` positioning at op start). Knobs: feed,
+   power, **minPower floor** (diodes barely lase below ~10–15% — the
+   darkest FIRED level never drops under it), row spacing. Flat-only
+   v1; wrapped/4th-axis raster deferred (row → A, G93 rules apply).
+3. **Sweep + interlace knobs** (Studio users report serpentine
+   interlace — alternate rows misaligned; mechanism UNTESTED:
+   S-settling ~3 ms at 16.7 mm/s ≈ 0.05 mm = half a pixel, sign
+   flips per direction): `sweep: 'serpentine' | 'one-way'` — serpentine
+   default (fast), one-way the quality mode whose returns are `G0`
+   rapids (DELIBERATE divergence from Studio's constant-feed returns:
+   constant speed is already broken by the turnaround). **Interlace
+   compensation**: signed mm, applied to reverse-row fired runs only;
+   calibrated by a COUPON (the `testPattern.ts` home — alternating
+   single-pixel columns burned serpentine AND one-way on one stock;
+   read the offset with a loupe/camera). What the knob will NOT fix
+   (recorded so nobody reaches for the wrong lever): run-START
+   FADE-IN — under-burned leading edges from power ramp — is a
+   magnitude error, not a position error; its lever is minPower or
+   overscan/lead-in, never this offset.
+
+**Open, pending Alice's job file** (2026-11-23): vector-laser
+engraves coming out LIGHT ON CORNERS. Code fact: within a path the
+beam stays on (modal S, no stamps); between paths `G1 S0` + rapid +
+re-stamp (`engrave.ts` engraveLaser). Ranked HIGH: power-ramp
+fade-in at each path start, so corners that are path endpoints
+under-burn — the .nc settles it (do S-stamps cluster at the corners?).
+If confirmed, the fix is an overscan/lead-in (a few hundred µm of lit
+move before the artwork line) — the same lever raster rows will want.
+
+**Greyscale modulation (per-move S), RE-OPENED as phase 2** (Alice
+2026-11-23): power-to-gray only means something per material. The
+raster op gains a greyscale mode whose power curve reads from the
+MATERIAL library (`materials.ts`), gated on a per-material
+step-wedge calibration ritual (coupon + user matches wedges to
+grays); NO calibration data = NO greyscale mode shown. v1 ships
+dithered 1-bit only — matching Studio, staying in proven firmware
+territory (the golden file proves 26k S-flips at 52k lines through
+the Z1 planner).
+
 ### Stock: shape vs mode
 
 Stock has two orthogonal properties: **shape** (cylinder or box — pure
@@ -1666,7 +1743,8 @@ work offsets, controller-side probing (Carvera hardware + Community
 Controller make them near-irrelevant); PCB/Gerber workflow (other
 tools' territory, 2026-11-01); greyscale laser raster via per-move S
 modulation (uncalibrable — every material/colour needs its own
-coupon, 2026-11-01); rest machining (manual knobs cover it,
+coupon, 2026-11-01; RE-OPENED 2026-11-23 as a phase 2 gated on
+exactly that coupon — see the laser raster engrave spec); rest machining (manual knobs cover it,
 2026-11-01); fixture/clamp modeling (setup burden > benefit; the
 entry-safety + G0 Y0 work already covers the dangerous travel,
 2026-11-01).
@@ -1781,7 +1859,11 @@ workflow — "leave that to other tools"; true greyscale laser raster
 (per-move S modulation) — would need a calibration coupon on every
 material/colour combination to mean anything ("beyond anything we
 should consider"); the halftone artwork approach IS the laser-image
-answer and it shipped in beta.13.
+answer and it shipped in beta.13. UPDATE 2026-11-23: laser-image dot
+matrix is back ON the gap list — Studio's own raster is 1-bit
+dithered at constant power (measured, see the laser raster engrave
+spec), so the "little/no greyscale ability" premise held but the
+vector-only conclusion didn't.
 
 Laser-image design note (ALICE, 2026-10-28): halftoning is the
 approach — her proven trick for making Studio's laser-image
@@ -1795,6 +1877,10 @@ bitmap import (beta.13): halftone dots artwork mode. The parked
 "raster mode = LATER (per-move S modulation, M325)" note in the
 laser design is DEAD per the verdict above — vectorized halftone is
 the only laser-image mode this project will have.
+SUPERSEDED 2026-11-23 by the laser raster engrave spec (§Operations):
+the laser gets a true dithered-bitmap raster (`rasterEngrave`),
+halftone→vector remains the MILL answer, and halftone joins the
+dither method list as a screen operator on the bitmap.
 
 ## Competitor CAM survey (2026-11-22 — six projects, research → candidates)
 

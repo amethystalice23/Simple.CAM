@@ -195,6 +195,42 @@ Notes on header fields:
   vectors stay at focus height exactly as Makera emits them (the head
   is already riding there by design).
 
+## Laser Image (raster, MakeraStudio_TOP_20260926153254.nc — measured 2026-11-23)
+
+The one raster-laser ground-truth file in the corpus ("Laser Image"
+toolpath, Z1, flat bed — no A words, no G93). Measured facts:
+
+- **1-bit dithered, constant power.** Exactly two S values across
+  52,279 G1 lines: `S0.3` (26,138 fired runs) and `S0.0` (26,139
+  beam-off runs), plus the closing `G1 S0`. No per-move power
+  modulation anywhere — Studio dithers the image and fires
+  full-power on black pixels.
+- **Constant-velocity serpentine; no rapids mid-raster.** One `G0 Z0`
+  and one positioning `G0 X.. Y..` at the start; EVERY later move is
+  `G1` — beam-off spans included, traveling at the same raster feed
+  (`F1000`, emitted once, modal). `S0.0` is the pen-up: velocity never
+  changes through the whole raster.
+- **Rows along X, stepped in Y**: 841 Y-moves from Y85.6 down to Y0.5
+  — 0.1 mm pitch both axes over a ~54×86 mm face. Rows alternate
+  direction (serpentine); the row step is folded into the row's last
+  X move (`G1 X51.5 Y47.3 S0.0`), with an occasional pure-`Y` lit move
+  where a corner pixel is shared between rows (`G1 Y85.5 S0.3`).
+- **Runs, not pixels**: ~453k pixel-pitch positions coalesce into
+  52k G1s (avg ~8.7 px/run); consecutive same-value pixels share one
+  move, the S word alternating on run boundaries. Lines are short
+  (avg ~10 chars, max 19) — no Z1 line-length risk.
+- Header/tail identical to the laser-vector dialect above: `M321` /
+  `G0 Z0` / `M3` in; `G1 S0`, `M05`, `M322`, `M05`, `G28`, `M02`
+  out. The file then carries a `(thumbnail_image_begin)` base64 PNG
+  in comments (comments exempt from the 61-char throw).
+- **Studio field reports (Alice, 2026-11-23):** serpentine suffers an
+  interlace artifact — alternate rows visibly misaligned; users
+  recommend a one-direction mode. Plausible mechanism (UNTESTED):
+  S-settling latency (~3 ms at F1000 = 16.7 mm/s ≈ 0.05 mm) shifts
+  each fired run late in the travel direction, sign flipping with
+  row direction. simple.cam's rasterEngrave spec (PLAN.md) offers
+  both sweeps and compensates.
+
 ## Air assist (TopClamp.nc, v1.0.0 header)
 
 - `M7` immediately after `T1 M6` (before positioning), `M9` at op end.
