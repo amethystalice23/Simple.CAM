@@ -253,6 +253,19 @@ describe('vcarveFlat generator', () => {
     expect(res.capped).toBe(true);
   });
 
+  it('honors the clear-stepover override (the panel knob)', () => {
+    // Ø10 disc: capped clearing rings at the default 0.5mm spacing vs a
+    // 1.0mm override — coarser spacing, fewer clearing rings, same cap
+    const fine = vcarveFlat(op([circlePts(0, 0, 5)]), vbit());
+    const coarse = vcarveFlat(op([circlePts(0, 0, 5)], { clearStepOver: 1.0 }), vbit());
+    expect(coarse.capped).toBe(true);
+    expect(coarse.maxDepthCut).toBeCloseTo(fine.maxDepthCut, 9);
+    expect(coarse.ringPasses).toBeLessThan(fine.ringPasses);
+    // a non-positive override falls back to the washboard default
+    const bad = vcarveFlat(op([circlePts(0, 0, 5)], { clearStepOver: 0 }), vbit());
+    expect(bad.ringPasses).toBe(fine.ringPasses);
+  });
+
   it('refuses bad inputs with clear errors', () => {
     expect(() => vcarveFlat(op([]), vbit())).toThrow(/at least one closed filled shape/);
     expect(() => vcarveFlat(op([[{ x: 0, y: 0 }]]), vbit())).toThrow(/closed filled shape/);

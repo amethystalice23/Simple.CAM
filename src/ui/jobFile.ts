@@ -253,6 +253,20 @@ export function normalizeJobOps(ops: JobOp[]): JobOp[] {
         return { ...op, fillMode: 'fill+outline' as const } as JobOp;
       }
     }
+    if (op.kind === 'vcarveFlat') {
+      // old/corrupt saves may miss the depth cap or carry a non-positive
+      // one. A positive constant is the safe default: the generator clamps
+      // to the selected bit's true cone height regardless, so the stored
+      // value only carries intent (and the sim's intended-DOC class). A
+      // garbage clear stepover drops back to the generator's washboard
+      // default (absent reads as auto).
+      const rawDepth = (op as { maxDepth?: unknown }).maxDepth;
+      const rawStep = (op as { clearStepOver?: unknown }).clearStepOver;
+      const maxDepth = typeof rawDepth === 'number' && rawDepth > 0 ? rawDepth : 3;
+      const clearStepOver = typeof rawStep === 'number' && rawStep > 0 ? rawStep : undefined;
+      const changed = maxDepth !== op.maxDepth || clearStepOver !== op.clearStepOver;
+      return changed ? ({ ...op, maxDepth, clearStepOver } as JobOp) : op;
+    }
     if (op.kind !== 'faceCylinder') return op;
     const raw = (op as { pattern?: unknown }).pattern;
     const pattern: FacePattern =

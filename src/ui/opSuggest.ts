@@ -794,11 +794,24 @@ function describePath(r: ResolvedFeature): FeatureKnowledge {
   if (path.filled) {
     facts.push({ label: 'import fill', value: 'filled region (area-fill candidate)' });
   }
+  const candidates: SuggestCandidate[] = [
+    { kind: 'engrave', why: 'trace this artwork with the tool tip' },
+  ];
+  // true V-carving needs a FLAT artwork frame, closed AND filled (the
+  // generation gate mirrored here): the groove deepens toward the stroke's
+  // medial axis, so it fills regions, not line work. Wrapped artwork keeps
+  // the chain-following rotary V-carve, not this op.
+  if (r.source.artworkFrame?.kind === 'flat' && path.closed && path.filled) {
+    candidates.push({
+      kind: 'vcarveFlat',
+      why: 'carve this filled shape with a V-bit — deep in wide strokes, shallow at the edges',
+    });
+  }
   return {
     kind: 'path',
     title: 'Artwork path',
     facts,
-    candidates: [{ kind: 'engrave', why: 'trace this artwork with the tool tip' }],
+    candidates,
     notes: [],
   };
 }
@@ -1001,6 +1014,7 @@ const TOOL_TYPES: Partial<Record<JobOp['kind'], Tool['type'][]>> = {
   profile: ['flat'],
   chamfer: ['vbit'],
   engrave: ['vbit', 'laser'],
+  vcarveFlat: ['vbit'],
   faceCylinder: ['flat'],
   cylChamfer: ['vbit', 'ball'],
   contour4d: ['ball', 'flat'],

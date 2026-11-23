@@ -513,10 +513,13 @@ export function vcarveFlat(op: VCarveFlatOp, tool: Tool): VCarveFlatResult {
   const capReach = rt + cap * tanA; // horizontal flank reach at the cap
   // capped-clearing ring stepover: the washboard law (floor within
   // CLEAR_AMPLITUDE between grooves) bounded by what still overlaps
-  const clearStep = Math.max(
-    0.05,
-    Math.min(2 * CLEAR_AMPLITUDE * tanA, 1.8 * capReach),
-  );
+  // capped-clearing ring stepover: the washboard law (floor within
+  // CLEAR_AMPLITUDE between grooves) bounded by what still overlaps —
+  // unless the op overrides it (the panel's Clear stepover knob)
+  const clearStep =
+    op.clearStepOver && op.clearStepOver > 0
+      ? op.clearStepOver
+      : Math.max(0.05, Math.min(2 * CLEAR_AMPLITUDE * tanA, 1.8 * capReach));
 
   const region = normalizeRegion(loops);
   if (region.length === 0) {

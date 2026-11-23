@@ -444,6 +444,40 @@ describe('describePickedFeature — chains, paths, edges', () => {
     expect(k.facts.find((f) => f.label === 'topology')?.value).toBe('closed');
   });
 
+  it('FLAT filled artwork offers V-carve alongside engrave; wrapped or open artwork does not', () => {
+    const path = {
+      kind: 'path' as const,
+      id: 'pa1',
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 4, y: 0, z: 0 },
+        { x: 4, y: 3, z: 0 },
+      ],
+      closed: true,
+      filled: true,
+    };
+    const flat = { ...source({ paths: [path] }), artworkFrame: { kind: 'flat' as const } };
+    const kf = describePickedFeature(resolved('path', flat, 0), stock4);
+    expect(kf.candidates.map((x) => x.kind)).toEqual(['engrave', 'vcarveFlat']);
+    expect(kf.candidates[1].why).toContain('filled shape');
+
+    // the generation gate mirrored: wrapped artwork keeps engrave only
+    const wrapped = {
+      ...source({ paths: [path] }),
+      artworkFrame: { kind: 'wrapped' as const, diameter: 20 },
+    };
+    const kw = describePickedFeature(resolved('path', wrapped, 0), stock4);
+    expect(kw.candidates.map((x) => x.kind)).toEqual(['engrave']);
+
+    // open line work fills no region — V-carve is not offered
+    const openPath = { ...path, closed: false, filled: false };
+    const ko = describePickedFeature(
+      resolved('path', { ...source({ paths: [openPath] }), artworkFrame: { kind: 'flat' as const } }, 0),
+      stock4,
+    );
+    expect(ko.candidates.map((x) => x.kind)).toEqual(['engrave']);
+  });
+
   it('an edge is a datum, not a path — only the Index aim is offered (4-axis)', () => {
     const e = {
       kind: 'edge' as const,
@@ -638,6 +672,31 @@ describe('suggestToolFor — the tool each suggestion would run with', () => {
     const s = suggestToolFor(k.candidates[1], r, [flat3], library);
     expect(s?.tool.id).toBe('v1');
     expect(s?.inUse).toBe(false);
+  });
+
+  it('V-carve wants a V-bit too — flats run engrave, never the V-carve', () => {
+    const path = {
+      kind: 'path' as const,
+      id: 'pa1',
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 4, y: 0, z: 0 },
+        { x: 4, y: 3, z: 0 },
+      ],
+      closed: true,
+      filled: true,
+    };
+    const flat = { ...source({ paths: [path] }), artworkFrame: { kind: 'flat' as const } };
+    const r = resolved('path', flat, 0);
+    const k = describePickedFeature(r, stock4);
+    const cand = k.candidates.find((c) => c.kind === 'vcarveFlat');
+    if (!cand) throw new Error('flat filled artwork must offer vcarveFlat');
+    // the smallest tip tool wins (edge work): the library's Ø3.175 V-bit
+    const s = suggestToolFor(cand, r, [flat3], library);
+    expect(s?.tool.id).toBe('v1');
+    expect(s?.inUse).toBe(false);
+    // no V-bit anywhere → no suggestion (the generator's own gate, mirrored)
+    expect(suggestToolFor(cand, r, [flat3, flat6], [flat3, flat6])).toBeNull();
   });
 
   it('a pocket takes the largest flat that manoeuvres inside the region', () => {

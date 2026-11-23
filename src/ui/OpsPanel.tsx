@@ -25,6 +25,7 @@ import {
   toolPresetFor,
 } from './jobGeneration';
 import { fixtureOrigin } from './placement';
+import { vbitConeHeight } from '../cam/vcarveFlat';
 import { panelToolNumbers } from './toolAssignment';
 import { sectionLabel } from './opsSections';
 import { OP_KIND_COLORS } from './opColors';
@@ -1688,6 +1689,38 @@ function ParamFields(props: {
           <InfoTip text="fill: the raster clears the selected closed painted regions — scanlines along the machine's fast X (axial on a wrapped logo), a hole inside a filled loop stays untouched (the ankh's counter), the same depth ladder per scanline, laser as ever a single pass. 'fill then outline' runs the raster FIRST with the outlines traced on top; 'fill only' skips them. Closed-but-unpainted paths (fill=none) outline only" />
         </>
       );
+    case 'vcarveFlat':
+      return (
+        <>
+          <NumberField
+            label="Max depth (mm)"
+            title="The depth cap: wide shapes fill a V groove that deepens toward the middle, but where the shape is wider than the bit's cone reaches, the groove stops at this depth and clears flat. Prefills from the bit's cone height — re-derives on a tool change until you edit it. The generator never cuts deeper than the bit's true cone, whatever this says"
+            value={op.maxDepth}
+            min={0.05}
+            step={0.1}
+            onCommit={(v) => upd({ maxDepth: Math.max(v, 0.05) } as Partial<JobOp>)}
+          />
+          <label
+            className="field"
+            title="Ring spacing, mm, when a wide shape clears flat at the cap (the flat floor between rings leaves a washboard — ridges like a washed board's slats — the default spacing keeps their height small). Empty = the default from the bit's angle; set a value to force finer or coarser rings"
+          >
+            <span>Clear stepover (mm)</span>
+            <input
+              type="number"
+              step={0.1}
+              min={0.05}
+              placeholder="auto"
+              value={op.clearStepOver ?? ''}
+              onChange={(e) => {
+                const s = e.target.value;
+                if (s === '') return upd({ clearStepOver: undefined } as Partial<JobOp>);
+                const v = parseFloat(s);
+                if (Number.isFinite(v) && v > 0) upd({ clearStepOver: v } as Partial<JobOp>);
+              }}
+            />
+          </label>
+        </>
+      );
   }
 }
 
@@ -1775,6 +1808,18 @@ export function OpsPanel(props: Props) {
           // width (tip Ø / kerf), not the shank-side diameter
           next = { ...next, stepDown, fillStepOver: engraveFillStepOver(t) } as JobOp;
           break;
+        case 'vcarveFlat': {
+          // the threadMill pitch-lock precedent (untouched prefills follow
+          // the tool, hand edits stick): refresh the depth cap only when it
+          // still equals the OLD bit's cone height — i.e. it is still the
+          // prefill. A hand-set cap (or a dangling old tool id) stays.
+          const vc = next as Extract<JobOp, { kind: 'vcarveFlat' }>;
+          const oldTool = props.tools.find((x) => x.id === op.toolId);
+          if (oldTool && vc.maxDepth === vbitConeHeight(oldTool)) {
+            next = { ...vc, maxDepth: vbitConeHeight(t) } as JobOp;
+          }
+          break;
+        }
         default:
           break; // drill/chamfer/index carry no step fields
       }
@@ -2075,7 +2120,7 @@ export function OpsPanel(props: Props) {
                           {PICK_BANNERS[props.picking!.kind]}
                         </button>
                       ) : (
-                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave', 'threadMill'].includes(op.kind) && (
+                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave', 'vcarveFlat', 'threadMill'].includes(op.kind) && (
                           <button
                             type="button"
                             className={editing ? '' : 'secondary'}

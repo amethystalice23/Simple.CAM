@@ -195,6 +195,7 @@ export const OP_KINDS: {
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'engrave', label: 'Engrave' },
+  { kind: 'vcarveFlat', label: 'V-carve' },
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'waterline', label: 'Waterline Contour' },
   { kind: 'rasterContour', label: 'Raster Contour' },
