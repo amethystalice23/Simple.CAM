@@ -1108,6 +1108,42 @@ export interface ToolSuggestion {
   inUse: boolean;
 }
 
+/** Does this tool satisfy the kind's type gate? Kinds with no
+ *  TOOL_TYPES entry accept anything. */
+export function toolFitsKind(tool: Tool, kind: JobOp['kind']): boolean {
+  const types = TOOL_TYPES[kind];
+  return types === undefined || types.includes(tool.type);
+}
+
+/** The library's default tool for a kind whose type gate the current tool
+ *  fails (her 2026-11-23 report: switching an op to V-carve kept the flat
+ *  endmill). No feature to read here, so no bound — just the gate's type
+ *  order, and for V-bits the ANGLED preference she named: sharpest
+ *  engraving angle first (a 60° bit beats a 90° chamferer), smallest
+ *  diameter breaking ties. Null = the library holds nothing of the
+ *  kind's type; callers keep the current tool and let the generator's
+ *  own message tell the user what's missing. */
+export function pickToolForKind(kind: JobOp['kind'], library: Tool[]): Tool | null {
+  const types = TOOL_TYPES[kind];
+  if (!types) return null;
+  for (const type of types) {
+    const fits = library.filter((t) => t.type === type);
+    if (fits.length === 0) continue;
+    if (type === 'vbit') {
+      const angled = fits.filter((t) => t.vAngle !== undefined && t.vAngle <= 90);
+      if (angled.length > 0) {
+        angled.sort(
+          (a, b) => (a.vAngle ?? 180) - (b.vAngle ?? 180) || a.diameter - b.diameter,
+        );
+        return angled[0];
+      }
+    }
+    fits.sort((a, b) => a.diameter - b.diameter);
+    return fits[0];
+  }
+  return null;
+}
+
 /**
  * The tool a suggested op would run with (Alice, 2026-11-12): prefer the
  * MOST APPROPRIATE of the tools already in use by the job's ops; when

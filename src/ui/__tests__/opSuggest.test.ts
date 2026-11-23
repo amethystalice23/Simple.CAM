@@ -13,7 +13,7 @@ import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFea
 import { MAKERA_TOOLS } from '../../core/makeraTools.generated';
 import type { FeatureSource } from '../featureSources';
 import type { ResolvedFeature } from '../featureSources';
-import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from '../opSuggest';
+import { createSuggestedOp, describePickedFeature, pickToolForKind, suggestToolFor, toolFitsKind, type SuggestCandidate } from '../opSuggest';
 
 const IDENTITY: ModelTransform = {
   position: { x: 0, y: 0, z: 0 },
@@ -942,5 +942,45 @@ describe('thread prep, cone measurement and the angle-matched tool pick (2026-11
     expect(k.candidates[1].vAngle).toBeCloseTo(90, 0);
     const pick = suggestToolFor(k.candidates[1], r, [], [v30(), v60(), v90()]);
     expect(pick?.tool.vAngle).toBe(90);
+  });
+});
+
+describe('pickToolForKind — the kind-switch re-pick (her 2026-11-23 report)', () => {
+  const tool = (id: string, type: string, diameter: number, vAngle?: number): Tool =>
+    ({ id, name: id, type: type as Tool['type'], diameter, vAngle }) as Tool;
+  const v30 = tool('v30', 'vbit', 1.5, 30);
+  const v60 = tool('v60', 'vbit', 3.175, 60);
+  const v90 = tool('v90', 'vbit', 6, 90);
+  const vUnk = tool('vUnk', 'vbit', 2);
+  const flat3 = tool('f3', 'flat', 3.175);
+  const ball3 = tool('b3', 'ball', 3);
+  const tmill = tool('tm', 'threadmill', 6);
+
+  it('toolFitsKind: the gates the generators enforce', () => {
+    expect(toolFitsKind(flat3, 'vcarveFlat')).toBe(false);
+    expect(toolFitsKind(v60, 'vcarveFlat')).toBe(true);
+    expect(toolFitsKind(v60, 'chamfer')).toBe(true);
+    expect(toolFitsKind(ball3, 'cylChamfer')).toBe(true);
+    expect(toolFitsKind(tmill, 'threadMill')).toBe(true);
+    expect(toolFitsKind(flat3, 'threadMill')).toBe(false);
+    // ungated kinds accept anything (spiralCarve has no TOOL_TYPES entry)
+    expect(toolFitsKind(ball3, 'spiralCarve')).toBe(true);
+    expect(toolFitsKind(flat3, 'index')).toBe(true);
+  });
+
+  it('V-carve re-picks the sharpest angled bit, not the inherited flat', () => {
+    const pick = pickToolForKind('vcarveFlat', [flat3, v90, v60, v30]);
+    expect(pick?.id).toBe('v30'); // 30° beats 60° beats 90°, smallest Ø breaks ties
+    const onlyWide = pickToolForKind('vcarveFlat', [flat3, v90]);
+    expect(onlyWide?.id).toBe('v90'); // a 90° chamferer is still an angled bit
+  });
+
+  it('falls back honestly: angle-less V-bit, then nothing', () => {
+    expect(pickToolForKind('vcarveFlat', [flat3, vUnk])?.id).toBe('vUnk');
+    expect(pickToolForKind('vcarveFlat', [flat3, ball3])).toBeNull(); // generator's message takes over
+  });
+
+  it('threadMill re-picks the thread mill when a flat is current', () => {
+    expect(pickToolForKind('threadMill', [flat3, ball3, tmill])?.id).toBe('tm');
   });
 });

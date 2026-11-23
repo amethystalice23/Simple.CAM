@@ -26,6 +26,7 @@ import {
 } from './jobGeneration';
 import { fixtureOrigin } from './placement';
 import { vbitConeHeight } from '../cam/vcarveFlat';
+import { pickToolForKind, toolFitsKind } from './opSuggest';
 import { panelToolNumbers } from './toolAssignment';
 import { sectionLabel } from './opsSections';
 import { OP_KIND_COLORS } from './opColors';
@@ -1987,9 +1988,19 @@ export function OpsPanel(props: Props) {
                   value={op.kind}
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => {
-                    const t = props.tools.find((x) => x.id === op.toolId);
+                    const kind = e.target.value as JobOp['kind'];
+                    let t = props.tools.find((x) => x.id === op.toolId);
+                    // A gated kind must not inherit a tool of the wrong
+                    // type (her 2026-11-23 report: switching an op to
+                    // V-carve kept the flat endmill) — re-pick the
+                    // library's fit, sharpest angled bit first for the
+                    // V-bit kinds. No fit in the library keeps the tool:
+                    // the generator's own message says what's missing.
+                    if (t && !toolFitsKind(t, kind)) {
+                      t = pickToolForKind(kind, props.tools) ?? t;
+                    }
                     const next = t
-                      ? newJobOp(e.target.value as JobOp['kind'], t, props.materialId, props.stock)
+                      ? newJobOp(kind, t, props.materialId, props.stock)
                       : null;
                     if (next) props.onChangeOp({ ...next, id: op.id, featureIds: op.featureIds });
                   }}
