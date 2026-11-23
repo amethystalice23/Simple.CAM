@@ -5,13 +5,22 @@
  *
  * Mill-tested ground truth: examples/MakeraStudioGHM9_Stage3_TOP…
  * `[T6]14ccw thread` — external M14×1 CCW cut with a Ø4.75 M6-form mill.
- * Their proven EXTERNAL cycle, reproduced here: approach outside the boss
- * at Rc + clearance → plunge beside the boss to the thread's BOTTOM
- * (plunge-fed through the face band — never rapid that leg) → RADIAL
- * feed in to Rc (no arc lead-in — the entry notch IS the bottom groove)
- * → ASCENDING helix, ~0.15mm chords, at the cut feed → straight rapid
- * up at the top (nothing stands above an external thread) → THE WHOLE
+ * Their proven EXTERNAL cycle, reproduced here: approach just outside the
+ * crest at crest R + toolR + margin → plunge beside the boss to the
+ * thread's BOTTOM (plunge-fed through the face band — never rapid that
+ * leg) → RADIAL feed in to Rc (no arc lead-in — the entry notch IS the
+ * bottom groove) → ASCENDING helix, ~0.15mm chords, at the cut feed →
+ * RADIAL feed out past the crest, then a straight rapid up → THE WHOLE
  * CYCLE RUNS TWICE (their spring pass = a full second identical pass).
+ *
+ * The exit leg (2026-11-23, double-thread report): a thread started
+ * below the boss top leaves flank standing beside the lift column, and
+ * a straight lift there notches the thread's side. The radial exit
+ * clears it — the entry notch's mirror at the top. When nothing stands
+ * above the thread the leg runs through air: their straight lift plus
+ * one ~1mm air feed, so it is always taken rather than guessed at (the
+ * model's own rim height is not a reliable witness — her job's picked
+ * rim sat AT the thread top, not at the boss top).
  *
  * Path radius (tool TIPS land on the groove bottom):
  *  - external: tips at the ISO minor d3 → Rc = d3/2 + toolR − tolerance,
@@ -221,6 +230,13 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
     }
     const bottomZ = target.topZ - target.depth;
     const asideRoom = boreR - toolR; // 0 external — irrelevant there
+    // External approach/exit radius: just clear of the boss FLANK — the
+    // crest plus the tool radius plus the standard margin (2026-11-23
+    // double-thread report: the old Rc + safeClearance park overshot
+    // 4.4mm past what the crest needs and plunged through the standing
+    // plate rim beyond the prep moat, full depth).
+    const crestR = target.internal ? 0 : op.nominalDiameter / 2;
+    const standR = crestR + toolR + APPROACH_CLEARANCE;
     // tight fit: less than a margin of aside room → follow the spiral out
     const spiralExit = target.internal && asideRoom < ASIDE_MARGIN;
     if (target.internal) {
@@ -246,7 +262,10 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
             'thread; use a longer-cutting mill (or split the thread into Z bands)',
         );
       }
-      notes.push(`Ø${op.nominalDiameter} boss → lifts straight off — nothing stands above an external thread`);
+      notes.push(
+        `Ø${op.nominalDiameter} boss → exits radially out past the crest — ` +
+          'through air when nothing stands above the thread, the exit notch when flank does',
+      );
       // the neck rides the crest plane EXACTLY at fit 0 (d3/2 + 0.6134·p
       // = Ø/2): past tolerance 0 the constant-Ø neck shaves the crests
       // tol-deep — real thread-milling physics, and the sim will paint
@@ -309,7 +328,10 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
 
     for (let li = 1; li <= levelCount; li++) {
       const levelRc = rcOfLevel(li);
-      const approach = at(levelRc + op.safeClearance, 0); // external: outside the boss at angle 0
+      // the park sits just clear of the crest — never farther out (the
+      // prep moat may be only a little wider than the boss), never closer
+      const parkR = Math.max(levelRc, standR);
+      const approach = at(parkR, 0); // external: just outside the crest at angle 0
       const grooveStart = at(levelRc, 0);
       // THE FINAL LEVEL RUNS TWICE — the spring is a full second pass at
       // the finished radius (Makera's cycle; intermediate levels once)
@@ -359,7 +381,7 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
           feed: op.feed,
           comment: 'radial entry',
         });
-        minutes += (target.internal ? levelRc : op.safeClearance) / op.feed;
+        minutes += (target.internal ? levelRc : parkR - levelRc) / op.feed;
 
         // ASCENDING HELIX — ARC FORM (2026-11-12, G2/G3): the thread IS an
         // analytic circle, so the chorded polyline becomes whole-revolution
@@ -439,8 +461,23 @@ export function threadMill(op: ThreadMillOp, tool: Tool): ThreadMillResult {
             moves.push({ words: { z: topSafeZ }, feed: 0, rapid: true });
           }
         } else {
-          // external: nothing stands above the thread — straight lift,
-          // then back out to the approach point for the next start/cycle
+          // RADIAL EXIT — feed straight out from the helix's end to the
+          // park radius before lifting: a thread started below the boss
+          // top leaves flank standing beside the lift column, and a
+          // straight lift notches the thread's side there (2026-11-23
+          // double-thread report). When nothing stands above the thread
+          // this leg runs through air — the mill-tested cycle's straight
+          // lift with one extra air feed — so it is always taken.
+          const out = parkR / levelRc;
+          moves.push({
+            words: {
+              x: target.center.x + (prev.x - target.center.x) * out,
+              y: target.center.y + (prev.y - target.center.y) * out,
+            },
+            feed: op.feed,
+            comment: lastStart ? 'radial exit past the crest' : 'step out for the next start',
+          });
+          minutes += (parkR - levelRc) / op.feed;
           moves.push({ words: { z: topSafeZ }, feed: 0, rapid: true });
           if (!lastStart) {
             moves.push({

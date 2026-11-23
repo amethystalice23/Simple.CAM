@@ -114,10 +114,10 @@ describe('threadMill — the mill-tested ground truth, replayed', () => {
     expect(entries[0].words.y).toBeCloseTo(0, 6);
     expect(entries[0].feed).toBe(100);
 
-    // the approach sits outside the boss at Rc + safeClearance, angle 0
+    // the approach sits just outside the crest: crest R + toolR + margin
     const approach = res.moves[0];
     expect(approach.rapid).toBe(true);
-    expect(approach.words.x).toBeCloseTo(8.7616 + 3, 6);
+    expect(approach.words.x).toBeCloseTo(14 / 2 + 4.75 / 2 + 0.5, 6);
     expect(approach.words.y).toBeCloseTo(0, 6);
 
     // two full-cycle plunges to the thread bottom, never rapid
@@ -160,7 +160,8 @@ describe('threadMill — the mill-tested ground truth, replayed', () => {
     expect(res.moves[springIdx].rapid).toBe(true);
     expect(res.passes).toBe(2);
 
-    // honest estimate: ~1101mm of helix + 26mm plunges + 6mm entries at 100mm/min
+    // honest estimate: ~1101mm of helix + 26mm plunges + 4.5mm of radial
+    // entries+exits at 100mm/min
     expect(res.estimatedMinutes).toBeGreaterThan(11);
     expect(res.estimatedMinutes).toBeLessThan(11.6);
     expect(res.notes.some((n) => n.includes('8.76'))).toBe(true);
@@ -172,6 +173,33 @@ describe('threadMill — the mill-tested ground truth, replayed', () => {
     const helix = pass.g1s.filter(isHelix);
     expect(helix[0].arc!.cw).toBe(false); // CCW ascent — the arc direction flips
     expect(helix[0].words.x!).toBeCloseTo(8.7616, 2);
+  });
+
+  it('external: every helix exits radially out past the crest before the lift', () => {
+    // 2026-11-23 double-thread report: a thread started below the boss
+    // top leaves standing flank beside the lift column — a straight
+    // lift at Rc notches the thread's side. The exit feeds radially out
+    // to the park radius first; when nothing stands above the thread
+    // the leg is air, so it is always taken.
+    const res = threadMill(op, mill);
+    const Rc = pathRadius(14, 1, 4.75 / 2, 0, false);
+    const park = 14 / 2 + 4.75 / 2 + 0.5;
+    const exits = res.moves.filter((m) => m.comment === 'radial exit past the crest');
+    expect(exits).toHaveLength(2); // pass + spring
+    for (const m of exits) {
+      expect(m.rapid).toBeUndefined(); // a FEED leg — never rapid through flank
+      expect(m.feed).toBe(100);
+      expect(Math.hypot(m.words.x!, m.words.y!)).toBeCloseTo(park, 6);
+    }
+    // whole-rev helix: the exit starts AT the groove start (angle 0) —
+    // a straight radial line out, no angular sweep
+    const idx = res.moves.indexOf(exits[0]!);
+    expect(res.moves[idx - 1]!.words.x).toBeCloseTo(Rc, 3);
+    expect(exits[0]!.words.y).toBeCloseTo(0, 6);
+    // the lift follows immediately, from the park radius
+    const lift = res.moves[idx + 1]!;
+    expect(lift.rapid).toBe(true);
+    expect(lift.words.z).toBeCloseTo(3, 6);
   });
 });
 
@@ -274,10 +302,10 @@ describe('threadMill — the Makera 09-11 gouge, pinned out', () => {
   const assertDescentsFromClear = (
     res: { moves: Move[] },
     internal: boolean,
-    /** the op's own path radius — the approach sits at Rc + safeClearance */
-    rc: number,
+    /** external: the park radius (crest R + toolR + margin); internal: 0 */
+    clearR: number,
   ) => {
-    const clearR = internal ? 0 : rc + 3; // internal: the center; external: Rc + safeClearance
+    if (internal) expect(clearR).toBe(0);
     let x: number | undefined;
     let y: number | undefined;
     let z: number | undefined;
@@ -300,26 +328,20 @@ describe('threadMill — the Makera 09-11 gouge, pinned out', () => {
   };
 
   it('external: every descent starts outside the crest at the approach point', () => {
-    assertDescentsFromClear(threadMill(op, mill), false, pathRadius(14, 1, 4.75 / 2, 0, false));
-    assertDescentsFromClear(
-      threadMill(multiOp, { ...longMill, pitch: 1.5 }),
-      false,
-      pathRadius(10, 1.5, 4.75 / 2, 0, false),
-    ); // multi-start + spring
-    // the radial ladder's outer levels approach FARTHER out — ≥, not ≈
-    assertDescentsFromClear(
-      threadMill({ ...op, stepOver: 0.2 }, mill),
-      false,
-      pathRadius(14, 1, 4.75 / 2, 0, false),
-    );
+    const park = (nominal: number) => nominal / 2 + 4.75 / 2 + 0.5;
+    assertDescentsFromClear(threadMill(op, mill), false, park(14));
+    assertDescentsFromClear(threadMill(multiOp, { ...longMill, pitch: 1.5 }), false, park(10)); // multi-start + spring
+    // the radial ladder's outer levels park at the SAME radius — the
+    // park is measured off the crest, not the level
+    assertDescentsFromClear(threadMill({ ...op, stepOver: 0.2 }, mill), false, park(14));
   });
 
   it('internal: every descent starts at the bore center', () => {
-    assertDescentsFromClear(threadMill(internalOp, mill), true, pathRadius(6, 1, 4.75 / 2, 0, true)); // spiral exit
+    assertDescentsFromClear(threadMill(internalOp, mill), true, 0); // spiral exit
     assertDescentsFromClear(
       threadMill({ ...internalOp, targets: [{ ...internalOp.targets[0], boreRadius: 4 }] }, mill),
       true,
-      pathRadius(6, 1, 4.75 / 2, 0, true),
+      0,
     ); // aside retract
   });
 });
