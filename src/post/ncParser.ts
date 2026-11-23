@@ -148,6 +148,20 @@ export function parseCarveraNc(text: string): ParsedNc {
 
   // modal state — the machine's running picture
   const pos = { x: 0, y: 0, z: 0, a: 0 };
+  /** the emitted A words' frame: the parser emits words as a CONTINUOUS
+   * physical θ (counter word + aOffset) so consecutive parsed moves'
+   * deltas are the rotation the machine physically travels. Every
+   * NO-MOTION counter adjustment (G92.4 shrink / plain re-anchor / the
+   * residue pin) drops whole turns or re-states the counter WITHOUT
+   * moving the axis — the raw words jump by the same turns, and a naive
+   * raw emission turns a zero-travel re-anchor into a phantom 360°
+   * revolution between two adjacent parsed moves (her spiral_test+polish
+   * report, 2026-11-23: ~125 polish stances swept phantom feed turns and
+   * the sim ate the model's middle as un-flagged "circular swipes").
+   * `pos.a` STAYS the raw counter (the ParsedNc.finalA contract); the
+   * offset shifts only what the emitted words say. Header forms (G92.4
+   * A<deg> R0, G10 L20) keep the raw frame — no offset change. */
+  let aOffset = 0;
   let mode: FeedMode = 'G94';
   let modalFeed: number | null = null; // last F word (null = none yet)
   let modalMotion: number | null = null; // last G0/G1/G2/G3 (null = none yet)
@@ -181,6 +195,12 @@ export function parseCarveraNc(text: string): ParsedNc {
     if (op !== null && opFirst) {
       move.op = { number: op.number, name: op.name, toolNumber };
       opStamped = true;
+    }
+    // emit A in the CONTINUOUS PHYSICAL frame (see aOffset's doc): the
+    // counter word mapped through the accumulated no-motion-adjustment
+    // offset, so consecutive moves' deltas are real rotation
+    if (move.words.a !== undefined && aOffset !== 0) {
+      move.words = { ...move.words, a: move.words.a + aOffset };
     }
     moves.push(move);
   };
@@ -260,12 +280,25 @@ export function parseCarveraNc(text: string): ParsedNc {
     const hasR = w.has('R');
     const hasS = w.has('S');
     if (hasR && hasS) fail('G92.4 with both R and S words', raw);
+    const c = pos.a; // the counter BEFORE this adjustment
     if (hasS) {
-      pos.a = shrinkA(pos.a); // shrink: whole turns off the CURRENT counter
+      pos.a = shrinkA(c); // shrink: whole turns off the CURRENT counter
     } else {
       // R form (rotate to the mod-360 spoke, counter = deg) and the plain
       // counter reset land the same tracked work-coordinate A
       pos.a = aVal;
+    }
+    // the physical-frame offset (see aOffset's doc): every NO-MOTION
+    // counter adjustment re-states what the unchanged physical position
+    // is CALLED — shift the mapping by exactly the re-statement so the
+    // words after it stay physically continuous. Physical θ of the
+    // counter c was c + aOffset; the new counter must map to the same
+    // θ. The R form physically rotates (header datum); the words continue
+    // in the new frame — no offset change there.
+    if (hasS) {
+      aOffset += c - shrinkA(c);
+    } else if (!hasR) {
+      aOffset += c - aVal;
     }
   };
 

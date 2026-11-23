@@ -350,6 +350,70 @@ describe('inter-op A shrink (G92.4 A0 S0 at op boundaries)', () => {
     expect(lines[anchor + 1]).not.toMatch(/^G92\.4/);
   });
 
+  it('pre-anchor shrink: a mid-op stance anchor re-anchors the counter to the raw pile (the polish phantom-revolution fix)', () => {
+    // Her spiral_test+polish report (2026-11-23): a mid-op stance anchor
+    // past 360 fired the pre-anchor shrink, which re-expressed the anchor
+    // as the reduced absolute (G0 A41.5 for raw A401.5) but left the
+    // counter there — the SAME op's cut moves speak the generator's raw
+    // accumulated A, so the first cut commanded a whole extra feed turn
+    // (counter 41.5, cut word A401.5, tool buried at plunge depth): ~125
+    // stances swept phantom full revolutions, the sim ate the model's
+    // middle as un-flagged "circular swipes". The shrink path must
+    // re-anchor the counter to the raw target like the short-way path.
+    const op = { number: 1, name: '4D Polish', toolNumber: 1 };
+    const gcode = postCarvera({
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000, op },
+        // stance 1's cuts pile A past one full turn (raw 395.5)
+        { words: { z: 4, a: 395.5 }, feed: 26.4, op },
+        // mid-op stance anchor — |preA| > 360 fires the shrink
+        { words: { a: 401.5 }, feed: 0, rapid: true, op, comment: 'stance anchor' },
+        // the next stance's cut moves speak RAW accumulated A — without
+        // the re-anchor this move is a phantom 360° feed revolution
+        { words: { x: 10.5, y: 0.5, z: 3.9, a: 401.5 }, feed: 900, op },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'stance-reanchor' },
+    });
+    const lines = gcode.split('\n');
+    // the shrink fired: counter 395.5 → 35.5, anchor re-expressed to 41.5
+    const anchor = lines.findIndex((l) => /^G0 A41\.5(;| |$)/.test(l));
+    expect(anchor).toBeGreaterThan(-1);
+    expect(lines[anchor - 1]).toBe('G92.4 A0 S0');
+    // THE RE-ANCHOR: the counter returns to the raw pile before the
+    // raw-A cut moves run (the anchor carries a comment line — index by
+    // the re-anchor text, not by offset)
+    const reAnchor = lines.indexOf('; re-anchor the counter to 401.5° (no motion)', anchor);
+    expect(reAnchor).toBeGreaterThan(anchor);
+    expect(lines[reAnchor + 1]).toBe('G92.4 A401.5');
+    // the cut speaks raw A401.5 — now counter-consistent
+    expect(gcode).toMatch(/^G1 .*A401\.5/m);
+  });
+
+  it('pre-anchor shrink: an UNTAGGED mid-op stance anchor re-anchors too — the discriminator is the next op START, not tags on the anchor', () => {
+    // stampOp tags only each op's FIRST move, so the app's mid-op stance
+    // anchors and their following cuts are untagged — the re-anchor must
+    // fire on "next move is a continuation", not on the anchor's own tag
+    const gcode = postCarvera({
+      moves: [
+        { words: { x: 10, y: 0, z: 5 }, feed: 0, rapid: true, spindleRpm: 18000 },
+        { words: { z: 4, a: 395.5 }, feed: 26.4 },
+        { words: { a: 401.5 }, feed: 0, rapid: true },
+        { words: { x: 10.5, y: 0.5, z: 3.9, a: 401.5 }, feed: 900 },
+      ],
+      tools,
+      toolNumbers: [1],
+      options: { jobName: 'untagged-stance' },
+    });
+    const lines = gcode.split('\n');
+    const anchor = lines.findIndex((l) => /^G0 A41\.5(;| |$)/.test(l));
+    expect(anchor).toBeGreaterThan(-1);
+    const reAnchor = lines.indexOf('; re-anchor the counter to 401.5° (no motion)', anchor);
+    expect(reAnchor).toBeGreaterThan(anchor);
+    expect(lines[reAnchor + 1]).toBe('G92.4 A401.5');
+  });
+
   it('never pre-shrinks a coordinated (X+Z+A) helix — cut moves keep frame', () => {
     const op = { number: 1, name: 'Thread', toolNumber: 1 };
     const gcode = postCarvera({

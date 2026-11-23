@@ -293,7 +293,8 @@ export function postCarvera(input: PostInput): string {
     }
   };
 
-  for (const m of input.moves) {
+  for (let moveIdx = 0; moveIdx < input.moves.length; moveIdx++) {
+    const m = input.moves[moveIdx];
     // A WORDLESS tagged move with no laser power is the RE-FIXTURE PAUSE
     // (the synthetic M6 hold that doubles as the "please turn over" prompt):
     // it emits no motion line, and the op boundary below carries the whole
@@ -551,9 +552,47 @@ export function postCarvera(input: PostInput): string {
         }
         if (tgt !== target) {
           // spoke re-expressed post-shrink: emit the reduced absolute
-          // (the counter is already there or within a partial turn)
+          // (the counter is already there or within a partial turn). THEN:
+          //  - a MID-OP stance anchor (the moves that follow are the same
+          //    op's continuations, not an op start) must re-anchor the counter back to the RAW pile value
+          //    — the op's cut moves speak the generator's raw accumulated
+          //    A (wordsLine prints m.words.a untouched), so the counter
+          //    has to read the pile again before they run. Without the
+          //    re-anchor the first cut move commands a whole extra FEED
+          //    turn (counter 39.04, cut word A399.04 — the tool buried at
+          //    plunge depth): her spiral_test+polish report (2026-11-23),
+          //    ~125 shrink-path stances each sweeping a phantom full
+          //    revolution, ~750k voxels the sim ate as "fine" circular
+          //    swipes. The short-way path below re-anchors for exactly
+          //    this reason; the shrink path must match it.
+          //  - a FRAME-ANCHORING RETURN (the next move is the next op's
+          //    TAGGED first move, or the stream ends — a datum-discipline
+          //    return, an Index op's rotation) is the END of a frame: the next op's absolute A
+          //    words are already in the rebased frame, so the counter
+          //    STAYS at the reduced tgt (the residue-pin block at the op
+          //    boundary handles the ±360 edge). Re-anchoring to the pile
+          //    here would strand the next op's every A word by whole
+          //    turns — pinned by the TDC_Adjust residue test.
+          // discriminator: the anchor is MID-OP iff the next move belongs
+          // to the same op — stampOp tags only each op's first move, so
+          // the app's mid-op anchors and their following continuations
+          // are BOTH untagged (undefined === undefined ⇒ mid-op), and a
+          // fully-tagged stream tags them with the same op number either
+          // way. A frame-anchoring return is by construction the op's
+          // last move: the next move carries the NEXT op's tag (or the
+          // stream ends).
+          const next = input.moves[moveIdx + 1];
+          const midOp =
+            next !== undefined &&
+            next.op?.number === m.op?.number;
           lines.push(emitMotion(`G0 A${fmt(tgt, 2)}`, m.comment));
-          st.lastA = tgt;
+          if (midOp) {
+            lines.push(`; re-anchor the counter to ${fmt(target, 2)}° (no motion)`);
+            lines.push(`G92.4 A${fmt(target, 2)}`);
+            st.lastA = target;
+          } else {
+            st.lastA = tgt;
+          }
           continue;
         }
       }
