@@ -110,7 +110,7 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 Deep-pocket roughing auto-selects TROCHOIDAL constant-engagement
 emission (spec 2026-11-13 below) — no knob, like climb. Profile — a single-cut op — keeps ON as **permission**: the loop stays intact even where it runs out of stock to cut through, OFF clips the wall pass to open spans at the stock edge. |
 | Slice pocket (flat op, indexed 4-axis too) | 2.5D | one `sliceAtZ` cross-section at the op's slice plane → `'outside'` profiles around it (tool-center path offset out by tool Ø/2 + allowance) / `'inside'` pockets its interior, over the start→end band; floor via the ⇩ pick; violet section-plane overlay + drag handle (docs/edge-tracing.md §2, §5) |
-| Flat chamfer (V-bit) | single-pass flank | two modes. **add**: the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path) — a new chamfer through a sharp edge. **existing**: the model already has the chamfer — the bit rides the modelled face, and direction selects which end was clicked: **up** = the bottom edge, traced exactly (depth ignored — the bit cuts up and out from there); **down** = the top edge, the tip slides down-and-in by depth·tan(angle/2) along the modelled face, landing on the bottom edge when depth matches the model. User side option (inside/outside — geometry can't always tell) and depth along the wall |
+| Flat chamfer (V-bit) | single-pass flank | two modes. **add**: the cone flank is placed through the selected circle or face outline (a face's border loop becomes the path; a loop that circle-matches a feature resolves to that analytic circle — selecting the hole rim or its face gives the same path) — a new chamfer through a sharp edge. **existing**: the model already has the chamfer — the bit rides the modelled face, and direction selects which end was clicked: **up** = the bottom edge, traced exactly (depth ignored — the bit cuts up and out from there); **down** = the top edge, the tip slides down-and-in by depth·tan(angle/2) along the modelled face, landing on the bottom edge when depth matches the model. User side option (inside/outside — geometry can't always tell) and depth along the wall. BAND PASSES (2026-11-23): a chamfer wider than the cone's usable flank W = Ø/2 − rt cuts in ceil(width/W) bands on the SAME plane — pass 1 is the anchor placement, pass k's axis rides (k−1)·W toward the material with its tip (k−1)·W/tanα up the plane, landing exactly on the band the previous pass cut (the flat tip and near flank ride ABOVE the plane over earlier bands — no seam dips, flat-tip bits included; polygon offsets cross the loop via the sign flip, circles via growing radius). The "cone is too short" throw is retired; only a degenerate tip-Ø = Ø bit (no flank at all) refuses. Depth is bounded by the feature, not the bit |
 | Cylinder chamfer (4-axis, 2026-10-23) | rotary ring pass | `cylChamfer.ts`: the degenerate face-cylinder vertical ring — one full A revolution per level at the selected edge circle's exact X, tip at Ø/2 − depth. The DEPTH is the only direction. V-BIT: 0 anchors on the circle and cuts up-and-out through whatever rises above it (ladder from the stock surface — the adjoining Ø is deliberately unknown, the one-circle rule; spec + edge sources in edge-tracing §6), >0 slides below the circle from an already-clear rim. BALL-NOSE (2026-11-05, Alice's Ø1 U-channel ask): depth 0 anchors on the circle like the V-bit — the upper hemisphere shears a FILLET up-and-to-the-side (the rounded analogue of the cone's chamfer; her same-day ruling: sometimes the only clickable feature is the floor, the sim reveals what it reached), ≤ radius is the true U (depth = radius → full semicircle, width = tool Ø; shallower → width = 2·√(r²−(r−d)²)), > radius passes the equator — the shank takes the walls straight, warned with width capped at tool Ø; no reach check (the hemisphere is always tangent at the equator). Edges are A-coaxial circles: face-cylinder ops publish their step edges at their own target Ø (`o:` ids), the stock its end rims, model circles on turned parts too; A-only sweeps G94 at the rotary deg/min |
 | Engrave (artwork line work, SPEC 2026-10-22) | path-following | `engrave.ts`: follow selected artwork paths at depth, no tool offset (see the full spec below) |
 | Test pattern (calibration coupon, 2026-10-24) | dialog → materialized ops | The top-bar **Calibration…** dialog (BambuStudio's name) generates a cutting-calibration coupon over the whole stock: two parameters (spindle speed / feed / step down / step over) linspaced min→max across a cell grid, everything else held at the tool's material preset so it never confounds the read. `src/cam/testPattern.ts` is the pure planner — cell counts from stock size + tool Ø capped at 10 divisions per axis (larger stock GROWS the cells/grooves to fill, never multiplies past 10×10; strands keep their tighter useful cap of 6, the leftover circumference becoming groove-width budget), value ladders, warnings; the dialog shows its legend + warnings live, then `materializeTestPattern` emits ORDINARY OPS: rotary (cylinder, 4-axis) a face op + one spiral carve op per cell (60° helix, grouping-outer, strand 1 tailed); flat (box) one thin box primitive per cell (the visible outline plate; its top face the pocket region) + one pocket op per cell, row-outer, with the perimeter border slightly wider than the inter-cell gap and cell 1/1 grown into it at the TOP-LEFT corner — rows number top to bottom, columns left to right, and the oversized corner marks the grid origin (the flat analogue of the ranked tails). The materialized ops ARE the record — each cell an op row with rates in the ⚡ popup, minutes in the estimate, saved in the job file; regenerate = delete + Generate again. Coupon lessons encoded: whole-bar face pass first (runout + stress skin, the v4 confound); RPM belongs on the grouping axis (spindle settles slower than the machine repositions — warned, never silently swapped); feeds above the rotary ceiling alias (warned; the G93 timing still clamps the cut); step-down = groove depth on rotary (single full-depth pass), pass depth on flat; step-over = groove width on rotary, clearing spacing on flat; the −X ends of every groove align while the +X ends stagger — strand 1 longest, shortening strand by strand (0.5mm-class steps sized to keep ≥1mm wall to the next grouping), so every groove self-identifies with no clockwise convention (which is viewpoint-dependent) |
@@ -1585,13 +1585,29 @@ reference these numbers):
    Operations: an invisible roughing engine inside the pocket op
    (auto-selected like climb and continuous descent), not a new op
    or checkbox.
-2. **True V-carving** — variable-depth V-bit cut that fills lettering
-   out to its vector outline with crisp corners; the feature that
-   built Vectric's business. ALICE: possibly related to her idea of
-   permitting chamfers DEEPER than the bit's cutting face via
-   multiple depth passes — same V-bit-geometry exploitation, but a
-   different op (chamfer rides a modelled edge; V-carve follows
-   vector outlines at variable depth). Design together when taken up.
+2. **True V-carving** — LANDED 2026-11-23 (branch feat/deeper-chamfer-vcarve,
+   op `vcarveFlat`): variable-depth V-bit fill of closed painted artwork
+   out to its outline with crisp corners. The toolpath follows the MEDIAL
+   AXIS, never the outline (an outline pass must gouge below the final
+   surface at the very edge that stays at depth 0): a ball-dominance
+   skeleton over an exact Euclidean distance transform (a cell is skeletal
+   unless a neighbor's inscribed ball contains its own — survives
+   tapering ridges that local-max criteria lose), depth
+   (r − tipØ/2)/tan(vAngle/2) per vertex from EXACT point-to-segment
+   distances, reprojected onto the true ridge so the raster's half-cell
+   offset cannot leave hairline ridges along strokes. Shapes wider than
+   the cone reaches cap at the cone height and clear with dense ring
+   passes spaced by the washboard law (≤0.25mm floor ripple — a V-bit
+   floor is always scored by its pass lines; her 2026-11-23 ruling:
+   same-bit clearing, the endmill prep insert deliberately deferred).
+   Open vectors/line work stay Engrave; wrapped stays the chain op.
+   Numeric tests pin the no-gouge property (every tip inside its
+   inscribed ball) and full dish coverage on stroke/disc/annulus shapes.
+   The DEEPER-CHAMFER half of the same 2026-11-21 batch-1 item landed
+   with it: flat chamfers wider than one cone flank cut in ceil(w/W)
+   BAND passes on the same plane — upper tips land exactly where the
+   previous band's flank ended (no seam dips, flat-tip bits included),
+   so cone length no longer bounds chamfer depth.
 3. **DXF import** — 2D CAD lingua franca, every competitor has it.
    ALICE: cheap. LANDED 2026-11-01 (see the engrave spec status); a DXF
    drops in as the same artwork primitive as an SVG.
@@ -1856,15 +1872,15 @@ Medium items, roadmap-adjacent:
   ChipCutter's wizard: pin positions strictly outside the 2D silhouette,
   strictly 180°-flip-invariant (< 1e-9 mm), optional poka-yoke asymmetry
   so the part only seats one way. Write into the spec before building.
-- **S10. V-carve flat depth law + modes** (medium) — wrapped V-carve
-  landed (`c32bffc`); the survey adds the flat 2D side: medial-axis depth
-  via inscribed-circle radius (`depth = r/tan(θ/2)`, closed-form
-  tangent-circle shrink, Ma/Bae/Choi 2012), Sides One (fill the shape) vs
-  Both (groove along a centerline, flat-bottom where the V can't reach),
-  max-depth cap with flat-bottom clearing rings, a clearing endmill kept
-  in step, inlay/male mirrored mode; Camcraft's per-move re-measure
-  safety law + the sim subtlety that branch crossings are legal at one
-  depth (crossing check needs a V-carve mode).
+- **S10. V-carve flat depth law + modes** — the CORE LANDED 2026-11-23
+  (`vcarveFlat`, see "True V-carving" above): the medial-axis depth law
+  (inscribed-circle radius, Ma/Bae/Choi 2012, in ball-containment form),
+  max-depth cap with same-bit clearing rings. STILL OPEN: Sides Both (a
+  groove along an open centerline), the clearing-endmill prep insert
+  (she ruled same-bit first), inlay/male mirrored mode. The sim's
+  intended-DOC rule = the cap (a V-carve is a full-flank cut, the
+  chamfer rule's analog) — branch crossings classify fine under the
+  removal-based rules.
 - **S11. Sim verdict upgrades** (small/medium) — PhysCAD's verdict line +
   click-to-jump-to-offending-move; RotatoCAM's on-surface/leftover/gouged
   deviation coloring (leftover is our missing third); ChipCutter's

@@ -1218,6 +1218,23 @@ export type JobOp =
       fillStepOver?: number;
     })
   | (JobOpBase & {
+      kind: 'vcarveFlat';
+      /**
+       * Depth cap, mm — where a shape is wider than the bit can reach
+       * ((r − tipØ/2)/tan(vAngle/2) > maxDepth), the groove clamps here
+       * and the interior is cleared by dense ring passes at this depth
+       * (her 2026-11-23 ruling: clear with the same bit — a V-bit floor
+       * is always scored by the pass lines). Prefilled from the selected
+       * bit's cone height ((Ø − tipØ)/2)/tan(vAngle/2); the GENERATOR
+       * clamps to the tool's true cone regardless, so a stale value only
+       * affects intent + the sim's intended-DOC classification, never
+       * safety.
+       */
+      maxDepth: number;
+      /** capped-clearing ring stepover, mm — default from the washboard law */
+      clearStepOver?: number;
+    })
+  | (JobOpBase & {
       kind: 'profile';
       selectionIs: 'floor' | 'rim';
       /** cut start, mm below the stock crown */

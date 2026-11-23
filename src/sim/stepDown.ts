@@ -31,6 +31,14 @@ export function simStepDownFor(op: JobOp): number {
       return op.endDepth - op.startDepth;
     case 'chamfer':
       return op.depth;
+    case 'vcarveFlat':
+      // op.maxDepth — the cone's full geometry, the chamfer rule's analog:
+      // a V-carve IS a full-flank cut by design (the groove's depth varies
+      // along the path but never exceeds the cap), so reading each removal
+      // against the cap paints honest carving fine; a plow deeper than the
+      // cone still warns. The generator clamps to the tool's true cone, so
+      // this only misclassifies warnings when the prefill goes stale.
+      return op.maxDepth;
     case 'swarfFinish':
       // A polish's intended removal below the pre-move standing is the
       // finishing skin itself: the roughing allowance + waterline

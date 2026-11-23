@@ -14,6 +14,7 @@ import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
 import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
 import { chamfer } from '../cam/chamfer';
+import { vcarveFlat, vbitConeHeight } from '../cam/vcarveFlat';
 import { drill } from '../cam/drill';
 import { pocket2d } from '../cam/pocket';
 import { profile2d } from '../cam/profile';
@@ -194,6 +195,7 @@ export const OP_KINDS: {
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'engrave', label: 'Engrave' },
+  { kind: 'vcarveFlat', label: 'V-carve' },
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'waterline', label: 'Waterline Contour' },
   { kind: 'rasterContour', label: 'Raster Contour' },
@@ -513,6 +515,16 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
         finishingOnly: false,
         fillMode: 'outlines',
         fillStepOver: engraveFillStepOver(tool),
+      });
+    case 'vcarveFlat':
+      // the cap prefills from the bit's cone height — the deepest the
+      // flank can cut before the shank-side would sweep. The generator
+      // clamps to the tool's true cone anyway, so this prefill is intent
+      // (the sim's intended DOC) + the user's ceiling, not a safety bound.
+      return withRates({
+        ...base,
+        kind,
+        maxDepth: vbitConeHeight(tool),
       });
     case 'threadMill': {
       // no stock/Ø defaults to read yet — the selection prefills the
@@ -3150,6 +3162,86 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           summary:
             `${cutPaths.length - fillLines} path(s)${fillLines > 0 ? ` + ${fillLines} fill line(s)` : ''}, ` +
             `${op.depth}mm deep${op.finishingOnly ? ', finishing pass only' : ''}${limited}, ` +
+            `~${res.estimatedMinutes.toFixed(1)} min`,
+        };
+      }
+
+      case 'vcarveFlat': {
+        // TRUE V-CARVING (2026-11-23, her batch-1 item): fill closed
+        // painted shapes with a variable-depth V groove — deepest on the
+        // stroke's medial axis, zero at the outline, crisp corners. The
+        // wrapped side stays the chain-following vCarve op (constant
+        // depth); this op is flat artwork only.
+        const SEL = 'select painted artwork shapes (closed + filled paths — drop an SVG onto the viewport)';
+        if (tool.type !== 'vbit') {
+          return fail('V-carve needs a V-bit — pick an engraving bit from the library');
+        }
+        if (tool.vAngle === undefined || tool.vAngle <= 0 || tool.vAngle >= 180) {
+          return fail('this V-bit has no usable tip angle — set the included angle in the tool library');
+        }
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
+        // flat artwork presents in the op's CUTTING frame like every flat
+        // op (a re-clamped section's WCS, the index rotation)
+        const { rotate } = cuttingRotate(ctx);
+        const flatLoops: { x: number; y: number }[][] = [];
+        let flatZ = 0;
+        for (const part of parts) {
+          const aw = part.source.artworkFrame;
+          if (!aw) {
+            return fail('V-carve cuts painted artwork shapes — the selection holds model or primitive features');
+          }
+          if (aw.kind !== 'flat') {
+            return fail(
+              'wrapped artwork cannot be flat-V-carved yet — the rotary V-carve follows chains at constant depth; ' +
+                'plan this artwork flat',
+            );
+          }
+          const xf0 = transformFn(part.source.transform);
+          const sel = new Set(part.ids);
+          for (const path of part.source.features.paths) {
+            if (!sel.has(path.id)) continue;
+            const pts = path.points.map((pt) => (rotate ? rotate(xf0(pt)) : xf0(pt)));
+            const z = pts[0].z;
+            if (pts.some((p) => Math.abs(p.z - z) > 0.05)) {
+              return fail(
+                "the artwork's plane must be horizontal to V-carve — rotate it flat, " +
+                  'or use the wrapped presentation',
+              );
+            }
+            flatZ = z;
+            if (path.closed && path.filled) {
+              flatLoops.push(pts.map((p) => ({ x: p.x, y: p.y })));
+            }
+          }
+        }
+        if (flatLoops.length === 0) {
+          return fail(
+            'V-carve fills closed and FILLED shapes — paint the letters in the artwork, ' +
+              'or use Engrave for line work',
+          );
+        }
+        const res = vcarveFlat(
+          {
+            id: op.id,
+            toolId: tool.id,
+            loops: flatLoops,
+            surfaceZ: flatZ,
+            feed,
+            plungeFeed,
+            clearance: op.rates?.clearance ?? SAFE_CLEARANCE,
+            maxDepth: op.maxDepth,
+            clearStepOver: op.clearStepOver,
+          },
+          tool,
+        );
+        return {
+          moves: res.moves,
+          minutes: res.estimatedMinutes,
+          error: null,
+          summary:
+            `${flatLoops.length} shape(s), ${res.corePasses} groove + ${res.ringPasses} ring pass(es)` +
+            `${res.capped ? `, capped at ${op.maxDepth}mm (wide areas cleared flat)` : ''}, ` +
             `~${res.estimatedMinutes.toFixed(1)} min`,
         };
       }

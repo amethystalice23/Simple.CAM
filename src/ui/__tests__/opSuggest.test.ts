@@ -13,7 +13,7 @@ import type { CircleFeature, JobOp, ModelTransform, PlaneFeature, RadialChainFea
 import { MAKERA_TOOLS } from '../../core/makeraTools.generated';
 import type { FeatureSource } from '../featureSources';
 import type { ResolvedFeature } from '../featureSources';
-import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from '../opSuggest';
+import { createSuggestedOp, describePickedFeature, pickToolForKind, suggestToolFor, toolFitsKind, type SuggestCandidate } from '../opSuggest';
 
 const IDENTITY: ModelTransform = {
   position: { x: 0, y: 0, z: 0 },
@@ -444,6 +444,40 @@ describe('describePickedFeature — chains, paths, edges', () => {
     expect(k.facts.find((f) => f.label === 'topology')?.value).toBe('closed');
   });
 
+  it('FLAT filled artwork offers V-carve alongside engrave; wrapped or open artwork does not', () => {
+    const path = {
+      kind: 'path' as const,
+      id: 'pa1',
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 4, y: 0, z: 0 },
+        { x: 4, y: 3, z: 0 },
+      ],
+      closed: true,
+      filled: true,
+    };
+    const flat = { ...source({ paths: [path] }), artworkFrame: { kind: 'flat' as const } };
+    const kf = describePickedFeature(resolved('path', flat, 0), stock4);
+    expect(kf.candidates.map((x) => x.kind)).toEqual(['engrave', 'vcarveFlat']);
+    expect(kf.candidates[1].why).toContain('filled shape');
+
+    // the generation gate mirrored: wrapped artwork keeps engrave only
+    const wrapped = {
+      ...source({ paths: [path] }),
+      artworkFrame: { kind: 'wrapped' as const, diameter: 20 },
+    };
+    const kw = describePickedFeature(resolved('path', wrapped, 0), stock4);
+    expect(kw.candidates.map((x) => x.kind)).toEqual(['engrave']);
+
+    // open line work fills no region — V-carve is not offered
+    const openPath = { ...path, closed: false, filled: false };
+    const ko = describePickedFeature(
+      resolved('path', { ...source({ paths: [openPath] }), artworkFrame: { kind: 'flat' as const } }, 0),
+      stock4,
+    );
+    expect(ko.candidates.map((x) => x.kind)).toEqual(['engrave']);
+  });
+
   it('an edge is a datum, not a path — only the Index aim is offered (4-axis)', () => {
     const e = {
       kind: 'edge' as const,
@@ -638,6 +672,31 @@ describe('suggestToolFor — the tool each suggestion would run with', () => {
     const s = suggestToolFor(k.candidates[1], r, [flat3], library);
     expect(s?.tool.id).toBe('v1');
     expect(s?.inUse).toBe(false);
+  });
+
+  it('V-carve wants a V-bit too — flats run engrave, never the V-carve', () => {
+    const path = {
+      kind: 'path' as const,
+      id: 'pa1',
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 4, y: 0, z: 0 },
+        { x: 4, y: 3, z: 0 },
+      ],
+      closed: true,
+      filled: true,
+    };
+    const flat = { ...source({ paths: [path] }), artworkFrame: { kind: 'flat' as const } };
+    const r = resolved('path', flat, 0);
+    const k = describePickedFeature(r, stock4);
+    const cand = k.candidates.find((c) => c.kind === 'vcarveFlat');
+    if (!cand) throw new Error('flat filled artwork must offer vcarveFlat');
+    // the smallest tip tool wins (edge work): the library's Ø3.175 V-bit
+    const s = suggestToolFor(cand, r, [flat3], library);
+    expect(s?.tool.id).toBe('v1');
+    expect(s?.inUse).toBe(false);
+    // no V-bit anywhere → no suggestion (the generator's own gate, mirrored)
+    expect(suggestToolFor(cand, r, [flat3, flat6], [flat3, flat6])).toBeNull();
   });
 
   it('a pocket takes the largest flat that manoeuvres inside the region', () => {
@@ -883,5 +942,45 @@ describe('thread prep, cone measurement and the angle-matched tool pick (2026-11
     expect(k.candidates[1].vAngle).toBeCloseTo(90, 0);
     const pick = suggestToolFor(k.candidates[1], r, [], [v30(), v60(), v90()]);
     expect(pick?.tool.vAngle).toBe(90);
+  });
+});
+
+describe('pickToolForKind — the kind-switch re-pick (her 2026-11-23 report)', () => {
+  const tool = (id: string, type: string, diameter: number, vAngle?: number): Tool =>
+    ({ id, name: id, type: type as Tool['type'], diameter, vAngle }) as Tool;
+  const v30 = tool('v30', 'vbit', 1.5, 30);
+  const v60 = tool('v60', 'vbit', 3.175, 60);
+  const v90 = tool('v90', 'vbit', 6, 90);
+  const vUnk = tool('vUnk', 'vbit', 2);
+  const flat3 = tool('f3', 'flat', 3.175);
+  const ball3 = tool('b3', 'ball', 3);
+  const tmill = tool('tm', 'threadmill', 6);
+
+  it('toolFitsKind: the gates the generators enforce', () => {
+    expect(toolFitsKind(flat3, 'vcarveFlat')).toBe(false);
+    expect(toolFitsKind(v60, 'vcarveFlat')).toBe(true);
+    expect(toolFitsKind(v60, 'chamfer')).toBe(true);
+    expect(toolFitsKind(ball3, 'cylChamfer')).toBe(true);
+    expect(toolFitsKind(tmill, 'threadMill')).toBe(true);
+    expect(toolFitsKind(flat3, 'threadMill')).toBe(false);
+    // ungated kinds accept anything (spiralCarve has no TOOL_TYPES entry)
+    expect(toolFitsKind(ball3, 'spiralCarve')).toBe(true);
+    expect(toolFitsKind(flat3, 'index')).toBe(true);
+  });
+
+  it('V-carve re-picks the sharpest angled bit, not the inherited flat', () => {
+    const pick = pickToolForKind('vcarveFlat', [flat3, v90, v60, v30]);
+    expect(pick?.id).toBe('v30'); // 30° beats 60° beats 90°, smallest Ø breaks ties
+    const onlyWide = pickToolForKind('vcarveFlat', [flat3, v90]);
+    expect(onlyWide?.id).toBe('v90'); // a 90° chamferer is still an angled bit
+  });
+
+  it('falls back honestly: angle-less V-bit, then nothing', () => {
+    expect(pickToolForKind('vcarveFlat', [flat3, vUnk])?.id).toBe('vUnk');
+    expect(pickToolForKind('vcarveFlat', [flat3, ball3])).toBeNull(); // generator's message takes over
+  });
+
+  it('threadMill re-picks the thread mill when a flat is current', () => {
+    expect(pickToolForKind('threadMill', [flat3, ball3, tmill])?.id).toBe('tm');
   });
 });

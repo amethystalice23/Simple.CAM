@@ -156,13 +156,82 @@ describe('chamfer generator', () => {
     expect(() => chamfer(op({ feed: 0 }), vbit())).toThrow('feed must be positive');
   });
 
-  it('fails when the cone is too short to reach the anchor plane', () => {
-    // Ø1 bit (0.5mm flank half-width), 1mm depth at 90° needs 1mm of flank
-    expect(() => chamfer(op({ depth: 1 }), vbit({ diameter: 1 }))).toThrow(
-      /cone is too short/,
+  it('cuts deeper-than-cone chamfers in band passes (Alice 2026-11-21: deeper than the bit)', () => {
+    // Ø1 bit (W = 0.5mm flank), 1mm depth at 90° needs 1mm of flank → 2 bands.
+    // Pass 1 = today's placement (tip −1, radius 5); pass 2 rides the plane
+    // up by W/tan45 = 0.5 and outward by W (radius 5.5 — a NEGATIVE cut-side
+    // offset, crossing the loop toward the material).
+    const res = chamfer(op({ depth: 1 }), vbit({ diameter: 1 }));
+    const plunges = res.moves
+      .filter((m) => !m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z as number);
+    expect(plunges.length).toBe(2); // deepest band first, then up the plane
+    expect(plunges[0]).toBeCloseTo(-1, 9);
+    expect(plunges[1]).toBeCloseTo(-0.5, 9);
+    const rs = radii(feedXY(res.moves));
+    expect(rs.length).toBe(2);
+    for (const r of rs) {
+      expect(r === 5 || r === 5.5).toBe(true);
+    }
+    expect(res.loops).toBe(2);
+    // but a shallow chamfer on the same bit stays one pass
+    const shallow = chamfer(op({ depth: 0.4 }), vbit({ diameter: 1 }));
+    expect(shallow.loops).toBe(1);
+    // an exact cone-width multiple splits with no phantom pass
+    expect(chamfer(op({ depth: 0.5 }), vbit({ diameter: 1 })).loops).toBe(1);
+  });
+
+  it('bands at 60°: band 2 tip = z₁ + W/tan30, path out by W', () => {
+    // depth 4, 60° bit: w = 4·tan30 = 2.309, W = 3.175/2 = 1.5875 → 2 bands
+    const res = chamfer(op({ depth: 4 }), vbit({ vAngle: 60 }));
+    const plunges = res.moves
+      .filter((m) => !m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z as number);
+    const stepUp = 1.5875 / Math.tan((30 * Math.PI) / 180);
+    expect(plunges[0]).toBeCloseTo(-4, 9);
+    expect(plunges[1]).toBeCloseTo(-4 + stepUp, 9);
+    const rs = radii(feedXY(res.moves));
+    expect(rs.some((r) => Math.abs(r - 5) < 1e-9)).toBe(true); // band 1
+    expect(rs.some((r) => Math.abs(r - 6.5875) < 1e-6)).toBe(true); // band 2: 5 + W
+  });
+
+  it("mirrors the bands for direction 'up': band k descends toward the anchor plane", () => {
+    const res = chamfer(op({ direction: 'up', depth: 1 }), vbit({ diameter: 1 }));
+    const plunges = res.moves
+      .filter((m) => !m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z as number);
+    expect(plunges.length).toBe(2); // starts deepest (z₀ + d), descends by W/tan45
+    expect(plunges[0]).toBeCloseTo(1, 9);
+    expect(plunges[1]).toBeCloseTo(0.5, 9);
+    // retract clears the raised tip of the CURRENT band
+    const safes = res.moves
+      .filter((m) => m.rapid && m.words.z !== undefined)
+      .map((m) => m.words.z as number);
+    expect(safes).toContain(6); // band 1: 1 + 5
+    expect(safes.some((z) => Math.abs(z - 5.5) < 1e-9)).toBe(true); // band 2: 0.5 + 5
+  });
+
+  it('bands a polygon chamfer across the loop: pass 2 offsets outward (clipper)', () => {
+    const square: Vec2[] = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const poly = { kind: 'poly', points: square, z: 0, materialOutside: true } as const;
+    // hole rim, deep chamfer: W = 1.5875, depth 2 at 90° → 2 bands; band 2
+    // crosses the loop outward by W (the old code returned the unoffset loop
+    // for any offset ≤ 0 — pinned here)
+    const res = chamfer(op({ loops: [poly], depth: 2 }), vbit());
+    const pts = feedXY(res.moves);
+    expect(pts.some((p) => p.x < -1.5)).toBe(true); // grown past the loop
+    expect(pts.some((p) => p.x > 11.5)).toBe(true);
+  });
+
+  it('refuses a bit whose tip is its full diameter (no flank at all)', () => {
+    expect(() => chamfer(op({ depth: 1 }), vbit({ diameter: 1, tipDiameter: 1 }))).toThrow(
+      /no cone flank/,
     );
-    // but a shallow chamfer on the same bit fits
-    expect(() => chamfer(op({ depth: 0.4 }), vbit({ diameter: 1 }))).not.toThrow();
   });
 
   it('fails when the loop is smaller than the tool tip', () => {

@@ -456,6 +456,38 @@ describe('normalizeJobOps: chamfer', () => {
   });
 });
 
+describe('normalizeJobOps: vcarveFlat', () => {
+  const base = { id: 'jobop-12', toolId: 't-vbit', featureIds: ['p:art:path:0'] };
+
+  it('repairs a save missing the depth cap: sane positive constant (the generator clamps to the bit cone regardless)', () => {
+    const stale = normalizeJobOps([{ ...base, kind: 'vcarveFlat' }] as unknown as JobOp[]);
+    const out = stale[0] as { kind: string; maxDepth: number; clearStepOver?: number };
+    expect(out.kind).toBe('vcarveFlat');
+    expect(out.maxDepth).toBeGreaterThan(0);
+    expect(out.maxDepth).toBe(3);
+    expect(out.clearStepOver).toBeUndefined();
+  });
+
+  it('drops a garbage clear stepover to absent (reads as the generator default) and keeps valid values', () => {
+    const repaired = normalizeJobOps([
+      { ...base, kind: 'vcarveFlat', maxDepth: -1, clearStepOver: 0 },
+    ] as unknown as JobOp[]);
+    expect(repaired[0]).toEqual({ ...base, kind: 'vcarveFlat', maxDepth: 3, clearStepOver: undefined });
+
+    const kept = normalizeJobOps([
+      { ...base, kind: 'vcarveFlat', maxDepth: 2.5, clearStepOver: 0.4 },
+    ] as unknown as JobOp[]);
+    expect(kept[0]).toEqual({ ...base, kind: 'vcarveFlat', maxDepth: 2.5, clearStepOver: 0.4 });
+  });
+
+  it('keeps an already-valid cap untouched', () => {
+    const kept = normalizeJobOps([
+      { ...base, kind: 'vcarveFlat', maxDepth: 1.75 },
+    ] as unknown as JobOp[]);
+    expect((kept[0] as { maxDepth: number }).maxDepth).toBe(1.75);
+  });
+});
+
 describe('normalizeJobOps: engrave fillMode', () => {
   // Alice's REAL job (2d_engrave.cam.json, saved 2026-10-31) is exactly
   // this shape: fill: true, fillStepOver 0.1, both ankh paths selected

@@ -67,6 +67,15 @@ export const OP_HELP: Record<JobOp['kind'], OpHelpDoc> = {
       'Drop an SVG or DXF on the viewport to add artwork.',
     ],
   },
+  vcarveFlat: {
+    what: 'Fills closed painted shapes with a V-bit groove at varying depth — deepest down each stroke’s middle, tapering to nothing at the edges. This is how you carve letters and logos with crisp corners.',
+    points: [
+      'Depth follows the shape automatically: wide strokes cut deep, thin ones stay shallow. You set only the depth cap.',
+      'The cap prefills from the bit’s cone height. Shapes wider than the bit reaches clear flat at the cap — a V-bit always leaves pass-line scores in that floor.',
+      'Painted (filled) closed paths only. For open line work, use Engrave instead.',
+      'Runs on flat artwork. On a cylinder, the rotary V-carve follows chains at one depth.',
+    ],
+  },
   slicePocket: {
     what: 'Slices the model at one height and pockets that cross-section — one clean shape that roughs a complicated body.',
     points: [
