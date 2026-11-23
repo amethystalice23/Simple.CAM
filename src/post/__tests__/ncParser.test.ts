@@ -69,7 +69,8 @@ function expectRoundTrips(parsed: Move, original: Move, label: string) {
       // can sit whole turns from the IR's counter-frame word while
       // naming the same spoke. Compare mod 360; the physical-delta
       // contract is pinned in the G92.4 describe below.
-      const d = ((p - o) % 360 + 360) % 360;
+      const pv = p as number; // word sets asserted equal above — o defined ⇒ p defined
+      const d = ((pv - o) % 360 + 360) % 360;
       const spoke = Math.min(d, 360 - d);
       expect(spoke, `${label} ${key} spoke`).toBeLessThan(1e-6);
     } else {
@@ -787,10 +788,12 @@ describe('nc parser: G92.4 tracked-A semantics', () => {
     const as = moves.map((m) => m.words.a);
     // the cut's parsed A sits on the SAME spoke as the anchor's — and the
     // delta between the anchor and the cut is the physical ZERO travel
+    const anchorA = as[1] ?? NaN;
+    const cutA = as[2] ?? NaN;
     expect(as[0]).toBeCloseTo(395.5, 6);
-    expect(as[1]).toBeCloseTo(41.5 + 360, 6); // physical: 395.5 → shrink → +6
-    expect(as[2]).toBeCloseTo(41.5 + 360, 6); // re-anchor: NO motion
-    expect(as[2] - as[1]).toBeCloseTo(0, 6);
+    expect(anchorA).toBeCloseTo(41.5 + 360, 6); // physical: 395.5 → shrink → +6
+    expect(cutA).toBeCloseTo(41.5 + 360, 6); // re-anchor: NO motion
+    expect(cutA - anchorA).toBeCloseTo(0, 6);
     expect(finalA).toBeCloseTo(401.5, 6); // the raw counter
   });
 });
