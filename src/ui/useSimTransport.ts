@@ -39,6 +39,10 @@ export interface SimTransport {
   /** the move the BAR shows: the carved position (worker progress) while
    *  playing, the committed position while paused */
   position: number;
+  /** the worker's carved cursor, straight from progress messages (0 while
+   *  a reset is in flight) — the redraw overlay's green rides this while
+   *  the yellow holds the commit */
+  carved: number;
   totalMoves: number;
   speed: PlaybackSpeed;
   label: string;
@@ -102,6 +106,9 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
   const position = commit ?? (staleRef.current ? 0 : (state.progress?.move ?? 0));
   const positionRef = useRef(position);
   positionRef.current = position;
+  /** the carved cursor, unpolluted by the commit — the scrub bar's redraw
+   *  overlay greens this under the yellow target while a re-carve runs */
+  const carved = staleRef.current ? 0 : (state.progress?.move ?? 0);
 
   useEffect(() => {
     // progress confirms the carve — clears the post-reset staleness too
@@ -404,6 +411,7 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
   return {
     playing,
     position,
+    carved,
     totalMoves,
     speed,
     label: speedLabel(speed),

@@ -12,11 +12,17 @@
  * keys live exactly as long as the bar does, and refuse typing, key
  * repeats (a backward step behind the carved cursor costs a full stock
  * reset), and modifier chords (transportKeys.ts, unit-pinned).
+ *
+ * REDRAW OVERLAY (2026-11-23, Alice's spec): a backward step/scrub costs
+ * a reset + re-carve — while it runs the old fill turns YELLOW holding
+ * the committed target and the GREEN redraws over it to the carved
+ * cursor; when they meet the yellow drops (transportFill.ts, pinned).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SimTransport } from './useSimTransport';
 import { transportKeyAction } from './transportKeys';
+import { transportFill } from './transportFill';
 
 interface Props {
   transport: SimTransport;
@@ -26,6 +32,7 @@ export function TransportBar({ transport }: Props) {
   const {
     playing,
     position,
+    carved,
     totalMoves,
     label,
     togglePlay,
@@ -39,8 +46,13 @@ export function TransportBar({ transport }: Props) {
   /** dragging previews the position WITHOUT committing (commit is on
    *  release — scrub-behind costs a full grid rebuild, per spec) */
   const [scrubPreview, setScrubPreview] = useState<number | null>(null);
-  const shown = scrubPreview ?? position;
-  const pct = totalMoves > 0 ? (100 * shown) / totalMoves : 0;
+  const { pendingPct, fillPct } = transportFill({
+    playing,
+    preview: scrubPreview,
+    position,
+    carved,
+    totalMoves,
+  });
 
   const moveFromEvent = useCallback(
     (clientX: number): number => {
@@ -123,13 +135,16 @@ export function TransportBar({ transport }: Props) {
       <div
         ref={barRef}
         className="transport-scrub"
-        title="Drag to scrub — releasing re-carves to that move (scrubbing back rebuilds the stock)"
+        title="Drag to scrub — releasing re-carves to that move (a backward scrub rebuilds the stock: yellow holds the target while the green redraws)"
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
       >
-        <div className="transport-scrub-fill" style={{ width: `${pct}%` }} />
+        {pendingPct !== null && (
+          <div className="transport-scrub-fill transport-scrub-fill-pending" style={{ width: `${pendingPct}%` }} />
+        )}
+        <div className="transport-scrub-fill" style={{ width: `${fillPct}%` }} />
       </div>
       <button
         type="button"
