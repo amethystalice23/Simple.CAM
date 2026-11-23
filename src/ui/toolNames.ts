@@ -74,7 +74,16 @@ export function toolOptionLabel(tool: Tool): string {
 export function toolMetaLine(tool: Tool): string {
   const parts: string[] = [tool.type];
   parts.push(`Ø${tool.diameter}`);
-  if (tool.fluteLength !== undefined) parts.push(`cut ${tool.fluteLength}mm`);
+  if (tool.type === 'threadmill') {
+    // the PITCH is what selects a thread mill (a 3-tooth is hard-locked
+    // to it; the panel locks the op's pitch from the tool) — the cut
+    // length reads as boilerplate next to it. Pitch in the meta line,
+    // cut length only as the fallback a pitch-less record deserves.
+    if (tool.pitch !== undefined) parts.push(`pitch ${tool.pitch}mm`);
+    else if (tool.fluteLength !== undefined) parts.push(`cut ${tool.fluteLength}mm`);
+  } else if (tool.fluteLength !== undefined) {
+    parts.push(`cut ${tool.fluteLength}mm`);
+  }
   if (tool.type === 'vbit' && tool.vAngle !== undefined && !tool.name.includes(`${tool.vAngle}`)) {
     parts.push(`${tool.vAngle}°`);
   }
