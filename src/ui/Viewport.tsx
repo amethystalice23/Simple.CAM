@@ -1663,8 +1663,11 @@ export function Viewport({
       data.chainLines.visible = displayLayers.features && measureMode;
       // artwork line work is the OBJECT's body — an authored primitive
       // must not vanish with the features toggle (there is no volume to
-      // render; the amber lines are it)
-      data.pathLines.visible = displayLayers.features || entry.source.artworkFrame !== undefined;
+      // render; the amber lines are it) — but it IS a loaded object, so
+      // the MODEL tick gates it like every other authored body
+      data.pathLines.visible =
+        displayLayers.model &&
+        (displayLayers.features || entry.source.artworkFrame !== undefined);
       // ... and the lines are also the artwork's selection surface: the
       // picked artwork's strokes light up amber-bright
       if (entry.source.artworkFrame) {
@@ -1854,7 +1857,7 @@ export function Viewport({
       hoverLineRef.current = null;
       fillShadeMeshesRef.current = [];
     };
-  }, [sources, stock, displayLayers.features, measureMode, opSelection, selColor, selectedObjectId, fillShade]);
+  }, [sources, stock, displayLayers.features, displayLayers.model, measureMode, opSelection, selColor, selectedObjectId, fillShade]);
 
   // toolpath preview: feed/rapid polylines straight from the Move[] IR.
   // PER-OP COLOURED (the fixture-ops spec's preview legibility ask,
@@ -2456,6 +2459,11 @@ export function Viewport({
           side: THREE.DoubleSide,
         }),
       );
+      // the Model layer covers EVERY authored object (2026-11-23: "the
+      // model layer includes all of the loaded objects, including
+      // internally generated ones, not just the stl") — primitive volumes
+      // hide with the Model tick like the STL mesh does
+      mesh.visible = displayLayers.model;
       mesh.userData.sourceId = p.id;
       // pose = primitivePose = transformFn: the axis remap is baked into the
       // local geometry, so adding any rotation here desyncs the mesh from
@@ -2493,6 +2501,14 @@ export function Viewport({
       primMeshesRef.current = [];
     };
   }, [primitives, stock, selectedObjectId]);
+
+  // re-apply the Model layer's tick to the primitive volumes after every
+  // rebuild (the build effect re-creates the meshes, always visible-by-build
+  // only when the tick was read at build time — the tick can flip between
+  // rebuilds) and on every toggle
+  useEffect(() => {
+    for (const m of primMeshesRef.current) m.visible = displayLayers.model;
+  }, [displayLayers.model, primitives, stock, selectedObjectId]);
 
   return (
     <>
