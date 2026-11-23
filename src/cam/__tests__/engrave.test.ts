@@ -291,16 +291,86 @@ describe('engrave: laser', () => {
       paths: [[{ x: 0, y: 0 }, { x: 10, y: 10 }]],
       laser: { focus: 1, power: 0.65 },
     });
-    const diag = res.moves.find((m) => !m.rapid && m.words.x !== undefined && m.words.a !== undefined)!;
-    expect(diag.power).toBeCloseTo(0.65, 6);
+    // the lead-in (below) is also a mixed A+X move and comes FIRST —
+    // the artwork diagonal is the LAST mixed move in the op
+    const mixed = res.moves.filter((m) => !m.rapid && m.words.x !== undefined && m.words.a !== undefined);
+    expect(mixed.length).toBeGreaterThanOrEqual(2);
+    const diag = mixed[mixed.length - 1];
+    expect(diag.power).toBeUndefined(); // power stamped on the lead-in, not the artwork line
+    expect(mixed[0].power).toBeCloseTo(0.65, 6);
     const dA = (10 / 8) * (180 / Math.PI);
     const t = Math.max(Math.hypot(10, 10) / 1000, (dA / 360) / 6.6);
     expect(diag.feed).toBeCloseTo(1 / t, 6);
+  });
+
+  it('lead-in: open paths approach from behind the start along the first segment', () => {
+    // power ramp under-burns the leading edge (the 2026-11-23 light-
+    // corners engraves) — the beam must run lit INTO the start point
+    const res = engrave(laserParams);
+    expect(res.moves[0].words.x).toBeCloseTo(-0.3, 6); // travel targets the lead point
+    expect(res.moves[0].words.y).toBeCloseTo(0, 6);
+    const lead = res.moves.find((m) => !m.rapid)!;
+    expect(lead.words.x).toBeCloseTo(0, 6); // lit lead-in move INTO the start
+    expect(lead.words.y).toBeCloseTo(0, 6);
+    expect(lead.power).toBeCloseTo(0.2, 6); // the power stamp rides the lead-in
+    const art = res.moves.filter((m) => !m.rapid)[1];
+    expect(art.words.x).toBeCloseTo(10, 6);
+    expect(art.power).toBeUndefined(); // artwork line rides the modal S
+  });
+
+  it('lead-in: closed paths approach along the final segment — overlap, invisible on the artwork', () => {
+    const res = engrave({
+      ...laserParams,
+      paths: [[{ x: 1, y: 1 }, { x: 5, y: 1 }, { x: 5, y: 5 }, { x: 1, y: 5 }, { x: 1, y: 1 }]],
+    });
+    // final segment (1,5)→(1,1) travels −Y into the start: lead sits ON
+    // that segment, territory the path burns again at its end
+    expect(res.moves[0].words.x).toBeCloseTo(1, 6);
+    expect(res.moves[0].words.y).toBeCloseTo(1.3, 6);
+    const lead = res.moves.find((m) => !m.rapid)!;
+    expect(lead.words.x).toBeCloseTo(1, 6);
+    expect(lead.words.y).toBeCloseTo(1, 6);
+    expect(lead.power).toBeCloseTo(0.2, 6);
+  });
+
+  it('lead-in: clamped to the final segment on small closed shapes (no chord across the interior)', () => {
+    const res = engrave({
+      ...laserParams,
+      paths: [[{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.05, y: 0 }, { x: 0, y: 0 }]],
+    });
+    // final segment is 0.05 mm (< the 0.3 default) — the lead starts
+    // exactly at the previous vertex, never past it
+    expect(res.moves[0].words.x).toBeCloseTo(0.05, 6);
+    expect(res.moves[0].words.y).toBeCloseTo(0, 6);
+  });
+
+  it('leadIn: 0 disables (byte-legacy behavior)', () => {
+    const res = engrave({ ...laserParams, laser: { focus: 1.5, power: 0.2, leadIn: 0 } });
+    expect(res.moves[0].words.x).toBeCloseTo(0, 6);
+    const first = res.moves.find((m) => !m.rapid)!;
+    expect(first.words.x).toBeCloseTo(10, 6);
+    expect(first.power).toBeCloseTo(0.2, 6);
+  });
+
+  it('lead-in: wrapped maps the lead through A behind the start', () => {
+    const res = engrave({
+      ...laserParams,
+      paths: [[{ x: 0, y: 0 }, { x: 10, y: 0 }]],
+      frame: { kind: 'wrapped', radius: 8, surfaceZ: 8, datumAngle: 0, startA: 0 },
+    });
+    // artwork X maps to A: the travel lands 0.3 mm of ARC behind the
+    // start (pure-A positioning rapid first, axial X rapid second)
+    expect(res.moves[0].words.a).toBeCloseTo(-0.3 * (180 / (8 * Math.PI)), 6);
+    expect(res.moves[1].words.x).toBeCloseTo(0, 6);
+    const lead = res.moves.find((m) => !m.rapid)!; // the lead-in is a pure-A lit move
+    expect(lead.words.a).toBeCloseTo(0, 6);
+    expect(lead.power).toBeCloseTo(0.2, 6);
   });
 
   it('validates laser fields with diagnosis', () => {
     expect(() => engrave({ ...laserParams, laser: { focus: -1, power: 0.5 } })).toThrowError(/focus/);
     expect(() => engrave({ ...laserParams, laser: { focus: 1, power: 1.5 } })).toThrowError(/power/);
     expect(() => engrave({ ...laserParams, laser: { focus: 1, power: 0 } })).toThrowError(/power/);
+    expect(() => engrave({ ...laserParams, laser: { focus: 1, power: 0.5, leadIn: -0.1 } })).toThrowError(/lead/);
   });
 });

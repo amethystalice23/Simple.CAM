@@ -1636,7 +1636,7 @@ function ParamFields(props: {
       return (
         <>
           {props.tool?.type === 'laser' ? (
-            <InfoTip text="laser: a single pass at the tool's focus height — depth is ignored, power comes from the tool (or the ⚡ override) and lands as the S word on the cut lines" />
+            <InfoTip text="laser: a single pass at the tool's focus height — depth is ignored, power comes from the tool (or the ⚡ override) and lands as the S word on the cut lines; each line begins with a 0.3 mm lit lead-in so path starts don't burn light" />
           ) : (
             <>
               <NumberField
