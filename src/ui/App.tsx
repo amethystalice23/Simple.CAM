@@ -62,6 +62,7 @@ import {
   freshOpId,
   type GeneratedOp,
 } from './jobGeneration';
+import { sectionEndIndex, sectionLabel } from './opsSections';
 import type { StandingGrid } from '../cam/rotaryCarve';
 import { isHeavyGenOp } from './genWorkerProtocol';
 import { GEN_CANCELLED, useGenWorker } from './useGenWorker';
@@ -203,13 +204,22 @@ export function App() {
   const [showStock, setShowStock] = useState(true);
   const [showModel, setShowModel] = useState(true);
   const [showSim, setShowSim] = useState(false);
+  /** the sim's classification warnings (yellow gouge / red shank contact)
+   *  — their own display layer (Alice, 2026-11-23: "separate the yellow
+   *  and red warnings out into a separate layer") so the carved stock and
+   *  the warnings toggle independently while a sim is up */
+  const [showSimWarnings, setShowSimWarnings] = useState(true);
   const [selection, setSelection] = useState<string[]>([]);
   /** suggest-ops picker (docs/PLAN.md "Suggest ops", round 1): armed by the
    *  ops panel's "Suggest ops…" button — the NEXT picked feature opens the
    *  knowledge popup instead of toggling the selection. suggestPickId holds
    *  the popup's feature while it's open (highlighted green in the viewport
    *  via activeFeatureIds, so the popup ties to what was clicked). */
-  const [suggestArmed, setSuggestArmed] = useState(false);
+  const [suggestArmed, setSuggestArmed] = useState<string | null>(null);
+  /** the fixture SECTION an armed pick (or an open popup) adds into — set
+   *  when a section's + Suggest row arms it, and survives the pick itself
+   *  (the popup's Add commits there, after suggestArmed clears) */
+  const [suggestSection, setSuggestSection] = useState<string>(IMPLICIT_FIXTURE_ID);
   const [suggestPickId, setSuggestPickId] = useState<string | null>(null);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>('model');
@@ -762,16 +772,19 @@ export function App() {
   /** arm: the "Suggest ops…" button. Measure mode is forced on (the viewport
    *  only routes feature clicks there) and the status strip carries the
    *  prompt; the NEXT picked feature opens the knowledge popup. */
-  const armSuggest = () => {
+  const armSuggest = (sectionId: string) => {
     setFeaturePick(null); // a one-shot pick banner and the picker compete for the same clicks
     setSuggestPickId(null);
-    setSuggestArmed(true);
+    setSuggestArmed(sectionId);
+    setSuggestSection(sectionId); // the popup's Add lands in this section
     setMeasureMode(true);
-    setStatusNote('suggest ops — click a feature in the viewport (Esc cancels)');
+    setStatusNote(
+      `suggest ops → ${sectionLabel(ops, sectionId)} — click a feature in the viewport (Esc cancels)`,
+    );
   };
   /** disarm without picking: the button toggles off, Esc, or right-click */
   const disarmSuggest = () => {
-    setSuggestArmed(false);
+    setSuggestArmed(null);
     setMeasureMode(false);
     setStatusNote(null);
   };
@@ -836,9 +849,9 @@ export function App() {
       }
     : null;
   /** add the CHECKED suggestions (round 2, docs/PLAN.md item 14): each
-   *  becomes a real op appended to the list — an Index suggestion first
-   *  (the sheet orders it at the head), the cutting ops after it with
-   *  feature selected + prefills computed in the datum frame the new
+   *  becomes a real op at the ARMED SECTION's end — an Index suggestion
+   *  first (the sheet orders it at the head), the cutting ops after it
+   *  with feature selected + prefills computed in the datum frame the new
    *  Index establishes (createSuggestedOp walks the growing list). */
   const addSuggestedOps = (cands: SuggestCandidate[]) => {
     if (cands.length === 0) return;
@@ -846,17 +859,24 @@ export function App() {
     if (!r) return;
     const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
     let next = [...ops];
+    let lastAdded: JobOp | null = null;
     for (const c of cands) {
       // the candidate's OWN suggested tool (same rule the sheet displays),
       // the current default only as the no-better-idea fallback
       const idx = suggestKnowledge?.candidates.indexOf(c) ?? -1;
       const chosen = (idx >= 0 ? suggestTools?.[idx] : null) ?? null;
       const opTool = chosen?.tool ?? defaultTool;
-      next = [...next, createSuggestedOp(c, r, sources, stock, opTool, stock.materialId, next)];
+      // land at the armed section's END — each insert re-walks its divider
+      // boundary on the grown list, so the picked order survives; the datum
+      // chain sees the ops that precede them in that section
+      const created = createSuggestedOp(c, r, sources, stock, opTool, stock.materialId, next);
+      const at = sectionEndIndex(next, suggestSection);
+      next = [...next.slice(0, at), created, ...next.slice(at)];
+      lastAdded = created;
     }
     setOps(next);
     setLastToolId(defaultTool.id);
-    setExpandedOpId(next[next.length - 1].id);
+    if (lastAdded) setExpandedOpId(lastAdded.id); // the last ADDED op, wherever its section sits
     const names = cands.map((c) => OP_KINDS.find((k) => k.kind === c.kind)?.label ?? c.kind);
     setStatusNote(
       `added ${cands.length} op${cands.length === 1 ? '' : 's'} — ${names.join(' + ')}`,
@@ -869,7 +889,7 @@ export function App() {
       // the picker consumes the click: ONE feature → the knowledge popup,
       // never the selection (the popup ties to it by description + the
       // green highlight, so the selection is left untouched)
-      setSuggestArmed(false);
+      setSuggestArmed(null);
       setMeasureMode(false);
       setSuggestPickId(id);
       setStatusNote(null);
@@ -1610,11 +1630,17 @@ export function App() {
     setError(null);
   };
 
-  const addOp = () => {
+  const addOp = (sectionId: string) => {
     const defaultTool = tools.find((t) => t.id === lastToolId) ?? tool;
     const op = newJobOp('pocket', defaultTool, stock.materialId, stock);
     setLastToolId(defaultTool.id);
-    setOps((prev) => [...prev, op]);
+    // the op joins the CLICKED section's end — before that section's next
+    // divider, not the whole list's end (the per-section add rows,
+    // Alice, 2026-11-21)
+    setOps((prev) => {
+      const at = sectionEndIndex(prev, sectionId);
+      return [...prev.slice(0, at), op, ...prev.slice(at)];
+    });
     setExpandedOpId(op.id);
   };
 
@@ -2291,12 +2317,14 @@ export function App() {
               features: showFeatures,
               paths: showPreview,
               simulation: showSim,
+              warnings: showSimWarnings,
             }}
             onToggleLayer={(layer, v) => {
               if (layer === 'stock') setShowStock(v);
               else if (layer === 'model') setShowModel(v);
               else if (layer === 'features') setShowFeatures(v);
               else if (layer === 'paths') setShowPreview(v);
+              else if (layer === 'warnings') setShowSimWarnings(v);
               else setShowSim(v);
             }}
             onToggleSelect={toggleSelect}
@@ -2497,7 +2525,7 @@ export function App() {
           onClose={() => setSuggestPickId(null)}
           onPickAnother={() => {
             setSuggestPickId(null);
-            armSuggest();
+            armSuggest(suggestSection);
           }}
           onAdd={addSuggestedOps}
         />

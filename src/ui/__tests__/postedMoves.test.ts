@@ -167,4 +167,37 @@ describe('buildPostedStream', () => {
     expect(ids.has('profile-row')).toBe(true);
     expect(s.moveOpIds.filter((id) => id === null).length).toBeLessThanOrEqual(1);
   });
+
+  it("toolOf indexes the CALLER'S tools table, never the export list (spiral shank-ghost regression, 2026-11-23)", () => {
+    // the library-shaped table the worker builds its spec list from: the
+    // op's tool sits at slot 1, a short-flute decoy at slot 0. The export
+    // list holds only the op's tool, so its own index is 0 — the old
+    // mapping carved the whole job with the decoy and painted phantom red
+    // shank contacts (41,458 moves on the spiral_test waterline)
+    const decoy: Tool = {
+      id: 't-decoy',
+      name: 'Ball 1',
+      type: 'ball',
+      diameter: 1,
+      fluteLength: 3,
+      spindleRpm: 18000,
+    };
+    const ops = [
+      {
+        id: 'op1',
+        kind: 'pocket',
+        toolId: 't-flat',
+        moves: [mv({ z: 5 }, 0, { rapid: true }), mv({ x: 10, z: -1 }), mv({ x: 0 })],
+        stepDown: 1,
+      },
+    ];
+    const library = [decoy, flat];
+    const s = buildPostedStream(ops, library, new Map([['t-flat', 1]]));
+    for (let i = 0; i < s.moves.length; i++) {
+      const ti = s.toolOf(i);
+      expect(ti).not.toBe(0xffff);
+      expect(ti).toBe(1); // the flat's slot in the CALLER's table
+      expect(library[ti].id).toBe('t-flat'); // what the worker would carve with
+    }
+  });
 });

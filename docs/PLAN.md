@@ -104,7 +104,7 @@ No dexel engine, no 3D-on-cylinder kernel in v1.
 | Face cylinder to diameter ("4D lathe") | parametric | Z stepped per depth level to `stockRadius − D/2`; roughing stepdown + finishing pass; user-set step-over (default 0.5·tool Ø — the radius, conservative radial engagement) shared by all patterns. Three cut patterns: **vertical** — rings, a full A revolution at each X (X steps in the cut between rings; A-only cuts in G94 at the ~6.6 RPM limit, deg/min); **horizontal** — indexed passes, a full X sweep at each A (A steps by the step-over arc at the cut radius; X zigzags, G94 mm/min); **spiral** — one continuous A+X helix per depth level, G93 with F = 1/pass-minutes. In-app time estimate (RPM-limited) |
 | Indexed flat ops (pocket/profile/drill/chamfer/thread-mill/slice-pocket) | 2.5D | A frozen at index angle → ordinary flat op in rotated frame (reuses flat engine; the generation paths all route through indexFrame) |
 | Thread (90° V-bit, IMPLEMENTED 2026-10-20) | parametric helix | `thread.ts`: per pass `G1 X… A…` constant Z, A advances `(span/lead)·360°` (lead = starts×pitch); Z depth-steps between passes re-entering at identical absolute A phase (levels retrace — sweeps alternate, A returns along the helix); multi-start = 360/starts phase offsets following the index datum; spring pass per start; external only. Depth derives from pitch + the tool's tip angle + tolerance (grooves half a pitch wide at crest; crest Ø = nominal − 2·tolerance); the panel's "Add facing toolpath" INSERTS a prefilled Face cylinder op before the thread (crest Ø, the thread's X range and rotation — its own tool/feeds/step-over); editing the nominal Ø prefills the standard ISO coarse pitch (metricPitch: M4→0.7, M6→1.0…). Fit is EMPIRICAL (risk 3) — the tolerance knob tunes it on a coupon |
-| Thread mill (3-axis XYZ helix, indexed 4-axis too; SPEC 2026-10-28) | helical interpolation | `threadMill.ts`: internal AND external threads with a single-profile thread mill — helix in machine XYZ, no A, G94 throughout. MILL-TESTED GROUND TRUTH: examples/MakeraStudioGHM9_Stage3_TOP_20261003132726.nc `[T6]14ccw thread` — her GHM9 part, an external M14×1 CCW cut with a Ø4.75 M6-form mill. Their proven EXTERNAL cycle, copied verbatim: approach outside the boss at Rc + clearance → plunge beside the boss to the thread's BOTTOM (staged feeds, F1000 bulk / F100 near material) → RADIAL feed in to Rc (no arc lead-in — the entry notch IS the bottom groove) → ASCENDING helix, one pitch per revolution, ~1°/segment (chord 0.15mm) at the cut feed → straight rapid up at the top (nothing stands above) → THE WHOLE CYCLE RUNS TWICE (their spring pass = a full second thread pass). Path radius pinned: 8.76 = d3/2 + toolR with d3 = ISO 724 EXTERNAL minor (nominal − 1.2268·p, root-arc-truncated — matches to 3 decimals, deliberate); INTERNAL mirrors with tips at the major: Rc = nominal/2 − toolR + tolerance, external Rc = d3/2 + toolR − tolerance; prep sizes ISO-true (bore at d1 = nominal − 1.0825·p, boss at nominal). Hand convention verified by the same file: "ccw" = left-hand = helix CW-viewed-from-above ASCENDING (z decreases with CCW rotation) ⇒ right-hand = CW-descending, as derived. ANTI-PATTERN, pinned by regression test (Alice's report, 2026-10-28 — "at some point the makera output did something silly and plunged to start subsequent cuts without allowance for the thread already there and gouged the thread face; they fixed this in later versions"): the 09-11 example cut a RADIAL LADDER (helix levels at 9.44 → 9.1 → 8.76) and re-plunged between levels AT THE CUT RADIUS — a vertical feed descent straight through the thread it had just cut; the fixed 10-03 cycle re-approaches from outside the crest first. Our cycle inherits the fix: every Z-descending move (spring pass, each multi-start, each target) starts from clear space — the approach point outside the crest (external) or the bore center (internal) — asserted over the whole move list by the descent test. INTERNAL cycle (no example exists — mirrored): approach at the bore CENTER, plunge inside the prep-cleared bore to the thread bottom, radial out to Rc, ascend; retract per Alice 2026-10-28 ("move aside… as long as there is hole diameter to do so, because we would have had a preceding pocket operation to clear it; if the tolerances are getting tight, follow the spiral back out"): aside — radial in to the bore center + straight lift — when the cleared bore leaves room (boreR − toolR ≥ margin; a sloppier prep or a slimmer tool — her Ø4.75 in an M14 bore has 4mm of room), else FOLLOW THE SPIRAL OUT: keep the helix going fraction of a lap past the mouth until the form is clear of the face, needing NO radial room (a straight lift while engaged drags the tooth through the thread teeth — the tight case; the bore-sized Makera mills with ~10µm aside room always exit this way). Multi-start = starts helices offset one pitch, lead = starts×pitch descending per rev; segments = 0.15mm chord target (floor 64, cap 512/rev); tool pitch validated strictly against thread pitch — and the panel SETS AND LOCKS the pitch from the tool while a fixed-pitch mill is selected (Alice, 2026-10-28: "as these threadmill bits have fixed pitch"; a pitch-less kind keeps it editable, defaulting to the ISO coarse on tool change). The thread perception is named cw/ccw like the rotary Thread op (Alice: "dont use right-hand/left-hand as the other thread tool uses cw/ccw, so be consistant" — 'ccw' = left-hand, the 14ccw example). RADIAL LADDER (Alice: "for tougher materials you might need to do this in multiple passes"): a Step over field (0.05mm increments) — 0 = the full form in ONE radial pass (the Makera cycle), > 0 splits the radial span into even levels, each a full bottom-up thread at its own radius, deepest last, the spring repeating the final level; the sim classifies thread removals against the ladder's step (or the full form depth) so a correct thread paints fine. The PREP insert's allowance is FORCED ≥ 0 (her first prep computed nominalR − bossR = −0.01 from a boss a hair over nominal and the profile errored: "dont warn that it must be >= 0, force it to be" — profile2d clamps, not throws). TOOL MODEL (Alice, 2026-10-28, twice-corrected — final form shop-checked against global.makera.com/en-gb/products/thread-milling-bit-6mm-shank): thread mills come in three kinds — 1-tooth, 3-tooth, and full-thread (the last is internal-only tapping, not in the Makera set). The Makera 1/3-tooth mills: a 2mm TOOTHED BAND (LCF) at the tip, then a long thin CUTTING LENGTH — the taper before the shank (18mm on the M6, 24 on the M8; shop overrides in the import) — then the SHANK (Ø6 on the M6/M8, 1/8″ on M1–M5; SFDM was RIGHT all along, the 3.175 "neck" clamp was the wrong reading of "long neck"), OAL 38/50. fluteLength carries the CUTTING LENGTH, so the full-depth helix keeps the shank clear: EXTERNAL — the shank crosses the crest radially unconditionally (Rc − shankR < crestR always), so a thread deeper than the cutting length throws (the shank would sweep the stock beside the thread); INTERNAL — the thread is capped at cutting − one pitch when the shank misses the bore. The OVERALL LENGTH caps the thread below the collet margin (OAL − 15mm). `flutes` = the TOOTH count ("there are no flutes, the teeth appear in only one spot on the circumference"): a 3-tooth is HARD-LOCKED to its pitch (teeth must ride successive turns of one groove), a 1-tooth cuts ANY pitch; records with no count read locked. The SIM classifies a thread's removals against the FULL THREAD LENGTH (one axial pass by tool design — her report: "wether i set step over of 0 or 0.1mm gives a wall of yellow"; the radial ladder never changes axial engagement), and models the tool with the cutting length as the flute — the 2mm-band record put the Ø6 shank 2mm above the tip, inside the stock beside every full-depth thread. The prep insert runs 1mm past the thread floor (form clearance below the last turn). PROFILE ALLOWANCE SPLIT (Alice, 2026-10-28 night): "allowance i dont want to change as it is height as well as width, which would mean unseen consequences" — the profile's single allowance becomes **Bottom allowance** (floor stock, forced ≥ 0) + **Side allowance** (RADIAL, SIGNED — negative steps the tool-center path INSIDE the contour, turning a boss down past its modeled Ø); a diameter field was rejected ("not only circular features"), offset-on-top-of-allowance as confusing. normalizeJobOps migrates old saves (single allowance → both). The THREAD PREP INSERT prefills `sideAllowance = (nominal − 2·tolerance)/2 − bossR` — the ISO-fit crest target, BOTH ends from the THREAD (nominal + tolerance), the start from the resolved boss: "the feature on the thread might not be the same as the thread diameter set" — so the neck rides the reduced crest at zero clearance and the red streamers stop (the internal pocket prep analogously: allowance = boreR − d1R, clamped ≥ 0 — a pocket cannot grow its region). Her job now generates clean end-to-end. DEPTH SEMANTICS CONFIRMED (Alice, 2026-10-28 night): the boxes anchor at the STOCK CROWN like every op, and that is what she wants — "i genuinely wanted thread from the very top of the stock to 9mm down… i moved up 1mm from [the datum] to allow for the runout that the facing op would give us". The SELECTED FACE IS JUST A DATUM: on a model that already carries the finished thread form, the right-Ø feature may sit at the base of a modelled outward chamfer where thread meets body — start 0 from the crown is the legitimate setup (the prefill fills Ø/pitch/side; the depths are hers). Her production workflow for the GHM9 adapter: thread end in the 4th-axis vice → rotary-mill the flats half → re-fixture vertical in 3-axis → mill the outer thread (this op) + pocket the through hole. THREAD END TREATMENT (her ruling, 2026-10-28 night — answering the transition question): EXTERNAL threads NEVER fade — the leading end (screwed into something) is threaded FULL FORM until it falls off the face, then a CHAMFER BIT dresses the face, 'possibly combined with an end mill to clear some of it down to the inner radius' (root-Ø relief so the chamfer has room); 'it is sadly impossible to inset the thread so that it slowly disappears… and give a tapered start' — the best extra is 'mill some of the peaks off with an endmill afterwards' (crest-dressing). The trailing end at a shoulder: EITHER pre-cut a chamfer/undercut down to the thread's minor Ø in advance (the last turn runs out into it), OR thread down until it butts the wider piece (a partial last turn). FADE-OUT / FORM RUNOUT IS AN INTERNAL-ONLY FEATURE — only inside threads can fade, harmlessly into the bore wall where nothing must engage; PARKED until an internal job wants it. Makera's own Stage3 flow confirms the recipe: the 14ccw thread is followed by [T4] chamfer ops (Inside/Outside). No generator feature needed — the external treatment composes from the existing chamfer/profile ops. Flute check internal: depth ≤ fluteLength when the shank oversizes the bore (loud error). The panel's "Add prep toolpath" INSERTS a prefilled op before the thread (Alice 2026-10-28; Makera's own prep on the same part was a flat-endmill contour around the boss): external → a PROFILE turning the boss to the major Ø (side outside, clear-to-stock, allowance = nominalR − bossR, negative to turn down); internal → a POCKET opening the bore to d1 (allowance = boreR − d1/2); nominal-Ø edit prefills the ISO coarse pitch like the rotary op |
+| Thread mill (3-axis XYZ helix, indexed 4-axis too; SPEC 2026-10-28) | helical interpolation | `threadMill.ts`: internal AND external threads with a single-profile thread mill — helix in machine XYZ, no A, G94 throughout. MILL-TESTED GROUND TRUTH: examples/MakeraStudioGHM9_Stage3_TOP_20261003132726.nc `[T6]14ccw thread` — her GHM9 part, an external M14×1 CCW cut with a Ø4.75 M6-form mill. Their proven EXTERNAL cycle, copied verbatim: approach just outside the crest at crest R + toolR + margin (2026-11-23: the old Rc + clearance park overshot into standing stock beyond the prep moat) → plunge beside the boss to the thread's BOTTOM (staged feeds, F1000 bulk / F100 near material) → RADIAL feed in to Rc (no arc lead-in — the entry notch IS the bottom groove) → ASCENDING helix, one pitch per revolution, ~1°/segment (chord 0.15mm) at the cut feed → RADIAL feed out past the crest then straight rapid up (air when nothing stands above; 2026-11-23 double-thread report: a thread started below the boss top leaves flank beside the lift column, and the straight lift notches the thread's side — so the radial exit is always taken) → THE WHOLE CYCLE RUNS TWICE (their spring pass = a full second thread pass). Path radius pinned: 8.76 = d3/2 + toolR with d3 = ISO 724 EXTERNAL minor (nominal − 1.2268·p, root-arc-truncated — matches to 3 decimals, deliberate); INTERNAL mirrors with tips at the major: Rc = nominal/2 − toolR + tolerance, external Rc = d3/2 + toolR − tolerance; prep sizes ISO-true (bore at d1 = nominal − 1.0825·p, boss at nominal). Hand convention verified by the same file: "ccw" = left-hand = helix CW-viewed-from-above ASCENDING (z decreases with CCW rotation) ⇒ right-hand = CW-descending, as derived. ANTI-PATTERN, pinned by regression test (Alice's report, 2026-10-28 — "at some point the makera output did something silly and plunged to start subsequent cuts without allowance for the thread already there and gouged the thread face; they fixed this in later versions"): the 09-11 example cut a RADIAL LADDER (helix levels at 9.44 → 9.1 → 8.76) and re-plunged between levels AT THE CUT RADIUS — a vertical feed descent straight through the thread it had just cut; the fixed 10-03 cycle re-approaches from outside the crest first. Our cycle inherits the fix: every Z-descending move (spring pass, each multi-start, each target) starts from clear space — the approach point outside the crest (external) or the bore center (internal) — asserted over the whole move list by the descent test. INTERNAL cycle (no example exists — mirrored): approach at the bore CENTER, plunge inside the prep-cleared bore to the thread bottom, radial out to Rc, ascend; retract per Alice 2026-10-28 ("move aside… as long as there is hole diameter to do so, because we would have had a preceding pocket operation to clear it; if the tolerances are getting tight, follow the spiral back out"): aside — radial in to the bore center + straight lift — when the cleared bore leaves room (boreR − toolR ≥ margin; a sloppier prep or a slimmer tool — her Ø4.75 in an M14 bore has 4mm of room), else FOLLOW THE SPIRAL OUT: keep the helix going fraction of a lap past the mouth until the form is clear of the face, needing NO radial room (a straight lift while engaged drags the tooth through the thread teeth — the tight case; the bore-sized Makera mills with ~10µm aside room always exit this way). Multi-start = starts helices offset one pitch, lead = starts×pitch descending per rev; segments = 0.15mm chord target (floor 64, cap 512/rev); tool pitch validated strictly against thread pitch — and the panel SETS AND LOCKS the pitch from the tool while a fixed-pitch mill is selected (Alice, 2026-10-28: "as these threadmill bits have fixed pitch"; a pitch-less kind keeps it editable, defaulting to the ISO coarse on tool change). The thread perception is named cw/ccw like the rotary Thread op (Alice: "dont use right-hand/left-hand as the other thread tool uses cw/ccw, so be consistant" — 'ccw' = left-hand, the 14ccw example). RADIAL LADDER (Alice: "for tougher materials you might need to do this in multiple passes"): a Step over field (0.05mm increments) — 0 = the full form in ONE radial pass (the Makera cycle), > 0 splits the radial span into even levels, each a full bottom-up thread at its own radius, deepest last, the spring repeating the final level; the sim classifies thread removals against the ladder's step (or the full form depth) so a correct thread paints fine. The PREP insert's allowance is FORCED ≥ 0 (her first prep computed nominalR − bossR = −0.01 from a boss a hair over nominal and the profile errored: "dont warn that it must be >= 0, force it to be" — profile2d clamps, not throws). TOOL MODEL (Alice, 2026-10-28, twice-corrected — final form shop-checked against global.makera.com/en-gb/products/thread-milling-bit-6mm-shank): thread mills come in three kinds — 1-tooth, 3-tooth, and full-thread (the last is internal-only tapping, not in the Makera set). The Makera 1/3-tooth mills: a 2mm TOOTHED BAND (LCF) at the tip, then a long thin CUTTING LENGTH — the taper before the shank (18mm on the M6, 24 on the M8; shop overrides in the import) — then the SHANK (Ø6 on the M6/M8, 1/8″ on M1–M5; SFDM was RIGHT all along, the 3.175 "neck" clamp was the wrong reading of "long neck"), OAL 38/50. fluteLength carries the CUTTING LENGTH, so the full-depth helix keeps the shank clear: EXTERNAL — the shank crosses the crest radially unconditionally (Rc − shankR < crestR always), so a thread deeper than the cutting length throws (the shank would sweep the stock beside the thread); INTERNAL — the thread is capped at cutting − one pitch when the shank misses the bore. The OVERALL LENGTH caps the thread below the collet margin (OAL − 15mm). `flutes` = the TOOTH count ("there are no flutes, the teeth appear in only one spot on the circumference"): a 3-tooth is HARD-LOCKED to its pitch (teeth must ride successive turns of one groove), a 1-tooth cuts ANY pitch; records with no count read locked. The SIM classifies a thread's removals against the FULL THREAD LENGTH (one axial pass by tool design — her report: "wether i set step over of 0 or 0.1mm gives a wall of yellow"; the radial ladder never changes axial engagement), and models the tool with the cutting length as the flute — the 2mm-band record put the Ø6 shank 2mm above the tip, inside the stock beside every full-depth thread. The prep insert runs 1mm past the thread floor (form clearance below the last turn). PROFILE ALLOWANCE SPLIT (Alice, 2026-10-28 night): "allowance i dont want to change as it is height as well as width, which would mean unseen consequences" — the profile's single allowance becomes **Bottom allowance** (floor stock, forced ≥ 0) + **Side allowance** (RADIAL, SIGNED — negative steps the tool-center path INSIDE the contour, turning a boss down past its modeled Ø); a diameter field was rejected ("not only circular features"), offset-on-top-of-allowance as confusing. normalizeJobOps migrates old saves (single allowance → both). The THREAD PREP INSERT prefills `sideAllowance = (nominal − 2·tolerance)/2 − bossR` — the ISO-fit crest target, BOTH ends from the THREAD (nominal + tolerance), the start from the resolved boss: "the feature on the thread might not be the same as the thread diameter set" — so the neck rides the reduced crest at zero clearance and the red streamers stop (the internal pocket prep analogously: allowance = boreR − d1R, clamped ≥ 0 — a pocket cannot grow its region). Her job now generates clean end-to-end. DEPTH SEMANTICS CONFIRMED (Alice, 2026-10-28 night): the boxes anchor at the STOCK CROWN like every op, and that is what she wants — "i genuinely wanted thread from the very top of the stock to 9mm down… i moved up 1mm from [the datum] to allow for the runout that the facing op would give us". The SELECTED FACE IS JUST A DATUM: on a model that already carries the finished thread form, the right-Ø feature may sit at the base of a modelled outward chamfer where thread meets body — start 0 from the crown is the legitimate setup (the prefill fills Ø/pitch/side; the depths are hers). Her production workflow for the GHM9 adapter: thread end in the 4th-axis vice → rotary-mill the flats half → re-fixture vertical in 3-axis → mill the outer thread (this op) + pocket the through hole. THREAD END TREATMENT (her ruling, 2026-10-28 night — answering the transition question): EXTERNAL threads NEVER fade — the leading end (screwed into something) is threaded FULL FORM until it falls off the face, then a CHAMFER BIT dresses the face, 'possibly combined with an end mill to clear some of it down to the inner radius' (root-Ø relief so the chamfer has room); 'it is sadly impossible to inset the thread so that it slowly disappears… and give a tapered start' — the best extra is 'mill some of the peaks off with an endmill afterwards' (crest-dressing). The trailing end at a shoulder: EITHER pre-cut a chamfer/undercut down to the thread's minor Ø in advance (the last turn runs out into it), OR thread down until it butts the wider piece (a partial last turn). FADE-OUT / FORM RUNOUT IS AN INTERNAL-ONLY FEATURE — only inside threads can fade, harmlessly into the bore wall where nothing must engage; PARKED until an internal job wants it. Makera's own Stage3 flow confirms the recipe: the 14ccw thread is followed by [T4] chamfer ops (Inside/Outside). No generator feature needed — the external treatment composes from the existing chamfer/profile ops. Flute check internal: depth ≤ fluteLength when the shank oversizes the bore (loud error). The panel's "Add prep toolpath" INSERTS a prefilled op before the thread (Alice 2026-10-28; Makera's own prep on the same part was a flat-endmill contour around the boss): external → a PROFILE turning the boss to the major Ø (side outside, clear-to-stock, allowance = nominalR − bossR, negative to turn down); internal → a POCKET opening the bore to d1 (allowance = boreR − d1/2); nominal-Ø edit prefills the ISO coarse pitch like the rotary op |
 | Spiral carve (wrapped groove, STARTED 2026-10-20; WIDTH REWORKED 2026-11-16, branch `fix/wide-groove` — her ruling: "the resulting slot exactly as if cut by a single pass of a larger diameter tool, so rounding the ends also included", the quoted case a spiral through-cut on a hollow tube) | parametric | `spiralCarve.ts`: multi-start helices about the stock axis at a user angle off circumferential (90° = axial); depth ladder retraces the same pass polyline per level (sweeps alternate, A returns along the groove). THE WIDTH CONTRACT: a width wider than the tool's honest cut width (`slotToolWidth` — full Ø flat; ball chord 2·√(R²−(R−d)²); V cone tip+2d·tan(v/2)) is milled as the STADIUM a Ø=width tool would leave in one pass: parallel helix channels at PERPENDICULAR offsets (axial AND phase — the old axial-only fan squeezed by cos(angle) and left the middle standing with narrow-cutting tools), each channel's sweep extended onto the inset end circles, plus one CAP ARC around each end (the tool center rides the inset circle) so the ends come out ROUNDED; pinned by numeric no-overcut/no-undercut grid tests on the developed surface (0 standing cells at 0.1mm sampling, flat/ball/V × 30/45/60/90°, incl. exact width multiples). X+A segments G93 per segment from the rotary limit; strand phases follow the index datum; setup ghost + groove marks share `slotPasses` with the emitter. Archimedean/straight/cross-hatch still to come |
 | Flat pocket / profile / drill / engrave | 2.5D | Clipper2 offsets (see docs) over sliced depth intervals; drill from circle-feature detection. Profile (and slice-pocket outside) carry **TABS** (2026-10-25, Alice's cut-out workflow): N auto-spaced hold-down bridges (count/height/length, defaults 3 × 0.5mm × 3mm) — deep levels cut spans between them, shallow levels cut through; arc-length placement never straddles the loop seam. The waterline rough needs none: its upper-shadow keep-out plus the widest-section stop make it provably unable to free a part (2026-10-25, tabs removed). Pocket and Profile ops carry a **cut-over toggle** (2026-10-28), with split semantics settled by Alice the same day: pocket ON = a **deliberate step-over perimeter around the defined area** — the cut REGION grows by one step-over before the tool-radius inset, so the swept cut extends exactly one step-over past the selected outline (clean past boundary drop-offs — her flat-on-the-barrel: clear past the horizon so the transition to the curve is crisp, no rim skin; "if you permitted the step-over, you already vouched nothing of value sits within it") and the stock clamp dilates the same way; OFF = the cut stops at the selected outline and clamps to the stock.
 Deep-pocket roughing auto-selects TROCHOIDAL constant-engagement
@@ -1551,6 +1551,19 @@ Build split: cam-kernel (pose/frame plumbing, indexFrame generalization),
 post-processor (per-fixture split + headers + parser concatenation),
 viewport-ui (divider/collapse + per-op colours).
 
+**PER-SECTION ADD ROWS + CROSS-DIVIDER DRAG (her 2026-11-21 follow-up):**
+the + Add / + Suggest pair moved from above the ops list to the END of
+EVERY fixture section — the buttons sit exactly where the new op appears,
+so any fixture can grow, not just the last (src/ui/opsSections.ts:
+sectionEndIndex/sectionLabel, shared by the panel's rows and App's
+insertions so the two never disagree; a new op or checked suggestions land
+before the clicked section's next divider; the pair hides with a collapsed
+section). Drag reordering crosses dividers now: a drop re-homes the dragged
+op into the target's section and it regenerates in that frame — her call
+("dragging won't cross the Fixture barrier" left no way into earlier
+fixtures); fixture dividers themselves still never drag, their position IS
+the frame boundary.
+
 ## Candidate future features (gap analysis, 2026-10-28)
 
 Nightcap survey of the six CAM systems that officially target the
@@ -1766,6 +1779,163 @@ bitmap import (beta.13): halftone dots artwork mode. The parked
 "raster mode = LATER (per-move S modulation, M325)" note in the
 laser design is DEAD per the verdict above — vectorized halftone is
 the only laser-image mode this project will have.
+
+## Competitor CAM survey (2026-11-22 — six projects, research → candidates)
+
+Survey of six alternate CAM projects sharing our idea space: ChipCutter
+(MIT/Apache, readable), Camcraft (Apache, readable), SolidCraft (MIT/Apache
+— CAD only, no CAM), OpenChuckCAM (**AGPL — description-only, docs
+included**), PhysCAD (closed, description-only), RotatoCAM (closed,
+description-only; its example post scripts are unlicensed — tainted).
+Full research record with per-source findings, formulas, and URL list:
+`reference/competitor-cam-survey-2026-11-22.md` (gitignored, unpublished).
+Items are S-numbered (S for survey) to keep the 2026-10-28 gap-analysis
+numbering stable. Verdicts PENDING unless noted — Alice adjudicates what
+goes on the plan vs the ideas bucket.
+
+Cheap/correctness items, convergent across ≥2 independent sources:
+
+- **S1. G93 A-rate clamp audit + post backstop** (trivial/small) — three
+  independent implementations converge: segment time = max(surface time,
+  ΔA / max deg-min), so a coordinated move at small radius never commands
+  A past its ceiling. We already clamp via `MAX_ROTARY_RPM` in
+  swarfFinish/spiralCarve/faceCylinder; the gap is uniformity across every
+  coordinated-A generator plus a post-level backstop so it can't regress.
+- **S2. 4D finish-pass quality details** (small, lands in the in-flight
+  work) — Camcraft's pivot law (ladders planned as BALL CENTERS, stream
+  locates the tip: `tip = center − r·pose` — rotating about the tip stands
+  the ball a full radius off the wall; their shipped bug); Camcraft's link
+  law (pass-to-pass links on a laid bar = radial retract → angular index
+  → radial plunge, never a Z lift); OpenChuckCAM's knob set (lead angle
+  −30..30°, largest tilt 10°, largest angle step 5°, report largest tilt
+  used; surfaces the pass can't follow refused-and-listed by area, not
+  cut badly); ChipCutter's slope-compensated stepover (local flank cos φ)
+  and recursive chord-sagitta subdivision. ChipCutter's warning that
+  voxel/heightmap grid corners cause staircase lifts reads as a risk for
+  the voxel-truth pilot.
+- **S3. Flute-reach checks at part ends / beside walls** (small/medium) —
+  RotatoCAM SHIPPED this bug (cutter 1.9× past flute length into the
+  rougher's end collar, 132 entries); OpenChuckCAM bounds it as a per-path
+  check over existing stock ("a bound, not a measurement"); Camcraft has
+  the drill-reach law. Addresses valley-partial fragility + the wide-groove
+  contract; warn-don't-block compatible.
+- **S4. Read-back + replay verification at export** (medium) — re-parse the
+  written file, replay, compare against the plan (OpenChuckCAM: tip
+  0.0007 mm, A 0.0005°; mismatch refuses the write). We already hold the
+  pinned `ncParser` — wiring it into export verifies every job's
+  semantics where goldens only pin enumerated cases.
+- **S5. M6 return-position hazard audit** (trivial to check) — Camcraft's
+  Carvera post records that the firmware ends every M6 with `G53 G0
+  Z<clearance>` then returns to the machine X/Y the M6 arrived at, so the
+  first move after a tool change must never be a diagonal from an
+  unknown position. Verify against `docs/makera-dialect.md` + our post's
+  post-M6 behavior; if it holds it's a post rule + golden test. Other
+  dialect facts to cross-check while there: mm-only (G20 halts), M2 not
+  M30, dwell G4 P seconds, T0 = probe.
+- **S6. Machine-profile validation warnings** (small) — PhysCAD: "a setup
+  that won't fit travel won't post"; ChipCutter ships harvestable Carvera
+  profile data (verify against Makera specs — they're alpha); OpenChuckCAM
+  carries confirmed/unconfirmed provenance per profile value. Wire
+  travel/feed/RPM limits + the 61-char rule into post-time WARNINGS
+  (not gates) named per op.
+
+Medium items, roadmap-adjacent:
+
+- **S7. Holding tabs** (small/medium) — four sources converge, each with a
+  piece: ChipCutter's triangular ramped profile (no dwell marks), Camcraft's
+  geometry-sized bridges, OpenChuckCAM's rotary head/tail zones, PhysCAD's
+  setup-level construct every op rides over. NOT the rejected fixture
+  modeling — uncut material, no modeled bodies. Prerequisite for
+  through-cut flip work.
+- **S8. Drilling (spot/peck) + helical bore + bolt-circle patterns**
+  (medium) — no drilling op exists at all today; ChipCutter has the full
+  spec (tip breakthrough compensation, TSP hole ordering), RotatoCAM's
+  drill_pattern covers bolt-circle/grid/rotary-indexed. Generate-pins
+  needs pin drilling — design together with S9.
+- **S9. Generate-pins refinements** (small add-on to the planned op) —
+  ChipCutter's wizard: pin positions strictly outside the 2D silhouette,
+  strictly 180°-flip-invariant (< 1e-9 mm), optional poka-yoke asymmetry
+  so the part only seats one way. Write into the spec before building.
+- **S10. V-carve flat depth law + modes** (medium) — wrapped V-carve
+  landed (`c32bffc`); the survey adds the flat 2D side: medial-axis depth
+  via inscribed-circle radius (`depth = r/tan(θ/2)`, closed-form
+  tangent-circle shrink, Ma/Bae/Choi 2012), Sides One (fill the shape) vs
+  Both (groove along a centerline, flat-bottom where the V can't reach),
+  max-depth cap with flat-bottom clearing rings, a clearing endmill kept
+  in step, inlay/male mirrored mode; Camcraft's per-move re-measure
+  safety law + the sim subtlety that branch crossings are legal at one
+  depth (crossing check needs a V-carve mode).
+- **S11. Sim verdict upgrades** (small/medium) — PhysCAD's verdict line +
+  click-to-jump-to-offending-move; RotatoCAM's on-surface/leftover/gouged
+  deviation coloring (leftover is our missing third); ChipCutter's
+  quantitative metrology (excess/gouge volume, RMS/MAE, P95, in-tolerance
+  %, worst-cell location, per-op progression) — doubles as a regression
+  instrument for our own generators. Pure analysis/UI over the existing
+  voxel sim.
+
+Ideas bucket (bigger or later):
+
+- **S12. Wrap-space rotary roughing + axis fit from mesh normals**
+  (large) — Camcraft: fit the rotation axis from facet normals
+  (normal lines anchored at circumcenters), develop the surface onto a
+  cylinder, run pocket ladders in that frame (ρ plays Z); seam closure,
+  seam relocation, world exit at ρ + tool radius. The axis fit also
+  detects a modelled thread's pitch and hand, and lets the cylinder
+  canvas adopt any user mesh. The natural roughing partner to the 4D
+  finish pass for arbitrary meshes.
+- **S13. Measured-engagement principle for the adaptive-clearing spec**
+  (medium, spec amendment) — Camcraft measures every emitted cut on
+  in-process stock before keeping it (engagement max/location/distribution
+  reported; overload capped and NAMED, then fallback ladder). Adopt the
+  measure-don't-assert principle into the spec.
+- **S14. Short-move block-time model** (medium) — OpenChuckCAM: minimum
+  block time (Z1 measured 7 ms over WiFi) + planner window (32); report
+  or slow down without touching geometry. Pairs with the 61-char limit
+  and the entryXY sim-flag work.
+- **S15. Arc-preserving offsets + biarc fitting** (medium) — SolidCraft's
+  closed PR: offset lines-and-arcs exactly so walls emit as G2/G3 arcs,
+  not chord spam; Camcraft's biarc refit (Bolton 1975). Fights the
+  61-char limit and controller look-ahead.
+- **S16. Probing ops → auto WCS** (small/medium) — PhysCAD Probe Stock +
+  Camcraft probing-as-IR; Carvera has a probe + auto tool setter. Needs
+  Carvera probe-macro verification first; replaces "measure and type" in
+  the fixture-ops flow.
+- **S17. Setup sheets with SHA-256 + change-order tool list** (small) —
+  OpenChuckCAM/ChipCutter/Camcraft; operator hashes the program file at
+  the machine. Cheap traceability for a blind-file controller.
+- **S18. Small remainder** — mill_flats (index N times, face each side;
+  thin preset over indexed 4-axis); no-windup raster finishing (A stays
+  0–360°, alternative to G92.4 unwinding); multi-offset single-program
+  posting; engagement-aware feed optimization post-pass (corner
+  slowdown for the 200 W spindle); dogbones/T-bones; Hershey single-line
+  engraving fonts; grid copies; wrapped backplot must subdivide
+  coordinated rotary moves (big-ΔA G1 draws the wrap, not a chord).
+
+Hard rules and confirmations from the survey (do not re-litigate):
+
+- **PATENT LANDMINE: view-cube corner/edge clicking** (Autodesk; PhysCAD
+  removed it until 2029). Our three.js viewport stays face-click only.
+- **No code-loading post plugin system, ever** (RotatoCAM executes
+  `~/.rotatocam/posts/*.py` at startup) — RCE territory in a web app.
+- **Rest machining reconfirmed struck-off** by competitor field data
+  (OpenChuckCAM: 51 mm³ removed for 3,661 moves; output depends on sim
+  stock, breaks when an earlier op changes). **Fixture modeling
+  reconfirmed struck-off** (RotatoCAM's own docs: a drawn chuck "is not
+  proof that every collision is checked"; their held-region/tabs approach
+  validates our lightweight direction).
+- **Blocking posture rejected**: several targets gate export on ticked
+  warnings; we take the diagnostic quality (named refusals, numbers,
+  locations), never the gate — warn-don't-block stands.
+- **Dialect caution**: Z1 has no G93 (OpenChuckCAM's feed rules don't
+  transfer); PathPilot semantics need Carvera-firmware verification;
+  harvested machine constants get checked against Makera's published
+  specs before shipping.
+- **Competitive position**: we are ahead of all six on Carvera 4th-axis
+  support (PhysCAD's rotary is Labs-half-built; Camcraft's Carvera post
+  is 3-axis-only and they refuse freeform carvings on A; RotatoCAM's
+  Carvera post is experimental/unqualified; OpenChuckCAM is Z1-only).
+  Rotary post facts still come only from our goldens + mill-tested
+  examples.
 
 ## License policy (hard rule)
 

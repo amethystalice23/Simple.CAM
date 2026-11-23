@@ -62,6 +62,17 @@ function expectRoundTrips(parsed: Move, original: Move, label: string) {
     const p = parsed.words[key];
     if (o === undefined) {
       expect(p, `${label} ${key} absent`).toBeUndefined();
+    } else if (key === 'a') {
+      // A is emitted in the parser's CONTINUOUS PHYSICAL frame: every
+      // no-motion counter adjustment (G92.4 shrink / re-anchor / pin)
+      // shifts the mapping by the turns it re-stated, so a parsed word
+      // can sit whole turns from the IR's counter-frame word while
+      // naming the same spoke. Compare mod 360; the physical-delta
+      // contract is pinned in the G92.4 describe below.
+      const pv = p as number; // word sets asserted equal above — o defined ⇒ p defined
+      const d = ((pv - o) % 360 + 360) % 360;
+      const spoke = Math.min(d, 360 - d);
+      expect(spoke, `${label} ${key} spoke`).toBeLessThan(1e-6);
     } else {
       expect(p, `${label} ${key}`).toBeCloseTo(parseFloat(o.toFixed(2)), 6);
     }
@@ -749,7 +760,41 @@ describe('nc parser: G92.4 tracked-A semantics', () => {
       ].join('\n'),
     );
     expect(seq.finalA).toBe(45);
-    expect(seq.moves.map((m) => m.words.a)).toEqual([360, 720, 720, 45]);
+    // the EMITTED words are the CONTINUOUS PHYSICAL θ (counter word +
+    // the accumulated no-motion offset), so consecutive deltas are the
+    // rotation the machine actually travels: 360→720 (+1 turn), the
+    // shrink at 720 (no motion), 720→1080 (+1 turn — the raw word said
+    // 720 but the physical moved a full turn), 1080→405 (−675, exactly
+    // the counter's 720→45 travel). finalA stays the raw COUNTER (45).
+    expect(seq.moves.map((m) => m.words.a)).toEqual([360, 720, 1080, 405]);
+  });
+
+  it('a stance re-anchor round-trips as ZERO travel — the polish phantom-revolution contract', () => {
+    // the post's shrink-path stance anchor (her spiral_test+polish report,
+    // 2026-11-23): counter 395.5 → S0 shrink → G0 A41.5 (re-expressed
+    // spoke) → G92.4 A401.5 (the re-anchor) → the stance's cut speaks
+    // A401.5. The machine travels ZERO on the cut; the parsed stream must
+    // say the same — the naive raw-word parse read a phantom 360° feed
+    // revolution between the plunge and the cut, and the sim ate the
+    // model's middle as "circular swipes".
+    const nc = [
+      'G1 A395.5 F100',
+      'G92.4 A0 S0', // counter → 35.5, no motion
+      'G0 A41.5', // the anchor: +6° physical
+      'G92.4 A401.5', // the re-anchor: counter back to the pile, no motion
+      'G1 X10.5 Y0.5 Z3.9 A401.5 F900', // the cut: ZERO A travel
+    ].join('\n');
+    const { moves, finalA } = parseCarveraNc(nc);
+    const as = moves.map((m) => m.words.a);
+    // the cut's parsed A sits on the SAME spoke as the anchor's — and the
+    // delta between the anchor and the cut is the physical ZERO travel
+    const anchorA = as[1] ?? NaN;
+    const cutA = as[2] ?? NaN;
+    expect(as[0]).toBeCloseTo(395.5, 6);
+    expect(anchorA).toBeCloseTo(41.5 + 360, 6); // physical: 395.5 → shrink → +6
+    expect(cutA).toBeCloseTo(41.5 + 360, 6); // re-anchor: NO motion
+    expect(cutA - anchorA).toBeCloseTo(0, 6);
+    expect(finalA).toBeCloseTo(401.5, 6); // the raw counter
   });
 });
 

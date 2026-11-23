@@ -94,6 +94,23 @@ describe('toolMetaLine', () => {
   it('omits the unknowns quietly — no placeholder clutter', () => {
     expect(toolMetaLine(tool('Custom shape', undefined, 5))).toBe('flat · Ø5');
   });
+
+  it('shows the PITCH in place of the cut length for thread mills', () => {
+    // a thread mill's pitch is what selects it (a 3-tooth is hard-locked
+    // to its pitch; the op panel locks the pitch from the tool) — the cut
+    // length is boilerplate next to that
+    const m6: Tool = {
+      ...tool('Thread Mill M6x1', 'Thread · Mill', 6),
+      type: 'threadmill',
+      pitch: 1,
+      fluteLength: 12,
+      shaftDiameter: 6,
+    };
+    expect(toolMetaLine(m6)).toBe('threadmill · Ø6 · pitch 1mm · shank 6');
+    // a pitch-less record falls back to the cut length rather than nothing
+    const anyPitch: Tool = { ...m6, pitch: undefined };
+    expect(toolMetaLine(anyPitch)).toBe('threadmill · Ø6 · cut 12mm · shank 6');
+  });
 });
 
 describe('toolState', () => {

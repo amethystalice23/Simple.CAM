@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Vec2 } from '../../core/types';
-import { arcTable, MAX_RAMP_ANGLE_DEG, rampEntry, type RampParams } from '../entry';
+import { arcTable, helicalDescentFits, MAX_RAMP_ANGLE_DEG, rampEntry, type RampParams } from '../entry';
 
 /** CCW square contour spanning [min, min+size]². */
 function square(min: number, size: number): Vec2[] {
@@ -42,6 +42,25 @@ function params(over: Partial<RampParams> = {}): RampParams {
 describe('arcTable', () => {
   it('closes back on vertex 0', () => {
     expect(arcTable(square(0, 10))).toEqual([0, 10, 20, 30, 40]);
+  });
+});
+
+describe('helicalDescentFits — the continuous-descent qualifier', () => {
+  it('step-down-governed descents fit at any revolution count (2026-11-23)', () => {
+    // the reported prep profile: 56.5mm perimeter, stepDown 0.2 → 43
+    // revolutions, each 15× shallower than the angle limit
+    expect(helicalDescentFits(56.5, 9, 0.2)).toBe(true);
+    // deep and slow: 41 revolutions of a full cut band at ~1.2°
+    expect(helicalDescentFits(40, 40.5, 1)).toBe(true);
+  });
+
+  it('angle-governed pinched loops keep the traversal cap', () => {
+    // P = 1mm at stepDown 1: the angle caps each rev at 0.052mm → 39 revs
+    expect(helicalDescentFits(1, 2, 1)).toBe(false);
+    // few enough steep revolutions still fit
+    expect(helicalDescentFits(1, 0.05, 1)).toBe(true);
+    // under the minimum ramp stretch, never a ramp
+    expect(helicalDescentFits(0.3, 2, 1)).toBe(false);
   });
 });
 

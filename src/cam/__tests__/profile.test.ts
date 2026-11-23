@@ -215,11 +215,23 @@ describe('profile2d', () => {
     expect(approaches.map((m) => m.words.z)).toEqual([0.5]);
   });
 
-  it('a deep loop that would degenerate keeps the stepped ladder', () => {
-    // 40.5mm descent at per-rev ≤ 1 needs 41 revolutions — past the ramp
-    // traversal cap, so continuous descent must NOT fire (a degenerate
-    // fallback there would be a straight full-depth plunge)
+  it('a deep step-down-governed descent collapses to continuous (2026-11-23)', () => {
+    // 40.5mm descent on a 48mm perimeter at stepDown 1: each revolution
+    // takes the full cut band at ~1.2° — 41 gentle revolutions. The old
+    // 24-rev cap wrongly kept the stepped ladder here (40 retract-re-
+    // enter batches on the reported prep profile); the cap now binds only
+    // when the ANGLE governs each revolution.
     const res = profile2d(op({ topZ: 0, floorZ: -40, stepDown: 1 }), tool);
+    expect(res.continuous).toBe(1);
+    expect(res.passes).toBe(1);
+    expect(res.entries.helical).toBe(1);
+  });
+
+  it('a pinched angle-governed loop keeps the stepped ladder', () => {
+    // stepDown 5 on a 48mm perimeter: one revolution may only descend
+    // P·tan3° = 2.5mm at the angle cap — 25 revolutions of a steep spiral
+    // is a plunge in all but name, so the traversal cap still binds there
+    const res = profile2d(op({ topZ: 0, floorZ: -62, stepDown: 5 }), tool);
     expect(res.continuous).toBe(0);
     expect(res.passes).toBe(res.levels);
   });

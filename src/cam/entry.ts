@@ -31,7 +31,10 @@ import { pointAtArc } from './clipUtils';
  *  machine; steeper is a plunge in all but name. */
 export const MAX_RAMP_ANGLE_DEG = 3;
 /** Zigzag legs / helical revolutions beyond this mean the geometry is too
- *  small to ramp — fall back to a straight plunge. */
+ * small to ramp — fall back to a straight plunge. Only binds when the
+ * ANGLE caps each traversal (a pinched loop, or a step-down steeper than
+ * the angle allows): a step-down-governed descent can need any number of
+ * gentle revolutions (2026-11-23, the double-thread prep report). */
 const MAX_RAMP_TRAVERSALS = 24;
 /** A ramp stretch shorter than this is a plunge with extra steps. */
 const MIN_RAMP_STRETCH = 0.5;
@@ -40,14 +43,25 @@ export type EntryMode = 'helical' | 'zigzag' | 'plunge';
 
 /**
  * True when a closed-loop helical descent of `descent` over perimeter `P`
- * stays within the traversal cap — never degenerating to a straight
- * plunge. Callers qualify continuous-descent mode (the profile ladder
- * collapse) with this: a deep or pinched loop keeps its stepped ladder.
+ * stays a legal, non-degenerate ramp. Callers qualify continuous-descent
+ * mode (the profile ladder collapse) with this.
+ *
+ * STEP-DOWN-GOVERNED — stepDown at or under the angle cap (P·tanα): every
+ * revolution takes the full cut band and still rides ≤ α, so however many
+ * revolutions the descent needs, none is degenerate; it always fits
+ * (2026-11-23, the double-thread prep report: 43 revolutions of 0.2mm on
+ * a 56.5mm perimeter — 15× shallower than the angle limit — wrongly kept
+ * the stepped ladder, 40 retract-re-enter batches).
+ *
+ * ANGLE-GOVERNED — the perimeter is too pinched for the step-down at α:
+ * each revolution is as steep as the angle allows, and past the traversal
+ * cap that is a plunge in all but name; the stepped ladder keeps it.
  */
 export function helicalDescentFits(P: number, descent: number, stepDown: number): boolean {
   if (P < MIN_RAMP_STRETCH) return false;
-  const perRev = Math.min(stepDown, P * Math.tan((MAX_RAMP_ANGLE_DEG * Math.PI) / 180));
-  return perRev > 0 && Math.max(1, Math.ceil(descent / perRev)) <= MAX_RAMP_TRAVERSALS;
+  const angleCap = P * Math.tan((MAX_RAMP_ANGLE_DEG * Math.PI) / 180);
+  if (stepDown <= angleCap) return stepDown > 0;
+  return angleCap > 0 && Math.max(1, Math.ceil(descent / angleCap)) <= MAX_RAMP_TRAVERSALS;
 }
 
 /**
@@ -192,7 +206,12 @@ export function rampEntry(p: RampParams): EntryResult {
     if (P < MIN_RAMP_STRETCH) return plungeEntry(p, 'loop too short to ramp');
     const perRev = p.bore ? p.stepDown : Math.min(p.stepDown, P * tanA);
     const revs = Math.max(1, Math.ceil(descent / perRev));
-    if (!p.bore && revs > MAX_RAMP_TRAVERSALS) return plungeEntry(p, 'loop too short to ramp');
+    // the traversal cap binds only when the ANGLE governs each revolution
+    // (step-down over the angle cap = a pinched loop); a step-down-
+    // governed descent needs its many revolutions lawfully
+    if (!p.bore && p.stepDown > P * tanA && revs > MAX_RAMP_TRAVERSALS) {
+      return plungeEntry(p, 'loop too short to ramp');
+    }
 
     // ARC FORM (2026-11-12): a loop that approximates an analytic circle
     // ramps as whole-revolution arcs — one full-circle G2/G3 per turn,
