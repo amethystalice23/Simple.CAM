@@ -39,12 +39,19 @@ export interface SimTransport {
   /** the move the BAR shows: the carved position (worker progress) while
    *  playing, the committed position while paused */
   position: number;
+  /** the worker's carved cursor, straight from progress messages (0 while
+   *  a reset is in flight) — the redraw overlay's green rides this while
+   *  the yellow holds the commit */
+  carved: number;
   totalMoves: number;
   speed: PlaybackSpeed;
   label: string;
   togglePlay: () => void;
   returnToStart: () => void;
   stepForward: () => void;
+  /** one move BACK (the ← key, 2026-11-23): behind the carved position
+   * this is the scrub-style reset + re-carve — voxels cannot un-carve */
+  stepBack: () => void;
   /** scrub commit (on RELEASE — the bar previews locally while dragging) */
   scrubTo: (moveIndex: number) => void;
   cycleSpeed: () => void;
@@ -99,6 +106,9 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
   const position = commit ?? (staleRef.current ? 0 : (state.progress?.move ?? 0));
   const positionRef = useRef(position);
   positionRef.current = position;
+  /** the carved cursor, unpolluted by the commit — the scrub bar's redraw
+   *  overlay greens this under the yellow target while a re-carve runs */
+  const carved = staleRef.current ? 0 : (state.progress?.move ?? 0);
 
   useEffect(() => {
     // progress confirms the carve — clears the post-reset staleness too
@@ -331,6 +341,21 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     commitTo(positionRef.current + 1);
   }, [commitTo, stopClock]);
 
+  const stepBack = useCallback(() => {
+    // the ← key (2026-11-23) — the max-park pause mirrors stepForward;
+    // commitTo clamps at 0 and posts the reset + re-carve behind the
+    // carved position (the scrub-proven path)
+    if (playingRef.current) {
+      setPlaying(false);
+      if (minutesPerSecond(speedRef.current) === null) {
+        postedTargetRef.current = carvedRef.current;
+        sendRef.current({ type: 'carve', throughMove: carvedRef.current });
+      }
+    }
+    stopClock();
+    commitTo(positionRef.current - 1);
+  }, [commitTo, stopClock]);
+
   const scrubTo = useCallback(
     (k: number) => {
       if (playingRef.current) {
@@ -386,12 +411,14 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
   return {
     playing,
     position,
+    carved,
     totalMoves,
     speed,
     label: speedLabel(speed),
     togglePlay,
     returnToStart,
     stepForward,
+    stepBack,
     scrubTo,
     cycleSpeed,
   };

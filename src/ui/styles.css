@@ -1060,11 +1060,25 @@ pre {
   overflow: hidden;
   cursor: pointer;
   touch-action: none; /* the drag owns the pointer, not the scroll */
+  position: relative; /* the fills stack as layers over the track */
+}
+.transport-scrub-fill,
+.transport-scrub-fill-pending {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  height: 100%;
+  pointer-events: none; /* the bar handles the drag, not the fill */
 }
 .transport-scrub-fill {
-  height: 100%;
   background: #7fae6f; /* the sim-progress-fill green — same carve story */
-  pointer-events: none; /* the bar handles the drag, not the fill */
+}
+.transport-scrub-fill-pending {
+  /* the redraw overlay's target layer (2026-11-23): a backward step/scrub
+   * costs a full reset + re-carve — the yellow holds the committed target
+   * while the green redraws over it; once they meet the yellow drops */
+  background: #e0a94f; /* the sim's warning yellow */
 }
 .transport-speed {
   background: rgba(42, 48, 56, 0.9);

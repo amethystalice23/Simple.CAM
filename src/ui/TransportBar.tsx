@@ -2,14 +2,27 @@
  * The simulation transport bar (2026-10-27, Alice's spec): a floating
  * widget across the viewport's BOTTOM, visible only while the
  * Simulation layer tick is on AND a completed simulation exists. Left to
- * right: play/pause, return-to-start (NO step-back — dropped deliberately),
- * step-forward, scrub bar, speed pill (immediately adjacent to the bar's
- * right end), move readout (trails last, muted). Styling follows the
- * projection-pill/layers-button floating-widget pattern.
+ * right: play/pause, return-to-start (the button row still has no
+ * step-back), step-forward, scrub bar, speed pill (immediately adjacent
+ * to the bar's right end), move readout (trails last, muted). Styling
+ * follows the projection-pill/layers-button floating-widget pattern.
+ *
+ * Keyboard (2026-11-23, Alice's ask): space toggles play/pause, the
+ * cursor keys step one move at a time — right forward, left back. The
+ * keys live exactly as long as the bar does, and refuse typing, key
+ * repeats (a backward step behind the carved cursor costs a full stock
+ * reset), and modifier chords (transportKeys.ts, unit-pinned).
+ *
+ * REDRAW OVERLAY (2026-11-23, Alice's spec): a backward step/scrub costs
+ * a reset + re-carve — while it runs the old fill turns YELLOW holding
+ * the committed target and the GREEN redraws over it to the carved
+ * cursor; when they meet the yellow drops (transportFill.ts, pinned).
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SimTransport } from './useSimTransport';
+import { transportKeyAction } from './transportKeys';
+import { transportFill } from './transportFill';
 
 interface Props {
   transport: SimTransport;
@@ -19,11 +32,13 @@ export function TransportBar({ transport }: Props) {
   const {
     playing,
     position,
+    carved,
     totalMoves,
     label,
     togglePlay,
     returnToStart,
     stepForward,
+    stepBack,
     scrubTo,
     cycleSpeed,
   } = transport;
@@ -31,8 +46,13 @@ export function TransportBar({ transport }: Props) {
   /** dragging previews the position WITHOUT committing (commit is on
    *  release — scrub-behind costs a full grid rebuild, per spec) */
   const [scrubPreview, setScrubPreview] = useState<number | null>(null);
-  const shown = scrubPreview ?? position;
-  const pct = totalMoves > 0 ? (100 * shown) / totalMoves : 0;
+  const { pendingPct, fillPct } = transportFill({
+    playing,
+    preview: scrubPreview,
+    position,
+    carved,
+    totalMoves,
+  });
 
   const moveFromEvent = useCallback(
     (clientX: number): number => {
@@ -70,12 +90,28 @@ export function TransportBar({ transport }: Props) {
     [moveFromEvent, scrubTo, scrubPreview],
   );
 
+  // keyboard: space / cursor keys, active exactly while the bar exists.
+  // preventDefault keeps a focused transport button from ALSO firing on
+  // the space keyup — the transport's own action runs instead.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = transportKeyAction(e);
+      if (action === null) return;
+      e.preventDefault();
+      if (action === 'togglePlay') togglePlay();
+      else if (action === 'stepForward') stepForward();
+      else stepBack();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [togglePlay, stepForward, stepBack]);
+
   return (
     <div className="transport-bar">
       <button
         type="button"
         className="transport-btn"
-        title={playing ? 'Pause the simulation playback' : 'Play the simulation (at the end: rewind and play)'}
+        title={playing ? 'Pause the simulation playback (space)' : 'Play the simulation — at the end, rewind and play (space)'}
         onClick={togglePlay}
       >
         {playing ? '⏸' : '▶'}
@@ -91,7 +127,7 @@ export function TransportBar({ transport }: Props) {
       <button
         type="button"
         className="transport-btn"
-        title="Step one move forward (pauses playback)"
+        title="Step one move forward (pauses playback; → key, ← steps back)"
         onClick={stepForward}
       >
         ⏭
@@ -99,13 +135,16 @@ export function TransportBar({ transport }: Props) {
       <div
         ref={barRef}
         className="transport-scrub"
-        title="Drag to scrub — releasing re-carves to that move (scrubbing back rebuilds the stock)"
+        title="Drag to scrub — releasing re-carves to that move (a backward scrub rebuilds the stock: yellow holds the target while the green redraws)"
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
       >
-        <div className="transport-scrub-fill" style={{ width: `${pct}%` }} />
+        {pendingPct !== null && (
+          <div className="transport-scrub-fill transport-scrub-fill-pending" style={{ width: `${pendingPct}%` }} />
+        )}
+        <div className="transport-scrub-fill" style={{ width: `${fillPct}%` }} />
       </div>
       <button
         type="button"
