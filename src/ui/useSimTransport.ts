@@ -45,6 +45,9 @@ export interface SimTransport {
   togglePlay: () => void;
   returnToStart: () => void;
   stepForward: () => void;
+  /** one move BACK (the ← key, 2026-11-23): behind the carved position
+   * this is the scrub-style reset + re-carve — voxels cannot un-carve */
+  stepBack: () => void;
   /** scrub commit (on RELEASE — the bar previews locally while dragging) */
   scrubTo: (moveIndex: number) => void;
   cycleSpeed: () => void;
@@ -331,6 +334,21 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     commitTo(positionRef.current + 1);
   }, [commitTo, stopClock]);
 
+  const stepBack = useCallback(() => {
+    // the ← key (2026-11-23) — the max-park pause mirrors stepForward;
+    // commitTo clamps at 0 and posts the reset + re-carve behind the
+    // carved position (the scrub-proven path)
+    if (playingRef.current) {
+      setPlaying(false);
+      if (minutesPerSecond(speedRef.current) === null) {
+        postedTargetRef.current = carvedRef.current;
+        sendRef.current({ type: 'carve', throughMove: carvedRef.current });
+      }
+    }
+    stopClock();
+    commitTo(positionRef.current - 1);
+  }, [commitTo, stopClock]);
+
   const scrubTo = useCallback(
     (k: number) => {
       if (playingRef.current) {
@@ -392,6 +410,7 @@ export function useSimTransport(sim: CarveSim, moves: Move[] | null): SimTranspo
     togglePlay,
     returnToStart,
     stepForward,
+    stepBack,
     scrubTo,
     cycleSpeed,
   };

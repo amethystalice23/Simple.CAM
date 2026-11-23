@@ -2,14 +2,21 @@
  * The simulation transport bar (2026-10-27, Alice's spec): a floating
  * widget across the viewport's BOTTOM, visible only while the
  * Simulation layer tick is on AND a completed simulation exists. Left to
- * right: play/pause, return-to-start (NO step-back — dropped deliberately),
- * step-forward, scrub bar, speed pill (immediately adjacent to the bar's
- * right end), move readout (trails last, muted). Styling follows the
- * projection-pill/layers-button floating-widget pattern.
+ * right: play/pause, return-to-start (the button row still has no
+ * step-back), step-forward, scrub bar, speed pill (immediately adjacent
+ * to the bar's right end), move readout (trails last, muted). Styling
+ * follows the projection-pill/layers-button floating-widget pattern.
+ *
+ * Keyboard (2026-11-23, Alice's ask): space toggles play/pause, the
+ * cursor keys step one move at a time — right forward, left back. The
+ * keys live exactly as long as the bar does, and refuse typing, key
+ * repeats (a backward step behind the carved cursor costs a full stock
+ * reset), and modifier chords (transportKeys.ts, unit-pinned).
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SimTransport } from './useSimTransport';
+import { transportKeyAction } from './transportKeys';
 
 interface Props {
   transport: SimTransport;
@@ -24,6 +31,7 @@ export function TransportBar({ transport }: Props) {
     togglePlay,
     returnToStart,
     stepForward,
+    stepBack,
     scrubTo,
     cycleSpeed,
   } = transport;
@@ -70,12 +78,28 @@ export function TransportBar({ transport }: Props) {
     [moveFromEvent, scrubTo, scrubPreview],
   );
 
+  // keyboard: space / cursor keys, active exactly while the bar exists.
+  // preventDefault keeps a focused transport button from ALSO firing on
+  // the space keyup — the transport's own action runs instead.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = transportKeyAction(e);
+      if (action === null) return;
+      e.preventDefault();
+      if (action === 'togglePlay') togglePlay();
+      else if (action === 'stepForward') stepForward();
+      else stepBack();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [togglePlay, stepForward, stepBack]);
+
   return (
     <div className="transport-bar">
       <button
         type="button"
         className="transport-btn"
-        title={playing ? 'Pause the simulation playback' : 'Play the simulation (at the end: rewind and play)'}
+        title={playing ? 'Pause the simulation playback (space)' : 'Play the simulation — at the end, rewind and play (space)'}
         onClick={togglePlay}
       >
         {playing ? '⏸' : '▶'}
@@ -91,7 +115,7 @@ export function TransportBar({ transport }: Props) {
       <button
         type="button"
         className="transport-btn"
-        title="Step one move forward (pauses playback)"
+        title="Step one move forward (pauses playback; → key, ← steps back)"
         onClick={stepForward}
       >
         ⏭
