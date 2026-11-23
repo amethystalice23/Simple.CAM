@@ -258,9 +258,10 @@ interface Props {
    *  frame). Null = no run in flight → no marker. */
   simTip: import('../sim/protocol').TipPose | null;
   /** display layers (the top-right Layers dropdown) + its toggle —
-   *  Stock/Model/Features/Paths/Simulation visibility in one place */
-  displayLayers: { stock: boolean; model: boolean; features: boolean; paths: boolean; simulation: boolean };
-  onToggleLayer: (layer: 'stock' | 'model' | 'features' | 'paths' | 'simulation', v: boolean) => void;
+   *  Stock/Model/Features/Paths/Simulation + the sim's Warnings overlay
+   *  (yellow gouge / red shank) each toggle independently */
+  displayLayers: { stock: boolean; model: boolean; features: boolean; paths: boolean; simulation: boolean; warnings: boolean };
+  onToggleLayer: (layer: 'stock' | 'model' | 'features' | 'paths' | 'simulation' | 'warnings', v: boolean) => void;
   onToggleSelect: (id: string) => void;
   onClearSelection: () => void;
   /** Shift+drag rubber-band box select (Alice, 2026-10-31: "must ensure
@@ -1249,6 +1250,14 @@ export function Viewport({
   // incrementally: each worker `chunk` message replaces one mesh; a
   // chunk whose mesh comes back EMPTY is hidden (fully carved away).
   const simGroupRef = useRef<THREE.Group | null>(null);
+  /** the classification-warning overlay's OWN group (Alice, 2026-11-23:
+   *  "separate the yellow and red warnings out into a separate layer, so
+   *  we can turn it and the sim layers on/off separately") — a sibling of
+   *  the chunk group under datum, so hiding the warnings never touches
+   *  the carved stock meshes and one `visible` flag covers every ghost
+   *  mesh at once. Same lifecycle as simGroupRef (built with it, disposed
+   *  with it). */
+  const simGhostGroupRef = useRef<THREE.Group | null>(null);
   /** the sim chunk material — created once per sim session and shared by
    *  every chunk mesh; NEVER disposed on effect re-runs (chunk messages
    *  re-fire the effect per message, and disposing the shared material
@@ -1276,6 +1285,12 @@ export function Viewport({
       });
       simGroupRef.current?.removeFromParent();
       simGroupRef.current = null;
+      simGhostGroupRef.current?.traverse((o) => {
+        const m = o as THREE.Mesh;
+        m.geometry?.dispose();
+      });
+      simGhostGroupRef.current?.removeFromParent();
+      simGhostGroupRef.current = null;
       simMatRef.current?.dispose();
       simMatRef.current = null;
       simGhostMatRef.current?.dispose();
@@ -1289,6 +1304,14 @@ export function Viewport({
       group.name = 'sim-chunks';
       datum.add(group);
       simGroupRef.current = group;
+    }
+    let ghostGroup = simGhostGroupRef.current;
+    if (!ghostGroup) {
+      ghostGroup = new THREE.Group();
+      ghostGroup.name = 'sim-ghosts';
+      ghostGroup.visible = displayLayers.warnings;
+      datum.add(ghostGroup);
+      simGhostGroupRef.current = ghostGroup;
     }
     if (!simMatRef.current) {
       simMatRef.current = new THREE.MeshStandardMaterial({ color: 0x9c7b52, flatShading: true });
@@ -1339,7 +1362,8 @@ export function Viewport({
         group.add(mesh);
       }
       // the classification ghost overlay (yellow gouge / red shank
-      // contact) rides on the same chunk message
+      // contact) rides the same chunk message but its OWN group — the
+      // warnings layer toggles independently of the carved stock
       const ghostName = `chunk-ghost-${id}`;
       if (chunk.ghostIndices && chunk.ghostIndices.length > 0) {
         const ggeo = new THREE.BufferGeometry();
@@ -1347,7 +1371,7 @@ export function Viewport({
         ggeo.setAttribute('normal', new THREE.BufferAttribute(chunk.ghostNormals!, 3));
         ggeo.setAttribute('color', new THREE.BufferAttribute(chunk.ghostColors!, 4, true));
         ggeo.setIndex(new THREE.BufferAttribute(chunk.ghostIndices!, 1));
-        let gmesh = group.children.find((c) => (c as THREE.Mesh).name === ghostName) as
+        let gmesh = ghostGroup.children.find((c) => (c as THREE.Mesh).name === ghostName) as
           | THREE.Mesh
           | undefined;
         if (gmesh) {
@@ -1357,18 +1381,26 @@ export function Viewport({
           gmesh = new THREE.Mesh(ggeo, ghostMat);
           gmesh.name = ghostName;
           gmesh.renderOrder = 1;
-          group.add(gmesh);
+          ghostGroup.add(gmesh);
         }
       } else {
         // no ghosts this update — drop any stale overlay mesh
-        const stale = group.children.find((c) => (c as THREE.Mesh).name === ghostName);
+        const stale = ghostGroup.children.find((c) => (c as THREE.Mesh).name === ghostName);
         if (stale) {
           ((stale as THREE.Mesh).geometry)?.dispose();
-          group.remove(stale);
+          ghostGroup.remove(stale);
         }
       }
     }
   }, [simChunks, stock]);
+
+  // the warnings layer's visibility — applied to the ghost GROUP (one
+  // flag, every overlay mesh at once), re-applied when a sim re-enters and
+  // rebuilds the group
+  useEffect(() => {
+    const g = simGhostGroupRef.current;
+    if (g) g.visible = displayLayers.warnings;
+  }, [displayLayers.warnings, simChunks]);
 
   // the sim's live tool-tip marker (b12, Alice's ask: "a marker for the
   // tool tip position ... a dot, or an outline"): a small cyan sphere at
@@ -2506,8 +2538,8 @@ export function Viewport({
 /** top-right viewport dropdown: every display layer's tick in one place.
  *  Closes on outside click or Escape; the button highlights when open. */
 function LayersDropdown(props: {
-  layers: { stock: boolean; model: boolean; features: boolean; paths: boolean; simulation: boolean };
-  onToggle: (layer: 'stock' | 'model' | 'features' | 'paths' | 'simulation', v: boolean) => void;
+  layers: { stock: boolean; model: boolean; features: boolean; paths: boolean; simulation: boolean; warnings: boolean };
+  onToggle: (layer: 'stock' | 'model' | 'features' | 'paths' | 'simulation' | 'warnings', v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -2532,6 +2564,7 @@ function LayersDropdown(props: {
     ['features', 'Features'],
     ['paths', 'Paths'],
     ['simulation', 'Simulation'],
+    ['warnings', 'Warnings'],
   ];
   const onCount = ENTRIES.filter(([k]) => props.layers[k]).length;
   return (
@@ -2540,7 +2573,7 @@ function LayersDropdown(props: {
         type="button"
         className={`layers-button${open ? ' active' : ''}`}
         onClick={() => setOpen((o) => !o)}
-        title="Display layers — Stock, Model, Features, Paths, Simulation"
+        title="Display layers — Stock, Model, Features, Paths, Simulation, Warnings"
       >
         ▼ Layers
       </button>
@@ -2556,7 +2589,7 @@ function LayersDropdown(props: {
               <span>{label}</span>
             </label>
           ))}
-          <span className="legend" style={{ padding: '2px 6px' }}>{onCount}/5 on</span>
+          <span className="legend" style={{ padding: '2px 6px' }}>{onCount}/6 on</span>
         </div>
       )}
     </div>

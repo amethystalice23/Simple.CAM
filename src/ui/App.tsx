@@ -204,6 +204,11 @@ export function App() {
   const [showStock, setShowStock] = useState(true);
   const [showModel, setShowModel] = useState(true);
   const [showSim, setShowSim] = useState(false);
+  /** the sim's classification warnings (yellow gouge / red shank contact)
+   *  — their own display layer (Alice, 2026-11-23: "separate the yellow
+   *  and red warnings out into a separate layer") so the carved stock and
+   *  the warnings toggle independently while a sim is up */
+  const [showSimWarnings, setShowSimWarnings] = useState(true);
   const [selection, setSelection] = useState<string[]>([]);
   /** suggest-ops picker (docs/PLAN.md "Suggest ops", round 1): armed by the
    *  ops panel's "Suggest ops…" button — the NEXT picked feature opens the
@@ -2312,12 +2317,14 @@ export function App() {
               features: showFeatures,
               paths: showPreview,
               simulation: showSim,
+              warnings: showSimWarnings,
             }}
             onToggleLayer={(layer, v) => {
               if (layer === 'stock') setShowStock(v);
               else if (layer === 'model') setShowModel(v);
               else if (layer === 'features') setShowFeatures(v);
               else if (layer === 'paths') setShowPreview(v);
+              else if (layer === 'warnings') setShowSimWarnings(v);
               else setShowSim(v);
             }}
             onToggleSelect={toggleSelect}
