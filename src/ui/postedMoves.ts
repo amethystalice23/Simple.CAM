@@ -127,16 +127,27 @@ export function buildPostedStream(
   const parsed = parseCarveraNc(nc);
 
   // parsed move → tool table index: the T numbers the parser recovered
-  // from the file, mapped back through the tools table; and the same walk
-  // spreads each op's intended DOC and section frame over its parsed moves
-  // (the op tag sits on the first move of the span)
+  // from the file, mapped back through the CALLER'S tools table (the
+  // same list the carve worker builds its spec table from — App passes
+  // the whole library), and the same walk spreads each op's intended DOC
+  // and section frame over its parsed moves (the op tag sits on the
+  // first move of the span). The index must land on the tool's slot in
+  // THAT list, never on the export list's own order: a single-tool job
+  // exports exactly one tool, so the export index is always 0 and the
+  // worker would carve the whole job with library slot 0 — a short-flute
+  // decoy that painted 41k phantom red shank contacts on the spiral_test
+  // job (Alice's 2026-11-23 report; the sim's toolOf contract, which the
+  // interface doc already states as "index into the passed tools table")
   const table: number[] = new Array(parsed.moves.length).fill(0xffff);
   const stepDown = new Float32Array(parsed.moves.length);
   const frameInv: (readonly number[] | null)[] = new Array(parsed.moves.length).fill(null);
   const moveOpIds: (string | null)[] = new Array(parsed.moves.length).fill(null);
+  const toolIndexOf = new Map<string, number>();
+  tools.forEach((t, i) => toolIndexOf.set(t.id, i));
   const toolIndexByNumber = new Map<number, number>();
   exportTools.forEach((t, i) => {
-    toolIndexByNumber.set(toolNumberByToolId.get(t.id) ?? i + 1, i);
+    const li = toolIndexOf.get(t.id);
+    if (li !== undefined) toolIndexByNumber.set(toolNumberByToolId.get(t.id) ?? i + 1, li);
   });
   // op number → the input op's step-down + section frame (1-based stamps)
   const stepByOpNumber = new Map<number, number>();
