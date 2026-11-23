@@ -66,8 +66,26 @@ export interface EngraveParams {
    * lifts; the beam is the modal S word on G1s, so each path's first cut
    * stamps `power` (0–1) and a bare-power move extinguishes (S0) before
    * travels. G0 never fires. */
-  laser?: { focus: number; power: number };
+  laser?: {
+    focus: number;
+    power: number;
+    /** LEAD-IN, mm (Alice, 2026-11-23 — vector engraves burned LIGHT AT
+     * CORNERS, which are path starts): before each path's first cut, a lit
+     * move runs INTO the start point from behind it, so the beam reaches
+     * full power before touching the artwork (power ramp costs ~0.05 mm
+     * at F1000 — the whole leading edge under-burns otherwise). Closed
+     * paths approach along the FINAL segment's direction — the lead
+     * pre-burns territory the path burns again at its end, invisible on
+     * the artwork (clamped to that segment's length so it never chords
+     * across a small shape); open paths tail out behind the start.
+     * Default LASER_LEAD_IN_MM; 0 disables. */
+    leadIn?: number;
+  };
 }
+
+/** default laser lead-in: 0.3 mm at a typical F1000 (16.7 mm/s) buys
+ * ~18 ms of power-settling before the artwork line begins */
+export const LASER_LEAD_IN_MM = 0.3;
 
 export interface EngraveResult {
   moves: Move[];
@@ -226,18 +244,68 @@ function engraveLaser(op: EngraveParams): EngraveResult {
   const { focus, power } = op.laser!;
   if (focus < 0) throw new Error('laser focus must not be negative');
   if (power <= 0 || power > 1) throw new Error('laser power must be within (0, 1]');
+  const leadIn = op.laser!.leadIn ?? LASER_LEAD_IN_MM;
+  if (leadIn < 0) throw new Error('laser lead-in must not be negative');
   const wrapped = op.frame.kind === 'wrapped';
   const R = wrapped ? (op.frame as EngraveWrappedFrame).radius : 0;
   if (wrapped && R <= 0) throw new Error('radius must be positive');
   const degPerMm = wrapped ? 180 / (Math.PI * R) : 0;
   const passZ = op.frame.surfaceZ + focus;
 
+  /**
+   * The path with a LEAD-IN point prepended (see EngraveParams.laser.
+   * leadIn): a lit move from the lead point into the real start means
+   * the beam is at full power when the artwork line begins. Closed
+   * paths (endpoints within 1e-6 mm — the halftone rings close by
+   * repeating the start) approach along the FINAL segment's travel
+   * direction, clamped to that segment's length, so the lead pre-burns
+   * exactly territory the path burns again at its end — invisible on
+   * the artwork, and the previously-light start corner gets the extra
+   * pass. Open paths tail out behind the start along the first
+   * segment. Degenerate paths (all points coincident) get no lead.
+   */
+  const withLeadIn = (path: { x: number; y: number }[]): { x: number; y: number }[] => {
+    if (leadIn === 0 || path.length < 2) return path;
+    const p0 = path[0];
+    const pn = path[path.length - 1];
+    const closed = Math.hypot(pn.x - p0.x, pn.y - p0.y) < 1e-6;
+    let dir: { x: number; y: number } | null = null;
+    let clamp = Infinity;
+    if (closed) {
+      // final segment's travel direction (the one arriving AT the start)
+      for (let i = path.length - 2; i > 0; i--) {
+        const b = path[i + 1];
+        const c = path[i];
+        const l = Math.hypot(b.x - c.x, b.y - c.y);
+        if (l > 1e-12) {
+          dir = { x: (b.x - c.x) / l, y: (b.y - c.y) / l };
+          clamp = l; // never chord past the vertex into the shape's interior
+          break;
+        }
+      }
+    } else {
+      for (let i = 0; i < path.length - 1; i++) {
+        const c = path[i];
+        const b = path[i + 1];
+        const l = Math.hypot(b.x - c.x, b.y - c.y);
+        if (l > 1e-12) {
+          dir = { x: (b.x - c.x) / l, y: (b.y - c.y) / l };
+          break;
+        }
+      }
+    }
+    if (!dir) return path;
+    const eff = Math.min(leadIn, clamp);
+    return [{ x: p0.x - dir.x * eff, y: p0.y - dir.y * eff }, ...path];
+  };
+
   const moves: Move[] = [];
   let minutes = 0;
   let effective = op.feed;
   let a = wrapped ? (op.frame as EngraveWrappedFrame).startA : 0;
 
-  op.paths.forEach((path, pi) => {
+  op.paths.forEach((rawPath, pi) => {
+    const path = withLeadIn(rawPath);
     if (pi > 0) {
       // extinguish before the travel: a bare G1 with S0 (no axis words;
       // the feed is unchanged so no F — the modal state carries)

@@ -16,7 +16,7 @@ Flat artwork cuts in its plane. Wrapped artwork bends around the cylinder you po
 
 **Fill areas** adds a raster to closed painted shapes. **Fill then outline** rasters the insides first and traces the outlines on top; **Fill only** rasters alone. The scanlines run along the machine's fast X — axial on a wrapped logo — spaced by [step-over](../glossary.md#step-over)-style **Fill step over**. A hole inside a filled loop (the counter of an "O") stays untouched.
 
-With a [laser](../concepts/tools-and-materials.md) tool the op burns instead of cuts: one pass at the module's focus height. Depth fields don't apply — power rides the S word instead.
+With a [laser](../concepts/tools-and-materials.md) tool the op burns instead of cuts: one pass at the module's focus height. Depth fields don't apply — power rides the S word instead. Each line starts with a short lit run-in (0.3 mm) before its real start, so the beam reaches full power before it touches the artwork — without it, corners where lines begin burn light.
 
 ## When you'd use it
 

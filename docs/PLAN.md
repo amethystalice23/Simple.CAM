@@ -310,6 +310,11 @@ fade-in at each path start, so corners that are path endpoints
 under-burn — the .nc settles it (do S-stamps cluster at the corners?).
 If confirmed, the fix is an overscan/lead-in (a few hundred µm of lit
 move before the artwork line) — the same lever raster rows will want.
+**FIXED 2026-11-23 (branch fix/laser-lead-in, Alice's go-ahead without
+the .nc): `laser.leadIn` lit lead-in per path, default 0.3 mm** —
+closed paths approach along the final segment (invisible overlap,
+start corner gains the extra pass), open paths tail behind the start,
+0 = legacy byte-identical. Raster rows inherit the same lever.
 
 **Greyscale modulation (per-move S), RE-OPENED as phase 2** (Alice
 2026-11-23): power-to-gray only means something per material. The

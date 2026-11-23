@@ -194,6 +194,15 @@ Notes on header fields:
   M3 after the op's first Z-bearing move. Within-op travels between
   vectors stay at focus height exactly as Makera emits them (the head
   is already riding there by design).
+- **Deliberate divergence (Alice, 2026-11-23) — LEAD-IN:** vector
+  engraves burned LIGHT AT CORNERS (path starts; power ramp under-burns
+  the leading edge — ~3 ms of S-settling ≈ 0.05 mm at F1000). simple.cam
+  runs a lit lead-in move INTO each path start before the artwork line
+  (default 0.3 mm, `laser.leadIn`, 0 = legacy byte-identical): closed
+  paths approach along the final segment's direction so the lead
+  pre-burns territory the path burns again at its end (invisible; the
+  start corner gets the extra pass), open paths tail out behind the
+  start. Makera emits no lead-in — their files share the fade-in.
 
 ## Laser Image (raster, MakeraStudio_TOP_20260926153254.nc — measured 2026-11-23)
 
