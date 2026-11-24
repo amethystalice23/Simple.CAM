@@ -360,10 +360,14 @@ function primitiveForFile(p: Primitive): unknown {
 }
 
 /** The RUNTIME form: a saved bitmap's base64 becomes the Uint8Array the
- *  dither reads. Malformed grayscale is a hard error (silently keeping
- *  the base64 string would break every raster at generation). */
+ *  dither and the viewport texture read. IDEMPOTENT — a primitive that
+ *  already carries the array (parseJobFile ran) passes through, so both
+ *  load paths can normalize safely. Malformed grayscale is a hard error
+ *  (silently keeping the base64 string would break every raster at
+ *  generation AND blank the viewport's texture loop). */
 function primitiveFromSaved(p: Primitive): Primitive {
   if (p.kind !== 'bitmap') return p;
+  if (p.gray.data instanceof Uint8Array) return p; // already runtime form
   const saved = p.gray as unknown as { width?: unknown; height?: unknown; base64?: unknown };
   if (
     typeof saved.width !== 'number' ||
@@ -380,6 +384,19 @@ function primitiveFromSaved(p: Primitive): Primitive {
       data: decodeGray(saved.base64),
     },
   };
+}
+
+/**
+ * Normalize saved primitives to runtime form — the ONE conversion both
+ * load paths pass: parseJobFile (opened .cam.json files) AND the
+ * IndexedDB autosave restore (loadAutosave hands back the raw FILE form
+ * — gray.base64, no array — and its consumer applyJob never runs the
+ * parser; the 2026-11-24 reload blank-page crash was exactly that gap:
+ * the viewport's texture loop read gray.data[i] off undefined and React
+ * unmounted the tree).
+ */
+export function normalizePrimitives(primitives: Primitive[]): Primitive[] {
+  return primitives.map(primitiveFromSaved);
 }
 
 export function saveJobFile(state: SaveableState): JobFile {
@@ -418,7 +435,7 @@ export function parseJobFile(text: string): JobFile {
     ...parsed,
     stock: normalizeStock(parsed.stock),
     ops: normalizeJobOps(parsed.ops),
-    primitives: parsed.primitives.map(primitiveFromSaved),
+    primitives: normalizePrimitives(parsed.primitives),
   };
 }
 

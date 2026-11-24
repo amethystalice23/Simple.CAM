@@ -8,6 +8,7 @@ import {
   JOB_FORMAT,
   JOB_VERSION,
   normalizeJobOps,
+  normalizePrimitives,
   normalizeStock,
   parseJobFile,
   saveJobFile,
@@ -639,5 +640,63 @@ describe('bitmap artwork serialization (v2)', () => {
     };
     delete raw.primitives[0].gray.base64;
     expect(() => parseJobFile(JSON.stringify(raw))).toThrow(/malformed/);
+  });
+});
+
+describe('normalizePrimitives (the autosave-restore gate)', () => {
+  const bitmapPrim = {
+    kind: 'bitmap',
+    id: 'prim-9',
+    gray: { width: 2, height: 1, data: new Uint8Array([0, 255]) },
+    width: 20,
+    height: 10,
+    transform: identityTransform(),
+  } as Primitive;
+  const cylinder: Primitive = {
+    kind: 'cylinder',
+    id: 'prim-3',
+    diameter: 16,
+    length: 50,
+    original: { diameter: 16, length: 50 },
+    transform: identityTransform(),
+  };
+
+  it('converts FILE-form base64 to the runtime array (the reload path)', () => {
+    // the IndexedDB autosave hands back saveJobFile's output shape:
+    // gray.base64, no data — loadAutosave's consumer normalizes with this
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [bitmapPrim, cylinder],
+      ops: [],
+      tools: [],
+      modelName: 'none',
+      modelBytes: null,
+    });
+    const fileForm = file.primitives[0] as unknown as {
+      gray: { base64: string };
+    };
+    const restored = normalizePrimitives([
+      { ...bitmapPrim, gray: { width: 2, height: 1, base64: fileForm.gray.base64 } } as unknown as Primitive,
+      cylinder,
+    ]);
+    const bmp = restored[0] as Extract<Primitive, { kind: 'bitmap' }>;
+    expect(bmp.gray.data).toBeInstanceOf(Uint8Array);
+    expect(Array.from(bmp.gray.data)).toEqual([0, 255]);
+    expect(restored[1]).toEqual(cylinder); // non-bitmaps pass through
+  });
+
+  it('is idempotent — a primitive that already carries the array passes through', () => {
+    const once = normalizePrimitives([bitmapPrim]);
+    const twice = normalizePrimitives(once);
+    expect(twice[0]).toEqual(once[0]); // same reference shape, no throw
+  });
+
+  it('throws loudly on malformed grayscale (corrupt autosave → start fresh)', () => {
+    expect(() =>
+      normalizePrimitives([
+        { ...bitmapPrim, gray: { width: 2, height: 1 } } as unknown as Primitive,
+      ]),
+    ).toThrow(/malformed/);
   });
 });

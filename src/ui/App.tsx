@@ -67,7 +67,7 @@ import { sectionEndIndex, sectionLabel } from './opsSections';
 import type { StandingGrid } from '../cam/rotaryCarve';
 import { isHeavyGenOp } from './genWorkerProtocol';
 import { GEN_CANCELLED, useGenWorker } from './useGenWorker';
-import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
+import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizePrimitives, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import * as THREE from 'three';
 import { displayFrameFor, sectionCrownZ, sectionFixtureId, sectionMode, stockTopZ } from './placement';
@@ -2013,19 +2013,24 @@ export function App() {
    * The applied job becomes the "saved" baseline for dirty tracking. */
   const applyJob = (job: ReturnType<typeof parseJobFile>) => {
     // imported files normalize inside parseJobFile; the autosave restore
-    // skips it, so normalize here — the one gate both load paths pass
+    // skips it, so normalize here — the one gate both load paths pass.
+    // normalizePrimitives is the load paths' shared bitmap conversion
+    // (gray.base64 → the runtime array; idempotent for parsed files):
+    // the autosave hands back raw FILE form, and the viewport's texture
+    // loop reads gray.data — the 2026-11-24 reload blank-page crash.
     const ops = normalizeJobOps(job.ops);
     const stock = normalizeStock(job.stock);
+    const primitives = normalizePrimitives(job.primitives);
     setStock(stock);
-    setPrimitives(job.primitives);
+    setPrimitives(primitives);
     setOps(ops);
     seedJobOpIds(ops);
-    seedPrimitiveIds(job.primitives);
+    seedPrimitiveIds(primitives);
     setGenerated({});
     setEditingOpId(null);
     setExpandedOpId(null);
     setSelection([]);
-    setSelectedObjectId(job.model ? 'model' : (job.primitives[0]?.id ?? null));
+    setSelectedObjectId(job.model ? 'model' : (primitives[0]?.id ?? null));
     setPreviewMoves(null);
     carveSim.dispose(); // the sim carved the previous job's moves
     setShowSim(false);
