@@ -12,8 +12,12 @@ export const JOB_FORMAT = 'simple.cam job';
 /** v2 (2026-11-24): the 'bitmap' artwork primitive — laser raster engrave.
  *  Its grayscale array rides as `gray.base64` in the file (converted to
  *  the runtime Uint8Array on load); older builds refuse the file at the
- *  version gate rather than meet an unknown primitive kind. */
-export const JOB_VERSION = 2;
+ *  version gate rather than meet an unknown primitive kind.
+ *  v3 (2026-11-24, same day): the 'text' primitive — typed lettering with
+ *  its laid-out stroke paths. No field conversion needed (plain JSON
+ *  numbers); the bump keeps older builds refusing at the gate instead of
+ *  meeting the unknown kind. */
+export const JOB_VERSION = 3;
 
 export interface JobFile {
   format: string;

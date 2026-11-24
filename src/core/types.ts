@@ -736,6 +736,42 @@ export type Primitive =
        *  stock at drop time, then independent like the artwork's. */
       wrapDiameter?: number;
       transform: ModelTransform;
+    }
+  | {
+      kind: 'text';
+      id: string;
+      /** the label it came from — the objects list labels the row with it
+       * (absent on old saves) */
+      sourceName?: string;
+      /** the user's text — '\n' separates lines */
+      text: string;
+      /** a TEXT_FONT_IDS id (src/core/textFonts.ts — the vendored
+       *  single-line vector fonts) */
+      fontId: string;
+      /** cap height, mm — the ONLY size the user sets; width/height
+       *  derive from the layout */
+      size: number;
+      /** extra tracking between characters, mm (negative tightens) */
+      letterSpacing: number;
+      /** wrap width, mm — 0 = no wrap */
+      wrapWidth: number;
+      /**
+       * The laid-out STROKE PATHS in mm, CENTERED frame (the artwork
+       * convention): x ∈ [−w/2, w/2], y ∈ [−h/2, h/2], y up. Re-derived
+       * by the UI whenever a text field changes — `width`/`height` below
+       * ARE this layout's extent, so the user never types dimensions.
+       * Consumed exactly like artwork paths (each a selectable feature;
+       * the engrave op's op-targeting plumbing).
+       */
+      paths: Vec2[][];
+      /** the layout extent at the current size, mm */
+      width: number;
+      height: number;
+      presentation: 'flat' | 'wrapped';
+      /** wrapped: the text's OWN cylinder Ø (mm) — the artwork
+       *  convention (pre-filled from the stock, then independent) */
+      wrapDiameter: number;
+      transform: ModelTransform;
     };
 
 /**

@@ -116,7 +116,12 @@ export function buildPostedStream(
     const own = toolNumberByToolId.get(o.toolId);
     const num = o.kind === 'index' ? (prevCutNum ?? own ?? 1) : (own ?? 1);
     if (o.kind !== 'index') prevCutNum = num;
-    stampedList.push(...stampOp(o.moves, i + 1, opLabel(o.kind), num));
+    // chunked: a coupon-scale op's stamped stream overflows the spread
+    // (~65k args) — "Maximum call stack size exceeded" past ~65k moves
+    const stamped = stampOp(o.moves, i + 1, opLabel(o.kind), num);
+    for (let k = 0; k < stamped.length; k += 4096) {
+      stampedList.push(...stamped.slice(k, k + 4096));
+    }
   });
 
   const nc = postCarvera({

@@ -251,7 +251,11 @@ export function ExportDialog(props: Props) {
           const num =
             o.kind === 'index' ? (prevCutNum ?? toolNumbers.get(o.toolId) ?? 1) : toolNumbers.get(o.toolId) ?? 1;
           if (o.kind !== 'index') prevCutNum = num;
-          moves.push(...stampOp(props.generated[o.id].moves, opNumber, opLabel(o.kind), num));
+          // chunked: a coupon-scale op's stream overflows the spread
+          const stamped = stampOp(props.generated[o.id].moves, opNumber, opLabel(o.kind), num);
+          for (let k = 0; k < stamped.length; k += 4096) {
+            moves.push(...stamped.slice(k, k + 4096));
+          }
         });
       });
       // this file's tools (first-use order) and their panel numbers

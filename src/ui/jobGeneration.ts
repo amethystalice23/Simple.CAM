@@ -14,6 +14,12 @@ import { slotToolWidth, spiralCarve } from '../cam/spiralCarve';
 import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
 import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
+import {
+  DEFAULT_COLUMN_SPACING_MM,
+  gridToGray,
+  planInterlaceCoupon,
+  solidBand,
+} from '../cam/rasterCoupons';
 import { chamfer } from '../cam/chamfer';
 import { vcarveFlat, vbitConeHeight } from '../cam/vcarveFlat';
 import { drill } from '../cam/drill';
@@ -51,6 +57,7 @@ import type {
   CylChamferEdge,
   DrillOp,
   JobOp,
+  MatrixParam,
   ModelTransform,
   Move,
   OpRates,
@@ -74,6 +81,7 @@ import { transformFn } from './featureOverlays';
 import { bitmapKernelGray, bitmapWrappedLocalPoint, boxTopFaceId, resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { nextPrimitiveId, unitTransform } from './primitives';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
+import { DEFAULT_TEXT_FONT_ID, layoutTextPaths, rotateLayout90 } from './textPrimitive';
 
 export interface GeneratedOp {
   moves: Move[];
@@ -1072,6 +1080,7 @@ export function materializeTestPattern(
   plan: TestPatternPlan,
   tool: Tool,
   materialId: string,
+  labels?: { laser: Tool; axisZ: number },
 ): { ops: JobOp[]; primitives: Primitive[] } {
   if (plan.error) return { ops: [], primitives: [] };
   const plungeFeed = presetRates('pocket', tool, materialId).plungeFeed;
@@ -1176,6 +1185,1186 @@ export function materializeTestPattern(
     }
   }
 
+  // the "Numbers" layer (Alice, 2026-11-24): text labels for the grid —
+  // one per column above the top row and one per row in the left margin
+  // (flat), or the strand values in the −X margin (rotary — the grooves
+  // occupy every phase at every grouping, so per-column labels have no
+  // groove-free home on the cylinder). Burned by ONE laser engrave op, no
+  // ⚡ overrides; without a laser tool the coupon cuts unlabeled
+  // (warn-don't-block).
+  if (labels && plan.rows > 0 && plan.cols > 0) {
+    const value = (param: MatrixParam, v: number): string =>
+      param === 'feed' || param === 'spindleRpm'
+        ? String(Math.round(v))
+        : String(Math.round(v * 100) / 100);
+    const colTexts = plan.colValues.map((v) => value(plan.colParam, v));
+    const rowTexts = plan.rowValues.map((v) => value(plan.rowParam, v));
+    let labelIds: string[] = [];
+    /** the cap that fits the longest label into `band` mm — the
+     *  auto-shrink the compact-chart idiom uses */
+    const fitCap = (texts: string[], band: number): number => {
+      const longest = texts.reduce((a, b) => (b.length >= a.length ? b : a));
+      const len = layoutTextPaths({
+        text: longest,
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: INTERLACE_LABEL_CAP_MM,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }).width;
+      return Math.max(1.2, Math.min(INTERLACE_LABEL_CAP_MM, (INTERLACE_LABEL_CAP_MM * Math.max(band, 1)) / Math.max(len, 1e-6)));
+    };
+    const pushLabel = (
+      text: string,
+      cap: number,
+      paths: Vec2[][],
+      w: number,
+      h: number,
+      wrapped: boolean,
+      transform: ModelTransform,
+    ) => {
+      const label: Extract<Primitive, { kind: 'text' }> = {
+        kind: 'text',
+        id: nextPrimitiveId(),
+        text,
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: cap,
+        letterSpacing: 0,
+        wrapWidth: 0,
+        paths,
+        width: w,
+        height: h,
+        presentation: wrapped ? 'wrapped' : 'flat',
+        wrapDiameter: wrapped ? plan.rotary?.surfaceDiameter ?? 1 : 1,
+        transform,
+      };
+      primitives.push(label);
+      for (let k = 0; k < paths.length; k++) labelIds.push(`p:${label.id}:path:${k}`);
+    };
+
+    if (plan.mode === 'rotary' && plan.rotary) {
+      // strand labels in the −X margin: UNROTATED (the text runs around
+      // the arc, cap-height along X inside the 3mm margin), arc-centered
+      // on each strand's phase, cap auto-shrunk to the strand pitch
+      const rt = plan.rotary;
+      const band = (Math.PI * rt.surfaceDiameter) / plan.rows - 1;
+      const cap = fitCap(rowTexts, band);
+      const marginX = rt.groupXs[0] - 1.5;
+      rowTexts.forEach((text, s) => {
+        const l = layoutTextPaths({
+          text,
+          fontId: DEFAULT_TEXT_FONT_ID,
+          size: cap,
+          letterSpacing: 0,
+          wrapWidth: 0,
+        });
+        pushLabel(text, cap, l.paths, l.width, l.height, true, {
+          position: { x: marginX, y: 0, z: labels.axisZ },
+          rotationDeg: { x: -(s * rt.spinStep), y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        });
+      });
+    }
+
+    if (plan.mode === 'flat' && plan.flat) {
+      const f = plan.flat;
+      const blockTop = f.y0 + plan.rows * f.cellH + (plan.rows - 1) * f.spacing;
+      // column labels: horizontal above the top row (the top margin is
+      // only ~one tool Ø deep — no room to rotate), bottom-anchored just
+      // above the grown origin cell's top edge
+      const colCap = Math.min(fitCap(colTexts, f.cellW + f.spacing - 1), f.spacing - 0.3);
+      colTexts.forEach((text, c) => {
+        const l = layoutTextPaths({
+          text,
+          fontId: DEFAULT_TEXT_FONT_ID,
+          size: colCap,
+          letterSpacing: 0,
+          wrapWidth: 0,
+        });
+        pushLabel(text, colCap, l.paths, l.width, l.height, false, unitTransform({
+          x: f.x0 + c * (f.cellW + f.spacing) + f.cellW / 2,
+          y: blockTop + f.originGrowth + 0.15 + l.height / 2,
+          z: f.crownZ,
+        }));
+      });
+      // row labels: rotated 90° (book-spine, reading bottom-up) in the
+      // left margin, right-aligned clear of the grown origin cell
+      const rowCap = Math.min(fitCap(rowTexts, f.cellH + f.spacing - 1), f.spacing - 0.3);
+      rowTexts.forEach((text, r) => {
+        const rot = rotateLayout90(
+          layoutTextPaths({
+            text,
+            fontId: DEFAULT_TEXT_FONT_ID,
+            size: rowCap,
+            letterSpacing: 0,
+            wrapWidth: 0,
+          }),
+        );
+        pushLabel(text, rowCap, rot.paths, rot.width, rot.height, false, unitTransform({
+          x: f.x0 - f.originGrowth - 0.15 - rot.width / 2,
+          y: f.y0 + (plan.rows - 1 - r) * (f.cellH + f.spacing) + f.cellH / 2,
+          z: f.crownZ,
+        }));
+      });
+    }
+
+    ops.push({
+      kind: 'engrave',
+      id: `jobop-${++opCount}`,
+      toolId: labels.laser.id,
+      featureIds: labelIds,
+      depth: 0.1,
+      stepDown: 0.1,
+      fillMode: 'outlines',
+    });
+  }
+
+  return { ops, primitives };
+}
+
+/**
+ * LASER CALIBRATION COUPONS (src/cam/rasterCoupons.ts): the raster analogue
+ * of materializeTestPattern — a laser-coupon plan materializes into
+ * ORDINARY ops (rasterEngrave, one per burn) over ordinary bitmap
+ * primitives, stacked in "slots" so each burn is its own clickable, editable,
+ * savable record. Regenerate = delete + Generate again, like the cutting
+ * coupon.
+ *
+ * Slot layout (`laserCouponLadder`): 3-axis stock stacks the slots along Y
+ * above the crown; 4-axis stock bends each slot around the arc (the bitmap
+ * drop's wrapped convention — its own Ø of the stock's effective radius,
+ * centered on the rotation axis, rotated to its arc position). Slot 0 sits
+ * lowest, the ladder ascends with the plans' ascending bands/sweeps. The
+ * gap keeps adjacent burns far enough apart that a loupe never reads them
+ * into one coupon.
+ */
+
+/** mm between stacked coupon bitmaps (the read stays per-sweep/per-band) */
+export const COUPON_GAP_MM = 2;
+
+export interface LaserCouponLadder {
+  /** true = 4-axis stock: the slots bend around the arc; false = flat,
+   *  slots along Y above the crown */
+  wrapped: boolean;
+  /** per-slot face mm: x = the axial/top span (every slot copies it), y =
+   *  the slot's height (arc or Y) — what the PLANNERS take as their span */
+  span: { x: number; y: number };
+  /** machine transform of slot i (0 = lowest; the ladder ascends like the
+   *  plans' ascending bands). Flat slots sit on the crown; wrapped slots
+   *  rotate their wrap window about the rotation axis to theirs. */
+  place: (slot: number) => ModelTransform;
+}
+
+/**
+ * Lay out `count` coupon slots over the stock's usable laser face: 3-axis
+ * stacks them along Y above the crown, 4-axis spreads them over the arc.
+ * An explicit `slotY` pins the slot height (the interlace coupon's plan grid
+ * fixes its face); the default splits the span evenly.
+ */
+export function laserCouponLadder(
+  stock: Stock,
+  count: number,
+  gap = COUPON_GAP_MM,
+  slotY?: number,
+): LaserCouponLadder {
+  if (count < 1) throw new Error('coupon ladder needs at least one slot');
+  const [x0, x1] = stockSpan(stock, 'x');
+  const spanX = Math.max(x1 - x0, 1);
+  if (stock.kind === 'cylinder' && stock.axisMode === '4-axis') {
+    const radius = stock.calibration.effectiveRadius;
+    const circ = 2 * Math.PI * radius;
+    const axisZ = stock.calibration.axisZ;
+    const height = slotY ?? Math.max((circ - gap * (count - 1)) / count, 1);
+    // slot i's wrap window centers at arc c_i (rotationDeg.x = Rx angle;
+    // the bend centers at local angle 0, and a +Rx rotation moves a +Z
+    // point toward −Y — the ASCENDING arc is the negative rotation)
+    const degPerMm = 180 / (Math.PI * radius);
+    return {
+      wrapped: true,
+      span: { x: spanX, y: height },
+      place: (slot) => ({
+        position: { x: (x0 + x1) / 2, y: 0, z: axisZ },
+        rotationDeg: {
+          x: -(height / 2 + slot * (height + gap)) * degPerMm,
+          y: 0,
+          z: 0,
+        },
+        scale: { x: 1, y: 1, z: 1 },
+      }),
+    };
+  }
+  const [y0, y1] = stockSpan(stock, 'y');
+  const [, z1] = stockSpan(stock, 'z');
+  const height = slotY ?? Math.max((y1 - y0 - gap * (count - 1)) / count, 1);
+  return {
+    wrapped: false,
+    span: { x: spanX, y: height },
+    place: (slot) => ({
+      position: {
+        x: (x0 + x1) / 2,
+        y: y0 + height / 2 + slot * (height + gap),
+        z: z1, // flat bitmaps present on the crown plane (the import path)
+      },
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    }),
+  };
+}
+
+/**
+ * The coupon's KERNEL grid (columns/bands along machine X, rows around)
+ * as the gray a coupon bitmap STORES: the wrapped generation path consumes
+ * bitmapKernelGray(prim.gray) — the image transposed with a vertical flip,
+ * the face-up convention (image WIDTH runs around, HEIGHT along the tube)
+ * — so the wrapped storage is that mapping's INVERSE: transpose with the
+ * rows flipped. Flat coupons store the kernel grid as-is (the flat burn
+ * consumes the image directly).
+ */
+function couponStoredGray(
+  kernel: { width: number; height: number; data: Uint8Array },
+  wrapped: boolean,
+): { width: number; height: number; data: Uint8Array } {
+  if (!wrapped) return kernel;
+  const out = new Uint8Array(kernel.width * kernel.height);
+  for (let i = 0; i < kernel.height; i++) {
+    // image col i runs around; image row j carries the axial index
+    for (let j = 0; j < kernel.width; j++) {
+      out[j * kernel.height + i] = kernel.data[(kernel.height - 1 - i) * kernel.width + j];
+    }
+  }
+  return { width: kernel.height, height: kernel.width, data: out };
+}
+
+/** One coupon bitmap primitive: the plan's gray on a face rect placed in
+ *  its slot. Wrapped slots (4-axis) carry the import path's presentation:
+ *  'wrapped' with the STOCK's effective Ø (the drop's own-Ø default). */
+function bitmapCouponPrimitive(
+  gray: { width: number; height: number; data: Uint8Array },
+  face: { width: number; height: number },
+  transform: ModelTransform,
+  wrapped: boolean,
+  stock: Stock,
+  name: string,
+): Extract<Primitive, { kind: 'bitmap' }> {
+  return {
+    kind: 'bitmap',
+    id: nextPrimitiveId(),
+    sourceName: name,
+    gray,
+    width: face.width,
+    height: face.height,
+    ...(wrapped
+      ? { presentation: 'wrapped' as const, wrapDiameter: rotaryCalibrationOf(stock).effectiveRadius * 2 }
+      : {}),
+    transform,
+  };
+}
+
+/**
+ * The INTERLACE COUPON v2 (Alice's 2026-11-24 rulings — replaces the
+ * whole-stock twin-bitmap design, then the fixed-ladder round the same
+ * day): "some small patches at each of a bunch of different settings...
+ * a 1x1cm block should be enough... put a text label with it too... make
+ * sure theres a few mm gap between blocks and a text label above it", and
+ * the follow-ups: the ladder comes from RANGE BOXES on the panel (From/To,
+ * prefilled −0.5…+0.5), the grid is "5 + 5 + 1 with that extra being the
+ * reference zero... being a column thats centered across the two" rows,
+ * and the block gap derives from the widest label so labels never overlap.
+ *
+ * DERIVATION (INTERLACE TARGET STEP 0.1mm): the range splits at zero.
+ * Each side (when it exists) is stepped EVENLY from its endpoint to one
+ * step short of zero with count = round(sideSpan / 0.1) clamped to
+ * [1, 10] per side (10 per side → 21 patches incl. zero, the cap) — the
+ * prefill ±0.5 gives exactly 5 + 5 steps of 0.1 plus the zero reference
+ * (11 patches). A zero-absent range is one span stepped inclusively,
+ * count = round(span / 0.1) + 1 (0.1…0.9 → nine steps of 0.1, rows 5+4).
+ * The nonzero values split into two rows as evenly as possible (row 1 =
+ * the ascending first half — for a symmetric range exactly the negatives;
+ * rows differ by ≤ 1), and zero — when in range — burns as its OWN column
+ * beside the rows (+X end, reading order), vertically centered across the
+ * seam. Block gap = max(3.5mm, widest label width − patch + 2mm): labels
+ * are centered on their patches, so adjacent label edges always clear by
+ * ≥ 2mm whatever the range formats to.
+ *
+ * ASCII (prefill, flat stock; patches are 10mm squares, g = block gap):
+ *
+ *   row 1 (lowest):  [-0.5][-0.4][-0.3][-0.2][-0.1] (g)
+ *   row 2 (above):   [+0.1][+0.2][+0.3][+0.4][+0.5] (g)  [ 0 ]  ← zero column,
+ *                                                              centered on the
+ *                                                              row1/row2 seam
+ */
+
+/** the ladder's target step, mm — the prefill ±0.5 range derives 0.1
+ *  (5 + 5 + the zero reference, Alice's 5+5+1 grid) */
+export const INTERLACE_TARGET_STEP_MM = 0.1;
+/** the block-gap floor, mm — "a few mm" between blocks even for narrow
+ *  labels; the derived gap never goes under this */
+export const INTERLACE_MIN_BLOCK_GAP_MM = 3.5;
+/** the derived gap's extra clearance beyond the label overhang, mm — a
+ *  gap of (widest label − patch + this) keeps adjacent label edges ≥ this
+ *  far apart whatever the range formats to */
+export const INTERLACE_GAP_CLEARANCE_MM = 2;
+/** per-side patch cap — 10 per side → 21 patches incl. the zero column */
+export const INTERLACE_MAX_PER_SIDE = 10;
+/** each patch is a 1×1cm raster block (her ruling — many dozens of lines) */
+export const INTERLACE_PATCH_MM = 10;
+/** clearance between a patch's top edge and its label, mm */
+export const INTERLACE_LABEL_CLEAR_MM = 1.5;
+/** label cap height, mm — small on the stock, readable under a loupe */
+export const INTERLACE_LABEL_CAP_MM = 3;
+/** the coupon's burn pitch — the raster default (the Studio corpus) */
+const INTERLACE_COUPON_PITCH = RASTER_PITCH_MM;
+
+export interface InterlaceLadder {
+  /** ascending grid values, From..To inclusive, zero included when in range */
+  values: number[];
+  /** index of the zero reference in `values`, null when 0 ∉ [From, To] */
+  zeroIndex: number | null;
+  /** the derived step(s), mm — one per side when zero splits the range
+   *  (they can differ on an asymmetric range), else the single span step */
+  steps: number[];
+  warnings: string[];
+}
+
+const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
+
+/**
+ * Derive the ladder from the range boxes (see the section doc for the
+ * rule). From > To reads as swapped (the wedge min/max precedent); a
+ * degenerate range (equal endpoints, or narrower than one step) returns
+ * fewer than two values and a warning — the panel disables Generate.
+ */
+export function deriveInterlaceLadder(from: number, to: number): InterlaceLadder {
+  const warnings: string[] = [];
+  let lo = from;
+  let hi = to;
+  if (Number.isFinite(from) && Number.isFinite(to) && from > to) {
+    warnings.push(
+      `the range ran backwards (from ${from} above to ${to}) — read as swapped; the ladder ascends ${to} → ${from}`,
+    );
+    [lo, hi] = [hi, lo];
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi - lo < 1e-9) {
+    return {
+      values: [],
+      zeroIndex: null,
+      steps: [],
+      warnings: [...warnings, 'the range needs at least two distinct values'],
+    };
+  }
+  const zeroIn = lo <= 1e-9 && hi >= -1e-9;
+  const values: number[] = [];
+  const steps: number[] = [];
+  let zeroIndex: number | null = null;
+  if (zeroIn) {
+    // zero splits the range: each side steps evenly from its endpoint to
+    // one step short of zero; zero is the shared reference column
+    const negSpan = -lo;
+    const posSpan = hi;
+    const rawNeg = Math.round(negSpan / INTERLACE_TARGET_STEP_MM);
+    const rawPos = Math.round(posSpan / INTERLACE_TARGET_STEP_MM);
+    const nNeg = Math.min(INTERLACE_MAX_PER_SIDE, Math.max(0, rawNeg));
+    const nPos = Math.min(INTERLACE_MAX_PER_SIDE, Math.max(0, rawPos));
+    if (rawNeg > INTERLACE_MAX_PER_SIDE || rawPos > INTERLACE_MAX_PER_SIDE) {
+      warnings.push(
+        `the range wants ${Math.max(rawNeg, rawPos)} patches on a side — clamped to ${INTERLACE_MAX_PER_SIDE} per side (21 patches incl. zero)`,
+      );
+    }
+    if (nNeg > 0) {
+      const step = round6(negSpan / nNeg);
+      steps.push(step);
+      for (let k = 0; k < nNeg; k++) values.push(round6(lo + k * step));
+    }
+    zeroIndex = values.length; // zero lands here in the ascending list
+    values.push(0);
+    if (nPos > 0) {
+      const step = round6(posSpan / nPos);
+      steps.push(step);
+      for (let k = 1; k <= nPos; k++) values.push(round6(k * step));
+    }
+  } else {
+    // zero absent: one inclusive span, count = round(span/step) + 1
+    const rawCount = Math.round((hi - lo) / INTERLACE_TARGET_STEP_MM) + 1;
+    let count = rawCount;
+    if (count > 2 * INTERLACE_MAX_PER_SIDE) {
+      warnings.push(
+        `the range wants ${count} patches — clamped to ${2 * INTERLACE_MAX_PER_SIDE}`,
+      );
+      count = 2 * INTERLACE_MAX_PER_SIDE;
+    }
+    count = Math.max(count, 2);
+    const step = round6((hi - lo) / (count - 1));
+    steps.push(step);
+    for (let k = 0; k < count; k++) values.push(round6(lo + k * step));
+  }
+  return { values, zeroIndex, steps, warnings };
+}
+
+/**
+ * The label text: explicit sign ("−0.5", "+0.125"), zero bare ("0"), up
+ * to four decimals with trailing zeros trimmed — derived ranges can
+ * produce values like 0.125 that a 2-decimal format would round away.
+ */
+export const interlaceLabel = (v: number): string => {
+  const mag = Math.abs(round6(v));
+  if (mag < 1e-9) return '0';
+  const t = mag.toFixed(4).replace(/\.?0+$/, '');
+  return `${v > 0 ? '+' : '-'}${t}`;
+};
+
+export interface InterlaceCouponV2 {
+  from: number;
+  to: number;
+  /** the ascending grid values (row1 + zero + row2 merged) — the panel's
+   *  ladder chips and the < 2 values degenerate gate read this */
+  values: number[];
+  /** row 1 = the ascending first half of the nonzero values, row 2 the
+   *  rest (rows differ by ≤ 1); empty when the range has no nonzero values */
+  row1: number[];
+  row2: number[];
+  /** the zero reference — its own column beside the rows, centered across
+   *  the seam; null when 0 ∉ [From, To] */
+  zero: number | null;
+  /** the derived step(s), mm (see InterlaceLadder) */
+  steps: number[];
+  /** the square raster block's side, mm */
+  patch: number;
+  /** mm between blocks — derived from the widest label so labels never
+   *  overlap each other or a neighbor patch */
+  gap: number;
+  /** mm — the widest label's width (what the gap derives from) */
+  labelWidth: number;
+  /** label cap height, mm */
+  labelCap: number;
+  /** the label box's height, mm (drives the slot height) */
+  labelHeight: number;
+  /** one row slot's height: patch + label clearance + label box */
+  slotHeight: number;
+  /** the whole coupon's face size, mm — x along the stock's span (rows +
+   *  zero column), y the ladder direction (arc on wrapped stock) */
+  size: { x: number; y: number };
+  warnings: string[];
+}
+
+/**
+ * Plan the v2 coupon against the stock and the CURRENT range: the ladder
+ * derives (deriveInterlaceLadder), every label lays out at the shared cap
+ * so the block gap derives from the actual widest label, and the row/zero
+ * layout sizes live. Pure; deterministic; the panel calls it on every
+ * range edit.
+ */
+export function planInterlaceCouponV2(stock: Stock, from = -0.5, to = 0.5): InterlaceCouponV2 {
+  const ladder = deriveInterlaceLadder(from, to);
+  // every label lays out at the shared cap — the widest sets the block gap
+  const labelLayouts = ladder.values.map((v) =>
+    layoutTextPaths({
+      text: interlaceLabel(v),
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: INTERLACE_LABEL_CAP_MM,
+      letterSpacing: 0,
+      wrapWidth: 0,
+    }),
+  );
+  const fallbackHeight = layoutTextPaths({
+    text: '0',
+    fontId: DEFAULT_TEXT_FONT_ID,
+    size: INTERLACE_LABEL_CAP_MM,
+    letterSpacing: 0,
+    wrapWidth: 0,
+  }).height;
+  const labelWidth = Math.max(0, ...labelLayouts.map((l) => l.width));
+  const labelHeight = labelLayouts[0]?.height ?? fallbackHeight;
+  const gap = Math.max(
+    INTERLACE_MIN_BLOCK_GAP_MM,
+    labelWidth - INTERLACE_PATCH_MM + INTERLACE_GAP_CLEARANCE_MM,
+  );
+
+  // the rows: nonzero values split as evenly as possible, ascending first
+  // half in row 1 (for a symmetric range exactly the negatives)
+  const zero = ladder.zeroIndex !== null ? 0 : null;
+  const nonzero =
+    ladder.zeroIndex === null
+      ? ladder.values
+      : ladder.values.filter((_, i) => i !== ladder.zeroIndex);
+  const split = Math.ceil(nonzero.length / 2);
+  const row1 = nonzero.slice(0, split);
+  const row2 = nonzero.slice(split);
+  const slotHeight = INTERLACE_PATCH_MM + INTERLACE_LABEL_CLEAR_MM + labelHeight;
+  const slotCount = row2.length > 0 ? 2 : row1.length > 0 ? 1 : 0;
+  const maxCols = Math.max(row1.length, row2.length, 1);
+  const gridW =
+    slotCount > 0 ? maxCols * INTERLACE_PATCH_MM + (maxCols - 1) * gap : 0;
+  // the whole footprint centers on the stock: rows grid + the zero column
+  const totalX =
+    slotCount > 0
+      ? gridW + (zero !== null ? gap + INTERLACE_PATCH_MM : 0)
+      : zero !== null
+        ? INTERLACE_PATCH_MM
+        : 0;
+  const totalY =
+    slotCount > 0
+      ? slotCount * slotHeight + (slotCount - 1) * gap
+      : INTERLACE_PATCH_MM + INTERLACE_LABEL_CLEAR_MM + labelHeight;
+
+  const warnings: string[] = [...ladder.warnings];
+  const [x0, x1] = stockSpan(stock, 'x');
+  const spanX = Math.max(x1 - x0, 1);
+  if (spanX < INTERLACE_PATCH_MM) {
+    warnings.push(
+      `the stock's span is ${spanX.toFixed(1)}mm — a ${INTERLACE_PATCH_MM}mm patch cannot fit along it; the burn will run past the edge`,
+    );
+  }
+  if (totalX > spanX + 1e-9) {
+    warnings.push(
+      `the grid needs ~${totalX.toFixed(0)}mm along the stock but the span is ${spanX.toFixed(0)}mm — patches will run past the edge`,
+    );
+  }
+  if (stock.kind === 'cylinder' && stock.axisMode === '4-axis') {
+    const circ = 2 * Math.PI * rotaryCalibrationOf(stock).effectiveRadius;
+    if (totalY > circ) {
+      warnings.push(
+        `the rows need ~${totalY.toFixed(0)}mm of arc but the cylinder's circumference is ${circ.toFixed(0)}mm — the outer rows will overlap the seam`,
+      );
+    }
+  } else {
+    const [y0, y1] = stockSpan(stock, 'y');
+    if (totalY > y1 - y0) {
+      warnings.push(
+        `the rows need ~${totalY.toFixed(0)}mm across the stock but it has ${(y1 - y0).toFixed(0)}mm — the outer rows will run past the edge`,
+      );
+    }
+  }
+  try {
+    warnings.push(
+      ...planInterlaceCoupon(
+        { x: INTERLACE_PATCH_MM, y: INTERLACE_PATCH_MM },
+        { pitch: INTERLACE_COUPON_PITCH, columnSpacing: DEFAULT_COLUMN_SPACING_MM },
+      ).warnings,
+    );
+  } catch (e) {
+    warnings.push(String(e instanceof Error ? e.message : e));
+  }
+  return {
+    from,
+    to,
+    values: ladder.values,
+    row1,
+    row2,
+    zero,
+    steps: ladder.steps,
+    patch: INTERLACE_PATCH_MM,
+    gap,
+    labelWidth,
+    labelCap: INTERLACE_LABEL_CAP_MM,
+    labelHeight,
+    slotHeight,
+    size: { x: totalX, y: totalY },
+    warnings,
+  };
+}
+
+/**
+ * Materialize the v2 coupon: ONE bitmap primitive + ONE serpentine
+ * rasterEngrave op per ladder setting (interlace = the setting), plus ONE
+ * text label primitive per patch burned by ONE engrave op over every
+ * label's paths.
+ *
+ * LAYOUT (see the section doc's ASCII): the rows stack through
+ * laserCouponLadder's slots — row 1 lowest (flat: nearer Y0; wrapped:
+ * nearer the around-origin), each row LEFT-ALIGNED along the stock's span
+ * ascending left→right, the whole footprint centered. The zero reference
+ * (when in range) is its own column AFTER the rows (+X end, reading
+ * order), vertically centered across the seam between the rows, with its
+ * own label above it. Flat: the offsets ride Y; wrapped: they ride the
+ * arc (ascending = negative Rx, the ladder's own convention).
+ */
+export function materializeInterlaceCoupon(
+  plan: InterlaceCouponV2,
+  stock: Stock,
+  laser: Tool,
+): { ops: JobOp[]; primitives: Primitive[] } {
+  if (plan.row1.length + plan.row2.length + (plan.zero !== null ? 1 : 0) === 0) {
+    return { ops: [], primitives: [] }; // a degenerate range materializes nothing
+  }
+  const wrapped = stock.kind === 'cylinder' && stock.axisMode === '4-axis';
+  const cal = rotaryCalibrationOf(stock);
+  const rowsLadder = laserCouponLadder(stock, Math.max(slotCountOf(plan), 1), plan.gap, plan.slotHeight);
+  // the patch grid: the same single-pixel-column pattern at every setting
+  // (the op's resample at the plan pitch reproduces it exactly)
+  const coupon = planInterlaceCoupon(
+    { x: plan.patch, y: plan.patch },
+    { pitch: INTERLACE_COUPON_PITCH, columnSpacing: DEFAULT_COLUMN_SPACING_MM },
+  );
+  const gray = couponStoredGray(
+    gridToGray(coupon.grid, (x) => coupon.columns.includes(x)),
+    wrapped,
+  );
+  const face = { width: plan.patch, height: plan.patch };
+  const degPerMm = 180 / (Math.PI * cal.effectiveRadius);
+  const primitives: Primitive[] = [];
+  const ops: JobOp[] = [];
+  const labelIds: string[] = [];
+  // the whole footprint (rows + zero column) centers on the stock span
+  const maxCols = Math.max(plan.row1.length, plan.row2.length, 1);
+  const gridW = maxCols * plan.patch + (maxCols - 1) * plan.gap;
+  const totalW = gridW + (plan.zero !== null ? plan.gap + plan.patch : 0);
+  const [x0, x1] = stockSpan(stock, 'x');
+  const leftX = (x0 + x1) / 2 - totalW / 2;
+  const colX = (col: number): number => leftX + col * (plan.patch + plan.gap) + plan.patch / 2;
+
+  /** one patch + its label at (x, slotBase); dPatch/dLabel place the patch
+   *  in the slot's lower band and the label above it ("a text label above
+   *  it" — her ruling). */
+  const burnPatch = (value: number, x: number, base: ModelTransform, labelDy: number) => {
+    const dPatch = -(plan.slotHeight - plan.patch) / 2;
+    const patchT: ModelTransform = wrapped
+      ? {
+          ...base,
+          position: { x, y: 0, z: cal.axisZ },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - dPatch * degPerMm },
+        }
+      : { ...base, position: { x, y: base.position.y + dPatch, z: base.position.z } };
+    const prim = bitmapCouponPrimitive(
+      gray,
+      face,
+      patchT,
+      wrapped,
+      stock,
+      `interlace coupon — offset ${interlaceLabel(value)}`,
+    );
+    primitives.push(prim);
+    ops.push({
+      kind: 'rasterEngrave',
+      id: `jobop-${++opCount}`,
+      toolId: laser.id,
+      featureIds: [`p:${prim.id}:bitmap:0`],
+      pitch: INTERLACE_COUPON_PITCH,
+      sweep: 'serpentine',
+      interlace: value,
+    });
+    // the label above: its own layout at the shared cap height
+    const lay = layoutTextPaths({
+      text: interlaceLabel(value),
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: plan.labelCap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+    });
+    const labelT: ModelTransform = wrapped
+      ? {
+          ...base,
+          position: { x, y: 0, z: cal.axisZ },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - labelDy * degPerMm },
+        }
+      : { ...base, position: { x, y: base.position.y + labelDy, z: base.position.z } };
+    const label: Extract<Primitive, { kind: 'text' }> = {
+      kind: 'text',
+      id: nextPrimitiveId(),
+      text: interlaceLabel(value),
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: plan.labelCap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+      paths: lay.paths,
+      width: lay.width,
+      height: lay.height,
+      presentation: wrapped ? 'wrapped' : 'flat',
+      wrapDiameter: Math.max(1, cal.effectiveRadius * 2),
+      transform: labelT,
+    };
+    primitives.push(label);
+    for (let k = 0; k < lay.paths.length; k++) labelIds.push(`p:${label.id}:path:${k}`);
+  };
+
+  // a row slot's label sits slotHeight/2 − labelH/2 above the slot center
+  const rowLabelDy = plan.slotHeight / 2 - plan.labelHeight / 2;
+  const rows: { values: number[] }[] = [
+    { values: plan.row1 },
+    ...(plan.row2.length > 0 ? [{ values: plan.row2 }] : []),
+  ];
+  rows.forEach((row, r) => {
+    const base = rowsLadder.place(r);
+    row.values.forEach((value, col) => burnPatch(value, colX(col), base, rowLabelDy));
+  });
+
+  // the zero reference column: AFTER the rows (+X end), centered across
+  // the seam — flat: the slot centers' Y midpoint; wrapped: the rotation
+  // midpoint. Its label rides the patch-center + clearance formula the
+  // row labels share.
+  if (plan.zero !== null) {
+    const base0 = rowsLadder.place(0);
+    const baseLast = rowsLadder.place(Math.max(rows.length - 1, 0));
+    const zeroX = leftX + gridW + plan.gap + plan.patch / 2;
+    // burnPatch offsets the patch by dPatch below its base — for the zero
+    // column the PATCH must sit ON the seam, so the base rides dPatch
+    // ABOVE it; the label then lands at patch-center + patch/2 + clearance
+    // + labelH/2, the same offset every row label carries
+    const dPatch = -(plan.slotHeight - plan.patch) / 2;
+    const zeroBase: ModelTransform = wrapped
+      ? {
+          position: { x: zeroX, y: 0, z: cal.axisZ },
+          rotationDeg: {
+            x: (base0.rotationDeg.x + baseLast.rotationDeg.x) / 2 + dPatch * degPerMm,
+            y: 0,
+            z: 0,
+          },
+          scale: { x: 1, y: 1, z: 1 },
+        }
+      : {
+          position: {
+            x: zeroX,
+            y: (base0.position.y + baseLast.position.y) / 2 - dPatch,
+            z: base0.position.z,
+          },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        };
+    burnPatch(0, zeroX, zeroBase, rowLabelDy);
+  }
+
+  // ONE engrave op burns every label — they share the tool, the power and
+  // the single-pass vector burn; the patches are what differ
+  ops.push({
+    kind: 'engrave',
+    id: `jobop-${++opCount}`,
+    toolId: laser.id,
+    featureIds: labelIds,
+    depth: 0.1,
+    stepDown: 0.1,
+    fillMode: 'outlines',
+  });
+  return { ops, primitives };
+}
+
+/** the row-slot count a plan lays out (1 when a single row holds all
+ *  nonzero values, 0 for a degenerate range) */
+const slotCountOf = (plan: InterlaceCouponV2): number =>
+  plan.row2.length > 0 ? 2 : plan.row1.length > 0 ? 1 : 0;
+
+/**
+ * The GREYSCALE POWER CHART v3 (Alice's 2026-11-24, matched to the
+ * MakeraStudio ground truth — examples/MakeraStudiolaser_grid_TOP_*.nc):
+ * a 2D calibration chart of raster squares. POWER steps along X (one
+ * column per S, ascending), FEED steps down Y (one row per F, FASTEST AT
+ * TOP — Makera's F3000 row first), and the chart's right-edge column
+ * repeats max power as the 100% REFERENCE (Makera repeats their S1
+ * column there). Each cell is a CELL×CELL mm solid-black square burned as
+ * its own rasterEngrave op at that column's S and that row's F (the ⚡
+ * feed + beam-power override — the exact column×row combination, like
+ * Makera's one toolpath per square). Text labels (the "Numbers" layer)
+ * label the chart: one label per column above the top row, one per row
+ * left of the grid.
+ *
+ * COMPACT (Alice's follow-up rulings, 2026-11-24): labels read as PERCENT
+ * ("what does S0.1 mean?... put that as a percentage") and are ROTATED
+ * 90° ("turn the text 90° and you can then squeeze all the columns
+ * together... ideally onto my anodised aluminium business card blanks").
+ * The rotation is baked into the stored points (rotateLayout90 — the
+ * primitive's transform semantics stay flat), so a rotated label's
+ * footprint is cap-height wide × text-length tall: the column gap
+ * shrinks to the laser-natural CHART_GAP_MM = 2mm (the rotated labels'
+ * ~cap-height X-footprint fits inside the cell's own band), and the feed
+ * labels' cap auto-shrinks until their rotated length fits one row band
+ * (cell + gap − 1mm of clearance). Prefill extent lands ≈ 82 × 51mm —
+ * inside a business-card blank. The no-overlap invariant holds across
+ * every label and cell rect.
+ *
+ * DERIVATION: the stepped columns run From, From+step, … strictly below
+ * To (so at the prefill 0.1 → 1.0 step 0.1 the stepped columns are
+ * S0.1…S0.9); To itself burns as the right-edge reference column — the
+ * chart's last column, always present. The feeds burn in the order
+ * typed (fastest first by convention), capped at the testPattern 10-row
+ * cap.
+ */
+
+/** the laser-natural minimum between squares, mm — with the labels
+ *  rotated 90° nothing wider sits between the cells, so this constant no
+ *  longer derives from label widths (the pre-rounds rule was 3.5mm) */
+export const CHART_GAP_MM = 2;
+/** each cell is a square raster block of this side, mm — Makera's chart
+ *  uses 6×6mm squares */
+export const CHART_CELL_MM = 6;
+/** the feeds field's row cap — the testPattern divisions cap */
+export const CHART_MAX_ROWS = 10;
+/** clearance between a block's top edge and its label, mm (the interlace
+ *  idiom) */
+const CHART_LABEL_CLEAR_MM = INTERLACE_LABEL_CLEAR_MM;
+/** label cap height for the column labels, mm (the interlace idiom) */
+const CHART_LABEL_CAP_MM = INTERLACE_LABEL_CAP_MM;
+/** clearance the rotated feed labels keep from each other and from the
+ *  grid, mm */
+const CHART_FEED_CLEAR_MM = 1;
+
+export interface ChartGrid {
+  /** the stepped power columns ascending (From..below To) */
+  stepped: number[];
+  /** the right-edge reference column's power (= To) */
+  ref: number;
+  /** the feed rows in typed order, fastest first by convention */
+  feeds: number[];
+  warnings: string[];
+}
+
+const round6c = (v: number): number => Math.round(v * 1e6) / 1e6;
+
+/**
+ * Derive the chart's columns and rows from the panel fields. from > to
+ * swaps (the wedge precedent); a non-positive step falls back to 0.1
+ * with a warning; feeds not strictly descending warn (the chart reads
+ * fastest-first) and clamp at CHART_MAX_ROWS.
+ */
+export function deriveChartGrid(
+  from: number,
+  to: number,
+  step: number,
+  feeds: number[],
+): ChartGrid {
+  const warnings: string[] = [];
+  const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+  let lo = Number.isFinite(from) ? clamp01(from) : 0.1;
+  let hi = Number.isFinite(to) ? clamp01(to) : 1;
+  if (from > to) {
+    warnings.push(
+      `the power range ran backwards (from ${from} above to ${to}) — read as swapped; the columns ascend ${to} → ${from}`,
+    );
+    [lo, hi] = [hi, lo];
+  }
+  let st = Number.isFinite(step) && step > 0 ? step : 0.1;
+  if (!(step > 0)) {
+    warnings.push('the power step must be positive — fell back to 0.1');
+  }
+  const stepped: number[] = [];
+  for (let k = 0; k < CHART_MAX_ROWS; k++) {
+    const v = lo + k * st; // index-based — no float accumulation drift
+    if (v >= hi - 1e-9) break;
+    stepped.push(round6c(v));
+  }
+  // degenerate: nothing stepped (From ≥ To, or the step ate the range)
+  if (stepped.length === 0) {
+    warnings.push('the power range needs From below To (at least two columns incl. the reference)');
+  }
+  const cleanFeeds = feeds.filter((f) => Number.isFinite(f) && f > 0);
+  if (cleanFeeds.length !== feeds.length) {
+    warnings.push('the feeds list held entries that are not positive numbers — they were dropped');
+  }
+  if (cleanFeeds.length === 0) {
+    warnings.push('the feeds list needs at least one feed');
+  }
+  if (cleanFeeds.length > CHART_MAX_ROWS) {
+    warnings.push(
+      `the feeds list wants ${cleanFeeds.length} rows — clamped to ${CHART_MAX_ROWS} (the test-pattern cap)`,
+    );
+    cleanFeeds.length = CHART_MAX_ROWS;
+  }
+  for (let i = 1; i < cleanFeeds.length; i++) {
+    if (cleanFeeds[i] > cleanFeeds[i - 1]) {
+      warnings.push(
+        'the feeds are not fastest-first — rows burn in the order typed, fastest at top by convention',
+      );
+      break;
+    }
+  }
+  return { stepped, ref: hi, feeds: cleanFeeds, warnings };
+}
+
+/**
+ * A column's label as PERCENT (Alice: "what does S0.1 mean?... put that
+ * as a percentage") — S is laser power 0–1, so S0.1 reads "10%"; 0.1%
+ * precision, trailing ".0" trimmed.
+ */
+export const chartColumnLabel = (power: number): string => {
+  const p = Math.round(round6c(power) * 1000) / 10;
+  return `${Number.isInteger(p) ? p : p.toFixed(1)}%`;
+};
+
+/** a row's label: "F3000" */
+export const chartRowLabel = (feed: number): string => `F${Math.round(feed)}`;
+
+export interface GreyscaleChart {
+  from: number;
+  to: number;
+  step: number;
+  /** the stepped power columns ascending (the reference excluded) */
+  columns: number[];
+  /** the right-edge reference column's power (= To) */
+  ref: number;
+  /** the feed rows, typed order (fastest first by convention) */
+  feeds: number[];
+  /** the square cell's side, mm (the Cell size field) */
+  cell: number;
+  /** mm between squares — the laser-natural minimum (rotated labels) */
+  gap: number;
+  /** the column labels' cap height, mm */
+  labelCap: number;
+  /** the FEED labels' cap height, mm — auto-shrunk so the rotated text
+   *  length fits one row band (see the section doc) */
+  feedLabelCap: number;
+  /** mm of left margin the rotated feed labels need */
+  feedMargin: number;
+  /** the coupon's face size, mm — x along the stock (feed labels + grid),
+   *  y the ladder direction (arc on wrapped stock) */
+  size: { x: number; y: number };
+  warnings: string[];
+}
+
+/**
+ * Plan the chart against the stock and the CURRENT fields: the column
+ * labels lay out at CHART_LABEL_CAP_MM and rotate 90° (their footprint =
+ * cap height wide), the feed labels' cap shrinks until their rotated
+ * length fits one row band, and the extent computes live. Pure;
+ * deterministic; the panel calls it on every edit.
+ */
+export function planGreyscaleChart(
+  stock: Stock,
+  from = 0.1,
+  to = 1,
+  step = 0.1,
+  feeds: number[] = [3000, 2500, 2000, 1500, 1000],
+  cell = CHART_CELL_MM,
+): GreyscaleChart {
+  const grid = deriveChartGrid(from, to, step, feeds);
+  const side = Math.max(1, cell);
+  // the column labels at the shared cap, rotated: footprint = cap height
+  // wide × text length tall (the tallest sets the top label band)
+  const colLabels = [...grid.stepped, grid.ref].map((p) =>
+    rotateLayout90(
+      layoutTextPaths({
+        text: chartColumnLabel(p),
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: CHART_LABEL_CAP_MM,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }),
+    ),
+  );
+  const maxColLabelLen = Math.max(0, ...colLabels.map((l) => l.height));
+  // the feed labels rotate too — auto-shrink their cap until the rotated
+  // text length fits one row band (cell + gap − clearance); measure the
+  // longest feed text at the shared cap and scale linearly
+  const maxFeedText = grid.feeds.map(chartRowLabel).reduce((a, b) => (b.length > a.length ? b : a), 'F3000');
+  const feedLenAtCap = layoutTextPaths({
+    text: maxFeedText,
+    fontId: DEFAULT_TEXT_FONT_ID,
+    size: CHART_LABEL_CAP_MM,
+    letterSpacing: 0,
+    wrapWidth: 0,
+  }).width;
+  const band = side + CHART_GAP_MM - CHART_FEED_CLEAR_MM;
+  const feedLabelCap = Math.max(
+    1.2,
+    Math.min(CHART_LABEL_CAP_MM, (CHART_LABEL_CAP_MM * band) / Math.max(feedLenAtCap, 1e-6)),
+  );
+  const feedLabelLayouts = grid.feeds.map((f) =>
+    rotateLayout90(
+      layoutTextPaths({
+        text: chartRowLabel(f),
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: feedLabelCap,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }),
+    ),
+  );
+  const maxFeedLabelW = Math.max(0, ...feedLabelLayouts.map((l) => l.width));
+  const feedMargin = maxFeedLabelW + CHART_GAP_MM;
+  const rows = grid.feeds.length;
+  const cols = grid.stepped.length + 1; // + the reference column
+  const gridW = cols * side + (cols - 1) * CHART_GAP_MM;
+  const totalX = feedMargin + gridW;
+  const totalY =
+    rows * side + (rows - 1) * CHART_GAP_MM + CHART_LABEL_CLEAR_MM + maxColLabelLen;
+
+  const warnings: string[] = [...grid.warnings];
+  const [x0, x1] = stockSpan(stock, 'x');
+  const spanX = Math.max(x1 - x0, 1);
+  if (totalX > spanX + 1e-9) {
+    warnings.push(
+      `the chart needs ~${totalX.toFixed(0)}mm along the stock but the span is ${spanX.toFixed(0)}mm — cells will run past the edge`,
+    );
+  }
+  if (stock.kind === 'cylinder' && stock.axisMode === '4-axis') {
+    const circ = 2 * Math.PI * rotaryCalibrationOf(stock).effectiveRadius;
+    if (totalY > circ) {
+      warnings.push(
+        `the rows need ~${totalY.toFixed(0)}mm of arc but the cylinder's circumference is ${circ.toFixed(0)}mm — the outer rows will overlap the seam`,
+      );
+    }
+  } else {
+    const [y0, y1] = stockSpan(stock, 'y');
+    if (totalY > y1 - y0) {
+      warnings.push(
+        `the rows need ~${totalY.toFixed(0)}mm across the stock but it has ${(y1 - y0).toFixed(0)}mm — the outer rows will run past the edge`,
+      );
+    }
+  }
+  return {
+    from,
+    to,
+    step,
+    columns: grid.stepped,
+    ref: grid.ref,
+    feeds: grid.feeds,
+    cell: side,
+    gap: CHART_GAP_MM,
+    labelCap: CHART_LABEL_CAP_MM,
+    feedLabelCap,
+    feedMargin,
+    size: { x: totalX, y: totalY },
+    warnings,
+  };
+}
+
+/**
+ * Materialize the chart: ONE bitmap primitive (a solid CELL×CELL mm black
+ * square) + ONE rasterEngrave op per cell, the op's ⚡ override carrying
+ * the exact column×row combination (feed = the row's F, spindleRpm = the
+ * column's S as beam %). The TEXT labels — one power label per column
+ * above the top row (bottom-anchored, reading bottom-up), one feed label
+ * per row left of the grid (reading bottom-up, centered on its row's cell
+ * height) — burn as ONE engrave op (Makera's "Numbers" layer). Layout:
+ * feed rows stack through laserCouponLadder's slots, FASTEST AT TOP (row
+ * 0 typed = the highest slot); columns ascend left→right with the To
+ * reference as the right-edge column; flat = the crown strip, wrapped =
+ * bent around the arc face-up.
+ */
+export function materializeGreyscaleChart(
+  plan: GreyscaleChart,
+  stock: Stock,
+  laser: Tool,
+): { ops: JobOp[]; primitives: Primitive[] } {
+  const wrapped = stock.kind === 'cylinder' && stock.axisMode === '4-axis';
+  const cal = rotaryCalibrationOf(stock);
+  const rows = plan.feeds.length;
+  const cols = plan.columns.length + 1; // + the reference column
+  const rowsLadder = laserCouponLadder(stock, rows, plan.gap, plan.cell);
+  const pitch = RASTER_PITCH_MM;
+  const px = {
+    w: Math.max(1, Math.round(plan.cell / pitch)),
+    h: Math.max(1, Math.round(plan.cell / pitch)),
+  };
+  const face = { width: plan.cell, height: plan.cell };
+  const cellGray = couponStoredGray(solidBand(px.w, px.h), wrapped);
+  const degPerMm = 180 / (Math.PI * cal.effectiveRadius);
+  const primitives: Primitive[] = [];
+  const ops: JobOp[] = [];
+  const labelIds: string[] = [];
+  // the whole footprint (feed-label margin + grid) centers on the stock
+  const gridW = cols * plan.cell + (cols - 1) * plan.gap;
+  const [x0, x1] = stockSpan(stock, 'x');
+  const leftX = (x0 + x1) / 2 - (plan.feedMargin + gridW) / 2 + plan.feedMargin;
+  const colX = (c: number): number => leftX + c * (plan.cell + plan.gap) + plan.cell / 2;
+  // every column's power: the stepped ladder, then the To reference
+  const colPowers = [...plan.columns, plan.ref];
+
+  /** lay out + rotate one label, burn it, and collect its path ids */
+  const burnLabel = (
+    labelText: string,
+    cap: number,
+    x: number,
+    base: ModelTransform,
+    dy: number,
+  ) => {
+    const lay = rotateLayout90(
+      layoutTextPaths({
+        text: labelText,
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: cap,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }),
+    );
+    const labelT: ModelTransform = wrapped
+      ? {
+          ...base,
+          position: { x, y: 0, z: cal.axisZ },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - dy * degPerMm },
+        }
+      : { ...base, position: { x, y: base.position.y + dy, z: base.position.z } };
+    const labelPrim: Extract<Primitive, { kind: 'text' }> = {
+      kind: 'text',
+      id: nextPrimitiveId(),
+      text: labelText,
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: cap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+      paths: lay.paths,
+      width: lay.width,
+      height: lay.height,
+      presentation: wrapped ? 'wrapped' : 'flat',
+      wrapDiameter: Math.max(1, cal.effectiveRadius * 2),
+      transform: labelT,
+    };
+    primitives.push(labelPrim);
+    for (let k = 0; k < lay.paths.length; k++) labelIds.push(`p:${labelPrim.id}:path:${k}`);
+  };
+
+  // the power labels: a label ROW above the TOP row (the fastest feed's
+  // row), one per column — bottom-anchored just above the cells, reading
+  // bottom-up along the column edge
+  {
+    const topBase = rowsLadder.place(rows - 1);
+    colPowers.forEach((power, c) => {
+      // the rotated label's own height sets its center: bottom edge sits
+      // CHART_LABEL_CLEAR_MM above the cell's top edge
+      const len = rotateLayout90(
+        layoutTextPaths({
+          text: chartColumnLabel(power),
+          fontId: DEFAULT_TEXT_FONT_ID,
+          size: plan.labelCap,
+          letterSpacing: 0,
+          wrapWidth: 0,
+        }),
+      ).height;
+      burnLabel(
+        chartColumnLabel(power),
+        plan.labelCap,
+        colX(c),
+        topBase,
+        plan.cell / 2 + CHART_LABEL_CLEAR_MM + len / 2,
+      );
+    });
+  }
+
+  // feed rows: typed order, FASTEST AT TOP — row 0 rides the highest slot.
+  // Cells sit CENTERED in their cell-sized slots (the label band lives
+  // above the top row and in the left margin).
+  plan.feeds.forEach((feed, i) => {
+    const slot = rows - 1 - i;
+    const base = rowsLadder.place(slot);
+    colPowers.forEach((power, c) => {
+      const cellT: ModelTransform = { ...base, position: { ...base.position, x: colX(c) } };
+      const prim = bitmapCouponPrimitive(
+        cellGray,
+        face,
+        cellT,
+        wrapped,
+        stock,
+        `power chart — ${chartColumnLabel(power)} ${chartRowLabel(feed)}`,
+      );
+      primitives.push(prim);
+      ops.push({
+        kind: 'rasterEngrave',
+        id: `jobop-${++opCount}`,
+        toolId: laser.id,
+        featureIds: [`p:${prim.id}:bitmap:0`],
+        pitch,
+        rates: { feed, spindleRpm: Math.round(power * 100) },
+      });
+    });
+    // the row's feed label, LEFT of the grid at the cell's height
+    burnLabel(chartRowLabel(feed), plan.feedLabelCap, leftX - plan.gap - plan.feedLabelCap / 2, base, 0);
+  });
+
+  // ONE engrave op burns every label (Makera's "Numbers" layer)
+  ops.push({
+    kind: 'engrave',
+    id: `jobop-${++opCount}`,
+    toolId: laser.id,
+    featureIds: labelIds,
+    depth: 0.1,
+    stepDown: 0.1,
+    fillMode: 'outlines',
+  });
   return { ops, primitives };
 }
 
@@ -2521,7 +3710,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             entryPose: prevExit,
             clipCtx: clipCtx ?? undefined,
           });
-          moves.push(...r.moves);
+          // chunked: a big op's move list overflows the spread (~65k args)
+          for (let i = 0; i < r.moves.length; i += 4096) {
+            moves.push(...r.moves.slice(i, i + 4096));
+          }
           minutes += r.estimatedMinutes;
           a = r.endA;
           swept += patch.cells.length;
@@ -3371,7 +4563,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // raster feed (an extinguish + G0 reposition between faces,
             // exactly like engraveLaser between paths)
             if (moves.length > 0) moves.push({ words: {}, feed, power: 0 });
-            moves.push(...res.moves);
+            // a coupon-scale raster carries ~10^5 moves — a spread push
+            // blows the call stack past ~65k args, so append in chunks
+            for (let i = 0; i < res.moves.length; i += 4096) {
+              moves.push(...res.moves.slice(i, i + 4096));
+            }
             minutes += res.estimatedMinutes;
             firedRuns += res.firedRuns;
             gridBits.push(`${res.grid.width}×${res.grid.height}`);

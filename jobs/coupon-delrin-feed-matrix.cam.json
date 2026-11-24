@@ -1,6 +1,6 @@
 {
   "format": "simple.cam job",
-  "version": 2,
+  "version": 3,
   "stock": {
     "kind": "cylinder",
     "length": 50,

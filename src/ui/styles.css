@@ -288,6 +288,7 @@ button.secondary:disabled:hover { background: #31373e; }
 .obj-cylinder { --type-color: #4fc3f7; }
 .obj-box { --type-color: #ff9d5c; }
 .obj-artwork { --type-color: #ff66cc; }
+.obj-text { --type-color: #ffd166; }
 .obj-dot {
   flex: none;
   width: 8px;
@@ -830,11 +831,13 @@ input.num-input:focus { outline: 1px solid #2e6f9e; }
 .tool-row.obj-model,
 .tool-row.obj-cylinder,
 .tool-row.obj-box,
-.tool-row.obj-artwork { border-left: 3px solid var(--type-color); }
+.tool-row.obj-artwork,
+.tool-row.obj-text { border-left: 3px solid var(--type-color); }
 .tool-row.obj-model .tool-name,
 .tool-row.obj-cylinder .tool-name,
 .tool-row.obj-box .tool-name,
-.tool-row.obj-artwork .tool-name { color: var(--type-color); }
+.tool-row.obj-artwork .tool-name,
+.tool-row.obj-text .tool-name { color: var(--type-color); }
 pre {
   font-size: 11px;
   background: #101315;
@@ -1180,6 +1183,24 @@ pre {
   color: #d8dde2;
   font-variant-numeric: tabular-nums;
 }
+/* the launcher's generator buttons: one ideogram + label + hint per row */
+.cal-launch { display: flex; flex-direction: column; gap: 8px; }
+.cal-launch > button {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  text-align: left;
+  background: #232830;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  color: #d8dde2;
+  cursor: pointer;
+}
+.cal-launch > button:hover { background: #31373e; }
+.cal-launch .cal-ideogram { font-size: 24px; width: 30px; text-align: center; }
+.cal-launch-label { display: flex; flex-direction: column; gap: 2px; font-size: 14px; font-weight: 600; }
+.cal-launch-hint { font-size: 11px; font-weight: 400; color: #9aa4ad; }
 .dialog-buttons {
   display: flex;
   justify-content: flex-end;

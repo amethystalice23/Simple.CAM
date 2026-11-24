@@ -2588,7 +2588,7 @@ export function Viewport({
     const objs: THREE.Mesh[] = [];
     const bitmapObjs: THREE.Mesh[] = [];
     for (const p of primitives) {
-      if (p.kind === 'artwork') {
+      if (p.kind === 'artwork' || p.kind === 'text') {
         // line work, not a volume: it renders as its amber path overlay
         // (buildFeatureOverlayData), and neither occludes the raycast
         // pickers nor is face-pickable — no solid mesh to build here

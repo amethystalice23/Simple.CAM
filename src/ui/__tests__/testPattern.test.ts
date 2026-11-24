@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { identityTransform } from '../../core/types';
-import type { Primitive, Stock, Tool } from '../../core/types';
+import type { JobOp, Primitive, Stock, Tool } from '../../core/types';
 import { sourcesFor } from '../featureSources';
 import {
   generateJobOp,
@@ -248,5 +248,149 @@ describe('materializeTestPattern — flat (the pocket grid, as ops)', () => {
     expect(c1.moves[0].spindleRpm).toBe(9000);
     const r4 = generateJobOp(ops[21], c);
     expect(r4.moves[0].spindleRpm).toBe(15000);
+  });
+});
+// ------------------------------------------------- the Numbers layer
+// (Alice, 2026-11-24): text labels for the grid — one per row and per
+// column at the coupon edges, burned by ONE laser engrave op when the job
+// has a laser tool. Rotary geometry: the grooves occupy every phase at
+// every grouping, so only the strand values fit (the −X margin strip).
+
+/** a laser for the Numbers layer */
+const LASER: Tool = {
+  id: 'laser',
+  name: 'laser module',
+  type: 'laser',
+  diameter: 0.1,
+  spindleRpm: 80,
+};
+
+describe('materializeTestPattern labels — the Numbers layer', () => {
+  const plan = planTestPattern(V5, ROD, BIT, testPatternDefaults(BIT, 'delrin'));
+  const pitchArc = (Math.PI * 15.75) / 5; // the strand pitch on the faced Ø
+
+  it('rotary: 5 strand labels + one engrave op, no power overrides, cells unchanged', () => {
+    const { ops, primitives } = materializeTestPattern(plan, BIT, 'delrin', { laser: LASER, axisZ: 0 });
+    expect(ops).toHaveLength(1 + 25 + 1); // face + cells + ONE label op
+    expect(primitives).toHaveLength(5);
+    const texts = primitives as Extract<Primitive, { kind: 'text' }>[];
+    // the labels read the ROW param values (feed, plain numbers)
+    expect(texts.map((t) => t.text)).toEqual(['450', '500', '550', '600', '650']);
+    // wrapped on the FACED Ø (the surface the cells just cut)
+    expect(texts.every((t) => t.presentation === 'wrapped')).toBe(true);
+    expect(texts.every((t) => t.wrapDiameter === 15.75)).toBe(true);
+    // arc phases mirror the strand spins 0, 72, … (ascending arc = −Rx)
+    expect(texts.map((t) => Math.abs(t.transform.rotationDeg.x))).toEqual([0, 72, 144, 216, 288]);
+    // the engrave op burns EVERY label path with the laser, no ⚡ overrides
+    const engraves = ops.filter((o) => o.kind === 'engrave');
+    expect(engraves).toHaveLength(1);
+    const e = engraves[0] as Extract<JobOp, { kind: 'engrave' }>;
+    expect(e.toolId).toBe(LASER.id);
+    expect(e.rates).toBeUndefined();
+    const allPaths = texts.flatMap((t) => t.paths.map((_, k) => `p:${t.id}:path:${k}`));
+    expect(new Set(e.featureIds)).toEqual(new Set(allPaths));
+  });
+
+  it('rotary: without a laser the coupon cuts unlabeled (the 3-arg call)', () => {
+    const { ops, primitives } = materializeTestPattern(plan, BIT, 'delrin');
+    expect(primitives).toEqual([]);
+    expect(ops).toHaveLength(26);
+  });
+
+  it('rotary: strand labels sit in the −X margin, on the axis, sized to the strand pitch', () => {
+    const { primitives } = materializeTestPattern(plan, BIT, 'delrin', { laser: LASER, axisZ: 0 });
+    const texts = primitives as Extract<Primitive, { kind: 'text' }>[];
+    const groupX0 = plan.rotary!.groupXs[0];
+    for (const t of texts) {
+      // in the −X margin strip (GROUP_MARGIN = 3mm), on the rotation axis
+      expect(t.transform.position.x).toBeLessThan(groupX0);
+      expect(t.transform.position.x).toBeGreaterThan(groupX0 - 3.01);
+      expect(t.transform.position.y).toBe(0);
+      expect(t.transform.position.z).toBeCloseTo(0, 6);
+      // UNROTATED on the tube: the cap direction runs AXIAL (≤ 3mm), the
+      // text length runs around the ARC (≤ the strand pitch)
+      expect(t.height).toBeLessThanOrEqual(3.001);
+      expect(t.width).toBeLessThanOrEqual(pitchArc);
+    }
+  });
+
+  it('flat: column labels above the top row + rotated row labels in the left margin', () => {
+    const flatPlan = planTestPattern(V5, BOX, BIT, testPatternDefaults(BIT, 'delrin'));
+    const f = flatPlan.flat!;
+    const { ops, primitives } = materializeTestPattern(flatPlan, BIT, 'delrin', { laser: LASER, axisZ: 0 });
+    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
+      Primitive,
+      { kind: 'text' }
+    >[];
+    expect(texts).toHaveLength(flatPlan.cols + flatPlan.rows);
+    const colLabels = texts.slice(0, flatPlan.cols);
+    const rowLabels = texts.slice(flatPlan.cols);
+    // column labels: one per colParam value (RPM), horizontal above the block
+    expect(colLabels.map((t) => t.text)).toEqual(flatPlan.colValues.map((v) => String(v)));
+    const blockTop = f.y0 + flatPlan.rows * f.cellH + (flatPlan.rows - 1) * f.spacing;
+    for (let c = 0; c < flatPlan.cols; c++) {
+      expect(colLabels[c].transform.position.x).toBeCloseTo(
+        f.x0 + c * (f.cellW + f.spacing) + f.cellW / 2,
+        5,
+      );
+      // bottom-anchored above the grown origin cell, inside the stock
+      expect(colLabels[c].transform.position.y).toBeGreaterThan(blockTop + f.originGrowth);
+      expect(colLabels[c].transform.position.y - colLabels[c].height / 2).toBeGreaterThan(blockTop + f.originGrowth);
+      expect(colLabels[c].transform.position.y + colLabels[c].height / 2).toBeLessThan(blockTop + f.spacing + f.originGrowth + 0.01);
+    }
+    // row labels: ROTATED (the length runs vertically), one per row value
+    expect(rowLabels.map((t) => t.text)).toEqual(flatPlan.rowValues.map((v) => String(v)));
+    for (let r = 0; r < flatPlan.rows; r++) {
+      const t = rowLabels[r];
+      expect(t.height).toBeGreaterThan(t.width); // rotated: text length is the height
+      // right-aligned clear of the grown origin cell, inside the margin
+      expect(t.transform.position.x + t.width / 2).toBeLessThan(f.x0 - f.originGrowth);
+      expect(t.transform.position.x - t.width / 2).toBeGreaterThan(f.x0 - f.spacing - f.originGrowth - 0.01);
+      // centered on its row's cell height
+      expect(t.transform.position.y).toBeCloseTo(
+        f.y0 + (flatPlan.rows - 1 - r) * (f.cellH + f.spacing) + f.cellH / 2,
+        5,
+      );
+    }
+    const engraves = ops.filter((o) => o.kind === 'engrave');
+    expect(engraves).toHaveLength(1);
+  });
+
+  it('flat: no label rect intersects another label or any cell plate', () => {
+    const flatPlan = planTestPattern(V5, BOX, BIT, testPatternDefaults(BIT, 'delrin'));
+    const { primitives } = materializeTestPattern(flatPlan, BIT, 'delrin', { laser: LASER, axisZ: 0 });
+    const rects = primitives
+      .filter((p): p is Extract<Primitive, { kind: 'box' | 'text' }> => p.kind === 'box' || p.kind === 'text')
+      .map((p) => {
+        const pos = p.transform.position;
+        const size =
+          p.kind === 'box'
+            ? { w: p.size.x, h: p.size.y }
+            : { w: p.width, h: p.height };
+        return { x0: pos.x - size.w / 2, x1: pos.x + size.w / 2, y0: pos.y - size.h / 2, y1: pos.y + size.h / 2 };
+      });
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i];
+        const b = rects[j];
+        expect(
+          a.x0 < b.x1 - 1e-6 && b.x0 < a.x1 - 1e-6 && a.y0 < b.y1 - 1e-6 && b.y0 < a.y1 - 1e-6,
+          `rects ${i} and ${j} overlap`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('generates every op cleanly incl. the Numbers layer (wrapped 4-axis)', () => {
+    const { ops, primitives } = materializeTestPattern(plan, BIT, 'delrin', { laser: LASER, axisZ: 0 });
+    const c: GenContext = {
+      ...ctx(ROD, primitives),
+      tools: [BIT, LASER],
+    };
+    for (const op of ops) {
+      const res = generateJobOp(op, c);
+      expect(res.error, `${op.id}: ${res.error}`).toBeNull();
+      expect(res.moves.length).toBeGreaterThan(0);
+    }
   });
 });
