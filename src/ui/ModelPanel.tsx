@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { round2 } from '../core/types';
 import type { ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
 import { alignAxisToStock, alignToStock, dropToSurface } from './placement';
-import { artworkSnapGeometry, primitiveGeometry } from './featureSources';
+import { artworkSnapGeometry, bitmapSnapGeometry, primitiveGeometry } from './featureSources';
 import { NumInput } from './fields';
 import { resizePrimitive, revertPrimitive, scaleForSize } from './primitives';
 
@@ -110,7 +110,9 @@ export function ModelPanel(props: Props) {
     const shape = !isModel
       ? selectedPrimitive!.kind === 'artwork'
         ? artworkSnapGeometry(selectedPrimitive!)
-        : primitiveGeometry(selectedPrimitive!)
+        : selectedPrimitive!.kind === 'bitmap'
+          ? bitmapSnapGeometry(selectedPrimitive!)
+          : primitiveGeometry(selectedPrimitive!)
       : geometry!;
     const t = fn(shape);
     // snapped positions are auto-filled numbers — they read clean at 2dp
@@ -153,13 +155,17 @@ export function ModelPanel(props: Props) {
         ? `cylinder Ø${selectedPrimitive.diameter.toFixed(1)} × ${selectedPrimitive.length.toFixed(1)}`
         : selectedPrimitive.kind === 'artwork'
           ? `${artworkKind(selectedPrimitive)} · ${selectedPrimitive.paths.length} path(s)`
-          : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
+          : selectedPrimitive.kind === 'bitmap'
+            ? `bitmap artwork · ${selectedPrimitive.width.toFixed(1)} × ${selectedPrimitive.height.toFixed(1)}mm`
+            : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
   const rowLabel = (p: Primitive) =>
     p.kind === 'cylinder'
       ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
       : p.kind === 'artwork'
         ? `${artworkKind(p)} · ${p.paths.length} path(s)`
-        : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
+        : p.kind === 'bitmap'
+          ? `bitmap artwork · ${p.width.toFixed(1)} × ${p.height.toFixed(1)}mm`
+          : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
   /** the row's SECOND line: type + size, mirroring the model row's shape
    * (filename on top, file type + dims under) */
   const rowMeta = (p: Primitive) =>
@@ -456,6 +462,28 @@ export function ModelPanel(props: Props) {
                 />
               </>
             )}
+          </>
+        ) : selectedPrimitive && selectedPrimitive.kind === 'bitmap' ? (
+          <>
+            {/* BITMAP face sizing (SPEC 2026-11-23): W and H in mm, both
+             *  driving the ONE uniform scale like flat artwork — the
+             *  image stretches onto the face, aspect is the import's
+             *  business. At scale 1 the face sits at its imported size. */}
+            <SizeField
+              label="W"
+              value={selectedPrimitive.width * active.scale.x}
+              onCommit={(v) => commitArtworkScale(v / Math.max(selectedPrimitive.width, 1e-9))}
+              onRevert={revertArtworkScale}
+            />
+            <SizeField
+              label="H"
+              value={selectedPrimitive.height * active.scale.y}
+              onCommit={(v) => commitArtworkScale(v / Math.max(selectedPrimitive.height, 1e-9))}
+              onRevert={revertArtworkScale}
+            />
+            <InfoTip
+              text={`scale ×${active.scale.x.toFixed(2)} — the dithered raster burns this face; ↺ reverts to the imported size`}
+            />
           </>
         ) : selectedPrimitive ? (
           AXES.map((a) => (

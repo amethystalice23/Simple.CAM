@@ -69,6 +69,7 @@ export function resizePrimitive(
   uniform: boolean,
 ): Primitive {
   if (p.kind === 'artwork') return p; // line work: no box dimensions to resize
+  if (p.kind === 'bitmap') return p; // raster artwork: the W/H fields drive scale
   if (p.kind === 'cylinder') {
     const dims = scaledDims({ x: p.diameter, y: p.length, z: 0 }, axis, value, uniform);
     return { ...p, diameter: dims.x, length: dims.y };
@@ -79,6 +80,7 @@ export function resizePrimitive(
 /** Revert a primitive dimension to its creation value; uniform reverts all. */
 export function revertPrimitive(p: Primitive, axis: 'x' | 'y' | 'z', uniform = false): Primitive {
   if (p.kind === 'artwork') return p; // line work: nothing to revert
+  if (p.kind === 'bitmap') return p; // raster artwork: nothing to revert
   if (p.kind === 'cylinder') {
     if (uniform) return { ...p, diameter: p.original.diameter, length: p.original.length };
     return axis === 'x' ? { ...p, diameter: p.original.diameter } : { ...p, length: p.original.length };

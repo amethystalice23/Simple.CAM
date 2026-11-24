@@ -9,6 +9,7 @@ import type * as THREE from 'three';
 import { DEFAULT_STEP_OVER_FACTOR, faceCylinder, SAFE_CLEARANCE, shortestATo } from '../cam/faceCylinder';
 import { cylChamfer } from '../cam/cylChamfer';
 import { engrave } from '../cam/engrave';
+import { rasterEngrave, RASTER_PITCH_MM } from '../cam/rasterEngrave';
 import { slotToolWidth, spiralCarve } from '../cam/spiralCarve';
 import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
 import { threadMill } from '../cam/threadMill';
@@ -195,6 +196,7 @@ export const OP_KINDS: {
   { kind: 'drill', label: 'Drill' },
   { kind: 'chamfer', label: 'Chamfer' },
   { kind: 'engrave', label: 'Engrave' },
+  { kind: 'rasterEngrave', label: 'Raster Engrave (laser)' },
   { kind: 'vcarveFlat', label: 'V-carve' },
   { kind: 'slicePocket', label: 'Slice pocket' },
   { kind: 'waterline', label: 'Waterline Contour' },
@@ -307,6 +309,11 @@ export function newJobOp(kind: JobOp['kind'], tool: Tool, materialId: string, st
   const withRates = <T extends JobOp>(op: T): T =>
     rates ? ({ ...op, rates } as T) : op;
   switch (kind) {
+    case 'rasterEngrave':
+      // dither method and sweep default in the GENERATOR (Atkinson,
+      // serpentine) — the op carries only deliberate deviations; pitch
+      // defaults to the measured 0.1mm Studio corpus
+      return { ...base, kind };
     case 'faceCylinder': {
       // face defaults follow the stock in 4-axis mode — any shape: a box
       // rides the rotary axis too, its Ø being the Y-Z diagonal. 3-axis
@@ -738,6 +745,7 @@ function stockBottomOf(ctx: GenContext): number {
 const SECTION_FRAME_OPS = new Set([
   'pocket', 'profile', 'drill', 'chamfer', 'threadMill', 'index', 'fixture',
   'slicePocket', 'waterline', 'rasterContour', 'cylChamfer', 'engrave',
+  'rasterEngrave',
   'faceCylinder', 'spiralCarve', 'thread',
 ]);
 
@@ -1404,9 +1412,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
   try {
     const tool = ctx.tools.find((t) => t.id === op.toolId);
     if (!tool) return fail('tool missing from library');
-    if (tool.type === 'laser' && op.kind !== 'engrave') {
-      // the module is a beam, not a cutter: it only fits engrave
-      return fail('the laser only fits the engrave operation — pick a cutting tool for this op');
+    if (tool.type === 'laser' && op.kind !== 'engrave' && op.kind !== 'rasterEngrave') {
+      // the module is a beam, not a cutter: it fits engrave + raster engrave
+      return fail('the laser only fits the engrave and raster engrave operations — pick a cutting tool for this op');
     }
     const material = getMaterial(ctx.stock.materialId);
     const { feed, plungeFeed } = feedsFor(tool, material, op.rates);
@@ -3163,6 +3171,130 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             `${cutPaths.length - fillLines} path(s)${fillLines > 0 ? ` + ${fillLines} fill line(s)` : ''}, ` +
             `${op.depth}mm deep${op.finishingOnly ? ', finishing pass only' : ''}${limited}, ` +
             `~${res.estimatedMinutes.toFixed(1)} min`,
+        };
+      }
+
+      case 'rasterEngrave': {
+        // LASER RASTER ENGRAVE (SPEC 2026-11-23): the dithered 1-bit
+        // burn of a BITMAP artwork at constant power, mirroring the
+        // Studio "Laser Image" dialect. The artwork stays grayscale —
+        // the method applies here, at the op.
+        const SEL = 'select bitmap artwork (import an image — the import dialogue’s dithered-bitmap tab)';
+        if (tool.type !== 'laser') {
+          return fail('raster engrave needs the laser module — pick the laser from the tool library');
+        }
+        const { parts, error } = selectionAcrossSources(ctx.sources, op.featureIds, SEL);
+        if (error) return fail(error);
+        // resolve every selected id to its bitmap primitive — the whole
+        // artwork is one feature, and one op may burn several artworks
+        // (each rastered in its own face rect, one continuous toolpath)
+        const faces: {
+          prim: Extract<Primitive, { kind: 'bitmap' }>;
+          rect: { origin: { x: number; y: number }; surfaceZ: number };
+        }[] = [];
+        for (const part of parts) {
+          for (const id of part.ids) {
+            const r = resolveFeature(ctx.sources, id);
+            if (!r || r.kind !== 'bitmap') {
+              return fail(
+                'raster engrave accepts only bitmap artwork — the selection holds line work or model features',
+              );
+            }
+            const prim = ctx.primitives.find(
+              (q) => q.id === part.source.id && q.kind === 'bitmap',
+            ) as Extract<Primitive, { kind: 'bitmap' }> | undefined;
+            if (!prim) return fail('the bitmap artwork is missing — reimport the image');
+            const xf0 = transformFn(part.source.transform);
+            const { rotate } = cuttingRotate(ctx);
+            const map = (pt: { x: number; y: number }) =>
+              rotate ? rotate(xf0({ x: pt.x, y: pt.y, z: 0 })) : xf0({ x: pt.x, y: pt.y, z: 0 });
+            const w = prim.width;
+            const h = prim.height;
+            const corners = [
+              map({ x: -w / 2, y: -h / 2 }),
+              map({ x: w / 2, y: -h / 2 }),
+              map({ x: w / 2, y: h / 2 }),
+              map({ x: -w / 2, y: h / 2 }),
+            ];
+            // rows run along machine X on a horizontal face — the raster
+            // cannot follow a tilted or rotated artwork (Studio's can't
+            // either; the image IS the face). Engrave's "rotate it flat"
+            // message names the same constraint for line work.
+            const zs = corners.map((c) => c.z);
+            if (zs.some((z) => Math.abs(z - zs[0]) > 0.05)) {
+              return fail(
+                'the bitmap artwork must lie flat to raster — rotate it level in the Model tab',
+              );
+            }
+            const xs = corners.map((c) => c.x);
+            const ys = corners.map((c) => c.y);
+            const c0 = corners[0];
+            const c1 = corners[1];
+            const c3 = corners[3];
+            const alongX = Math.hypot(c1.y - c0.y, c1.z - c0.z) < 0.05;
+            const alongY = Math.hypot(c3.x - c0.x, c3.z - c0.z) < 0.05;
+            if (!alongX || !alongY) {
+              return fail(
+                'the bitmap artwork must sit square to the machine axes — raster rows run along X; unrotate it in the Model tab',
+              );
+            }
+            faces.push({
+              prim,
+              rect: {
+                origin: { x: Math.min(...xs), y: Math.min(...ys) },
+                surfaceZ: zs[0],
+              },
+            });
+          }
+        }
+        if (faces.length === 0) return fail(SEL);
+        const pitch = op.pitch ?? RASTER_PITCH_MM;
+        const focus = tool.focus ?? 1;
+        const power = (rpmFor(tool, ctx.stock.materialId, op.rates) ?? tool.spindleRpm) / 100;
+        let moves: ReturnType<typeof rasterEngrave>['moves'] = [];
+        let minutes = 0;
+        let firedRuns = 0;
+        const gridBits: string[] = [];
+        try {
+          for (const f of faces) {
+            const res = rasterEngrave({
+              toolId: tool.id,
+              bitmap: f.prim.gray,
+              face: { width: f.prim.width, height: f.prim.height },
+              origin: f.rect.origin,
+              surfaceZ: f.rect.surfaceZ,
+              pitch,
+              feed,
+              focus,
+              power,
+              minPower: op.minPower,
+              method: op.method,
+              screenSpacing: op.screenSpacing,
+              sweep: op.sweep,
+              interlace: op.interlace,
+              leadIn: op.leadIn ?? 0,
+            });
+            // one op = ONE beam session: subsequent faces continue at
+            // raster feed (an extinguish + G0 reposition between faces,
+            // exactly like engraveLaser between paths)
+            if (moves.length > 0) moves.push({ words: {}, feed, power: 0 });
+            moves.push(...res.moves);
+            minutes += res.estimatedMinutes;
+            firedRuns += res.firedRuns;
+            gridBits.push(`${res.grid.width}×${res.grid.height}`);
+          }
+        } catch (e) {
+          return fail(String(e instanceof Error ? e.message : e));
+        }
+        const sweepLabel = op.sweep === 'one-way' ? 'one-way' : 'serpentine';
+        const methodLabel = op.method ?? 'atkinson';
+        return {
+          moves,
+          minutes,
+          error: null,
+          summary:
+            `${faces.length} bitmap${faces.length === 1 ? '' : 's'}, ${sweepLabel} ${methodLabel}, ` +
+            `pitch ${pitch}mm, ${firedRuns} fired run(s), ~${minutes.toFixed(1)} min`,
         };
       }
 

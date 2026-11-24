@@ -887,11 +887,14 @@ export function findNearestFeatures(
 /** A crisp single-feature outline for the hovered feature. */
 export function hoverLineGeometry(
   data: FeatureOverlayData,
-  kind: 'edge' | 'circle' | 'path' | 'radialChain' | 'thread',
+  kind: 'edge' | 'circle' | 'path' | 'radialChain' | 'thread' | 'bitmap',
   index: number,
 ): THREE.BufferGeometry {
   const positions: number[] = [];
-  if (kind === 'edge') {
+  if (kind === 'bitmap') {
+    // the bitmap artwork highlight draws with its own face-plane outline
+    // (the viewport's bitmap overlay); nothing to build here
+  } else if (kind === 'edge') {
     const s = data.edgeSamples[index];
     positions.push(s[0].x, s[0].y, s[0].z, s[s.length - 1].x, s[s.length - 1].y, s[s.length - 1].z);
   } else if (kind === 'path') {

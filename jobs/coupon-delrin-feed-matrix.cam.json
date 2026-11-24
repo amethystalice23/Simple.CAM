@@ -1,6 +1,6 @@
 {
   "format": "simple.cam job",
-  "version": 1,
+  "version": 2,
   "stock": {
     "kind": "cylinder",
     "length": 50,
@@ -637,8 +637,8 @@
       ],
       "shaftDiameter": 3.175,
       "fluteLength": 12,
-      "overallLength": 38,
       "flutes": 1,
+      "overallLength": 38,
       "material": "carbide"
     }
   ],

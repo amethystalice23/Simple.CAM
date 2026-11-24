@@ -17,6 +17,7 @@ export const OP_KIND_COLORS: Record<JobOp['kind'], string> = {
   drill: '#4ecf7a', // green
   chamfer: '#5fd0a8', // mint
   engrave: '#b48cff', // lavender
+  rasterEngrave: '#f5a3c7', // pink — the laser's raster cousin
   vcarveFlat: '#d47bb8', // orchid — the engrave family's fill cousin
   slicePocket: '#f05c5c', // red
   waterline: '#54c8e8', // cyan

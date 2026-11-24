@@ -631,6 +631,23 @@ export interface HoleFeature {
   diameter: number;
 }
 
+/**
+ * A BITMAP artwork feature (docs/PLAN.md "Laser raster engrave", SPEC
+ * 2026-11-23): the whole artwork is ONE selectable feature — the
+ * grayscale pixels live on the primitive, never exploded into paths.
+ * The face rect is the local-space frame x ∈ [−w/2, w/2], y ∈
+ * [−h/2, h/2] (the centered artwork convention); rasterEngrave is the
+ * only consumer.
+ */
+export interface BitmapFeature {
+  kind: 'bitmap';
+  id: string;
+  /** face width, mm (local frame) */
+  width: number;
+  /** face height, mm (local frame) */
+  height: number;
+}
+
 export type Feature = PlaneFeature | CircleFeature | EdgeFeature | HoleFeature;
 
 /**
@@ -685,6 +702,27 @@ export type Primitive =
        * angular picture is the invariant, so changing the Ø never
        * rescales the logo (mm/unit derives: arc(width) = wrapAngle) */
       wrapAngle: number;
+      transform: ModelTransform;
+    }
+  | {
+      kind: 'bitmap';
+      id: string;
+      /** the file it came from — the objects list labels the row */
+      sourceName?: string;
+      /**
+       * The grayscale ARTWORK, untouched (docs/PLAN.md "Laser raster
+       * engrave", SPEC 2026-11-23): dithering is material-dependent
+       * intent, so the method applies at the OP (rasterEngrave), never
+       * here. One feature — the whole artwork is the selection
+       * granularity; nothing inside it is path-selectable.
+       * Structurally src/core/bitmapImport.ts's GrayBitmap (this file
+       * keeps its zero-imports rule; the shape assigns interchangeably).
+       */
+      gray: { width: number; height: number; data: Uint8Array };
+      /** face dims, mm — the bitmap stretches onto the face, image row
+       *  0 (TOP) at height (the halftone v-down-flip convention) */
+      width: number;
+      height: number;
       transform: ModelTransform;
     };
 
@@ -1216,6 +1254,46 @@ export type JobOp =
        *  fill toggle's own knob — defaults from the tool's TIP width at
        *  creation (engraveFillStepOver) */
       fillStepOver?: number;
+    })
+  | (JobOpBase & {
+      kind: 'rasterEngrave';
+      /**
+       * LASER RASTER ENGRAVE (docs/PLAN.md "Laser raster engrave", SPEC
+       * 2026-11-23): dithered 1-bit burn of a BITMAP artwork at constant
+       * power, mirroring the Studio "Laser Image" dialect. Laser tool
+       * only; flat artwork only in v1 (wrapped/4th-axis raster deferred).
+       * Power/feed ride the same ⚡→preset→tool chain as engrave (the
+       * spindleRpm slot is beam power %).
+       */
+      /** pixel pitch, mm (default 0.1 — the measured Studio corpus) */
+      pitch?: number;
+      /** dither method applied at the op (default Atkinson; the artwork
+       *  stays grayscale — the method is material-dependent intent) */
+      method?: 'atkinson' | 'floyd-steinberg' | 'jarvis' | 'stucki' | 'burkes' | 'sierra' | 'bayer8' | 'halftone';
+      /** 'halftone' only: screen cell size, mm */
+      screenSpacing?: number;
+      /** serpentine (default, fast) or one-way (the quality mode whose
+       *  returns are G0 rapids — the deliberate Studio divergence) */
+      sweep?: 'serpentine' | 'one-way';
+      /**
+       * INTERLACE COMPENSATION, signed mm on reverse-row fired runs
+       * (serpentine only) — the Studio field-reported misalignment has
+       * an untested S-settling mechanism (~3 ms at F1000 ≈ half a pixel).
+       * Calibrated by the testPattern coupon; a POSITION error only —
+       * it will not fix run-start fade-in (that lever is minPower or
+       * leadIn).
+       */
+      interlace?: number;
+      /**
+       * Lit lead before each fired run's leading edge, mm (default 0 —
+       * unlike the vector lead-in's invisible self-overlap, a raster
+       * lead burns authored-white pixels; the coupon decides). Raster
+       * rows do NOT inherit the vector's 0.3 default.
+       */
+      leadIn?: number;
+      /** the fired S level never drops under this floor (diodes barely
+       *  lase below ~10–15%) */
+      minPower?: number;
     })
   | (JobOpBase & {
       kind: 'vcarveFlat';

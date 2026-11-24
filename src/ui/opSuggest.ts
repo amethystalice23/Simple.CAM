@@ -270,6 +270,7 @@ export function describePickedFeature(r: ResolvedFeature, stock: Stock): Feature
   if (r.kind === 'thread')
     return orderCandidates(describeThread(r.feature as ThreadFeature, rotary, axisZ));
   if (r.kind === 'path') return describePath(r);
+  if (r.kind === 'bitmap') return orderCandidates(describeBitmap(r));
   return orderCandidates(describeEdge(r, xf, rotary));
 }
 
@@ -816,6 +817,35 @@ function describePath(r: ResolvedFeature): FeatureKnowledge {
   };
 }
 
+/** BITMAP artwork knowledge (SPEC 2026-11-23): the whole artwork is one
+ *  feature; rasterEngrave is the only op that burns it. Face size is
+ *  local mm × the source scale (the Model tab's W/H drives one uniform
+ *  scale). */
+function describeBitmap(r: ResolvedFeature): FeatureKnowledge {
+  const bmp = r.feature as { width: number; height: number };
+  const s = r.source.transform.scale;
+  const w = bmp.width * s.x;
+  const h = bmp.height * s.y;
+  const facts: SuggestFact[] = [
+    { label: 'face', value: `${f1(w)} × ${f1(h)} mm` },
+    { label: 'dither', value: 'applied at the raster op (Atkinson default)' },
+  ];
+  return {
+    kind: 'bitmap',
+    title: 'Bitmap artwork',
+    facts,
+    candidates: [
+      {
+        kind: 'rasterEngrave',
+        why: 'burn this image with the laser — a dithered 1-bit raster at constant power',
+      },
+    ],
+    notes: [
+      { text: 'flat artwork only — wrapped/4th-axis raster is not available yet' },
+    ],
+  };
+}
+
 function describeEdge(
   r: ResolvedFeature,
   xf: (p: Vec3) => THREE.Vector3,
@@ -1014,6 +1044,7 @@ const TOOL_TYPES: Partial<Record<JobOp['kind'], Tool['type'][]>> = {
   profile: ['flat'],
   chamfer: ['vbit'],
   engrave: ['vbit', 'laser'],
+  rasterEngrave: ['laser'],
   vcarveFlat: ['vbit'],
   faceCylinder: ['flat'],
   cylChamfer: ['vbit', 'ball'],

@@ -62,6 +62,7 @@ export function stockAxisInModelSpace(
   return axis;
 }
 import type {
+  BitmapFeature,
   CircleFeature,
   EdgeFeature,
   JobOp,
@@ -101,10 +102,11 @@ export function primitiveGeometry(p: Primitive): THREE.BufferGeometry {
   if (p.kind === 'box') {
     return new THREE.BoxGeometry(p.size.x, p.size.y, p.size.z);
   }
-  if (p.kind === 'artwork') {
-    // line work, not a solid: the Viewport draws the paths as lines
-    // (artworkLocalPoints); an empty mesh keeps the raycast pipelines
-    // (plane picks, the occlusion gate) from ever hitting it
+  if (p.kind === 'artwork' || p.kind === 'bitmap') {
+    // line work / raster artwork, not solids: the Viewport draws the
+    // paths (artworkLocalPoints) or the textured face plane (bitmap);
+    // an empty mesh keeps the raycast pipelines (plane picks, the
+    // occlusion gate) from ever hitting it
     return new THREE.BufferGeometry();
   }
   const g = new THREE.CylinderGeometry(
@@ -132,6 +134,25 @@ export function artworkSnapGeometry(
   if (pts.length === 0) pts.push({ x: 0, y: 0, z: 0 }); // no paths yet: snap about the origin
   return new THREE.BufferGeometry().setFromPoints(
     pts.map((q) => new THREE.Vector3(q.x, q.y, q.z)),
+  );
+}
+
+/**
+ * Snap geometry for a BITMAP artwork (SPEC 2026-11-23): the face rect in
+ * the centered local frame — a plane at z=0 spanning width × height
+ * (the Viewport's textured face). primitiveGeometry is empty by design
+ * (raycast transparency), so like artwork its real bounds stand in.
+ */
+export function bitmapSnapGeometry(p: Extract<Primitive, { kind: 'bitmap' }>): THREE.BufferGeometry {
+  const w = p.width / 2;
+  const h = p.height / 2;
+  return new THREE.BufferGeometry().setFromPoints(
+    [
+      { x: -w, y: -h, z: 0 },
+      { x: w, y: -h, z: 0 },
+      { x: w, y: h, z: 0 },
+      { x: -w, y: h, z: 0 },
+    ].map((q) => new THREE.Vector3(q.x, q.y, q.z)),
   );
 }
 
@@ -167,8 +188,8 @@ function primitiveDetection(p: Primitive): DetectedFeatures {
   const key =
     p.kind === 'box'
       ? `box|${p.size.x}|${p.size.y}|${p.size.z}`
-      : p.kind === 'artwork'
-        ? `artwork|${p.id}` // artwork sources build features directly — never cached
+      : p.kind === 'artwork' || p.kind === 'bitmap'
+        ? `artwork|${p.id}` // artwork/bitmap sources build features directly — never cached
         : `cylinder|${p.diameter}|${p.length}`;
   let features = detectionCache.get(key);
   if (!features) {
@@ -268,6 +289,30 @@ function artworkFeatures(p: Extract<Primitive, { kind: 'artwork' }>): DetectedFe
   };
 }
 
+/** Bitmap artwork: the WHOLE artwork is one feature (SPEC 2026-11-23) —
+ *  never exploded into paths, nothing inside it selectable. The face
+ *  rect is centered on the primitive origin (the artwork convention). */
+function bitmapFeatures(p: Extract<Primitive, { kind: 'bitmap' }>): DetectedFeatures {
+  return {
+    planes: [],
+    circles: [],
+    edges: [],
+    paths: [],
+    bitmaps: [
+      {
+        kind: 'bitmap',
+        id: `p:${p.id}:bitmap:0`,
+        width: p.width,
+        height: p.height,
+      },
+    ],
+    radialChains: [],
+    threads: [],
+    faceToPlane: new Int32Array(0),
+    planeLoops: [],
+  };
+}
+
 /** All feature sources for the current job: the model first (when loaded),
  * then one per primitive. Order is stable — selection resolution and
  * labels iterate it. */
@@ -292,6 +337,19 @@ export function sourcesFor(
           p.presentation === 'wrapped'
             ? { kind: 'wrapped', diameter: p.wrapDiameter }
             : { kind: 'flat' },
+      });
+      continue;
+    }
+    if (p.kind === 'bitmap') {
+      // a raster artwork source: FLAT frame only in v1 (the spec defers
+      // wrapped/4th-axis raster), empty mesh (the Viewport draws the
+      // textured face plane)
+      sources.push({
+        id: p.id,
+        geometry: new THREE.BufferGeometry(),
+        features: bitmapFeatures(p),
+        transform: p.transform,
+        artworkFrame: { kind: 'flat' },
       });
       continue;
     }
@@ -373,9 +431,16 @@ export function opEdgeSource(ops: JobOp[], stock: Stock): FeatureSource | null {
  * resolution, labels, depth prefills, and generation. */
 export interface ResolvedFeature {
   source: FeatureSource;
-  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain' | 'thread';
+  kind: 'plane' | 'circle' | 'edge' | 'path' | 'radialChain' | 'thread' | 'bitmap';
   index: number;
-  feature: PlaneFeature | CircleFeature | EdgeFeature | PathFeature | RadialChainFeature | ThreadFeature;
+  feature:
+    | PlaneFeature
+    | CircleFeature
+    | EdgeFeature
+    | PathFeature
+    | RadialChainFeature
+    | ThreadFeature
+    | BitmapFeature;
 }
 
 export function resolveFeature(
@@ -405,6 +470,8 @@ export function resolveFeature(
   if (ri >= 0) return { source, kind: 'radialChain', index: ri, feature: source.features.radialChains[ri] };
   const ti = source.features.threads.findIndex((f) => f.id === id);
   if (ti >= 0) return { source, kind: 'thread', index: ti, feature: source.features.threads[ti] };
+  const bi = (source.features.bitmaps ?? []).findIndex((f) => f.id === id);
+  if (bi >= 0) return { source, kind: 'bitmap', index: bi, feature: source.features.bitmaps![bi] };
   return null;
 }
 

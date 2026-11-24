@@ -570,3 +570,74 @@ describe('model-less jobs with primitive-targeted ops', () => {
     expect(op.mode).toBe('add');
   });
 });
+
+describe('bitmap artwork serialization (v2)', () => {
+  const gray = {
+    width: 3,
+    height: 2,
+    // deliberately non-trivial bytes (0/1/255 patterns) with a value
+    // above 127 so a base64 bug cannot pass by luck
+    data: new Uint8Array([0, 1, 255, 128, 200, 42]),
+  };
+  const bitmap: Primitive = {
+    kind: 'bitmap',
+    id: 'prim-9',
+    sourceName: 'photo.png',
+    gray,
+    width: 30,
+    height: 20,
+    transform: identityTransform(),
+  };
+  const rasterOp: JobOp = {
+    id: 'jobop-7',
+    toolId: 't-laser',
+    featureIds: ['p:prim-9:bitmap:0'],
+    kind: 'rasterEngrave',
+  };
+  const laserTools: Tool[] = [
+    { id: 't-laser', name: 'Beam', type: 'laser', diameter: 0.1, spindleRpm: 30 },
+  ];
+
+  it('round-trips the grayscale array through base64 and back', () => {
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [bitmap],
+      ops: [rasterOp],
+      tools: laserTools,
+      modelName: 'none',
+      modelBytes: null,
+    });
+    // the FILE form carries base64, never the raw array (JSON would
+    // turn a Uint8Array into an index-keyed object)
+    const saved = file.primitives[0] as unknown as {
+      gray: { base64?: string; data?: unknown };
+    };
+    expect(typeof saved.gray.base64).toBe('string');
+    expect(saved.gray.data).toBeUndefined();
+    const parsed = parseJobFile(JSON.stringify(file));
+    const back = parsed.primitives[0];
+    if (back.kind !== 'bitmap') throw new Error('kind');
+    expect(back.gray.data).toBeInstanceOf(Uint8Array);
+    expect(Array.from(back.gray.data)).toEqual([0, 1, 255, 128, 200, 42]);
+    expect(back.gray.width).toBe(3);
+    expect(back.gray.height).toBe(2);
+  });
+
+  it('refuses a malformed grayscale section loudly', () => {
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [bitmap],
+      ops: [rasterOp],
+      tools: laserTools,
+      modelName: 'none',
+      modelBytes: null,
+    });
+    const raw = JSON.parse(JSON.stringify(file)) as {
+      primitives: { gray: Record<string, unknown> }[];
+    };
+    delete raw.primitives[0].gray.base64;
+    expect(() => parseJobFile(JSON.stringify(raw))).toThrow(/malformed/);
+  });
+});
