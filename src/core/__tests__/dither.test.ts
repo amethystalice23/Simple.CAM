@@ -23,16 +23,6 @@ const fromRows = (rows: number[][]): GrayBitmap => ({
   data: new Uint8Array(rows.flat()),
 });
 
-const bitsOf = (b: { width: number; height: number; bits: Uint8Array }): string[] => {
-  const rows: string[] = [];
-  for (let y = 0; y < b.height; y++) {
-    let s = '';
-    for (let x = 0; x < b.width; x++) s += b.bits[y * b.width + x] ? '#' : '.';
-    rows.push(s);
-  }
-  return rows;
-};
-
 // ------------------------------------------------------------ resample
 
 describe('resampleGray', () => {
