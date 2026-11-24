@@ -10,6 +10,9 @@ import { pocket2d } from '../../cam/pocket';
 import { profile2d } from '../../cam/profile';
 import { threadMill } from '../../cam/threadMill';
 import { engrave } from '../../cam/engrave';
+import { rasterEngrave } from '../../cam/rasterEngrave';
+import type { GrayBitmap } from '../../core/bitmapImport';
+import type { DitherMethod } from '../../core/dither';
 import type { ChamferOp, CylChamferOp, DrillOp, PocketOp, ProfileOp, ThreadMillOp, ThreadMillTarget, Tool, Vec2 } from '../../core/types';
 
 const tool: Tool = { id: 't1', name: '2mm flat', type: 'flat', diameter: 2, spindleRpm: 18000 };
@@ -127,6 +130,114 @@ describe('generator post goldens', () => {
       options: { jobName: 'engrave-laser' },
     }),
   );
+
+  // ---- LASER RASTER ENGRAVE goldens (docs/makera-dialect.md §"Laser
+  // Image" — the measured Studio raster dialect): a dithered 1-bit
+  // bitmap burned at CONSTANT power, rows along X at constant feed.
+  // 12×8 px artwork: left half black, right half white, one isolated
+  // 2px black island on image row 3 (columns 9–10) — row run lengths
+  // vary (6 vs 2), the island row carries two runs, half the rows end
+  // lit (odd serpentine rows → the pure-Y corner form) and half end
+  // beam-off (→ the fold form). Luma 0=black, 255=white, row 0 = TOP.
+  // 'bayer8' keeps the dither deterministic: solid black fires every
+  // pixel, solid white fires none.
+  const rasterBitmap: GrayBitmap = {
+    width: 12,
+    height: 8,
+    data: new Uint8Array(
+      Array.from({ length: 12 * 8 }, (_, p) => {
+        const c = p % 12;
+        const r = Math.floor(p / 12);
+        return c < 6 || (r === 3 && (c === 9 || c === 10)) ? 0 : 255;
+      }),
+    ),
+  };
+  const rasterMoves = (
+    sweep: 'serpentine' | 'one-way',
+    method: DitherMethod = 'bayer8',
+    screenSpacing?: number,
+  ) =>
+    rasterEngrave({
+      toolId: 'l1',
+      bitmap: rasterBitmap,
+      face: { width: 12, height: 8 },
+      origin: { x: 10, y: 20 },
+      surfaceZ: 0,
+      pitch: 1,
+      feed: 1000,
+      focus: 1.5,
+      power: 0.3,
+      method,
+      screenSpacing,
+      sweep,
+    }).moves.map((m, i) =>
+      i === 0 ? { ...m, op: { number: 1, name: 'Laser Raster', toolNumber: 1 } } : m,
+    );
+
+  const rasterSerpentineGcode = postCarvera({
+    moves: rasterMoves('serpentine'),
+    tools: [laserTool],
+    options: { jobName: 'raster-engrave-serpentine' },
+  });
+  checkGolden('raster-engrave-serpentine.nc', rasterSerpentineGcode);
+
+  // the QUALITY sweep: returns are G0 rapids above the work (deliberate
+  // divergence from Studio's constant-feed returns), Y steps ride them,
+  // every row traverses +X
+  checkGolden(
+    'raster-engrave-oneway.nc',
+    postCarvera({
+      moves: rasterMoves('one-way'),
+      tools: [laserTool],
+      options: { jobName: 'raster-engrave-oneway' },
+    }),
+  );
+
+  // the halftone-threshold operator through the post: same artwork,
+  // screenSpacing 2mm → dot-pattern rows instead of run fills
+  checkGolden(
+    'raster-engrave-halftone.nc',
+    postCarvera({
+      moves: rasterMoves('serpentine', 'halftone', 2),
+      tools: [laserTool],
+      options: { jobName: 'raster-engrave-halftone' },
+    }),
+  );
+
+  // Z1 LINE LENGTH, asserted at the post's throw boundary (61) — the
+  // firmware silently truncates > 63; raster lines are short (dialect
+  // avg ~10 chars) so this is a tripwire, not a live risk
+  it('raster-engrave-serpentine.nc: every instruction line fits the post buffer (max 61)', () => {
+    for (const line of stripDate(rasterSerpentineGcode).split('\n')) {
+      if (line.startsWith(';')) continue;
+      const idx = line.indexOf(' ; ');
+      const instruction = idx > 0 ? line.slice(0, idx) : line;
+      expect(
+        instruction.length,
+        `overlong raster line (${instruction.length} chars): "${line}"`,
+      ).toBeLessThanOrEqual(61);
+    }
+  });
+
+  // S-WORD MODALITY: the S word rides run boundaries only — the count of
+  // S-bearing lines must equal the number of power changes in the Move[]
+  // (the post is modal between changes). Derived from the moves; never
+  // hardcoded, so a generator retune cannot silently desync this check.
+  it('raster-engrave-serpentine.nc: S-bearing lines exactly match the power changes in the moves', () => {
+    const sLines = stripDate(rasterSerpentineGcode)
+      .split('\n')
+      .filter((l) => !l.startsWith(';') && /(^| )S\d/.test(l)).length;
+    let expected = 0;
+    let last: number | undefined;
+    for (const m of rasterMoves('serpentine')) {
+      if (m.power !== undefined && m.power !== last) {
+        expected++;
+        last = m.power;
+      }
+    }
+    expect(expected).toBeGreaterThan(0);
+    expect(sLines, `${sLines} S lines vs ${expected} power changes in the moves`).toBe(expected);
+  });
 
 
   checkGolden(
