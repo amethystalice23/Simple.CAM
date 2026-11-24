@@ -55,7 +55,7 @@ export const CALIBRATION_GENERATORS: CalibrationGeneratorEntry[] = [
     id: 'greyscale-power',
     label: 'Greyscale power',
     ideogram: '◐',
-    hint: 'a power step-wedge plus 25/50/75% gray patches — the pairing is the material power curve',
+    hint: 'labeled power bands in rows plus a 25/50/75% reference column — the pairing is the material power curve',
     component: GreyscaleWedgeDialog,
   },
 ];

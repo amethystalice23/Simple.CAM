@@ -13,21 +13,19 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import {
-  DEFAULT_WEDGE_BAND_MM,
-  DEFAULT_WEDGE_MIN_POWER,
-  planGreyscaleWedge,
-  type GreyscaleWedgePlan,
-} from '../cam/rasterCoupons';
+import { DEFAULT_WEDGE_MIN_POWER } from '../cam/rasterCoupons';
 import type { Tool } from '../core/types';
 import { toolOptionLabel } from './toolNames';
 import {
   materializeGreyscaleWedge,
   materializeInterlaceCoupon,
   planInterlaceCouponV2,
+  planWedgeCouponV2,
   interlaceLabel,
-  laserCouponLadder,
+  wedgeLabel,
   INTERLACE_PATCH_MM,
+  WEDGE_BAND_MM,
+  type GreyscaleWedgeV2,
   type InterlaceCouponV2,
 } from './jobGeneration';
 import { NumberField } from './fields';
@@ -200,38 +198,26 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
   const lasers = lasersForCoupons(props.tools);
   const initial = lasers.find((t) => t.id === props.initialToolId) ?? lasers[0];
   const [laserId, setLaserId] = useState(initial?.id ?? '');
-  const [bandHeight, setBandHeight] = useState(DEFAULT_WEDGE_BAND_MM);
-  const [minPower, setMinPower] = useState(DEFAULT_WEDGE_MIN_POWER);
-  const [maxPower, setMaxPower] = useState(1);
+  // the range boxes + band size (the interlace idioms, Alice's 2026-11-24
+  // follow-up): the band ladder derives from these live
+  const [min, setMin] = useState(DEFAULT_WEDGE_MIN_POWER);
+  const [max, setMax] = useState(1);
+  const [bandHeight, setBandHeight] = useState(WEDGE_BAND_MM);
   useEscape(props.onClose);
 
   const laser = lasers.find((t) => t.id === laserId) ?? initial;
-  const slots = useMemo(() => laserCouponLadder(props.stock, 1).span.y, [props.stock]);
 
-  const result: PlanResult<GreyscaleWedgePlan> = useMemo(() => {
+  const result: PlanResult<GreyscaleWedgeV2> = useMemo(() => {
     if (!laser) return { plan: null, error: null };
     try {
-      // converge the ladder ↔ planner count: the bands strip + the refs
-      // slot share the stock's span, so the planner's span is the strip of
-      // n ladder slots (n bands, each the slot height) — iterate until the
-      // planner's clamped count agrees, then bands × bandHeight tile the
-      // strip exactly and each band face = one slot height
-      let n = Math.min(10, Math.max(3, Math.floor(slots / bandHeight)));
-      let plan: GreyscaleWedgePlan | null = null;
-      for (let i = 0; i < 4; i++) {
-        const slot = laserCouponLadder(props.stock, n + 1);
-        plan = planGreyscaleWedge(slot.span.y * n, { minPower, maxPower, bandHeight });
-        if (plan.bands.length === n) break;
-        n = plan.bands.length;
-      }
-      return { plan, error: null };
+      return { plan: planWedgeCouponV2(props.stock, min, max, bandHeight), error: null };
     } catch (e) {
       return { plan: null, error: String(e instanceof Error ? e.message : e) };
     }
-  }, [laser, slots, bandHeight, minPower, maxPower]);
+  }, [laser, props.stock, min, max, bandHeight]);
 
   const generate = () => {
-    if (!laser || !result.plan) return;
+    if (!laser || !result.plan || result.plan.bands.length < 2) return;
     const { ops, primitives } = materializeGreyscaleWedge(result.plan, props.stock, laser);
     if (ops.length === 0) return;
     props.onGenerate(ops, primitives);
@@ -247,9 +233,9 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
           </button>
         </h2>
         <p className="cal-intro">
-          A step-wedge: one solid band burned per power level (a constant-power ladder from the
-          floor to full power), plus fixed 25/50/75% gray patches burned at the job's power. Match
-          each gray patch to the closest-matching band — those pairs are the material's{' '}
+          A compact step-wedge: labeled square bands burned in a row across the power range you
+          set, plus the fixed 25/50/75% gray patches in a reference block beside them. Match each
+          gray patch to the closest-matching band — those pairs are the material's{' '}
           <strong>power curve</strong>, the calibration the greyscale raster mode will read.
         </p>
 
@@ -257,28 +243,28 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
         {laser && (
           <div className="cal-axes">
             <NumberField
-              label="Band height (mm)"
-              value={bandHeight}
-              min={0.5}
-              step={0.5}
-              title="target band height, mm — the band COUNT derives from it (capped at 10 bands); larger stock grows the bands, never the count"
-              onCommit={setBandHeight}
-            />
-            <NumberField
               label="Min power"
-              value={minPower}
+              value={min}
               min={0}
               step={0.01}
-              title="the ladder's floor, 0–1 — diodes barely lase below ~5%"
-              onCommit={setMinPower}
+              title="the ladder's floor, 0–1 — the first band burns exactly here; diodes barely lase below ~5%"
+              onCommit={setMin}
             />
             <NumberField
               label="Max power"
-              value={maxPower}
+              value={max}
               min={0}
               step={0.01}
-              title="the ladder's top, 0–1 — the last rung burns exactly here"
-              onCommit={setMaxPower}
+              title="the ladder's top, 0–1 — the last band burns exactly here"
+              onCommit={setMax}
+            />
+            <NumberField
+              label="Band height (mm)"
+              value={bandHeight}
+              min={2}
+              step={1}
+              title="each band is a square block of this side, mm — bigger is easier to read and photograph; the band COUNT derives from the power range, not from this"
+              onCommit={setBandHeight}
             />
           </div>
         )}
@@ -286,16 +272,27 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
         {result.plan && (
           <div className="cal-legend">
             <p className="hint">
-              {result.plan.bands.length} bands of {result.plan.bandHeight.toFixed(2)}mm each, S{' '}
-              {Math.round(result.plan.bands[0] * 100)}% → {Math.round(result.plan.bands[result.plan.bands.length - 1] * 100)}%
-              (one raster op per band at its own power; the gray-refs bitmap burns above the ladder
-              at the job's power)
+              ladder:{' '}
+              {result.plan.bands.map((b) => (
+                <strong key={b}>{wedgeLabel(b)} </strong>
+              ))}
+              — step {result.plan.steps.map((s) => s.toFixed(3)).join(' / ')}
+            </p>
+            <p className="hint">
+              {result.plan.bands.length} bands of {result.plan.patch}×{result.plan.patch}mm —
+              row 1: {result.plan.row1.length}, row 2: {result.plan.row2.length}, refs column
+              (25/50/75%) beside the rows; {result.plan.gap.toFixed(1)}mm between blocks (fits{' '}
+              {result.plan.labelWidth.toFixed(1)}mm labels at {result.plan.labelCap}mm cap)
+            </p>
+            <p className="hint">
+              total size ≈ {result.plan.size.x.toFixed(0)} × {result.plan.size.y.toFixed(0)}mm on
+              the stock
             </p>
             <p className="hint">
               the read: burn the wedge, then match each gray patch (25 / 50 / 75%) to the
               closest-matching band — the band whose burn looks the same tone is the power that
-              material's 25 / 50 / 75% gray needs. Note the pairs down; that ladder is the
-              material's power curve.
+              material's gray needs. Note the pairs down; that ladder is the material's power
+              curve.
             </p>
           </div>
         )}
@@ -311,7 +308,11 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
           <button type="button" className="secondary" onClick={props.onClose}>
             Cancel
           </button>
-          <button type="button" onClick={generate} disabled={!laser || !result.plan}>
+          <button
+            type="button"
+            onClick={generate}
+            disabled={!laser || !result.plan || result.plan.bands.length < 2}
+          >
             Generate Toolpaths
           </button>
         </div>

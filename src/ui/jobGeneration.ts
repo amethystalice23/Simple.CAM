@@ -16,11 +16,14 @@ import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
 import {
   DEFAULT_COLUMN_SPACING_MM,
-  gridToGray,
+  DEFAULT_WEDGE_MIN_POWER,
   grayPatches,
+  gridToGray,
+  MAX_WEDGE_BANDS,
+  MIN_WEDGE_BANDS,
   planInterlaceCoupon,
   solidBand,
-  type GreyscaleWedgePlan,
+  WEDGE_GRAY_REFS,
 } from '../cam/rasterCoupons';
 import { chamfer } from '../cam/chamfer';
 import { vcarveFlat, vbitConeHeight } from '../cam/vcarveFlat';
@@ -1808,40 +1811,280 @@ const slotCountOf = (plan: InterlaceCouponV2): number =>
   plan.row2.length > 0 ? 2 : plan.row1.length > 0 ? 1 : 0;
 
 /**
- * Materialize the greyscale step wedge (planGreyscaleWedge): one SOLID
- * band bitmap + one raster op per band (the op's power pins the band's S
- * level — the spindleRpm slot is beam power %, so band S_i lands as an
- * explicit ⚡ override), plus one gray-refs bitmap of 25/50/75% dithered
- * patches + one op at the JOB's power (no override — the laser tool's own
- * %). The refs slot sits above the ascending ladder. The user matches each
- * gray patch to the closest-matching band: that pairing IS the material's
- * power curve (the phase-2 greyscale mode's data entry is NOT this round).
+ * The GREYSCALE STEP WEDGE v2 (Alice's 2026-11-24: "update the greyscale
+ * power coupon using similar styling and lessons learnt from the interlace
+ * generator"): the same idioms as the interlace coupon, translated to
+ * bands —
+ *
+ * 1. RANGE BOXES: Min/Max power (0–1, the op field's unit) derive the
+ *    band ladder live. Count = round((max−min)/0.1) clamped to the old
+ *    3..10 rule, bands an inclusive linspace from min to max (endpoints
+ *    exact); min ≥ max swaps (the wedge precedent), min == max warns flat.
+ * 2. COMPACT: the coupon no longer tiles the whole stock — each band is a
+ *    square block at the Band height field (default 10mm, the interlace
+ *    patch size), bands fill rows along the stock's span (ascending first
+ *    half row 1, rest row 2 — the interlace split), the whole footprint
+ *    centered like the interlace grid.
+ * 3. LABELS: a text label above every band (its S as percent — the ⚡
+ *    beam-power unit), the interlace no-overlap gap derivation (gap =
+ *    max(3.5, widest label − patch + 2)), labels may overhang their own
+ *    band, never touch a neighbor.
+ * 4. REFERENCE COLUMN: the fixed 25/50/75% dithered patches (the old
+ *    gray-refs slot) burn as ONE block in its own column AFTER the bands —
+ *    the zero column's analogue — centered across the two rows' seam, its
+ *    label above, one raster op at the JOB's power (no override).
+ */
+
+/** the band ladder's target step, S units (0–1) — the prefill 0.05…1.0
+ *  range derives 10 bands */
+const WEDGE_TARGET_STEP = 0.1;
+/** the block-gap floor + clearance — the interlace idiom, reused */
+export const WEDGE_MIN_BLOCK_GAP_MM = 3.5;
+export const WEDGE_GAP_CLEARANCE_MM = 2;
+/** each band is a square block of this side, mm (the interlace patch
+ *  size — "1x1cm is enough") */
+export const WEDGE_BAND_MM = 10;
+/** clearance between a block's top edge and its label, mm */
+export const WEDGE_LABEL_CLEAR_MM = 1.5;
+/** label cap height, mm — the interlace idiom, reused */
+export const WEDGE_LABEL_CAP_MM = 3;
+
+export interface WedgeLadder {
+  /** ascending S levels, min..max inclusive, count in the old 3..10 rule */
+  bands: number[];
+  /** the derived step between bands, S units */
+  steps: number[];
+  warnings: string[];
+}
+
+const round6w = (v: number): number => Math.round(v * 1e6) / 1e6;
+
+/**
+ * Derive the band ladder from the power range boxes. min ≥ max swaps
+ * (the wedge precedent); min == max warns "flat" and still derives the
+ * clamped count (a flat ladder is a legal, useless read — the warning
+ * says so). Count = round((max−min)/0.1) clamped into the old 3..10
+ * rule, warning when the range wants fewer than 3 (squeezed) or the
+ * clamp bites. Bands are an inclusive linspace — both endpoints exact.
+ */
+export function deriveWedgeLadder(min: number, max: number): WedgeLadder {
+  const warnings: string[] = [];
+  const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+  let lo = Number.isFinite(min) ? clamp01(min) : DEFAULT_WEDGE_MIN_POWER;
+  let hi = Number.isFinite(max) ? clamp01(max) : 1;
+  if (min > max) {
+    warnings.push(
+      `minPower ${min} was above maxPower ${max} — read as swapped; the ladder ascends ${max} → ${min}`,
+    );
+    [lo, hi] = [hi, lo];
+  }
+  // +1e-9: 0.95/0.1 lands at 9.499…98 in floats — half-step counts round
+  // UP so the prefill 0.05…1.0 range derives its 10 bands
+  const rawCount = Math.round((hi - lo) / WEDGE_TARGET_STEP + 1e-9);
+  let count = Math.min(MAX_WEDGE_BANDS, Math.max(MIN_WEDGE_BANDS, rawCount));
+  if (rawCount < MIN_WEDGE_BANDS) {
+    warnings.push(
+      `the range wants ${Math.max(rawCount, 1)} band(s) — the wedge squeezes to ${MIN_WEDGE_BANDS}; the read may be too coarse`,
+    );
+  } else if (rawCount > MAX_WEDGE_BANDS) {
+    warnings.push(`the range wants ${rawCount} bands — clamped to ${MAX_WEDGE_BANDS}`);
+  }
+  if (Math.abs(hi - lo) < 1e-9) {
+    warnings.push(
+      `minPower equals maxPower (${hi}) — the ladder is flat; every band burns at the same level`,
+    );
+  }
+  const rawStep = count > 1 ? (hi - lo) / (count - 1) : 0;
+  const bands: number[] = [];
+  for (let k = 0; k < count; k++) bands.push(round6w(lo + k * rawStep));
+  bands[count - 1] = hi; // exact maxPower on the last rung — no float dust
+  return { bands, steps: [round6w(rawStep)], warnings };
+}
+
+/**
+ * The label text for a band: its S as BEAM POWER percent (the ⚡ unit the
+ * op's spindleRpm slot carries), 0.1% precision, trailing ".0" trimmed —
+ * "5%", "15.6%", "100%".
+ */
+export const wedgeLabel = (band: number): string => {
+  const p = Math.round(band * 1000) / 10;
+  return Number.isInteger(p) ? `${p}%` : `${p.toFixed(1)}%`;
+};
+
+export interface GreyscaleWedgeV2 {
+  min: number;
+  max: number;
+  /** the ascending band ladder (row1 + row2 merged) */
+  bands: number[];
+  /** the derived step, S units */
+  steps: number[];
+  /** row 1 = the ascending first half of the bands, row 2 the rest */
+  row1: number[];
+  row2: number[];
+  /** the FIXED dithered reference grays (the refs column's slices) */
+  grayRefs: number[];
+  /** the square block's side, mm (the Band height field) */
+  patch: number;
+  /** mm between blocks — derived from the widest label (the interlace rule) */
+  gap: number;
+  /** mm — the widest label's width */
+  labelWidth: number;
+  labelCap: number;
+  labelHeight: number;
+  /** one row slot's height: patch + label clearance + label box */
+  slotHeight: number;
+  /** the coupon's face size, mm (x along the span incl. the refs column,
+   *  y the ladder direction) */
+  size: { x: number; y: number };
+  warnings: string[];
+}
+
+/**
+ * Plan the wedge v2 against the stock and the CURRENT range + band size:
+ * ladder derives, every label lays out at the shared cap so the gap
+ * derives from the actual widest label, rows split like the interlace
+ * grid, the refs column sizes in. Pure; deterministic; the panel calls it
+ * on every edit.
+ */
+export function planWedgeCouponV2(
+  stock: Stock,
+  min = DEFAULT_WEDGE_MIN_POWER,
+  max = 1,
+  bandHeight = WEDGE_BAND_MM,
+): GreyscaleWedgeV2 {
+  const ladder = deriveWedgeLadder(min, max);
+  const patch = Math.max(2, bandHeight);
+  // every label lays out at the shared cap — the widest sets the gap
+  const labelLayouts = ladder.bands.map((b) =>
+    layoutTextPaths({
+      text: wedgeLabel(b),
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: WEDGE_LABEL_CAP_MM,
+      letterSpacing: 0,
+      wrapWidth: 0,
+    }),
+  );
+  const refsLayout = layoutTextPaths({
+    text: 'refs',
+    fontId: DEFAULT_TEXT_FONT_ID,
+    size: WEDGE_LABEL_CAP_MM,
+    letterSpacing: 0,
+    wrapWidth: 0,
+  });
+  const labelWidth = Math.max(0, ...labelLayouts.map((l) => l.width), refsLayout.width);
+  const labelHeight = labelLayouts[0]?.height ?? refsLayout.height;
+  const gap = Math.max(
+    WEDGE_MIN_BLOCK_GAP_MM,
+    labelWidth - patch + WEDGE_GAP_CLEARANCE_MM,
+  );
+  const split = Math.ceil(ladder.bands.length / 2);
+  const row1 = ladder.bands.slice(0, split);
+  const row2 = ladder.bands.slice(split);
+  const slotHeight = patch + WEDGE_LABEL_CLEAR_MM + labelHeight;
+  const slotCount = row2.length > 0 ? 2 : 1;
+  const maxCols = Math.max(row1.length, row2.length, 1);
+  const gridW = maxCols * patch + (maxCols - 1) * gap;
+  const totalX = gridW + gap + patch; // the refs column always rides after
+  const totalY = slotCount * slotHeight + (slotCount - 1) * gap;
+
+  const warnings: string[] = [...ladder.warnings];
+  const [x0, x1] = stockSpan(stock, 'x');
+  const spanX = Math.max(x1 - x0, 1);
+  if (totalX > spanX + 1e-9) {
+    warnings.push(
+      `the grid needs ~${totalX.toFixed(0)}mm along the stock but the span is ${spanX.toFixed(0)}mm — bands will run past the edge`,
+    );
+  }
+  if (stock.kind === 'cylinder' && stock.axisMode === '4-axis') {
+    const circ = 2 * Math.PI * rotaryCalibrationOf(stock).effectiveRadius;
+    if (totalY > circ) {
+      warnings.push(
+        `the rows need ~${totalY.toFixed(0)}mm of arc but the cylinder's circumference is ${circ.toFixed(0)}mm — the outer rows will overlap the seam`,
+      );
+    }
+  } else {
+    const [y0, y1] = stockSpan(stock, 'y');
+    if (totalY > y1 - y0) {
+      warnings.push(
+        `the rows need ~${totalY.toFixed(0)}mm across the stock but it has ${(y1 - y0).toFixed(0)}mm — the outer rows will run past the edge`,
+      );
+    }
+  }
+  return {
+    min,
+    max,
+    bands: ladder.bands,
+    steps: ladder.steps,
+    row1,
+    row2,
+    grayRefs: [...WEDGE_GRAY_REFS],
+    patch,
+    gap,
+    labelWidth,
+    labelCap: WEDGE_LABEL_CAP_MM,
+    labelHeight,
+    slotHeight,
+    size: { x: totalX, y: totalY },
+    warnings,
+  };
+}
+
+/**
+ * Materialize the wedge v2: ONE solid-band bitmap + ONE rasterEngrave op
+ * per band (the op's power pins the band's S level — the spindleRpm slot
+ * is beam power %, so band S_i lands as an explicit ⚡ override) + ONE
+ * text label per band burned by ONE engrave op; the FIXED 25/50/75%
+ * dithered refs burn as ONE block in its own column after the bands,
+ * centered across the two rows' seam (the zero column's analogue), one
+ * raster op at the JOB's power (no override). Layout mirrors the
+ * interlace coupon: rows left-aligned ascending along the span, the whole
+ * footprint centered, labels above their blocks, the derived gap keeps
+ * every label clear of its neighbors.
  */
 export function materializeGreyscaleWedge(
-  plan: GreyscaleWedgePlan,
+  plan: GreyscaleWedgeV2,
   stock: Stock,
   laser: Tool,
 ): { ops: JobOp[]; primitives: Primitive[] } {
-  const slot = laserCouponLadder(stock, plan.bands.length + 1);
+  const wrapped = stock.kind === 'cylinder' && stock.axisMode === '4-axis';
+  const cal = rotaryCalibrationOf(stock);
+  const rowsLadder = laserCouponLadder(stock, plan.row2.length > 0 ? 2 : 1, plan.gap, plan.slotHeight);
   const pitch = RASTER_PITCH_MM;
-  const faceH = Math.min(plan.bandHeight, slot.span.y);
-  const face = { width: slot.span.x, height: faceH };
   const px = {
-    w: Math.max(1, Math.round(face.width / pitch)),
-    h: Math.max(1, Math.round(face.height / pitch)),
+    w: Math.max(1, Math.round(plan.patch / pitch)),
+    h: Math.max(1, Math.round(plan.patch / pitch)),
   };
-  const wrapped = slot.wrapped;
-  const primitives: Extract<Primitive, { kind: 'bitmap' }>[] = [];
+  const face = { width: plan.patch, height: plan.patch };
+  const degPerMm = 180 / (Math.PI * cal.effectiveRadius);
+  const primitives: Primitive[] = [];
   const ops: JobOp[] = [];
-  plan.bands.forEach((band, i) => {
-    const prim = bitmapCouponPrimitive(
-      couponStoredGray(solidBand(px.w, px.h), wrapped),
-      face,
-      slot.place(i),
-      wrapped,
-      stock,
-      `step wedge — band ${i + 1}, S ${Math.round(band * 100)}%`,
-    );
+  const labelIds: string[] = [];
+  const maxCols = Math.max(plan.row1.length, plan.row2.length, 1);
+  const gridW = maxCols * plan.patch + (maxCols - 1) * plan.gap;
+  const totalW = gridW + plan.gap + plan.patch; // the refs column
+  const [x0, x1] = stockSpan(stock, 'x');
+  const leftX = (x0 + x1) / 2 - totalW / 2;
+  const colX = (col: number): number => leftX + col * (plan.patch + plan.gap) + plan.patch / 2;
+
+  /** one block + its label: the interlace burnPatch idiom — the block in
+   *  the slot's lower band, the label above it ("a text label above it"). */
+  const burnBlock = (
+    labelText: string,
+    sourceName: string,
+    x: number,
+    base: ModelTransform,
+    gray: { width: number; height: number; data: Uint8Array },
+    opRates: { spindleRpm: number } | undefined,
+  ) => {
+    const dPatch = -(plan.slotHeight - plan.patch) / 2;
+    const blockT: ModelTransform = wrapped
+      ? {
+          ...base,
+          position: { x, y: 0, z: cal.axisZ },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - dPatch * degPerMm },
+        }
+      : { ...base, position: { x, y: base.position.y + dPatch, z: base.position.z } };
+    const prim = bitmapCouponPrimitive(gray, face, blockT, wrapped, stock, sourceName);
     primitives.push(prim);
     ops.push({
       kind: 'rasterEngrave',
@@ -1849,26 +2092,106 @@ export function materializeGreyscaleWedge(
       toolId: laser.id,
       featureIds: [`p:${prim.id}:bitmap:0`],
       pitch,
-      rates: { spindleRpm: Math.round(band * 100) },
+      ...(opRates ? { rates: opRates } : {}),
     });
+    const lay = layoutTextPaths({
+      text: labelText,
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: plan.labelCap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+    });
+    const labelDy = plan.slotHeight / 2 - plan.labelHeight / 2;
+    const labelT: ModelTransform = wrapped
+      ? {
+          ...base,
+          position: { x, y: 0, z: cal.axisZ },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - labelDy * degPerMm },
+        }
+      : { ...base, position: { x, y: base.position.y + labelDy, z: base.position.z } };
+    const labelPrim: Extract<Primitive, { kind: 'text' }> = {
+      kind: 'text',
+      id: nextPrimitiveId(),
+      text: labelText,
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: plan.labelCap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+      paths: lay.paths,
+      width: lay.width,
+      height: lay.height,
+      presentation: wrapped ? 'wrapped' : 'flat',
+      wrapDiameter: Math.max(1, cal.effectiveRadius * 2),
+      transform: labelT,
+    };
+    primitives.push(labelPrim);
+    for (let k = 0; k < lay.paths.length; k++) labelIds.push(`p:${labelPrim.id}:path:${k}`);
+  };
+
+  const rows: { values: number[] }[] = [
+    { values: plan.row1 },
+    ...(plan.row2.length > 0 ? [{ values: plan.row2 }] : []),
+  ];
+  rows.forEach((row, r) => {
+    const base = rowsLadder.place(r);
+    row.values.forEach((band, col) =>
+      burnBlock(
+        wedgeLabel(band),
+        `step wedge — band ${wedgeLabel(band)}`,
+        colX(col),
+        base,
+        couponStoredGray(solidBand(px.w, px.h), wrapped),
+        { spindleRpm: Math.round(band * 100) },
+      ),
+    );
   });
-  // the gray-refs slot: the FIXED 25/50/75% patches burn at the JOB's
-  // power — no override, the laser tool's own % decides
-  const refs = bitmapCouponPrimitive(
-    couponStoredGray(grayPatches(plan.grayRefs, px.w, px.h), wrapped),
-    face,
-    slot.place(plan.bands.length),
-    wrapped,
-    stock,
-    'step wedge — gray refs (25/50/75%)',
-  );
-  primitives.push(refs);
+
+  // the refs column: AFTER the bands, centered across the seam (the zero
+  // column's analogue) — the FIXED 25/50/75% dithered slices burn at the
+  // JOB's power (no override; the laser tool's own % decides)
+  {
+    const base0 = rowsLadder.place(0);
+    const baseLast = rowsLadder.place(Math.max(rows.length - 1, 0));
+    const refsX = leftX + gridW + plan.gap + plan.patch / 2;
+    const dPatch = -(plan.slotHeight - plan.patch) / 2;
+    const refsBase: ModelTransform = wrapped
+      ? {
+          position: { x: refsX, y: 0, z: cal.axisZ },
+          rotationDeg: {
+            x: (base0.rotationDeg.x + baseLast.rotationDeg.x) / 2 + dPatch * degPerMm,
+            y: 0,
+            z: 0,
+          },
+          scale: { x: 1, y: 1, z: 1 },
+        }
+      : {
+          position: {
+            x: refsX,
+            y: (base0.position.y + baseLast.position.y) / 2 - dPatch,
+            z: base0.position.z,
+          },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        };
+    burnBlock(
+      'refs',
+      'step wedge — gray refs (25/50/75%)',
+      refsX,
+      refsBase,
+      couponStoredGray(grayPatches(plan.grayRefs, px.w, px.h), wrapped),
+      undefined,
+    );
+  }
+
+  // ONE engrave op burns every label
   ops.push({
-    kind: 'rasterEngrave',
+    kind: 'engrave',
     id: `jobop-${++opCount}`,
     toolId: laser.id,
-    featureIds: [`p:${refs.id}:bitmap:0`],
-    pitch,
+    featureIds: labelIds,
+    depth: 0.1,
+    stepDown: 0.1,
+    fillMode: 'outlines',
   });
   return { ops, primitives };
 }

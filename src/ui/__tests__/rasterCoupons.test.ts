@@ -13,6 +13,7 @@ import { rotaryCalibrationOf } from '../../core/types';
 import { bitmapKernelGray, sourcesFor } from '../featureSources';
 import {
   deriveInterlaceLadder,
+  deriveWedgeLadder,
   generateJobOp,
   INTERLACE_GAP_CLEARANCE_MM,
   INTERLACE_MAX_PER_SIDE,
@@ -23,13 +24,17 @@ import {
   materializeGreyscaleWedge,
   materializeInterlaceCoupon,
   planInterlaceCouponV2,
+  planWedgeCouponV2,
+  wedgeLabel,
+  WEDGE_BAND_MM,
+  WEDGE_GAP_CLEARANCE_MM,
+  WEDGE_LABEL_CAP_MM,
+  WEDGE_MIN_BLOCK_GAP_MM,
   type GenContext,
 } from '../jobGeneration';
 import {
   DEFAULT_COLUMN_SPACING_MM,
-  DEFAULT_WEDGE_BAND_MM,
   gridToGray,
-  planGreyscaleWedge,
   planInterlaceCoupon,
   WEDGE_GRAY_REFS,
 } from '../../cam/rasterCoupons';
@@ -454,51 +459,263 @@ describe('materializeInterlaceCoupon v2 — patches + labels + zero column', () 
 
 
 // ---------------------------------------------------------------- the wedge
+// v2 (Alice's 2026-11-24): the interlace idioms applied to the wedge —
+// range boxes derive the band ladder (prefill 0.05…1.0 → 10 bands),
+// compact square blocks at the Band height field, a label above every
+// band, the 25/50/75% refs as a column beside the rows.
 
-describe('materializeGreyscaleWedge — the step-wedge coupon as ops', () => {
-  // the strip the panel derives: 10 ladder slots share the rod's arc
-  const spanY = laserCouponLadder(ROD, 11).span.y * 10;
-  const plan = planGreyscaleWedge(spanY, { bandHeight: DEFAULT_WEDGE_BAND_MM });
-
-  it('plans an ascending ladder from minPower to exactly maxPower', () => {
-    expect(plan.bands.length).toBe(10);
-    expect(plan.bands[0]).toBeCloseTo(0.05, 6);
-    expect(plan.bands[plan.bands.length - 1]).toBe(1);
-    for (let i = 1; i < plan.bands.length; i++) expect(plan.bands[i]).toBeGreaterThan(plan.bands[i - 1]);
-    expect(plan.grayRefs).toEqual([...WEDGE_GRAY_REFS]);
-  });
-
-  it('makes one solid band bitmap + one op per band, plus the gray-refs slot', () => {
-    const { ops, primitives } = materializeGreyscaleWedge(plan, ROD, LASER);
-    expect(ops).toHaveLength(plan.bands.length + 1);
-    expect(primitives).toHaveLength(plan.bands.length + 1);
-    const prims = primitives as Extract<Primitive, { kind: 'bitmap' }>[];
-    ops.forEach((op, i) => {
-      if (op.kind !== 'rasterEngrave') throw new Error('expected raster ops');
-      expect(op.pitch).toBe(RASTER_PITCH_MM);
-      expect(op.featureIds).toEqual([`p:${prims[i].id}:bitmap:0`]);
-      if (i < plan.bands.length) {
-        // the band's S level IS the op's power (the ⚡ override, beam %)
-        expect(op.rates?.spindleRpm).toBe(Math.round(plan.bands[i] * 100));
-      } else {
-        // the refs op burns at the JOB's power — no override
-        expect(op.rates).toBeUndefined();
-      }
-    });
-    // band bitmaps are solid black; the refs bitmap carries the 3 gray
-    // slices — read after the bitmapKernelGray round-trip (the wrapped
-    // store is the inverse transpose)
-    for (let i = 0; i < plan.bands.length; i++) {
-      expect(bitmapKernelGray(prims[i].gray).data.every((v) => v === 0)).toBe(true);
+describe('deriveWedgeLadder — the power range boxes', () => {
+  it('prefill 0.05…1.0: ten ascending bands, endpoints exact', () => {
+    const l = deriveWedgeLadder(0.05, 1);
+    expect(l.bands).toHaveLength(10);
+    expect(l.bands[0]).toBeCloseTo(0.05, 9);
+    expect(l.bands[l.bands.length - 1]).toBe(1); // exact maxPower, no dust
+    for (let i = 1; i < l.bands.length; i++) {
+      expect(l.bands[i]).toBeGreaterThan(l.bands[i - 1]);
+      // even increments (bands round to 6 decimals for clean labels)
+      expect(l.bands[i] - l.bands[i - 1]).toBeCloseTo(l.steps[0], 5);
     }
-    const refs = bitmapKernelGray(prims[prims.length - 1].gray);
-    const slices = [...new Set([...Array(refs.width).keys()].map((x) => refs.data[x]))].sort((a, b) => a - b);
-    expect(slices).toEqual(WEDGE_GRAY_REFS.map((g) => Math.round(255 * g)));
+    expect(l.warnings).toEqual([]);
   });
 
-  it('generates every op cleanly through the real pipeline', () => {
-    const { ops, primitives } = materializeGreyscaleWedge(plan, ROD, LASER);
-    const c = ctx(ROD, primitives);
+  it('an in-range count derives from the range (0.5…1.0 → 5 bands of 0.125)', () => {
+    const l = deriveWedgeLadder(0.5, 1);
+    expect(l.bands).toEqual([0.5, 0.625, 0.75, 0.875, 1]);
+    expect(l.steps).toEqual([0.125]);
+    expect(l.warnings).toEqual([]);
+  });
+
+  it('a narrow range squeezes to the old 3-band floor and warns', () => {
+    const l = deriveWedgeLadder(0.05, 0.1);
+    expect(l.bands).toHaveLength(3);
+    expect(l.bands[0]).toBeCloseTo(0.05, 9);
+    expect(l.bands[2]).toBeCloseTo(0.1, 9);
+    expect(l.warnings.some((w) => /squeezes/.test(w))).toBe(true);
+  });
+
+  it('an inverted range reads as swapped (the wedge precedent)', () => {
+    const l = deriveWedgeLadder(0.9, 0.2);
+    expect(l.bands[0]).toBeCloseTo(0.2, 9);
+    expect(l.bands[l.bands.length - 1]).toBeCloseTo(0.9, 9);
+    expect(l.warnings.some((w) => /swapped/.test(w))).toBe(true);
+  });
+
+  it('an equal range warns flat and still derives bands', () => {
+    const l = deriveWedgeLadder(0.5, 0.5);
+    expect(l.bands.every((b) => Math.abs(b - 0.5) < 1e-9)).toBe(true);
+    expect(l.bands.length).toBeGreaterThanOrEqual(3);
+    expect(l.warnings.some((w) => /flat/.test(w))).toBe(true);
+  });
+
+  it('band labels are beam-power percent (the ⚡ unit), trimmed', () => {
+    expect(wedgeLabel(0.05)).toBe('5%');
+    expect(wedgeLabel(1)).toBe('100%');
+    expect(wedgeLabel(0.156)).toBe('15.6%');
+  });
+});
+
+describe('planWedgeCouponV2 — rows, refs column, derived gap, live totals', () => {
+  const LONGROD: Stock = { ...ROD, length: 100 };
+
+  it('prefill plan: 10 bands in two even rows + the refs column', () => {
+    const plan = planWedgeCouponV2(LONGROD);
+    expect(plan.bands).toHaveLength(10);
+    expect(plan.row1).toHaveLength(5);
+    expect(plan.row2).toHaveLength(5);
+    expect(plan.grayRefs).toEqual([0.25, 0.5, 0.75]);
+    expect(plan.patch).toBe(WEDGE_BAND_MM);
+    expect(plan.gap).toBeCloseTo(
+      Math.max(WEDGE_MIN_BLOCK_GAP_MM, plan.labelWidth - plan.patch + WEDGE_GAP_CLEARANCE_MM),
+      9,
+    );
+    expect(plan.slotHeight).toBeGreaterThan(WEDGE_BAND_MM); // room for the label
+    expect(plan.size.y).toBeCloseTo(2 * plan.slotHeight + plan.gap, 6);
+    // the refs column rides a full gap+patch past the band grid
+    expect(plan.size.x).toBeCloseTo(5 * plan.patch + 4 * plan.gap + plan.gap + plan.patch, 6);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('a narrow power range still lays out (3 bands, one row + refs)', () => {
+    const plan = planWedgeCouponV2(LONGROD, 0.05, 0.1);
+    expect(plan.row1).toHaveLength(2);
+    expect(plan.row2).toHaveLength(1);
+    expect(plan.size.x).toBeCloseTo(2 * plan.patch + plan.gap + plan.gap + plan.patch, 6);
+  });
+
+  it('a wide range warns when it exceeds the stock span', () => {
+    const long = planWedgeCouponV2(LONGROD, 0, 1, 20); // 20mm blocks overflow
+    expect(long.warnings.some((w) => /run past the edge/.test(w))).toBe(true);
+  });
+});
+
+describe('materializeGreyscaleWedge v2 — bands + labels + refs column', () => {
+  const LONGROD: Stock = { ...ROD, length: 100 };
+  const plan = planWedgeCouponV2(LONGROD);
+
+  it('materializes 10 band bitmaps + 10 labels + refs block + refs label (22 prims, 12 ops)', () => {
+    const { ops, primitives } = materializeGreyscaleWedge(plan, LONGROD, LASER);
+    expect(ops).toHaveLength(12); // 10 band rasters + 1 refs raster + 1 engrave
+    expect(primitives).toHaveLength(22); // (10 bands + refs) × (bitmap + label)
+    const rasters = ops.filter((o) => o.kind === 'rasterEngrave');
+    const engraves = ops.filter((o) => o.kind === 'engrave');
+    expect(rasters).toHaveLength(11);
+    expect(engraves).toHaveLength(1); // ONE op burns every label
+    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
+      Primitive,
+      { kind: 'bitmap' }
+    >[];
+    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
+      Primitive,
+      { kind: 'text' }
+    >[];
+    expect(bitmaps).toHaveLength(11);
+    expect(texts).toHaveLength(11);
+    // every band burns as its own raster at ITS power (the ⚡ override),
+    // ascending with the ladder; the refs raster carries NO override
+    rasters.forEach((op, i) => {
+      const r = op as Extract<JobOp, { kind: 'rasterEngrave' }>;
+      expect(r.pitch).toBe(RASTER_PITCH_MM);
+      expect(r.featureIds).toEqual([`p:${bitmaps[i].id}:bitmap:0`]);
+      if (i < plan.bands.length) {
+        expect(r.rates?.spindleRpm).toBe(Math.round(plan.bands[i] * 100));
+      } else {
+        expect(r.rates).toBeUndefined(); // the refs burn at the JOB's power
+      }
+      expect(bitmaps[i].width).toBeCloseTo(WEDGE_BAND_MM, 6);
+      expect(bitmaps[i].height).toBeCloseTo(WEDGE_BAND_MM, 6);
+    });
+    // the band bitmaps are SOLID black; the refs bitmap carries the fixed
+    // gray slices (read after the bitmapKernelGray round-trip)
+    for (let i = 0; i < plan.bands.length; i++) {
+      expect(bitmapKernelGray(bitmaps[i].gray).data.every((v) => v === 0)).toBe(true);
+    }
+    const refs = bitmapKernelGray(bitmaps[bitmaps.length - 1].gray);
+    const slices = [...new Set([...Array(refs.width).keys()].map((x) => refs.data[x]))].sort(
+      (a, b) => a - b,
+    );
+    expect(slices).toEqual(WEDGE_GRAY_REFS.map((g) => Math.round(255 * g)));
+    // the labels: one per band (its S as percent) + the refs label
+    texts.forEach((t, i) => {
+      expect(t.text).toBe(i < plan.bands.length ? wedgeLabel(plan.bands[i]) : 'refs');
+      expect(t.size).toBe(WEDGE_LABEL_CAP_MM);
+      expect(t.presentation).toBe('wrapped');
+    });
+    // the engrave op targets EVERY label path, and nothing else
+    const e = engraves[0] as Extract<JobOp, { kind: 'engrave' }>;
+    const allPaths = texts.flatMap((t) => t.paths.map((_, k) => `p:${t.id}:path:${k}`));
+    expect(e.featureIds).toHaveLength(allPaths.length);
+    expect(new Set(e.featureIds)).toEqual(new Set(allPaths));
+    expect(e.toolId).toBe(LASER.id);
+  });
+
+  it('flat: bands in rows on the crown, refs column after them, on the seam', () => {
+    const boxPlan = planWedgeCouponV2(BOX);
+    const { primitives } = materializeGreyscaleWedge(boxPlan, BOX, LASER);
+    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
+      Primitive,
+      { kind: 'bitmap' }
+    >[];
+    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
+      Primitive,
+      { kind: 'text' }
+    >[];
+    const row1 = bitmaps.slice(0, boxPlan.row1.length);
+    const refs = bitmaps[bitmaps.length - 1];
+    // rows left-aligned ascending along X, patches + gap apart
+    for (let i = 1; i < row1.length; i++) {
+      expect(row1[i].transform.position.x - row1[i - 1].transform.position.x).toBeCloseTo(
+        boxPlan.patch + boxPlan.gap,
+        6,
+      );
+    }
+    // the refs column sits a full gap past the band grid's right edge,
+    // centered across the seam between the two row slots
+    const rowsRight = Math.max(...row1.map((b) => b.transform.position.x)) + boxPlan.patch / 2;
+    expect(refs.transform.position.x - rowsRight).toBeCloseTo(boxPlan.gap + boxPlan.patch / 2, 6);
+    const slot = laserCouponLadder(BOX, 2, boxPlan.gap, boxPlan.slotHeight);
+    const seamY = (slot.place(0).position.y + slot.place(1).position.y) / 2;
+    expect(refs.transform.position.y).toBeCloseTo(seamY, 6);
+    // the refs label rides directly above the refs block
+    const refsLabel = texts[texts.length - 1];
+    expect(refsLabel.text).toBe('refs');
+    expect(refsLabel.transform.position.x).toBeCloseTo(refs.transform.position.x, 6);
+    expect(refsLabel.transform.position.y).toBeGreaterThan(refs.transform.position.y);
+    // every label sits above its own block, on the crown
+    for (let i = 0; i < texts.length; i++) {
+      expect(texts[i].transform.position.z).toBeCloseTo(20, 6);
+      expect(texts[i].transform.position.y).toBeGreaterThan(bitmaps[i].transform.position.y);
+      expect(texts[i].transform.position.x).toBeCloseTo(bitmaps[i].transform.position.x, 6);
+    }
+  });
+
+  it('flat: no label rect intersects another label or a neighbor block', () => {
+    const boxPlan = planWedgeCouponV2(BOX);
+    const { primitives } = materializeGreyscaleWedge(boxPlan, BOX, LASER);
+    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
+      Primitive,
+      { kind: 'bitmap' }
+    >[];
+    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
+      Primitive,
+      { kind: 'text' }
+    >[];
+    const rects = [
+      ...bitmaps.map((b, i) => ({
+        x0: b.transform.position.x - b.width / 2,
+        x1: b.transform.position.x + b.width / 2,
+        y0: b.transform.position.y - b.height / 2,
+        y1: b.transform.position.y + b.height / 2,
+        owner: i,
+        kind: 'block' as const,
+      })),
+      ...texts.map((t, i) => ({
+        x0: t.transform.position.x - t.width / 2,
+        x1: t.transform.position.x + t.width / 2,
+        y0: t.transform.position.y - t.height / 2,
+        y1: t.transform.position.y + t.height / 2,
+        owner: i,
+        kind: 'label' as const,
+      })),
+    ];
+    // a VIOLATION is two rects from DIFFERENT blocks intersecting — a
+    // label may overhang its own block
+    const overlaps = (a: (typeof rects)[number], b: (typeof rects)[number]): boolean =>
+      a.owner !== b.owner &&
+      a.x0 < b.x1 - 1e-6 && b.x0 < a.x1 - 1e-6 && a.y0 < b.y1 - 1e-6 && b.y0 < a.y1 - 1e-6;
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        expect(
+          overlaps(rects[i], rects[j]),
+          `rects ${i} (${rects[i].kind}) and ${j} (${rects[j].kind}) overlap`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('wrapped: the refs column centers across the seam on the arc', () => {
+    const { primitives } = materializeGreyscaleWedge(plan, LONGROD, LASER);
+    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
+      Primitive,
+      { kind: 'bitmap' }
+    >[];
+    const row1 = bitmaps.slice(0, plan.row1.length);
+    const row2 = bitmaps.slice(plan.row1.length, plan.row1.length + plan.row2.length);
+    const refs = bitmaps[bitmaps.length - 1];
+    const r1 = row1[0].transform.rotationDeg.x;
+    const r2 = row2[0].transform.rotationDeg.x;
+    // the refs block's Rx sits BETWEEN the two rows' rotations — centered
+    // across the seam (ascending arc = more-negative Rx)
+    expect(refs.transform.rotationDeg.x).toBeLessThan(r1);
+    expect(refs.transform.rotationDeg.x).toBeGreaterThan(r2);
+    const seamExpect =
+      (r1 + r2) / 2 - ((plan.slotHeight - plan.patch) / 2) * (180 / (Math.PI * 8.175));
+    expect(refs.transform.rotationDeg.x).toBeCloseTo(seamExpect, 3);
+    expect(refs.transform.position.y).toBe(0);
+  });
+
+  it('generates every op cleanly through the real pipeline (wrapped 4-axis)', () => {
+    const { ops, primitives } = materializeGreyscaleWedge(plan, LONGROD, LASER);
+    const c = ctx(LONGROD, primitives);
     for (const op of ops) {
       const res = generateJobOp(op, c);
       expect(res.error, `${op.id}: ${res.error}`).toBeNull();
@@ -506,22 +723,18 @@ describe('materializeGreyscaleWedge — the step-wedge coupon as ops', () => {
     }
   });
 
-  it('flat stock: bands tile the crown strip with the refs slot on top', () => {
-    const flatPlan = planGreyscaleWedge(laserCouponLadder(BOX, 6).span.y * 5, {});
-    const { ops, primitives } = materializeGreyscaleWedge(flatPlan, BOX, LASER);
-    const prims = primitives as Extract<Primitive, { kind: 'bitmap' }>[];
-    const ys = prims.map((p) => p.transform.position.y);
-    for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThan(ys[i - 1]);
-    expect(prims[prims.length - 1].transform.position.z).toBeCloseTo(20, 6);
-    expect(ops).toHaveLength(flatPlan.bands.length + 1);
-  });
-
-  it('surfaces the planner warnings — an inverted ladder reads as swapped', () => {
-    const swapped = planGreyscaleWedge(20, { minPower: 0.9, maxPower: 0.2 });
-    expect(swapped.warnings.length).toBeGreaterThan(0);
-    expect(swapped.bands[0]).toBeCloseTo(0.2, 6);
+  it('generates cleanly on flat stock too (bands + labels + refs)', () => {
+    const boxPlan = planWedgeCouponV2(BOX);
+    const { ops, primitives } = materializeGreyscaleWedge(boxPlan, BOX, LASER);
+    const c = ctx(BOX, primitives);
+    for (const op of ops) {
+      const res = generateJobOp(op, c);
+      expect(res.error, `${op.id}: ${res.error}`).toBeNull();
+      expect(res.moves.length).toBeGreaterThan(0);
+    }
   });
 });
+
 
 // ------------------------------------------------------ planner consumption
 
