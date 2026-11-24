@@ -201,3 +201,44 @@ describe('buildPostedStream', () => {
     }
   });
 });
+
+  it('a LASER op (no T M6 in the dialect) still resolves its tool slot (2026-11-24 no-marks report)', () => {
+    // laser files carry NO T M6 and no TOOL header (makera-dialect.md
+    // "Laser job" — Makera's own format), so the parser's toolNumber
+    // stays 0 and the T-number map misses. The op's own toolId is the
+    // only tool truth — without the fallback every laser move resolved
+    // to 0xffff and the sim skipped the whole op: no marks on the stock,
+    // raster AND vector laser engraves alike.
+    const laser: Tool = {
+      id: 't-laser',
+      name: '5W module',
+      type: 'laser',
+      diameter: 0.1,
+      spindleRpm: 30,
+      focus: 1.5,
+    };
+    const ops = [
+      {
+        id: 'opL',
+        kind: 'engrave',
+        toolId: 't-laser',
+        moves: [
+          mv({ x: 0, y: 0 }, 0, { rapid: true }),
+          mv({ x: 10, y: 0 }, 100, { power: 0.2 }),
+          mv({}, 100, { power: 0 }),
+        ],
+        stepDown: 0,
+      },
+    ];
+    // the library the worker builds specs/beam tables from: the laser at
+    // slot 2, cutting tools before it
+    const library = [flat, ball, laser];
+    const s = buildPostedStream(ops, library, new Map([['t-laser', 1]]));
+    const lit = s.moves.findIndex((m) => m.power !== undefined && m.power > 0);
+    expect(lit).toBeGreaterThanOrEqual(0);
+    for (let i = 0; i < s.moves.length; i++) {
+      const ti = s.toolOf(i);
+      expect(ti).not.toBe(0xffff);
+      expect(library[ti].id).toBe('t-laser'); // the beam slot, not 0xffff
+    }
+  });

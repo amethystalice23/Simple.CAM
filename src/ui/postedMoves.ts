@@ -159,10 +159,25 @@ export function buildPostedStream(
     idByOpNumber.set(i + 1, o.id);
   });
 
+  // op number → the input op itself (the T-number fallback below reads
+  // its toolId)
+  const opByNumber = new Map<number, PostedOpInput>();
+  ops.forEach((o, i) => opByNumber.set(i + 1, o));
+
   for (let mi = 0; mi < parsed.moves.length; mi++) {
     const op = parsed.moves[mi].op;
     if (!op) continue;
-    const ti = toolIndexByNumber.get(op.toolNumber);
+    // The T numbers the parser recovered from the file — EXCEPT laser
+    // ops: the dialect emits NO T M6 and no TOOL header for a laser
+    // (Makera's own laser files), so the file CANNOT name its tool and
+    // the parser's toolNumber stays 0. The input op's own toolId is
+    // then the only tool truth — fall back to it (the 2026-11-24 report:
+    // every laser move resolved to 0xffff and the sim skipped the
+    // whole op — no marks on the stock, vector engraves included).
+    let ti = toolIndexByNumber.get(op.toolNumber);
+    if (ti === undefined) {
+      ti = toolIndexOf.get(opByNumber.get(op.number)?.toolId ?? '');
+    }
     const sd = stepByOpNumber.get(op.number) ?? 0;
     const fi = frameByOpNumber.get(op.number) ?? null;
     const oid = idByOpNumber.get(op.number) ?? null;
