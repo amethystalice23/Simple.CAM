@@ -1762,10 +1762,10 @@ function ParamFields(props: {
             </select>
           </label>
           <NumberField
-            label="Interlace (mm)"
+            label="Interlace offset (mm)"
             value={op.interlace ?? 0}
             step={0.05}
-            title="Shifts alternate rows sideways, signed mm — compensates the small offset Studio users report on reverse rows (the beam settles ~3 ms per turn, about half a pixel). Calibrate on the test coupon; it fixes position only, never under-burn"
+            title="Signed mm applied to serpentine reverse rows only — the small position offset the beam's settling leaves on the turns. Calibrate with the Laser interlacing coupon: the sharpest patch's label is this value. A position fix only — it will NOT fix run-start fade-in (min power / lead-in are that lever)"
             onCommit={(v) => upd({ interlace: v } as Partial<JobOp>)}
           />
           <NumberField

@@ -15,11 +15,12 @@ import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
 import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
 import {
+  DEFAULT_COLUMN_SPACING_MM,
   gridToGray,
   grayPatches,
+  planInterlaceCoupon,
   solidBand,
   type GreyscaleWedgePlan,
-  type InterlaceCouponPlan,
 } from '../cam/rasterCoupons';
 import { chamfer } from '../cam/chamfer';
 import { vcarveFlat, vbitConeHeight } from '../cam/vcarveFlat';
@@ -81,6 +82,7 @@ import { transformFn } from './featureOverlays';
 import { bitmapKernelGray, bitmapWrappedLocalPoint, boxTopFaceId, resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { nextPrimitiveId, unitTransform } from './primitives';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
+import { DEFAULT_TEXT_FONT_ID, layoutTextPaths } from './textPrimitive';
 
 export interface GeneratedOp {
   moves: Move[];
@@ -1325,42 +1327,254 @@ function bitmapCouponPrimitive(
 }
 
 /**
- * Materialize the interlace coupon (planInterlaceCoupon): TWO identical
- * column-grid bitmaps (serpentine slot lowest, one-way above) + one
- * rasterEngrave op per sweep — same pitch, same fallback feed/power, the
- * sweep field the only difference. The user burns it, reads the column
- * shift between the two sweeps with a loupe/camera, and enters that offset
- * into the serpentine op's interlace field (sign per the knob's definition:
- * signed mm on REVERSE-row fired runs).
+ * The INTERLACE COUPON v2 (Alice's 2026-11-24 ruling — replaces the
+ * whole-stock twin-bitmap design): "some small patches at each of a bunch
+ * of different settings... a 1x1cm block should be enough, thats many
+ * dozens of lines, put a text label with it too. so do -0.5 to +0.5 in
+ * 0.12mm increments, important to include the zero case too... make sure
+ * theres a few mm gap between blocks and a text label above it."
+ *
+ * One pass, nine patches: 0.12mm multiples within ±0.5 INCLUDING zero.
+ * Each patch is a 1×1cm single-pixel-column grid (the same
+ * planInterlaceCoupon pattern, ~12 columns at 0.8mm spacing, ~100 rows at
+ * 0.1mm pitch) burned as ONE serpentine rasterEngrave op with interlace =
+ * that patch's setting; a text label above each names it. Blocks run in a
+ * row along the stock's span (rows when the span is narrow), a few mm
+ * between blocks; flat stock lays the rows on the crown, 4-axis bends
+ * them around the arc (laserCouponLadder's slots, the 2f785d8 drop
+ * conventions). The user burns once, finds the sharpest patch, and its
+ * label IS the interlace offset value.
+ */
+
+/** the ladder: 0.12mm multiples within ±0.5, zero included — ascending */
+export const INTERLACE_LADDER_MM: readonly number[] = [
+  -0.48, -0.36, -0.24, -0.12, 0, 0.12, 0.24, 0.36, 0.48,
+];
+/** each patch is a 1×1cm raster block (her ruling — many dozens of lines) */
+export const INTERLACE_PATCH_MM = 10;
+/** a few mm between blocks — along the row AND between rows (her ruling) */
+export const INTERLACE_BLOCK_GAP_MM = 3.5;
+/** clearance between a patch's top edge and its label, mm */
+export const INTERLACE_LABEL_CLEAR_MM = 1.5;
+/** label cap height, mm — small on the stock, readable under a loupe */
+export const INTERLACE_LABEL_CAP_MM = 3;
+/** the coupon's burn pitch — the raster default (the Studio corpus) */
+const INTERLACE_COUPON_PITCH = RASTER_PITCH_MM;
+
+export interface InterlaceCouponV2 {
+  ladder: readonly number[];
+  /** patches per row along the stock's span */
+  perRow: number;
+  rows: number;
+  /** the square raster block's side, mm */
+  patch: number;
+  /** mm between blocks */
+  gap: number;
+  /** label cap height, mm */
+  labelCap: number;
+  /** the label box's height, mm (drives the slot height) */
+  labelHeight: number;
+  /** one row slot's height: patch + label clearance + label box */
+  slotHeight: number;
+  /** the whole coupon's face size, mm — x along the stock's span, y the
+   *  ladder direction (arc on wrapped stock) */
+  size: { x: number; y: number };
+  warnings: string[];
+}
+
+/** The label text: signed two-decimal ("−0.48"), zero bare ("0") — the
+ *  burned patch must read its own value unambiguously. */
+export const interlaceLabel = (v: number): string =>
+  Math.abs(v) < 1e-9 ? '0' : `${v > 0 ? '+' : '-'}${Math.abs(v).toFixed(2)}`;
+
+/**
+ * Plan the v2 coupon against the stock: patches fill rows along the
+ * stock's X span, rows stack via laserCouponLadder's slots (crown strip
+ * flat, arc wrapped). Pure; deterministic; the panel shows it live.
+ */
+export function planInterlaceCouponV2(stock: Stock): InterlaceCouponV2 {
+  const [x0, x1] = stockSpan(stock, 'x');
+  const spanX = Math.max(x1 - x0, 1);
+  const perRow = Math.min(
+    INTERLACE_LADDER_MM.length,
+    Math.max(1, Math.floor((spanX + INTERLACE_BLOCK_GAP_MM) / (INTERLACE_PATCH_MM + INTERLACE_BLOCK_GAP_MM))),
+  );
+  const rows = Math.ceil(INTERLACE_LADDER_MM.length / perRow);
+  // the label box height — all nine labels share it (same font + cap);
+  // '+0.48' is the widest, so it is the fit reference
+  const labelHeight = layoutTextPaths({
+    text: interlaceLabel(0.48),
+    fontId: DEFAULT_TEXT_FONT_ID,
+    size: INTERLACE_LABEL_CAP_MM,
+    letterSpacing: 0,
+    wrapWidth: 0,
+  }).height;
+  const slotHeight = INTERLACE_PATCH_MM + INTERLACE_LABEL_CLEAR_MM + labelHeight;
+  const needed = rows * slotHeight + (rows - 1) * INTERLACE_BLOCK_GAP_MM;
+
+  const warnings: string[] = [];
+  if (spanX < INTERLACE_PATCH_MM) {
+    warnings.push(
+      `the stock's span is ${spanX.toFixed(1)}mm — a ${INTERLACE_PATCH_MM}mm patch cannot fit along it; the burn will run past the edge`,
+    );
+  }
+  if (stock.kind === 'cylinder' && stock.axisMode === '4-axis') {
+    const circ = 2 * Math.PI * rotaryCalibrationOf(stock).effectiveRadius;
+    if (needed > circ) {
+      warnings.push(
+        `${rows} row(s) need ~${needed.toFixed(0)}mm of arc but the cylinder's circumference is ${circ.toFixed(0)}mm — the outer rows will overlap the seam`,
+      );
+    }
+  } else {
+    const [y0, y1] = stockSpan(stock, 'y');
+    if (needed > y1 - y0) {
+      warnings.push(
+        `${rows} row(s) need ~${needed.toFixed(0)}mm across the stock but it has ${(y1 - y0).toFixed(0)}mm — the outer rows will run past the edge`,
+      );
+    }
+  }
+  try {
+    warnings.push(
+      ...planInterlaceCoupon(
+        { x: INTERLACE_PATCH_MM, y: INTERLACE_PATCH_MM },
+        { pitch: INTERLACE_COUPON_PITCH, columnSpacing: DEFAULT_COLUMN_SPACING_MM },
+      ).warnings,
+    );
+  } catch (e) {
+    warnings.push(String(e instanceof Error ? e.message : e));
+  }
+  return {
+    ladder: INTERLACE_LADDER_MM,
+    perRow,
+    rows,
+    patch: INTERLACE_PATCH_MM,
+    gap: INTERLACE_BLOCK_GAP_MM,
+    labelCap: INTERLACE_LABEL_CAP_MM,
+    labelHeight,
+    slotHeight,
+    size: {
+      x: Math.min(spanX, perRow * INTERLACE_PATCH_MM + (perRow - 1) * INTERLACE_BLOCK_GAP_MM),
+      y: needed,
+    },
+    warnings,
+  };
+}
+
+/**
+ * Materialize the v2 interlace coupon: ONE bitmap primitive + ONE
+ * serpentine rasterEngrave op per ladder setting (interlace = the
+ * setting), plus ONE text label primitive per patch (its setting, the
+ * shared font at INTERLACE_LABEL_CAP_MM) burned by ONE engrave op over
+ * every label's paths. Patches fill rows along the stock's span
+ * left→right ascending; rows stack through laserCouponLadder's slots —
+ * flat on the crown, wrapped bent around the arc at the stock's own Ø.
  */
 export function materializeInterlaceCoupon(
-  plan: InterlaceCouponPlan,
+  plan: InterlaceCouponV2,
   stock: Stock,
   laser: Tool,
 ): { ops: JobOp[]; primitives: Primitive[] } {
-  // the burned face reads off the plan's grid at the plan's pitch — the
-  // op's resample (round(face/pitch)) reproduces the planned grid exactly
-  const face = { width: plan.grid.width * plan.pitch, height: plan.grid.height * plan.pitch };
-  const ladder = laserCouponLadder(stock, 2, COUPON_GAP_MM, face.height);
-  const gray = couponStoredGray(gridToGray(plan.grid, (x) => plan.columns.includes(x)), ladder.wrapped);
-  const sweeps = ['serpentine', 'one-way'] as const;
-  const sweepName: Record<(typeof sweeps)[number], string> = {
-    serpentine: 'serpentine sweep',
-    'one-way': 'one-way sweep',
-  };
-  const primitives = sweeps.map((sweep, i) =>
-    bitmapCouponPrimitive(gray, face, ladder.place(i), ladder.wrapped, stock, `interlace coupon — ${sweepName[sweep]}`),
+  const wrapped = stock.kind === 'cylinder' && stock.axisMode === '4-axis';
+  const cal = rotaryCalibrationOf(stock);
+  const [x0, x1] = stockSpan(stock, 'x');
+  const rowsLadder = laserCouponLadder(stock, plan.rows, plan.gap, plan.slotHeight);
+  // the patch grid: the same single-pixel-column pattern at every setting
+  // (the op's resample at the plan pitch reproduces it exactly)
+  const coupon = planInterlaceCoupon(
+    { x: plan.patch, y: plan.patch },
+    { pitch: INTERLACE_COUPON_PITCH, columnSpacing: DEFAULT_COLUMN_SPACING_MM },
   );
-  const ops = sweeps.map(
-    (sweep, i): JobOp => ({
+  const gray = couponStoredGray(
+    gridToGray(coupon.grid, (x) => coupon.columns.includes(x)),
+    wrapped,
+  );
+  const face = { width: plan.patch, height: plan.patch };
+  const degPerMm = 180 / (Math.PI * cal.effectiveRadius);
+  const primitives: Primitive[] = [];
+  const ops: JobOp[] = [];
+  const labelIds: string[] = [];
+  plan.ladder.forEach((value, i) => {
+    const row = Math.floor(i / plan.perRow);
+    const col = i % plan.perRow;
+    const rowBlocks = Math.min(plan.perRow, plan.ladder.length - row * plan.perRow);
+    const blockX = (x0 + x1) / 2 + (col - (rowBlocks - 1) / 2) * (plan.patch + plan.gap);
+    const base = rowsLadder.place(row);
+    // the patch sits in the slot's LOWER band, the label in the upper —
+    // "a text label above it" (her ruling). Flat: the offsets ride Y;
+    // wrapped: they ride the arc (ascending = negative Rx, the ladder's
+    // own convention).
+    const dPatch = -(plan.slotHeight - plan.patch) / 2;
+    const patchT: ModelTransform = wrapped
+      ? {
+          ...base,
+          position: { x: blockX, y: 0, z: cal.axisZ },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - dPatch * degPerMm },
+        }
+      : { ...base, position: { x: blockX, y: base.position.y + dPatch, z: base.position.z } };
+    const prim = bitmapCouponPrimitive(
+      gray,
+      face,
+      patchT,
+      wrapped,
+      stock,
+      `interlace coupon — offset ${interlaceLabel(value)}`,
+    );
+    primitives.push(prim);
+    ops.push({
       kind: 'rasterEngrave',
       id: `jobop-${++opCount}`,
       toolId: laser.id,
-      featureIds: [`p:${primitives[i].id}:bitmap:0`],
-      pitch: plan.pitch,
-      sweep,
-    }),
-  );
+      featureIds: [`p:${prim.id}:bitmap:0`],
+      pitch: INTERLACE_COUPON_PITCH,
+      sweep: 'serpentine',
+      interlace: value,
+    });
+    // the label above: its own layout at the shared cap height (the "0"
+    // label is genuinely narrower — each burns its own shape)
+    const lay = layoutTextPaths({
+      text: interlaceLabel(value),
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: plan.labelCap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+    });
+    const dLabel = plan.slotHeight / 2 - lay.height / 2;
+    const labelT: ModelTransform = wrapped
+      ? {
+          ...base,
+          position: { x: blockX, y: 0, z: cal.axisZ },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - dLabel * degPerMm },
+        }
+      : { ...base, position: { x: blockX, y: base.position.y + dLabel, z: base.position.z } };
+    const label: Extract<Primitive, { kind: 'text' }> = {
+      kind: 'text',
+      id: nextPrimitiveId(),
+      text: interlaceLabel(value),
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: plan.labelCap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+      paths: lay.paths,
+      width: lay.width,
+      height: lay.height,
+      presentation: wrapped ? 'wrapped' : 'flat',
+      wrapDiameter: Math.max(1, cal.effectiveRadius * 2),
+      transform: labelT,
+    };
+    primitives.push(label);
+    for (let k = 0; k < lay.paths.length; k++) labelIds.push(`p:${label.id}:path:${k}`);
+  });
+  // ONE engrave op burns every label — they share the tool, the power and
+  // the single-pass vector burn; the patches are what differ
+  ops.push({
+    kind: 'engrave',
+    id: `jobop-${++opCount}`,
+    toolId: laser.id,
+    featureIds: labelIds,
+    depth: 0.1,
+    stepDown: 0.1,
+    fillMode: 'outlines',
+  });
   return { ops, primitives };
 }
 

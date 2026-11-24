@@ -102,7 +102,7 @@ export function primitiveGeometry(p: Primitive): THREE.BufferGeometry {
   if (p.kind === 'box') {
     return new THREE.BoxGeometry(p.size.x, p.size.y, p.size.z);
   }
-  if (p.kind === 'artwork' || p.kind === 'bitmap') {
+  if (p.kind === 'artwork' || p.kind === 'bitmap' || p.kind === 'text') {
     // line work / raster artwork, not solids: the Viewport draws the
     // paths (artworkLocalPoints) or the textured face plane (bitmap);
     // an empty mesh keeps the raycast pipelines (plane picks, the
@@ -288,8 +288,8 @@ function primitiveDetection(p: Primitive): DetectedFeatures {
   const key =
     p.kind === 'box'
       ? `box|${p.size.x}|${p.size.y}|${p.size.z}`
-      : p.kind === 'artwork' || p.kind === 'bitmap'
-        ? `artwork|${p.id}` // artwork/bitmap sources build features directly — never cached
+      : p.kind === 'artwork' || p.kind === 'bitmap' || p.kind === 'text'
+        ? `artwork|${p.id}` // artwork/bitmap/text sources build features directly — never cached
         : `cylinder|${p.diameter}|${p.length}`;
   let features = detectionCache.get(key);
   if (!features) {
@@ -389,6 +389,61 @@ function artworkFeatures(p: Extract<Primitive, { kind: 'artwork' }>): DetectedFe
   };
 }
 
+/**
+ * TEXT primitive → local-space 3D polylines (2026-11-24). The stored paths
+ * are ALREADY centered mm, y-up (layoutTextPaths) — flat is a pure copy.
+ * WRAPPED: bent onto the text's OWN cylinder (`wrapDiameter`), axis ∥
+ * local X (the wrapped-artwork primitive convention), the bend centered at
+ * local angle 0 (the +Z top), arc mm = layout mm (no scale — the paths are
+ * mm, the wrap is a pure bend at any Ø). ORIENTATION follows the
+ * field-verified wrapped-bitmap convention (round 4): the text's LEFT edge
+ * at the low-arc end (left→right = ascending A — Alice's hardware check:
+ * upside-down, never mirrored) and the cap TOP toward −X (face up).
+ */
+export function textLocalPoints(p: Extract<Primitive, { kind: 'text' }>): Vec3[][] {
+  if (p.presentation !== 'wrapped' || !(p.wrapDiameter > 0)) {
+    return p.paths.map((path) => path.map((q) => ({ x: q.x, y: q.y, z: 0 })));
+  }
+  const r = p.wrapDiameter / 2;
+  return p.paths.map((path) =>
+    path.map((q) => {
+      const th = q.x / r; // arc mm → radians, ascending with A
+      return { x: -q.y, y: r * Math.sin(th), z: r * Math.cos(th) };
+    }),
+  );
+}
+
+/** TEXT features: each layout stroke one selectable path feature — the
+ *  artwork plumbing (no detection runs; lettering has no planes). */
+function textFeatures(p: Extract<Primitive, { kind: 'text' }>): DetectedFeatures {
+  const pts = textLocalPoints(p);
+  return {
+    planes: [],
+    circles: [],
+    edges: [],
+    paths: pts.map((points, i): PathFeature => ({
+      kind: 'path',
+      id: `p:${p.id}:path:${i}`,
+      points,
+    })),
+    radialChains: [],
+    threads: [],
+    faceToPlane: new Int32Array(0),
+    planeLoops: [],
+  };
+}
+
+/** The TEXT primitive's real local extents for the placement snap math —
+ *  the artworkSnapGeometry lesson (primitiveGeometry is empty for line
+ *  work, and an empty mesh's bbox snaps to NaN). */
+export function textSnapGeometry(p: Extract<Primitive, { kind: 'text' }>): THREE.BufferGeometry {
+  const pts = textLocalPoints(p).flat();
+  if (pts.length === 0) pts.push({ x: 0, y: 0, z: 0 });
+  return new THREE.BufferGeometry().setFromPoints(
+    pts.map((q) => new THREE.Vector3(q.x, q.y, q.z)),
+  );
+}
+
 /** Bitmap artwork: the WHOLE artwork is one feature (SPEC 2026-11-23) —
  *  never exploded into paths, nothing inside it selectable. The face
  *  rect is centered on the primitive origin (the artwork convention). */
@@ -432,6 +487,21 @@ export function sourcesFor(
         id: p.id,
         geometry: new THREE.BufferGeometry(),
         features: artworkFeatures(p),
+        transform: p.transform,
+        artworkFrame:
+          p.presentation === 'wrapped'
+            ? { kind: 'wrapped', diameter: p.wrapDiameter }
+            : { kind: 'flat' },
+      });
+      continue;
+    }
+    if (p.kind === 'text') {
+      // typed lettering (2026-11-24): strokes as per-path features, the
+      // artwork frame plumbing — the engrave op targets them unchanged
+      sources.push({
+        id: p.id,
+        geometry: new THREE.BufferGeometry(),
+        features: textFeatures(p),
         transform: p.transform,
         artworkFrame:
           p.presentation === 'wrapped'

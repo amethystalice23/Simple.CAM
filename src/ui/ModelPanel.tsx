@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import * as THREE from 'three';
 import { rotateGray90 } from '../core/bitmapImport';
+import { TEXT_FONT_IDS, textFontLabel } from '../core/textLayout';
 import { round2, rotaryCalibrationOf } from '../core/types';
 import type { ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
 import { alignAxisToStock, alignToStock, dropToSurface, stockSpan } from './placement';
-import { artworkSnapGeometry, bitmapSnapGeometry, flipGrayVertical, primitiveGeometry } from './featureSources';
+import { artworkSnapGeometry, bitmapSnapGeometry, flipGrayVertical, primitiveGeometry, textSnapGeometry } from './featureSources';
 import { NumInput } from './fields';
 import { bitmapWrappedFit, resizePrimitive, revertPrimitive, scaleForSize } from './primitives';
+import { relayoutText, type TextSpec } from './textPrimitive';
+import { TextPrimitiveDialog } from './TextPrimitiveDialog';
 
 interface Props {
   /** null when no STL is loaded — primitives still work (the whole point) */
@@ -26,6 +29,8 @@ interface Props {
    * untouched) */
   detectionNote: string | null;
   onAddPrimitive: (kind: 'cylinder' | 'box') => void;
+  /** "+ Text": open the text dialog's spec → a laid-out text primitive */
+  onAddText: (spec: TextSpec) => void;
   /** the artwork ⇩ Ø pick: armed for the SELECTED artwork, next viewport
    * click on a circular feature becomes its wrap Ø */
   pickingWrapDiameter: boolean;
@@ -47,7 +52,7 @@ const SIZE_LABELS: Record<Axis, string> = { x: 'X', y: 'Y', z: 'Z' };
 
 /** object types, color-coded like the op kinds (2026-11-11): the dot on
  * each list row and the editor card's accent bar share --type-color */
-type ObjKind = 'model' | 'cylinder' | 'box' | 'artwork';
+type ObjKind = 'model' | 'cylinder' | 'box' | 'artwork' | 'text';
 
 /** the ⓘ affordance: explanatory text lives in a tooltip, never dropped
  * into a list or panel as a paragraph (Alice, 2026-11-11) */
@@ -92,6 +97,8 @@ export function ModelPanel(props: Props) {
   const hasActive = isModel || selectedPrimitive !== null;
   const isArtwork = selectedPrimitive?.kind === 'artwork';
   const [uniform, setUniform] = useState(false);
+  // the "+ Text" dialog — content-only fields; the layout derives the size
+  const [addingText, setAddingText] = useState(false);
 
   // the active placement applies to whichever object is selected
   const active: ModelTransform = isModel
@@ -113,7 +120,9 @@ export function ModelPanel(props: Props) {
         ? artworkSnapGeometry(selectedPrimitive!)
         : selectedPrimitive!.kind === 'bitmap'
           ? bitmapSnapGeometry(selectedPrimitive!)
-          : primitiveGeometry(selectedPrimitive!)
+          : selectedPrimitive!.kind === 'text'
+            ? textSnapGeometry(selectedPrimitive!)
+            : primitiveGeometry(selectedPrimitive!)
       : geometry!;
     const t = fn(shape);
     // snapped positions are auto-filled numbers — they read clean at 2dp
@@ -158,7 +167,9 @@ export function ModelPanel(props: Props) {
           ? `${artworkKind(selectedPrimitive)} · ${selectedPrimitive.paths.length} path(s)`
           : selectedPrimitive.kind === 'bitmap'
             ? `bitmap artwork · ${selectedPrimitive.width.toFixed(1)} × ${selectedPrimitive.height.toFixed(1)}mm`
-            : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
+            : selectedPrimitive.kind === 'text'
+              ? `text · ${selectedPrimitive.width.toFixed(1)} × ${selectedPrimitive.height.toFixed(1)}mm`
+              : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
   const rowLabel = (p: Primitive) =>
     p.kind === 'cylinder'
       ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
@@ -166,7 +177,9 @@ export function ModelPanel(props: Props) {
         ? `${artworkKind(p)} · ${p.paths.length} path(s)`
         : p.kind === 'bitmap'
           ? `bitmap artwork · ${p.width.toFixed(1)} × ${p.height.toFixed(1)}mm`
-          : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
+          : p.kind === 'text'
+            ? `text · ${p.width.toFixed(1)} × ${p.height.toFixed(1)}mm`
+            : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
   /** the row's SECOND line: type + size, mirroring the model row's shape
    * (filename on top, file type + dims under) */
   const rowMeta = (p: Primitive) =>
@@ -174,7 +187,11 @@ export function ModelPanel(props: Props) {
       ? `${(p.width * p.transform.scale.x).toFixed(1)} × ${(p.height * p.transform.scale.y).toFixed(1)} mm`
       : null;
   const rowName = (p: Primitive) =>
-    p.kind === 'artwork' ? (p.sourceName ?? 'Artwork') : rowLabel(p);
+    p.kind === 'artwork'
+      ? (p.sourceName ?? 'Artwork')
+      : p.kind === 'text'
+        ? (p.text.split('\n')[0].trim() || 'Text')
+        : rowLabel(p);
 
   const setPosition = (axis: Axis, v: number) =>
     setActive({ ...active, position: { ...active.position, [axis]: v } });
@@ -191,6 +208,26 @@ export function ModelPanel(props: Props) {
     setActive({ ...active, scale: { x: s, y: s, z: s } });
   };
   const revertArtworkScale = () => setActive({ ...active, scale: { x: 1, y: 1, z: 1 } });
+
+  /** TEXT editor change: one field patch, re-laid-out — the size fields
+   *  are content, never dimensions. A layout failure (unsupported font or
+   *  character) leaves the primitive untouched. */
+  const textChange = (p: Extract<Primitive, { kind: 'text' }>, patch: Partial<TextSpec>) => {
+    try {
+      props.onPrimitiveChange(
+        relayoutText(p, {
+          text: p.text,
+          fontId: p.fontId,
+          size: p.size,
+          letterSpacing: p.letterSpacing,
+          wrapWidth: p.wrapWidth,
+          ...patch,
+        }),
+      );
+    } catch {
+      /* keep the last good layout */
+    }
+  };
 
   // WRAPPED bitmap (round 3, 2026-11-24 — Alice: "if i rotate it rotates
   // the already wrapped tube, not the image on the tube"): rotation is
@@ -256,6 +293,9 @@ export function ModelPanel(props: Props) {
             </button>
             <button type="button" className="secondary" onClick={() => props.onAddPrimitive('box')}>
               + Box
+            </button>
+            <button type="button" className="secondary" onClick={() => setAddingText(true)}>
+              + Text
             </button>
           </div>
         </div>
@@ -516,6 +556,103 @@ export function ModelPanel(props: Props) {
               </>
             )}
           </>
+        ) : selectedPrimitive && selectedPrimitive.kind === 'text' ? (
+          <>
+            {/* TEXT editor (2026-11-24): content fields only — every change
+             *  re-lays-out the strokes and width/height follow (never
+             *  typed). Presentation mirrors the artwork/bitmap frame choice;
+             *  wrapped bends the lettering onto the text's own Ø. */}
+            <label className="field">
+              <span>Text</span>
+              <textarea
+                rows={3}
+                value={selectedPrimitive.text}
+                onChange={(e) => textChange(selectedPrimitive, { text: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>Font</span>
+              <select
+                value={selectedPrimitive.fontId}
+                onChange={(e) => textChange(selectedPrimitive, { fontId: e.target.value })}
+              >
+                {TEXT_FONT_IDS.map((id) => (
+                  <option key={id} value={id}>
+                    {textFontLabel(id)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="axis-row wide">
+              <span className="axis-label">Cap mm</span>
+              <NumInput
+                value={selectedPrimitive.size}
+                min={0.5}
+                step={0.5}
+                onCommit={(v) => textChange(selectedPrimitive, { size: Math.max(0.5, v) })}
+              />
+            </div>
+            <div className="axis-row wide">
+              <span className="axis-label">Track mm</span>
+              <NumInput
+                value={selectedPrimitive.letterSpacing}
+                step={0.1}
+                onCommit={(v) => textChange(selectedPrimitive, { letterSpacing: v })}
+              />
+            </div>
+            <div className="axis-row wide">
+              <span className="axis-label">Wrap mm</span>
+              <NumInput
+                value={selectedPrimitive.wrapWidth}
+                min={0}
+                step={1}
+                onCommit={(v) => textChange(selectedPrimitive, { wrapWidth: Math.max(0, v) })}
+              />
+            </div>
+            <InfoTip text="Cap is the letter height, mm — width and height derive from the layout. Track is extra spacing between characters; Wrap 0 = no wrap" />
+            <label className="field">
+              <span>Presentation</span>
+              <select
+                value={selectedPrimitive.presentation}
+                onChange={(e) => {
+                  const presentation = e.target.value as 'flat' | 'wrapped';
+                  props.onPrimitiveChange({
+                    ...selectedPrimitive,
+                    presentation,
+                    // first wrap: the stock's effective Ø stands in (the
+                    // artwork convention)
+                    ...(presentation === 'wrapped'
+                      ? {
+                          wrapDiameter: Math.max(
+                            1,
+                            rotaryCalibrationOf(props.stock).effectiveRadius * 2,
+                          ),
+                        }
+                      : {}),
+                    transform: reposeOnPresentation(presentation),
+                  });
+                }}
+              >
+                <option value="flat">flat</option>
+                <option value="wrapped">wrapped</option>
+              </select>
+            </label>
+            {selectedPrimitive.presentation === 'wrapped' && (
+              <div className="axis-row wide">
+                <span className="axis-label">Ø</span>
+                <NumInput
+                  value={selectedPrimitive.wrapDiameter}
+                  step={0.5}
+                  onCommit={(v) =>
+                    props.onPrimitiveChange({
+                      ...selectedPrimitive,
+                      wrapDiameter: Math.max(0.5, v),
+                    })
+                  }
+                />
+              </div>
+            )}
+          </>
         ) : selectedPrimitive && selectedPrimitive.kind === 'bitmap' ? (
           <>
             {/* BITMAP presentation (round 2, 2026-11-24): 3-axis keeps the
@@ -685,6 +822,15 @@ export function ModelPanel(props: Props) {
           ))
         )}
       </section>
+      )}
+      {addingText && (
+        <TextPrimitiveDialog
+          onCreate={(spec) => {
+            setAddingText(false);
+            props.onAddText(spec);
+          }}
+          onClose={() => setAddingText(false)}
+        />
       )}
     </>
   );

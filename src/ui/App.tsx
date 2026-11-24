@@ -47,6 +47,7 @@ import {
   defaultCylinder,
   seedPrimitiveIds,
 } from './primitives';
+import { textPrimitiveFromSpec, type TextSpec } from './textPrimitive';
 import { parseDxf } from '../core/dxfImport';
 import { encodeBinaryStl, stepMeshesToSoup, STEP_TESSELLATION } from '../core/stepImport';
 import { parseSvgPaths } from '../core/vectorImport';
@@ -1120,6 +1121,15 @@ export function App() {
     }
     if (!prim) prim = kind === 'cylinder' ? defaultCylinder(stock) : defaultBox(stock);
     const p = prim;
+    setPrimitives((prev) => [...prev, p]);
+    setSelectedObjectId(p.id);
+  };
+
+  /** "+ Text" (2026-11-24): the dialog's spec → a laid-out text primitive.
+   *  The stock picks the frame like artworkFromImport: flat on the crown,
+   *  wrapped on the rotation axis. */
+  const addText = (spec: TextSpec) => {
+    const p = textPrimitiveFromSpec(spec, stock);
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
   };
@@ -2437,6 +2447,7 @@ export function App() {
               }
               onDeletePrimitive={deletePrimitive}
               onAddPrimitive={addPrimitive}
+              onAddText={addText}
               pickingWrapDiameter={
                 featurePick?.kind === 'wrapDiameter' && featurePick.opId === selectedObjectId
               }

@@ -6,29 +6,29 @@
  * materializeGreyscaleWedge (jobGeneration.ts) and hands them to
  * props.onGenerate. Laser-only: both gates on a laser tool existing.
  *
- * Panel text speaks in the plan's own terms (band COUNT, the returned band
- * height, the warnings list) — the >10 band cap clamps silently the same
- * way the cutting coupon's cell counts cap, so the text never invents a
- * "requested" number the plan didn't honor.
+ * Panel text speaks in the plan's own terms (the interlace ladder, the
+ * wedge's band COUNT and returned band height, the warnings list) — caps
+ * clamp silently the same way the cutting coupon's cell counts cap, so
+ * the text never invents a "requested" number the plan didn't honor.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  DEFAULT_COLUMN_SPACING_MM,
   DEFAULT_WEDGE_BAND_MM,
   DEFAULT_WEDGE_MIN_POWER,
   planGreyscaleWedge,
-  planInterlaceCoupon,
   type GreyscaleWedgePlan,
-  type InterlaceCouponPlan,
 } from '../cam/rasterCoupons';
-import { RASTER_PITCH_MM } from '../cam/rasterEngrave';
 import type { Tool } from '../core/types';
 import { toolOptionLabel } from './toolNames';
 import {
   materializeGreyscaleWedge,
   materializeInterlaceCoupon,
+  planInterlaceCouponV2,
+  interlaceLabel,
   laserCouponLadder,
+  INTERLACE_PATCH_MM,
+  type InterlaceCouponV2,
 } from './jobGeneration';
 import { NumberField } from './fields';
 import type { CalibrationPanelProps } from './CalibrationLauncher';
@@ -81,22 +81,18 @@ export function InterlaceCouponDialog(props: CalibrationPanelProps) {
   const lasers = lasersForCoupons(props.tools);
   const initial = lasers.find((t) => t.id === props.initialToolId) ?? lasers[0];
   const [laserId, setLaserId] = useState(initial?.id ?? '');
-  const [pitch, setPitch] = useState(RASTER_PITCH_MM);
-  const [columnSpacing, setColumnSpacing] = useState(DEFAULT_COLUMN_SPACING_MM);
   useEscape(props.onClose);
 
   const laser = lasers.find((t) => t.id === laserId) ?? initial;
-  // the two burn slots the materializer fills — the planner takes the same span
-  const slot = useMemo(() => laserCouponLadder(props.stock, 2), [props.stock]);
 
-  const result: PlanResult<InterlaceCouponPlan> = useMemo(() => {
+  const result: PlanResult<InterlaceCouponV2> = useMemo(() => {
     if (!laser) return { plan: null, error: null };
     try {
-      return { plan: planInterlaceCoupon(slot.span, { pitch, columnSpacing }), error: null };
+      return { plan: planInterlaceCouponV2(props.stock), error: null };
     } catch (e) {
       return { plan: null, error: String(e instanceof Error ? e.message : e) };
     }
-  }, [laser, slot, pitch, columnSpacing]);
+  }, [laser, props.stock]);
 
   const generate = () => {
     if (!laser || !result.plan) return;
@@ -115,46 +111,34 @@ export function InterlaceCouponDialog(props: CalibrationPanelProps) {
           </button>
         </h2>
         <p className="cal-intro">
-          Two identical grids of single-pixel columns, one burned{' '}
-          <strong>serpentine</strong>, one <strong>one-way</strong>, stacked as separate bitmaps
-          over the stock. If the serpentine's reverse rows misalign, the columns land offset from
-          the one-way set — that offset is the value for the raster op's <strong>interlace</strong>{' '}
-          field.
+          Nine small patches burned in <strong>one pass</strong> — a 1×1cm grid of single-pixel
+          columns each, at interlace offsets −0.48 to +0.48mm in 0.12mm steps, zero included.
+          Each patch carries a text label naming its setting.
         </p>
 
         <LaserSelect {...props} laserId={laserId} onPick={setLaserId} lasers={lasers} />
-        {laser && (
-          <div className="cal-axes">
-            <NumberField
-              label="Pixel pitch (mm)"
-              value={pitch}
-              min={0.02}
-              step={0.01}
-              title="spacing of the burn's rows and columns, mm — 0.1 is the Studio pitch; finer is slower"
-              onCommit={setPitch}
-            />
-            <NumberField
-              label="Column spacing (mm)"
-              value={columnSpacing}
-              min={0.2}
-              step={0.1}
-              title="gap between coupon columns, mm — snaps to whole pixels at the pitch"
-              onCommit={setColumnSpacing}
-            />
-          </div>
-        )}
 
         {result.plan && (
           <div className="cal-legend">
             <p className="hint">
-              {result.plan.columns.length} columns × {result.plan.grid.height} rows at{' '}
-              {result.plan.pitch}mm pitch, burned twice (serpentine lowest, one-way above it)
+              ladder:{' '}
+              {result.plan.ladder.map((v) => (
+                <strong key={v}>{interlaceLabel(v)} </strong>
+              ))}
+              — {result.plan.rows} row{result.plan.rows === 1 ? '' : 's'} ×{' '}
+              {result.plan.perRow} patches of {INTERLACE_PATCH_MM}×{INTERLACE_PATCH_MM}mm,{' '}
+              {result.plan.gap}mm between blocks, labels at {result.plan.labelCap}mm cap
             </p>
             <p className="hint">
-              the read: burn the coupon, compare the two column sets with a loupe or camera, and
-              enter the measured offset (mm) into the <strong>serpentine</strong> op's interlace
-              field — the knob shifts the reverse-row fired runs; a POSITION error only, it will
-              not fix run-start fade-in (that lever is min power or lead-in).
+              total size ≈ {result.plan.size.x.toFixed(0)} × {result.plan.size.y.toFixed(0)}mm on
+              the stock{result.plan.rows > 1 ? ` (${result.plan.rows} rows across the span)` : ''}
+            </p>
+            <p className="hint">
+              the read: burn once, compare the 9 patches with a loupe or camera — the{' '}
+              <strong>sharpest</strong>, cleanest patch's label is your interlace offset value.
+              Enter it in the raster op's <strong>Interlace offset (mm)</strong> field: a POSITION
+              fix on serpentine reverse rows only — it will NOT fix run-start fade-in (that lever
+              is min power or lead-in).
             </p>
           </div>
         )}

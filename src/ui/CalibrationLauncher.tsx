@@ -48,7 +48,7 @@ export const CALIBRATION_GENERATORS: CalibrationGeneratorEntry[] = [
     id: 'laser-interlace',
     label: 'Laser interlacing',
     ideogram: '⇄',
-    hint: 'burn single-pixel columns serpentine and one-way; the shift between them calibrates the interlace field',
+    hint: 'nine small 1cm patches at interlace offsets −0.48…+0.48mm, one pass — the sharpest patch labels your interlace offset',
     component: InterlaceCouponDialog,
   },
   {
@@ -86,8 +86,8 @@ export function CalibrationLauncher(props: {
           </button>
         </h2>
         <p className="cal-intro">
-          Each generator cuts or burns a coupon over the <strong>whole stock</strong> as ordinary
-          toolpaths — examine them, toggle them, save the result as your own calibration job.
+          Each generator cuts or burns a calibration coupon as ordinary toolpaths — examine them,
+          toggle them, save the result as your own calibration job.
         </p>
         <div className="cal-launch">
           {CALIBRATION_GENERATORS.map((g) => (
