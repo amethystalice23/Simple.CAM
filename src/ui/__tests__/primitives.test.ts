@@ -234,7 +234,8 @@ describe('seedPrimitiveIds', () => {
 });
 
 // DITHERED-BITMAP artwork (SPEC 2026-11-23): the Confirm-path constructor —
-// the RAW grayscale lands on the primitive, flat face only.
+// the RAW grayscale lands on the primitive (the wrapped kernel image is
+// derived at generation, round 3).
 describe('bitmapFromImport', () => {
   it("fits the image aspect inside a box stock's flat top extents", () => {
     const p = bitmapFromImport(gray(100, 200), boxStock, { name: 'photo.png' });
@@ -280,11 +281,46 @@ describe('bitmapFromImport', () => {
     expect(p.height).toBeCloseTo(50);
   });
 
-  it('a 4-axis cylinder fits the axial length × Ø strip above the crown', () => {
-    const p = bitmapFromImport(gray(400, 100), cylinderStock);
+  it('a 4-axis cylinder wraps: image width around, image height along X (round 3, transposed)', () => {
+    // round 3 (2026-11-24): Alice's transposed mapping — the image's
+    // WIDTH runs AROUND, its HEIGHT ALONG the tube. The face rect keeps
+    // the kernel contract (width = the axial span, 100 long; height =
+    // the arc around Ø50): the axial edge carries the image's height
+    // (400 px over 100 mm) and the arc carries its width — 100 px over
+    // 100 × (100/400) = 25 mm of arc
+    const p = bitmapFromImport(gray(100, 400), cylinderStock);
     if (p.kind !== 'bitmap') return;
-    // extents 100 (length) × 50 (Ø), aspect 4 → width-bound: 100 × 25
-    expect(p.width).toBeCloseTo(100);
-    expect(p.height).toBeCloseTo(25);
+    expect(p.presentation).toBe('wrapped');
+    expect(p.wrapDiameter).toBeCloseTo(50);
+    expect(p.width).toBeCloseTo(100); // axial: the image's height
+    expect(p.height).toBeCloseTo(25); // arc: the image's width
+    // the wrapped face sits ON THE AXIS (the generator's on-axis check),
+    // never on the crown
+    expect(p.transform.position).toEqual({ x: 50, y: 0, z: 0 });
+  });
+
+  it('a wide image force-scales down past one turn (the >360° ruling, transposed fit)', () => {
+    // the image's WIDTH runs the arc now: aspect W/H = 4 → the arc would
+    // be 100 · 4 = 400 mm — over the 2πR = 157.08 circumference. One
+    // uniform scale-down: 157.08/400 = 0.3927, face 39.27 (axial) ×
+    // 157.08 (arc), and the confirming UI gets the applied scale.
+    const seen: number[] = [];
+    const p = bitmapFromImport(gray(400, 100), cylinderStock, { name: 'wide.png' }, (s) =>
+      seen.push(s),
+    );
+    if (p.kind !== 'bitmap') return;
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeCloseTo((2 * Math.PI * 25) / 400, 6);
+    expect(p.width).toBeCloseTo(100 * seen[0], 6);
+    expect(p.height).toBeCloseTo(2 * Math.PI * 25, 6);
+  });
+
+  it('a tall image under one turn reports no scale (the transposed default)', () => {
+    // round 3: a TALL image (100 × 400) fits the default Ø50×100 stock —
+    // arc 25 mm, axial 100 mm — exactly what force-scaled under the
+    // round-2 mapping
+    const seen: number[] = [];
+    bitmapFromImport(gray(100, 400), cylinderStock, undefined, (s) => seen.push(s));
+    expect(seen).toHaveLength(0);
   });
 });

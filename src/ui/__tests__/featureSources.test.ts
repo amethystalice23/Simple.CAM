@@ -6,6 +6,8 @@ import { detectFeatures, type DetectedFeatures } from '../../cam/features';
 import {
   artworkLocalPoints,
   artworkSnapGeometry,
+  bitmapKernelGray,
+  bitmapSnapGeometry,
   expandHalftonePaths,
   opEdgeSource,
   parseNamespacedId,
@@ -486,7 +488,7 @@ describe('stockAxisInModelSpace', () => {
 
 // DITHERED-BITMAP artwork sources (SPEC 2026-11-23)
 describe('sourcesFor: bitmap artwork source', () => {
-  const bitmapPrim = (id: string): Primitive => ({
+  const bitmapPrim = (id: string): Extract<Primitive, { kind: 'bitmap' }> => ({
     kind: 'bitmap',
     id,
     sourceName: 'photo.png',
@@ -512,6 +514,55 @@ describe('sourcesFor: bitmap artwork source', () => {
     const r = resolveFeature(sources, 'p:prim-1:bitmap:0');
     expect(r).not.toBeNull();
     expect(r!.kind).toBe('bitmap');
+  });
+
+  it('a wrapped presentation publishes the wrapped frame (round 2)', () => {
+    const wrapped = { ...bitmapPrim('prim-2'), presentation: 'wrapped' as const, wrapDiameter: 50 };
+    const [src] = sourcesFor(null, null, identityTransform(), [wrapped]);
+    expect(src.artworkFrame).toEqual({ kind: 'wrapped', diameter: 50 });
+  });
+
+  it('wrapped snap geometry bends the face onto its Ø (bbox reads the curve)', () => {
+    const wrapped = { ...bitmapPrim('prim-3'), presentation: 'wrapped' as const, wrapDiameter: 50 };
+    const geo = bitmapSnapGeometry(wrapped);
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox!;
+    // Ø50, face 20 wide × 10 of arc: arc ±5 mm of the centered window
+    // bends the arc edges to y = 25·sin(±0.2) = ±4.9667, z ≈ 24.5–25 —
+    // NOT a flat rect's z=0 and ±5
+    expect(bb.min.x).toBeCloseTo(-10);
+    expect(bb.max.x).toBeCloseTo(10);
+    expect(bb.min.y).toBeCloseTo(25 * Math.sin(-0.2), 4);
+    expect(bb.max.y).toBeCloseTo(25 * Math.sin(0.2), 4);
+    // the arc samples step 2 mm of s, so the nearest to the window's
+    // center is ±1 mm → the crown z sits just shy of the Ø
+    expect(bb.max.z).toBeCloseTo(25 * Math.cos(1 / 25), 4);
+    expect(bb.max.z - bb.min.z).toBeGreaterThan(0.01);
+  });
+});
+
+describe('bitmapKernelGray: the kernel image under the transposed wrap (round 3)', () => {
+  it('transposes with both axes flipped: image top toward +X, left edge at the around-origin', () => {
+    // image 2 cols × 3 rows:
+    //   A B
+    //   C D
+    //   E F   (A..F = 10..60)
+    // The kernel bitmap (columns = axial X, rows burned bottom-first from
+    // the around-origin) must be:
+    //   row 0 (high arc)  F D B
+    //   row 1 (low arc)   E C A
+    // — kernel row ny−1 = image column 0 (the LEFT edge at the
+    // around-origin) scanned small-X → high-X as E, C, A (so the image's
+    // TOP, A, lands at +X), ascending A reads the image left→right.
+    const img = {
+      width: 2,
+      height: 3,
+      data: Uint8Array.from([10, 20, 30, 40, 50, 60]),
+    };
+    const k = bitmapKernelGray(img);
+    expect(k.width).toBe(3); // the image's rows run axial
+    expect(k.height).toBe(2); // the image's columns run the arc
+    expect(Array.from(k.data)).toEqual([60, 40, 20, 50, 30, 10]);
   });
 });
 

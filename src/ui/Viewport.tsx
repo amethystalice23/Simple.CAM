@@ -9,7 +9,7 @@ import type { FeaturePickKind, ModelTransform, Move, Primitive, Stock, Vec2 } fr
 import { movesToSegmentMoves } from './toolpathPreview';
 import { sliceAtZ, transformedPositions } from '../cam/slicing';
 import type { FeatureSource } from './featureSources';
-import { primitiveGeometry, primitivePose } from './featureSources';
+import { bitmapWrappedLocalPoint, primitiveGeometry, primitivePose } from './featureSources';
 import { segmentsForRadius } from './meshSegments';
 import { NavCube } from './navcube';
 import { bitmapFaceOutline, buildFeatureOverlayData, connectorLine, findNearestFeatures, hoverLineGeometry, measureText, pickFromNearest, planeHighlightMesh, planePick, pxPerMmAt, sampleVisibleAt, transformFn, PATH_COLOR, PATH_HOVER, PLANE_SELECT, SELECT_COLOR, GLOBAL_SELECT_COLOR,
@@ -259,6 +259,57 @@ interface Props {
    *  there is a way to bulk select paths"): every path feature with a
    *  point inside the screen rect — the caller unions them in. */
   onBoxSelect: (ids: string[]) => void;
+}
+
+/**
+ * The WRAPPED bitmap's curved strip geometry: the face bends onto the
+ * bitmap's own Ø (round 2, 2026-11-24; round 3 — Alice's transposed
+ * mapping — the IMAGE WIDTH runs AROUND, the IMAGE HEIGHT along the tube,
+ * image LEFT edge at the low arc, image TOP toward +X). The arc window
+ * stays centered at local angle 0. The angle derives from the
+ * ARCHITECTURAL radius (wrapDiameter/2) so the wrap math matches the
+ * burn; the RENDER radius sits +0.05 radially out (the wrap-shade's
+ * round-4 lift) so the strip never z-fights the stock. UVs carry the
+ * mapping: u 0→1 runs the ARC from the around-origin (image LEFT) up —
+ * image left→right = ascending A; v 0→1 runs AXIAL from the small-X end
+ * (v 0 = canvas BOTTOM, the image's bottom row) to +X (canvas top) —
+ * CanvasTexture's default flipY puts the canvas' bottom row at v 0 and
+ * its top row at v 1, exactly the top-toward-+X convention.
+ */
+const BITMAP_STRIP_MAX_EDGE_MM = 2; // the wrap-shade's fineness rule
+const BITMAP_STRIP_SEGMENTS_CAP = 720; // a full-turn face never exceeds this
+function bitmapStripGeometry(
+  p: Extract<Primitive, { kind: 'bitmap' }>,
+  diameter: number,
+): THREE.BufferGeometry {
+  const r0 = diameter / 2;
+  const rr = r0 + 0.05; // radial lift off the crown
+  const seg = Math.min(BITMAP_STRIP_SEGMENTS_CAP, Math.max(2, Math.ceil(p.height / BITMAP_STRIP_MAX_EDGE_MM)));
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  for (let i = 0; i <= seg; i++) {
+    const s = -p.height / 2 + (p.height * i) / seg; // low arc = image LEFT edge
+    const u = i / seg;
+    for (const [x, v] of [
+      [-p.width / 2, 0], // small X = the image's bottom row (v 0)
+      [p.width / 2, 1], // +X = the image's top row (v 1)
+    ] as const) {
+      const q = bitmapWrappedLocalPoint(diameter, x, s);
+      const scale = rr / r0;
+      positions.push(q.x, q.y * scale, q.z * scale);
+      uvs.push(u, v);
+    }
+  }
+  const indices: number[] = [];
+  for (let i = 0; i < seg; i++) {
+    const a = 2 * i;
+    indices.push(a, a + 1, a + 3, a, a + 3, a + 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  return geo;
 }
 
 /**
@@ -913,7 +964,14 @@ export function Viewport({
         const b = source?.features.bitmaps?.[0];
         if (source && b) {
           const xf = transformFn(source.transform);
-          const loop = bitmapFaceOutline(b.width, b.height, xf);
+          // wrapped bitmaps bend the hover loop onto their Ø (the strip
+          // the raycast just hit)
+          const loop = bitmapFaceOutline(
+            b.width,
+            b.height,
+            xf,
+            source.artworkFrame?.kind === 'wrapped' ? source.artworkFrame : null,
+          );
           const positions: number[] = [];
           for (let i = 0; i < loop.length; i++) {
             const a = loop[i];
@@ -1795,8 +1853,16 @@ export function Viewport({
         const b = entry.source.features.bitmaps?.[sel.index];
         if (b) {
           const xf = transformFn(entry.source.transform);
+          // wrapped bitmaps bend the highlight loop onto their Ø (round 2)
           const loop = new THREE.LineLoop(
-            new THREE.BufferGeometry().setFromPoints(bitmapFaceOutline(b.width, b.height, xf)),
+            new THREE.BufferGeometry().setFromPoints(
+              bitmapFaceOutline(
+                b.width,
+                b.height,
+                xf,
+                entry.source.artworkFrame?.kind === 'wrapped' ? entry.source.artworkFrame : null,
+              ),
+            ),
             new THREE.LineBasicMaterial({ color: selColor, transparent: true, depthTest: false }),
           );
           loop.renderOrder = 6;
@@ -2535,6 +2601,13 @@ export function Viewport({
         // heightmap/preview corpus settled the flip: CanvasTexture's
         // default flipY maps the canvas' TOP row to the plane's +y, which
         // is exactly the artworkLocalPoints convention; no re-derivation.
+        // WRAPPED: the face bends onto the bitmap's own Ø (round 2; round
+        // 3 the transposed mapping) — a curved strip over its arc window,
+        // radial +0.05 lift (the wrap-shade's round-4 lift) to clear the
+        // stock. UVs carry the recorded convention: canvas u runs the ARC
+        // from the around-origin (image LEFT edge, left→right = ascending
+        // A); canvas v runs AXIAL (v 0 = the image's bottom row at the
+        // small-X end, v 1 = its top row at +X — top toward +X).
         const gw = Math.max(p.gray.width, 1);
         const gh = Math.max(p.gray.height, 1);
         const cv = document.createElement('canvas');
@@ -2553,17 +2626,21 @@ export function Viewport({
         const tex = new THREE.CanvasTexture(cv);
         tex.colorSpace = THREE.SRGBColorSpace;
         const sel = p.id === selectedObjectId;
-        const mesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(p.width, p.height),
-          new THREE.MeshBasicMaterial({
-            map: tex,
-            side: THREE.DoubleSide,
-            depthTest: false, // feature-overlay x-ray reading, like the amber lines
-            color: sel ? 0xffe0a0 : 0xffffff, // the selected tint, on map
-          }),
-        );
+        const wrapped =
+          p.presentation === 'wrapped' && p.wrapDiameter && p.wrapDiameter > 0
+            ? { diameter: p.wrapDiameter }
+            : null;
+        const mat = new THREE.MeshBasicMaterial({
+          map: tex,
+          side: THREE.DoubleSide,
+          depthTest: false, // feature-overlay x-ray reading, like the amber lines
+          color: sel ? 0xffe0a0 : 0xffffff, // the selected tint, on map
+        });
+        const geo = wrapped ? bitmapStripGeometry(p, wrapped.diameter) : new THREE.PlaneGeometry(p.width, p.height);
+        const mesh = new THREE.Mesh(geo, mat);
         mesh.userData = { sourceId: p.id, bitmapFeatureId: `p:${p.id}:bitmap:0` };
         const pose = primitivePose(p); // never hand-compose rotations
+        if (wrapped) pose.quaternion.identity(); // round 3: wrapped rotation is the IMAGE'S — the strip's 3D transform never rotates (a restored job's stale rotationDeg cannot turn the tube)
         mesh.position.copy(pose.position);
         mesh.quaternion.copy(pose.quaternion);
         mesh.scale.copy(pose.scale);

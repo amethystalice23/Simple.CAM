@@ -840,9 +840,12 @@ function describeBitmap(r: ResolvedFeature): FeatureKnowledge {
         why: 'burn this image with the laser — a dithered 1-bit raster at constant power',
       },
     ],
-    notes: [
-      { text: 'flat artwork only — wrapped/4th-axis raster is not available yet' },
-    ],
+    // wrapped raster shipped 2026-11-24 (round 2): a wrapped presentation's
+    // rows step around in A — no longer flat-only
+    notes:
+      r.source.artworkFrame?.kind === 'wrapped'
+        ? [{ text: 'wrapped raster: rows burn around the part — A steps the scanlines' }]
+        : [],
   };
 }
 

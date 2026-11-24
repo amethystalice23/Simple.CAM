@@ -82,6 +82,7 @@ import { simStepDownFor } from '../sim/stepDown';
 import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
+import { Toasts, useToasts } from './Toasts';
 import { OpsPanel } from './OpsPanel';
 import { OP_KIND_COLORS } from './opColors';
 import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from './opSuggest';
@@ -186,6 +187,9 @@ export function App() {
    * always says what just happened instead of going stale (Alice,
    * 2026-11-11). Null = the fallback defaults (model dims / drop hint). */
   const [statusNote, setStatusNote] = useState<string | null>(null);
+  // transient notices (the Toasts pattern — ToolPanel had it first): the
+  // wrapped-raster drop's forced >360° scale-down warns here
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
   const [tab, setTab] = useState<Tab>('stock');
@@ -1067,12 +1071,22 @@ export function App() {
   };
 
   /** A DITHERED-BITMAP confirm (SPEC 2026-11-23): the RAW grayscale lands
-   *  as one bitmap artifact — same flat branch as the halftone artwork
-   *  (face dims fit the aspect inside the flat top extents; center, crown).
-   *  Dithering happens when the rasterEngrave op generates, never here:
-   *  the method is material-dependent intent. */
+   *  as one bitmap artifact — 3-axis keeps the flat branch (face dims fit
+   *  the aspect inside the flat top extents; center, crown); 4-axis wraps
+   *  (round 2, 2026-11-24; round 3 the transposed mapping — image width
+   *  around, image height along X). bitmapFromImport is the single
+   *  placement choke point: a wrapped fit over one turn comes back
+   *  force-scaled (Alice's 2026-11-24 ruling — 360° is the ceiling) and
+   *  the applied scale warns here as a toast. Dithering happens when the
+   *  rasterEngrave op generates, never here: the method is
+   *  material-dependent intent. */
   const confirmBitmapArtwork = (name: string, gray: GrayBitmap) => {
-    const p = bitmapFromImport(gray, stock, { name });
+    const p = bitmapFromImport(gray, stock, { name }, (scale) =>
+      pushToast(
+        `would wrap past one turn — scaled the artwork ×${scale.toFixed(2)} to fit 360°`,
+        'warn',
+      ),
+    );
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
     setStatusNote(`imported bitmap artwork ${name}`);
@@ -2624,6 +2638,7 @@ export function App() {
           onClose={() => setShowSimulate(false)}
         />
       )}
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

@@ -720,9 +720,21 @@ export type Primitive =
        */
       gray: { width: number; height: number; data: Uint8Array };
       /** face dims, mm — the bitmap stretches onto the face, image row
-       *  0 (TOP) at height (the halftone v-down-flip convention) */
+       *  0 (TOP) at height (the halftone v-down-flip convention).
+       *  WRAPPED (`presentation: 'wrapped'`): width stays the AXIAL span
+       *  (machine X) and height is the ARC LENGTH around wrapDiameter —
+       *  the raster's rows step in A, so the around dimension is the
+       *  height. The UI force-scales a face taller than one turn. */
       width: number;
       height: number;
+      /** absent = 'flat' (old saves): the face strip above the crown.
+       *  'wrapped' bends the face onto wrapDiameter around the rotation
+       *  axis — the wrapped raster's cutting-surface declaration, the
+       *  artwork primitive's own-Ø convention. */
+      presentation?: 'flat' | 'wrapped';
+      /** wrapped: the bitmap's OWN cylinder Ø (mm). Pre-filled from the
+       *  stock at drop time, then independent like the artwork's. */
+      wrapDiameter?: number;
       transform: ModelTransform;
     };
 
@@ -1261,8 +1273,9 @@ export type JobOp =
        * LASER RASTER ENGRAVE (docs/PLAN.md "Laser raster engrave", SPEC
        * 2026-11-23): dithered 1-bit burn of a BITMAP artwork at constant
        * power, mirroring the Studio "Laser Image" dialect. Laser tool
-       * only; flat artwork only in v1 (wrapped/4th-axis raster deferred).
-       * Power/feed ride the same ⚡→preset→tool chain as engrave (the
+       * only; flat artwork burns the strip above the crown, wrapped
+       * artwork (round 2, 2026-11-24) burns around the part — rows step
+       * in A. Power/feed ride the same ⚡→preset→tool chain as engrave (the
        * spindleRpm slot is beam power %).
        */
       /** pixel pitch, mm (default 0.1 — the measured Studio corpus) */

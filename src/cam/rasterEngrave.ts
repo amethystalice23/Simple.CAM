@@ -18,8 +18,14 @@
  *    fired run re-stamps S), so a lit corner pixel burns from the run
  *    that reaches it, never from the corner move itself.
  *
- * FLAT ONLY in v1 (the spec defers wrapped/4th-axis raster — row → A,
- * G93 rules apply). The dither itself is src/core/dither.ts; the
+ * WRAPPED (`frame`, 2026-11-24): the face reinterprets on the cylinder —
+ * width = machine X (axial), height = ARC length around the stock, and the
+ * rows step in A, not Y. The raster NEVER folds the row step into the last
+ * X span there (a fold would be a coordinated X+A move → G93): serpentine
+ * row steps are pure-A beam-off G1s at ROTARY_FEED_DEG_MIN; one-way row
+ * steps are axis-separate rapids (a coordinated rapid would run at the
+ * rotary clamp — engrave.ts precedent). NO move carries both x and a —
+ * G93 never appears. The dither itself is src/core/dither.ts; the
  * artwork stays grayscale and the method applies here, at the op.
  *
  * Knobs beyond pitch/feed/power (the spec's piece 3):
@@ -55,6 +61,7 @@ import {
   resampleGray,
   type DitherMethod,
 } from '../core/dither';
+import { ROTARY_FEED_DEG_MIN, shortestATo } from './faceCylinder';
 
 /** the SPEC default pitch — the Studio corpus runs 0.1 mm both axes */
 export const RASTER_PITCH_MM = 0.1;
@@ -69,14 +76,20 @@ export interface RasterEngraveParams {
   /** the grayscale ARTWORK (row 0 = image top) — never dithered upstream;
    *  the method applies here, at the op (material-dependent intent) */
   bitmap: GrayBitmap;
-  /** the artwork's face size, mm — the bitmap stretches onto it */
+  /** the artwork's face size, mm — the bitmap stretches onto it.
+   *  FLAT: width/height are machine X/Y. WRAPPED (`frame` present): width
+   *  is the AXIAL span (machine X), height is the ARC LENGTH around the
+   *  cylinder — the UI force-scales it under the circumference; the
+   *  generator still guards. */
   face: { width: number; height: number };
   /** machine-space position of the face rect's corner with the smaller
    *  X and Y (the bottom-left in a standard frame) — the caller maps the
    *  artwork primitive's transform; the raster runs [x, x+width] ×
-   *  [y, y+height] */
+   *  [y, y+height]. WRAPPED: x is the machine X of the small-X edge, y is
+   *  the arc-mm of the artwork's LEADING edge (row 0's A derives from it) */
   origin: { x: number; y: number };
-  /** machine Z of the engraved plane (the face rides at focus above it) */
+  /** machine Z of the engraved plane (the face rides at focus above it).
+   *  WRAPPED: the crown Z of the stock cylinder */
   surfaceZ: number;
   /** pixel pitch, mm (default RASTER_PITCH_MM) — the image resamples to
    *  round(face/pitch) pixels, effective pitch re-derives from the face */
@@ -98,6 +111,22 @@ export interface RasterEngraveParams {
   interlace?: number;
   /** mm of lit travel before each fired run's leading edge (default 0) */
   leadIn?: number;
+  /** WRAPPED (4th-axis) frame — absent = FLAT, byte-identical behavior */
+  frame?: RasterWrappedFrame;
+}
+
+/** WRAPPED (4th-axis): burn the artwork around the stock cylinder —
+ *  axial = machine X, arc = A. Row j burns at
+ *  datumAngle + (origin.y + (j + 0.5)·py)·degPerMm,
+ *  degPerMm = 180/(π·radius). A accumulates continuously past 360°. */
+export interface RasterWrappedFrame {
+  kind: 'wrapped';
+  /** stock radius, mm (>0) */
+  radius: number;
+  /** machine A before the op (positioning origin) */
+  startA: number;
+  /** machine A when the around-origin sits at arc 0 */
+  datumAngle: number;
 }
 
 export interface RasterEngraveResult {
@@ -136,12 +165,36 @@ export function rasterEngrave(op: RasterEngraveParams): RasterEngraveResult {
   const method = op.method ?? DEFAULT_DITHER_METHOD;
   const firedPower = Math.min(1, Math.max(op.power, op.minPower ?? 0));
 
+  // WRAPPED frame guards — after the shared ones, so a wrapped call with
+  // a bad shared param still throws the FLAT message
+  const frame = op.frame;
+  let degPerMm = 0;
+  if (frame) {
+    if (!(frame.radius > 0)) throw new Error('radius must be positive');
+    const circumference = 2 * Math.PI * frame.radius;
+    if (op.face.height > circumference) {
+      throw new Error(
+        `artwork arc ${op.face.height.toFixed(2)}mm exceeds the cylinder circumference ` +
+          `${circumference.toFixed(2)}mm — scale the artwork to fit`,
+      );
+    }
+    degPerMm = 180 / (Math.PI * frame.radius);
+  }
+
   // the grid: round(face/pitch) pixels, effective pitch re-derived so the
   // raster spans the face EXACTLY (the resample is the op's tone step)
   const nx = Math.max(1, Math.round(op.face.width / pitch));
   const ny = Math.max(1, Math.round(op.face.height / pitch));
   const px = op.face.width / nx;
   const py = op.face.height / ny;
+  // row 0's absolute A: the machine's accumulated A takes the SHORTEST
+  // rotation to row 0's arc position — never unwind the pile (engrave.ts
+  // precedent); rows then ascend monotonically from it (steps are small
+  // and one-directional, so no shortestATo between rows)
+  const aRow0 = frame
+    ? frame.startA +
+      shortestATo(frame.datumAngle + (op.origin.y + 0.5 * py) * degPerMm, frame.startA)
+    : 0;
   const grid = resampleGray(op.bitmap, nx, ny);
   const bits = ditherGray(grid, method, { pitch: px, screenSpacing: op.screenSpacing });
 
@@ -229,8 +282,16 @@ export function rasterEngrave(op: RasterEngraveParams): RasterEngraveResult {
 
   // the ONE positioning rapid + the op's one Z move to focus height
   // (the post arms M3 after it; from here the beam can only meet the
-  // surface — same ordering contract as engraveLaser)
-  moves.push({ words: { x: x0mm, y: ym(0) }, feed: 0, rapid: true });
+  // surface — same ordering contract as engraveLaser).
+  // WRAPPED positions axis-separate (engrave.ts precedent — a coordinated
+  // rapid would run at the rotary clamp): A to row 0's arc center, then X
+  // to the near edge, then the focus Z.
+  if (frame) {
+    moves.push({ words: { a: aRow0 }, feed: 0, rapid: true });
+    moves.push({ words: { x: x0mm }, feed: 0, rapid: true });
+  } else {
+    moves.push({ words: { x: x0mm, y: ym(0) }, feed: 0, rapid: true });
+  }
   moves.push({ words: { z: op.surfaceZ + op.focus }, feed: 0, rapid: true, comment: 'laser focus height' });
 
   let curX = x0mm;
@@ -238,6 +299,9 @@ export function rasterEngrave(op: RasterEngraveParams): RasterEngraveResult {
     const dir = sweep === 'serpentine' ? (j % 2 === 0 ? 1 : -1) : 1;
     const runs = rows[j];
     const yNext = j + 1 < ny ? ym(j + 1) : null;
+    // WRAPPED: rows ascend monotonically in A — each row steps exactly
+    // py·degPerMm of arc from the previous one (no shortestATo here)
+    const aNext = frame && j + 1 < ny ? aRow0 + (j + 1) * py * degPerMm : null;
 
     /** emit one traversal span at raster feed; stamps the S word on the
      *  span (the post is modal — a same-power move emits no S) */
@@ -267,27 +331,56 @@ export function rasterEngrave(op: RasterEngraveParams): RasterEngraveResult {
     }
     if (Math.abs(far - x) > 1e-9) spans.push({ toX: far, lit: false });
 
-    // emit; the row step folds into the LAST span when it is beam-off,
-    // otherwise a pure-Y beam-off corner move follows (dialect form)
-    for (let s = 0; s < spans.length; s++) {
-      const last = s === spans.length - 1;
-      if (last && spans[s].lit) {
-        span(spans[s].toX, true, false);
-        if (yNext !== null) {
-          moves.push({ words: { y: yNext }, feed: op.feed, power: 0 });
-          minutes += py / op.feed;
-        }
-      } else {
-        span(spans[s].toX, spans[s].lit, last && yNext !== null);
+    if (frame) {
+      // WRAPPED: rows scan X at fixed A; the step NEVER folds into the
+      // last span (a fold would be a coordinated X+A move → G93).
+      // Serpentine steps are pure-A beam-off G1s at the rotary limit;
+      // one-way steps are axis-separate rapids (a coordinated rapid would
+      // run at the rotary clamp — engrave.ts precedent).
+      for (let s = 0; s < spans.length; s++) {
+        span(spans[s].toX, spans[s].lit, false);
       }
-    }
+      if (aNext !== null) {
+        if (sweep === 'serpentine') {
+          moves.push({ words: { a: aNext }, feed: ROTARY_FEED_DEG_MIN, power: 0 });
+          minutes += (py * degPerMm) / ROTARY_FEED_DEG_MIN;
+        } else {
+          // the QUALITY mode: return as rapids — constant speed is already
+          // broken by the turnaround (deliberate divergence from Studio,
+          // spec's wording). A fired last span (the run reached the far
+          // edge, no beam-off gap) extinguishes bare first — the flat
+          // pure-Y corner move's wrapped form.
+          if (spans[spans.length - 1].lit) {
+            moves.push({ words: {}, feed: op.feed, power: 0 });
+          }
+          moves.push({ words: { a: aNext }, feed: 0, rapid: true });
+          moves.push({ words: { x: x0mm }, feed: 0, rapid: true });
+          curX = x0mm;
+        }
+      }
+    } else {
+      // emit; the row step folds into the LAST span when it is beam-off,
+      // otherwise a pure-Y beam-off corner move follows (dialect form)
+      for (let s = 0; s < spans.length; s++) {
+        const last = s === spans.length - 1;
+        if (last && spans[s].lit) {
+          span(spans[s].toX, true, false);
+          if (yNext !== null) {
+            moves.push({ words: { y: yNext }, feed: op.feed, power: 0 });
+            minutes += py / op.feed;
+          }
+        } else {
+          span(spans[s].toX, spans[s].lit, last && yNext !== null);
+        }
+      }
 
-    if (sweep === 'one-way' && yNext !== null) {
-      // the QUALITY mode: return above the work as a rapid — constant
-      // speed is already broken by the turnaround, so the return buys
-      // nothing (deliberate divergence from Studio, spec's wording)
-      moves.push({ words: { x: x0mm, y: yNext }, feed: 0, rapid: true });
-      curX = x0mm;
+      if (sweep === 'one-way' && yNext !== null) {
+        // the QUALITY mode: return above the work as a rapid — constant
+        // speed is already broken by the turnaround, so the return buys
+        // nothing (deliberate divergence from Studio, spec's wording)
+        moves.push({ words: { x: x0mm, y: yNext }, feed: 0, rapid: true });
+        curX = x0mm;
+      }
     }
   }
 

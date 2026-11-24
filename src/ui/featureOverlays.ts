@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import type { CircleFeature, ModelTransform, Vec3 } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 import { densifyWrappedPath } from './artworkFillRegions';
+import { bitmapWrappedLocalPoint } from './featureSources';
 
 /** In-plane extent of a plane group's member-triangle footprint. */
 export interface PlaneExtent {
@@ -414,22 +415,48 @@ const round1 = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(1));
  * hover line pushes the closing segment). Drawn wherever overlays draw,
  * never in hoverLineGeometry (already 'bitmap'-shaped, deliberately
  * empty).
+ * WRAPPED (`wrapped` given): the loop bends onto the bitmap's own Ø —
+ * the same bitmapWrappedLocalPoint the Viewport's curved strip renders —
+ * and the arc edges densify (~2 mm) so the drawn outline rides the
+ * curve. The kernel's v-down reading puts the image BOTTOM edge at the
+ * low arc (−h/2), matching the burn's around-origin end.
  */
 export function bitmapFaceOutline(
   width: number,
   height: number,
   xf: (v: Vec3) => THREE.Vector3,
+  wrapped?: { diameter: number } | null,
 ): THREE.Vector3[] {
-  return (
-    [
-      { x: -width / 2, y: -height / 2, z: 0 },
-      { x: width / 2, y: -height / 2, z: 0 },
-      { x: width / 2, y: height / 2, z: 0 },
-      { x: -width / 2, y: height / 2, z: 0 },
-      // the flat artwork convention: local centered frame → the
-      // primitive's transform places it like artwork's path points
-    ] as Vec3[]
-  ).map((v) => xf(v));
+  if (!wrapped || !(wrapped.diameter > 0)) {
+    return (
+      [
+        { x: -width / 2, y: -height / 2, z: 0 },
+        { x: width / 2, y: -height / 2, z: 0 },
+        { x: width / 2, y: height / 2, z: 0 },
+        { x: -width / 2, y: height / 2, z: 0 },
+        // the flat artwork convention: local centered frame → the
+        // primitive's transform places it like artwork's path points
+      ] as Vec3[]
+    ).map((v) => xf(v));
+  }
+  const D = wrapped.diameter;
+  const w = width / 2;
+  const h = height / 2;
+  const bend = (x: number, s: number): Vec3 => bitmapWrappedLocalPoint(D, x, s);
+  const arcSteps = Math.max(2, Math.ceil(height / 2));
+  const pts: Vec3[] = [
+    bend(-w, -h), // bottom edge (the burn's leading edge), −w → w
+    bend(w, -h),
+  ];
+  for (let i = 1; i < arcSteps; i++) {
+    pts.push(bend(w, -h + (height * i) / arcSteps)); // right arc edge up
+  }
+  pts.push(bend(w, h));
+  pts.push(bend(-w, h)); // top edge, w → −w
+  for (let i = arcSteps - 1; i > 0; i--) {
+    pts.push(bend(-w, -h + (height * i) / arcSteps)); // left arc edge down
+  }
+  return pts.map((v) => xf(v));
 }
 
 export function transformFn(t: ModelTransform): (v: Vec3) => THREE.Vector3 {
@@ -575,7 +602,7 @@ export function buildFeatureOverlayData(
   // and pick surface (raycast), so these lines must never enter the
   // per-path index machinery and shift every path highlight by one.
   for (const b of features.bitmaps ?? []) {
-    const loop = bitmapFaceOutline(b.width, b.height, xf);
+    const loop = bitmapFaceOutline(b.width, b.height, xf, wrapped);
     for (let i = 0; i < loop.length; i++) {
       const a = loop[i];
       const c = loop[(i + 1) % loop.length];

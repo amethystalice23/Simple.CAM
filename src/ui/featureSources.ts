@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import { rotateGray90 } from '../core/bitmapImport';
 import { detectFeatures, type DetectedFeatures, type DetectAxis } from '../cam/features';
 import { segmentsForRadius } from './meshSegments';
 import {
@@ -138,22 +139,99 @@ export function artworkSnapGeometry(
 }
 
 /**
+ * The WRAPPED bitmap's local bend (round 2, 2026-11-24; round 3 the same
+ * day — Alice's transposed-mapping ruling): the face rect bends onto the
+ * bitmap's OWN cylinder (`wrapDiameter`), axis ∥ local X (the
+ * wrapped-artwork primitive convention), the arc window centered at local
+ * angle 0 (the +Z top). Face width = the AXIAL span along local X — the
+ * image's HEIGHT runs along the tube (image top toward +X); face height =
+ * the ARC LENGTH around — the image's WIDTH runs the arc, ascending
+ * toward +Y — the A direction (atan2(y, z) sense everywhere the rotary
+ * math runs). ORIENTATION (the recorded default): the image's LEFT edge
+ * sits at the LOW-ARC end (s = −h/2, the around-origin) — image
+ * left→right = ascending A — and the image's TOP toward +X. Rotation is
+ * the IMAGE's (the Model tab's rotate buttons rewrite p.gray; the strip's
+ * 3D transform never rotates in wrapped mode). Callers pass (x, s) in
+ * face mm: x ∈ [−w/2, w/2] axial, s ∈ [−h/2, h/2] arc. Flat display
+ * (Viewport's PlaneGeometry) is the degenerate r → ∞.
+ */
+export function bitmapWrappedLocalPoint(
+  wrapDiameter: number,
+  x: number,
+  s: number,
+): { x: number; y: number; z: number } {
+  const r = wrapDiameter / 2;
+  const th = s / r; // arc mm → radians, ascending with A
+  return { x, y: r * Math.sin(th), z: r * Math.cos(th) };
+}
+
+/**
+ * The source image AS THE KERNEL CONSUMES IT for a wrapped face (round 3,
+ * 2026-11-24): the kernel's contract is face {width: AXIAL, height: ARC}
+ * with a bitmap whose columns run axial (grid col 0 at the small-X edge —
+ * runStart k·px from x0mm) and whose rows run the arc BURNED BOTTOM-FIRST
+ * from the around-origin (machine row j reads grid row ny−1−j). Under the
+ * transposed mapping — image WIDTH around, image HEIGHT along X, image
+ * LEFT edge at the around-origin, image TOP toward +X — that bitmap is
+ * the image TRANSPOSED with both axes flipped: kernel pixel (col c, row r)
+ * = image(col W−1−r, row H−1−c). Spot-check: kernel row ny−1 (burned
+ * first, at the around-origin) = image column 0 — the LEFT edge ✓; kernel
+ * col 0 (small X) = image row H−1 — the BOTTOM at −X, so the TOP lands
+ * at +X ✓. Concretely it is rotateGray90 (CW) followed by a vertical
+ * flip. Never touches the primitive — the stored image stays raw.
+ */
+export function bitmapKernelGray(
+  gray: { width: number; height: number; data: Uint8Array },
+): { width: number; height: number; data: Uint8Array } {
+  const { width: w, height: h, data } = rotateGray90(gray); // CW transpose
+  const out = new Uint8Array(w * h);
+  for (let r = 0; r < h; r++) {
+    for (let c = 0; c < w; c++) {
+      // flipV over the CW-rotated image
+      out[r * w + c] = data[(h - 1 - r) * w + c];
+    }
+  }
+  return { width: w, height: h, data: out };
+}
+
+/**
  * Snap geometry for a BITMAP artwork (SPEC 2026-11-23): the face rect in
  * the centered local frame — a plane at z=0 spanning width × height
  * (the Viewport's textured face). primitiveGeometry is empty by design
  * (raycast transparency), so like artwork its real bounds stand in.
+ * WRAPPED: the face bends onto its own cylinder — sample the four edges
+ * through bitmapWrappedLocalPoint so the bounding box the align/drop
+ * buttons snap with reads the curved body, not a phantom flat rect.
  */
 export function bitmapSnapGeometry(p: Extract<Primitive, { kind: 'bitmap' }>): THREE.BufferGeometry {
   const w = p.width / 2;
   const h = p.height / 2;
-  return new THREE.BufferGeometry().setFromPoints(
-    [
-      { x: -w, y: -h, z: 0 },
-      { x: w, y: -h, z: 0 },
-      { x: w, y: h, z: 0 },
-      { x: -w, y: h, z: 0 },
-    ].map((q) => new THREE.Vector3(q.x, q.y, q.z)),
-  );
+  if (p.presentation !== 'wrapped' || !(p.wrapDiameter && p.wrapDiameter > 0)) {
+    return new THREE.BufferGeometry().setFromPoints(
+      [
+        { x: -w, y: -h, z: 0 },
+        { x: w, y: -h, z: 0 },
+        { x: w, y: h, z: 0 },
+        { x: -w, y: h, z: 0 },
+      ].map((q) => new THREE.Vector3(q.x, q.y, q.z)),
+    );
+  }
+  // the four edges, densified enough for an honest bbox: vertical (arc)
+  // edges in 2 mm steps (wraps most of a turn on small stock), the axial
+  // edges straight so endpoints carry them
+  const pts: { x: number; y: number; z: number }[] = [];
+  const arcSteps = Math.max(2, Math.ceil(p.height / 2));
+  const xs = [-w, w];
+  for (const x of xs) {
+    for (let i = 0; i <= arcSteps; i++) {
+      pts.push(bitmapWrappedLocalPoint(p.wrapDiameter!, x, -h + (p.height * i) / arcSteps));
+    }
+  }
+  for (const end of [-h, h]) {
+    pts.push(bitmapWrappedLocalPoint(p.wrapDiameter!, -w, end));
+    pts.push(bitmapWrappedLocalPoint(p.wrapDiameter!, w, end));
+  }
+  return new THREE.BufferGeometry().setFromPoints(pts.map((q) => new THREE.Vector3(q.x, q.y, q.z)));
 }
 
 /** Pose for a primitive's render mesh: EXACTLY its ModelTransform. The
@@ -341,15 +419,19 @@ export function sourcesFor(
       continue;
     }
     if (p.kind === 'bitmap') {
-      // a raster artwork source: FLAT frame only in v1 (the spec defers
-      // wrapped/4th-axis raster), empty mesh (the Viewport draws the
-      // textured face plane)
+      // a raster artwork source: FLAT frame by default (the spec-deferred
+      // flat strip above the crown); WRAPPED presentation bends onto the
+      // bitmap's own Ø and the raster op coordinates A. Empty mesh (the
+      // Viewport draws the textured face — plane or curved strip).
       sources.push({
         id: p.id,
         geometry: new THREE.BufferGeometry(),
         features: bitmapFeatures(p),
         transform: p.transform,
-        artworkFrame: { kind: 'flat' },
+        artworkFrame:
+          p.presentation === 'wrapped'
+            ? { kind: 'wrapped', diameter: p.wrapDiameter ?? 0 }
+            : { kind: 'flat' },
       });
       continue;
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { rasterEngrave, MAX_RASTER_MOVES } from '../rasterEngrave';
+import { ROTARY_FEED_DEG_MIN } from '../faceCylinder';
 import type { GrayBitmap } from '../../core/bitmapImport';
 
 // ------------------------------------------------------------ helpers
@@ -280,5 +281,171 @@ describe('rasterEngrave — guards and time estimate', () => {
     const r = rasterEngrave({ ...BASE, bitmap: halfBlack(4, 4) });
     expect(r.firedPixels).toBe(8); // 2 px per row × 4 rows
     expect(r.firedRuns).toBe(4);
+  });
+});
+
+// ------------------------------------------------- wrapped (4th axis)
+
+describe('rasterEngrave — wrapped (4th-axis frame)', () => {
+  /** radius whose degPerMm is exactly 1: R = 180/π → circumference 360 */
+  const R1 = 180 / Math.PI;
+  const FRAME1 = { kind: 'wrapped' as const, radius: R1, startA: 0, datumAngle: 90 };
+  const degPerMm1 = 180 / (Math.PI * R1); // = 1 (to float precision)
+  /** 4×4 solid black, wrapped: rows step 1° of arc each */
+  const solidWrapped = { ...BASE, frame: FRAME1 };
+
+  const aMoves = (r: ReturnType<typeof rasterEngrave>) =>
+    r.moves.filter((m) => m.words.a !== undefined && !m.rapid);
+
+  it('flat mode stays byte-identical when frame is absent (guard)', () => {
+    const r = rasterEngrave({ ...BASE });
+    expect(r.moves).toEqual([
+      { words: { x: 0, y: 0.5 }, feed: 0, rapid: true },
+      { words: { z: 11 }, feed: 0, rapid: true, comment: 'laser focus height' },
+      { words: { x: 4 }, feed: 1000, power: 0.3 }, // row 0 (forward): lit edge to edge
+      { words: { y: 1.5 }, feed: 1000, power: 0 },
+      { words: { x: 0 }, feed: 1000, power: 0.3 }, // row 1 (reverse): lit back to the near edge
+      { words: { y: 2.5 }, feed: 1000, power: 0 },
+      { words: { x: 4 }, feed: 1000, power: 0.3 },
+      { words: { y: 3.5 }, feed: 1000, power: 0 },
+      { words: { x: 0 }, feed: 1000, power: 0.3 }, // row 3 (reverse, last): no corner after
+      { words: {}, feed: 1000, power: 0 },
+    ]);
+    expect(r.estimatedMinutes).toBeCloseTo(19 / 1000, 9);
+  });
+
+  it('row j burns at datumAngle + (origin.y + (j+0.5)·py)·degPerMm — pixel-row centers in arc', () => {
+    const r = rasterEngrave(solidWrapped);
+    // positioning rapid A = row 0's center
+    expect(r.moves[0].words.a).toBeCloseTo(90 + 0.5 * degPerMm1, 9);
+    // then each row ascends exactly py·degPerMm of arc
+    const as = aMoves(r).map((m) => (m.words as { a: number }).a);
+    expect(as.length).toBe(3);
+    for (let j = 1; j < 4; j++) {
+      expect(as[j - 1]).toBeCloseTo(90 + (0 + (j + 0.5) * 1) * degPerMm1, 9);
+    }
+  });
+
+  it('no move carries both x and a — G93 never appears (serpentine and one-way)', () => {
+    for (const sweep of ['serpentine', 'one-way'] as const) {
+      for (const bmp of [solid(4, 4, 0), halfBlack(4, 4), checker(4, 4)]) {
+        const r = rasterEngrave({ ...solidWrapped, bitmap: bmp, sweep });
+        for (const m of r.moves) {
+          expect(m.words.x === undefined || m.words.a === undefined).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('serpentine row steps are pure-A beam-off G1s at the rotary feed, ny−1 of them', () => {
+    const r = rasterEngrave({ ...solidWrapped, bitmap: halfBlack(4, 4) });
+    const steps = aMoves(r);
+    expect(steps.length).toBe(3); // ny − 1
+    for (const m of steps) {
+      expect(m.feed).toBe(ROTARY_FEED_DEG_MIN); // beam-OFF, deg/min
+      expect(m.power).toBe(0);
+      expect(m.rapid).toBeFalsy();
+    }
+    // no folded moves: no wrapped G1 carries a y word (the flat fold is gone)
+    expect(r.moves.some((m) => !m.rapid && m.words.x !== undefined && m.words.y !== undefined)).toBe(false);
+  });
+
+  it('one-way row steps are axis-separate rapids; a fired last span extinguishes bare first', () => {
+    // solid black: every run reaches the far edge — no beam-off gap, so
+    // each transition extinguishes bare (the flat corner move's wrapped
+    // form) before the A rapid and the X rapid
+    const r = rasterEngrave({ ...solidWrapped, bitmap: solid(4, 4, 0), sweep: 'one-way' });
+    const rapids = r.moves.filter((m) => m.rapid);
+    // opening a + x + z, then per transition: bare extinguish (G1) + a + x
+    expect(rapids.length).toBe(3 + 2 * 3);
+    const aRapids = rapids.filter((m) => m.words.a !== undefined);
+    expect(aRapids.length).toBe(4); // positioning + 3 transitions
+    for (const m of aRapids) expect(m.power).toBeUndefined(); // G0 never fires
+    const extinguishes = r.moves.filter(
+      (m) => !m.rapid && Object.keys(m.words).length === 0,
+    );
+    expect(extinguishes.length).toBe(4); // 3 bare transitions + the final one
+    // halfway bitmap: the last span per row is the beam-off far-edge gap —
+    // NO bare extinguish, just the two rapids per transition
+    const r2 = rasterEngrave({ ...solidWrapped, bitmap: halfBlack(4, 4), sweep: 'one-way' });
+    const bare2 = r2.moves.filter((m) => !m.rapid && Object.keys(m.words).length === 0);
+    expect(bare2.length).toBe(1); // final extinguish only
+    const aRapids2 = r2.moves.filter((m) => m.rapid && m.words.a !== undefined);
+    expect(aRapids2.length).toBe(4); // positioning + 3 transitions
+  });
+
+  it('A positions by the SHORTEST rotation from startA, then ascends monotonically', () => {
+    // startA 750: shortest rotation to row 0's arc (90.5°) is +60.5 —
+    // the pile never unwinds; rows then ascend 1° each (810.5, 811.5, …)
+    const r = rasterEngrave({
+      ...solidWrapped,
+      frame: { kind: 'wrapped', radius: R1, startA: 750, datumAngle: 90 },
+    });
+    const as = r.moves
+      .filter((m) => m.words.a !== undefined && !m.rapid)
+      .map((m) => (m.words as { a: number }).a);
+    expect(as.length).toBe(3);
+    as.forEach((a, i) => {
+      const j = i + 1;
+      expect(a).toBeCloseTo(810.5 + j, 9);
+      expect(a % 360).toBeCloseTo((90 + (j + 0.5) * degPerMm1) % 360, 9);
+      if (i > 0) expect(a).toBeGreaterThan(as[i - 1]); // monotone ascent
+    });
+  });
+
+  it('minutes: X spans at feed + serpentine A steps at the rotary rate (rapids excluded)', () => {
+    // solid black 4×4mm axial, 4 rows: 16mm of X at F1000, three 1°-of-arc
+    // steps at ROTARY_FEED_DEG_MIN deg/min
+    const r = rasterEngrave(solidWrapped);
+    const xMin = (4 * 4) / 1000;
+    const aMin = 3 * ((1 * degPerMm1) / ROTARY_FEED_DEG_MIN);
+    expect(r.estimatedMinutes).toBeCloseTo(xMin + aMin, 12);
+    // one-way: the A steps are rapids — minutes drop to the X travel alone
+    const ow = rasterEngrave({ ...solidWrapped, sweep: 'one-way' });
+    expect(ow.estimatedMinutes).toBeCloseTo(xMin, 12);
+  });
+
+  it('guards: artwork arc beyond the circumference throws; radius>0; shared messages kept', () => {
+    // R1 circumference = 360: height 361 exceeds, 360 exactly fits
+    expect(() =>
+      rasterEngrave({ ...BASE, frame: FRAME1, face: { width: 4, height: 361 }, bitmap: solid(4, 4, 0) }),
+    ).toThrow(/circumference/);
+    expect(() =>
+      rasterEngrave({ ...BASE, frame: FRAME1, face: { width: 4, height: 360 }, bitmap: solid(4, 4, 0) }),
+    ).not.toThrow();
+    expect(() =>
+      rasterEngrave({
+        ...BASE,
+        frame: { kind: 'wrapped', radius: 0, startA: 0, datumAngle: 0 },
+      }),
+    ).toThrow(/radius/);
+    // shared params keep the FLAT error messages
+    expect(() => rasterEngrave({ ...solidWrapped, feed: 0 })).toThrow(/raster feed must be positive/);
+    expect(() => rasterEngrave({ ...solidWrapped, pitch: 0 })).toThrow(/raster pitch/);
+    expect(() => rasterEngrave({ ...solidWrapped, bitmap: solid(4, 4, 255) })).toThrow(/nothing dark/);
+  });
+
+  it('sweep/interlace/leadIn semantics identical: same span sequence as the equivalent flat call', () => {
+    const xs = (r: ReturnType<typeof rasterEngrave>) =>
+      r.moves.filter((m) => !m.rapid && m.words.x !== undefined).map((m) => (m.words as { x: number }).x);
+    const powers = (r: ReturnType<typeof rasterEngrave>) =>
+      r.moves.filter((m) => !m.rapid && m.words.x !== undefined).map((m) => m.power);
+    for (const opts of [
+      { sweep: 'serpentine' as const, interlace: 0.5 },
+      { sweep: 'serpentine' as const, leadIn: 0.7, interlace: 0.3 },
+      { sweep: 'one-way' as const, leadIn: 0.7 },
+    ]) {
+      const args = {
+        ...BASE,
+        bitmap: halfBlack(6, 3),
+        face: { width: 6, height: 3 },
+        origin: { x: 10, y: 20 },
+        ...opts,
+      };
+      const flat = rasterEngrave(args);
+      const wrap = rasterEngrave({ ...args, frame: { ...FRAME1 } });
+      expect(xs(wrap)).toEqual(xs(flat));
+      expect(powers(wrap)).toEqual(powers(flat));
+    }
   });
 });

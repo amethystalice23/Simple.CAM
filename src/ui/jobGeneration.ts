@@ -71,7 +71,7 @@ import {
   type ThreadSourceTarget,
 } from './opTargets';
 import { transformFn } from './featureOverlays';
-import { boxTopFaceId, resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
+import { bitmapKernelGray, bitmapWrappedLocalPoint, boxTopFaceId, resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { nextPrimitiveId, unitTransform } from './primitives';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
 
@@ -732,15 +732,17 @@ function stockBottomOf(ctx: GenContext): number {
  * completion, Alice 2026-11-21: "the engine runs exactly as it was, the
  * WCS moves around it" — generation PRESENTS the stock/selection/model in
  * the section's frame and the generators stay frame-blind): the 2.5D
- * feature ops + the mesh-slicer ops (slice-pocket, waterline, raster —
+ * feature ops (pocket, profile, drill, chamfer, threadMill, index,
+ * fixture) + the mesh-slicer ops (slicePocket, waterline, rasterContour —
  * positions presented via the cutting frame) + cylChamfer (edge circles
- * mapped) + engrave's FLAT artwork (wrapped stays loud-fail inside the
- * op) + the stock-parametric rotary ops (face cylinder, spiral carve,
- * thread — a 4-axis section's re-clamp keeps the axis-fixed calibration;
- * the A datum already resets at the fixture barrier, and the X fields
- * author against the section's re-zeroed WCS). Still failing loud:
- * rotary contour/4D carve/swarf (their cross-orientation standing state
- * is the 4D roadmap), engrave wrapped.
+ * mapped) + engrave's and rasterEngrave's FLAT artwork (wrapped stays
+ * loud-fail inside the op) + the stock-parametric rotary ops (face
+ * cylinder, spiral carve, thread — a 4-axis section's re-clamp keeps the
+ * axis-fixed calibration; the A datum already resets at the fixture
+ * barrier, and the X fields author against the section's re-zeroed WCS).
+ * Still failing loud: rotary contour/4D carve/swarf (their
+ * cross-orientation standing state is the 4D roadmap), engrave wrapped,
+ * rasterEngrave wrapped.
  */
 const SECTION_FRAME_OPS = new Set([
   'pocket', 'profile', 'drill', 'chamfer', 'threadMill', 'index', 'fixture',
@@ -3178,7 +3180,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         // LASER RASTER ENGRAVE (SPEC 2026-11-23): the dithered 1-bit
         // burn of a BITMAP artwork at constant power, mirroring the
         // Studio "Laser Image" dialect. The artwork stays grayscale —
-        // the method applies here, at the op.
+        // the method applies here, at the op. WRAPPED (round 2, 2026-11-
+        // 24): a wrapped presentation burns around the part — the frame
+        // is the artwork's own (part-ABSOLUTE like engrave: its angular
+        // position is set in the Model tab, the cut ignores the index
+        // rotation), the face's width stays the axial span and its
+        // height becomes the arc length the rows step in A.
         const SEL = 'select bitmap artwork (import an image — the import dialogue’s dithered-bitmap tab)';
         if (tool.type !== 'laser') {
           return fail('raster engrave needs the laser module — pick the laser from the tool library');
@@ -3191,8 +3198,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         const faces: {
           prim: Extract<Primitive, { kind: 'bitmap' }>;
           rect: { origin: { x: number; y: number }; surfaceZ: number };
+          /** non-null when the face wraps — the 4th-axis frame the rows
+           *  step in A through (src/cam/rasterEngrave's RasterWrappedFrame) */
+          frame: { kind: 'wrapped'; radius: number; startA: number; datumAngle: number } | null;
         }[] = [];
         for (const part of parts) {
+          const aw = part.source.artworkFrame;
           for (const id of part.ids) {
             const r = resolveFeature(ctx.sources, id);
             if (!r || r.kind !== 'bitmap') {
@@ -3205,11 +3216,82 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             ) as Extract<Primitive, { kind: 'bitmap' }> | undefined;
             if (!prim) return fail('the bitmap artwork is missing — reimport the image');
             const xf0 = transformFn(part.source.transform);
+            const w = prim.width;
+            const h = prim.height;
+            if (aw?.kind === 'wrapped') {
+              // the wrapped face: columns axial along machine X, rows A.
+              // Part-absolute like engrave's wrapped artwork — no index
+              // rotation, no section framing (a framed section's WCS
+              // re-presents flat artwork; the wrapped θ cannot follow).
+              if (faces.some((f) => !f.frame)) {
+                return fail('one raster op cuts in one frame — split flat and wrapped artwork into separate ops');
+              }
+              if (ctx.sectionFrame) {
+                return fail(
+                  'wrapped artwork cannot run in a re-clamped (fixture) section yet — ' +
+                    'flat artwork presents in the section frame, wrapped does not; ' +
+                    'plan it above the fixture or as its own setup',
+                );
+              }
+              if (sectionModeOf(ctx) !== '4-axis') {
+                return fail(fourAxisGate('wrapped raster engraving', ctx));
+              }
+              const diameter = aw.diameter;
+              const radius = diameter / 2;
+              // the face's four corners through the bitmap's own bend
+              // (bitmapWrappedLocalPoint: the image LEFT edge sits at the
+              // low arc — the around-origin, image left→right = ascending
+              // A — and the image TOP toward +X; the recorded convention of
+              // the transposed mapping) then out through the primitive
+              // transform
+              const bend = (x: number, s: number) =>
+                xf0(bitmapWrappedLocalPoint(diameter, x, s));
+              const c0 = bend(-w / 2, -h / 2);
+              const c1 = bend(w / 2, -h / 2);
+              const c2 = bend(w / 2, h / 2);
+              const c3 = bend(-w / 2, h / 2);
+              const corners = [c0, c1, c2, c3];
+              const axisZ = rotaryCalibrationOf(ctx.stock).axisZ;
+              for (const c of corners) {
+                if (Math.abs(Math.hypot(c.y, c.z - axisZ) - radius) > 0.05) {
+                  return fail(
+                    'the wrapped bitmap must sit ON the stock axis — move it back ' +
+                      'onto the axis before raster engraving',
+                  );
+                }
+              }
+              // the axial (image-column) edges must run along machine X —
+              // raster cannot follow a Y/Z-rotated artwork (Studio's can't
+              // either; the image IS the face)
+              if (
+                Math.hypot(c1.y - c0.y, c1.z - c0.z) > 0.05 ||
+                Math.hypot(c3.y - c2.y, c3.z - c2.z) > 0.05
+              ) {
+                return fail(
+                  'the wrapped bitmap must sit square to the machine axes — raster columns run along X; unrotate it in the Model tab',
+                );
+              }
+              // the around-origin (kernel origin.y): arc-mm of the LOW-ARC
+              // edge — the burn's leading edge, the image's LEFT edge under
+              // the transposed mapping. Like engrave's
+              // wrapped branch, the artwork's angular position is
+              // absolute, so the datum does NOT rotate in (datumAngle 0);
+              // the machine's A approach takes startA.
+              const circ = Math.PI * diameter;
+              const originY = ((Math.atan2(c0.y, c0.z - axisZ) * 180) / Math.PI / 360) * circ;
+              faces.push({
+                prim,
+                frame: { kind: 'wrapped', radius, startA: ctx.startA, datumAngle: 0 },
+                rect: {
+                  origin: { x: Math.min(c0.x, c1.x, c2.x, c3.x), y: originY },
+                  surfaceZ: axisZ + radius,
+                },
+              });
+              continue;
+            }
             const { rotate } = cuttingRotate(ctx);
             const map = (pt: { x: number; y: number }) =>
               rotate ? rotate(xf0({ x: pt.x, y: pt.y, z: 0 })) : xf0({ x: pt.x, y: pt.y, z: 0 });
-            const w = prim.width;
-            const h = prim.height;
             const corners = [
               map({ x: -w / 2, y: -h / 2 }),
               map({ x: w / 2, y: -h / 2 }),
@@ -3238,8 +3320,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
                 'the bitmap artwork must sit square to the machine axes — raster rows run along X; unrotate it in the Model tab',
               );
             }
+            if (faces.some((f) => f.frame)) {
+              return fail('one raster op cuts in one frame — split flat and wrapped artwork into separate ops');
+            }
             faces.push({
               prim,
+              frame: null,
               rect: {
                 origin: { x: Math.min(...xs), y: Math.min(...ys) },
                 surfaceZ: zs[0],
@@ -3259,7 +3345,12 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
           for (const f of faces) {
             const res = rasterEngrave({
               toolId: tool.id,
-              bitmap: f.prim.gray,
+              // the kernel contract (face {width: axial, height: arc}, bitmap
+              // columns axial + rows burned bottom-first from the around-
+              // origin) under the transposed mapping takes the image
+              // TRANSPOSED with both axes flipped (bitmapKernelGray); flat
+              // faces keep the image as-is
+              bitmap: f.frame ? bitmapKernelGray(f.prim.gray) : f.prim.gray,
               face: { width: f.prim.width, height: f.prim.height },
               origin: f.rect.origin,
               surfaceZ: f.rect.surfaceZ,
@@ -3273,6 +3364,7 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               sweep: op.sweep,
               interlace: op.interlace,
               leadIn: op.leadIn ?? 0,
+              ...(f.frame ? { frame: f.frame } : {}),
             });
             // one op = ONE beam session: subsequent faces continue at
             // raster feed (an extinguish + G0 reposition between faces,
@@ -3288,13 +3380,17 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
         }
         const sweepLabel = op.sweep === 'one-way' ? 'one-way' : 'serpentine';
         const methodLabel = op.method ?? 'atkinson';
+        const wrappedFace = faces.find((f) => f.frame);
+        const wrappedLabel = wrappedFace
+          ? ` · wrapped Ø${(wrappedFace.frame!.radius * 2).toFixed(1)}mm, ${wrappedFace.prim.height.toFixed(1)}mm arc`
+          : '';
         return {
           moves,
           minutes,
           error: null,
           summary:
             `${faces.length} bitmap${faces.length === 1 ? '' : 's'}, ${sweepLabel} ${methodLabel}, ` +
-            `pitch ${pitch}mm, ${firedRuns} fired run(s), ~${minutes.toFixed(1)} min`,
+            `pitch ${pitch}mm, ${firedRuns} fired run(s)${wrappedLabel}, ~${minutes.toFixed(1)} min`,
         };
       }
 

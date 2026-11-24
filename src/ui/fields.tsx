@@ -56,6 +56,9 @@ export function NumInput(props: {
   min?: number;
   step?: number;
   onCommit: (v: number) => void;
+  /** inert display — wrapped bitmaps' transform rotation is locked (round
+   * 3: rotation is the image's, the tube never turns) */
+  disabled?: boolean;
 }) {
   const [text, setText] = useState(String(props.value));
   // keep the field in sync when the value is changed elsewhere (e.g. a snap)
@@ -71,6 +74,7 @@ export function NumInput(props: {
       type="number"
       step={props.step ?? 1}
       value={text}
+      disabled={props.disabled}
       onChange={(e) => commit(e.target.value)}
     />
   );

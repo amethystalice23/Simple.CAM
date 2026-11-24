@@ -3431,3 +3431,130 @@ describe('generation in a fixture (re-clamped) section', () => {
     expect(String(stockRes.error)).not.toMatch(/re-clamped/);
   });
 });
+
+// ------------------------------------------ rasterEngrave wrapped (round 2)
+describe('rasterEngrave — wrapped bitmap (4th-axis frame)', () => {
+  const laser: Tool = { id: 'l1', name: 'laser module', type: 'laser', diameter: 0.1, spindleRpm: 80 };
+  const bmpId = 'prim-bmp';
+  const bmp = (over: Partial<Extract<Primitive, { kind: 'bitmap' }>> = {}): Primitive => ({
+    kind: 'bitmap',
+    id: bmpId,
+    gray: { width: 4, height: 4, data: new Uint8Array(16).fill(0) }, // solid black
+    width: 20, // the axial span
+    height: 30, // the arc around Ø50
+    presentation: 'wrapped',
+    wrapDiameter: 50,
+    transform: identityTransform(), // on the axis (axisZ 0), wrap centered at +Z top
+    ...over,
+  });
+  const ctxFor = (primitive: Primitive, stock: Stock): GenContext => ({
+    stock,
+    geometry: null,
+    features: null,
+    transform: identityTransform(),
+    tools: [laser],
+    primitives: [primitive],
+    sources: sourcesFor(null, null, identityTransform(), [primitive]),
+    datumAngle: 0,
+    startA: 0,
+  });
+  const op: JobOp = {
+    kind: 'rasterEngrave',
+    id: 'raster-1',
+    toolId: 'l1',
+    featureIds: [`p:${bmpId}:bitmap:0`],
+  };
+
+  it('builds the wrapped frame: A positions at the around-origin row, cuts carry X only', () => {
+    const res = generateJobOp(op, ctxFor(bmp(), cylStock));
+    expect(res.error).toBeNull();
+    const moves = res.moves;
+    // Ø50 → degPerMm = 180/(25π); origin.y = arc-mm of the LOW-ARC edge —
+    // the image's LEFT edge under the round-3 transposed mapping —
+    // θ_local(−h/2)·r = (−0.6)(25) = −15 mm; the burn's first row
+    // sits origin.y + 0.5·py (py = 0.1) → A = −34.264°, taken the short way
+    // from startA 0
+    const position = moves.findIndex((m) => m.rapid && m.words.a !== undefined);
+    expect(position).toBe(0);
+    expect(moves[position].words.a).toBeCloseTo(-15 * (180 / (Math.PI * 25)) + 0.05 * (180 / (Math.PI * 25)), 3);
+    // row 0's axial positioning: X to the face's small-X edge, then the
+    // focus Z (surface 25 + focus 1)
+    const xRapid = moves.find((m) => m.rapid && m.words.x !== undefined)!;
+    expect(xRapid.words.x).toBeCloseTo(-10, 6);
+    expect(moves.find((m) => m.rapid && m.words.z !== undefined)!.words.z).toBeCloseTo(26, 6);
+    // NO cut move carries both x and a; the row steps are pure-A G1s at
+    // the rotary rate (deg/min)
+    for (const m of moves) {
+      if (m.rapid) continue;
+      expect(m.words.x === undefined || m.words.a === undefined).toBe(true);
+      if (m.words.a !== undefined && !m.words.x && !m.words.y) {
+        expect(m.feed).toBe(ROTARY_FEED_DEG_MIN);
+      }
+    }
+    expect(res.summary).toContain('wrapped Ø50.0mm, 30.0mm arc');
+  });
+
+  it('burns the TRANSPOSED image (round 3): image top lands at +X, left edge at the around-origin', () => {
+    // image 2×2, black ONLY at its top-left pixel. The kernel bitmap is
+    // the image transposed with both axes flipped (bitmapKernelGray), so
+    // the pixel lands at kernel col 1, row 1 → on a pitch-1 face 20×30 it
+    // fires x ∈ [0, 10) (the HIGH-X half — the image's TOP toward +X) on
+    // machine rows 0..14 (the LOW-ARC half — the image's LEFT edge at the
+    // burn's around-origin).
+    const corner = bmp({
+      gray: { width: 2, height: 2, data: Uint8Array.from([0, 255, 255, 255]) },
+      width: 20,
+      height: 30,
+    });
+    const res = generateJobOp({ ...op, pitch: 1 }, ctxFor(corner, cylStock));
+    expect(res.error).toBeNull();
+    const fired = res.moves.filter((m) => !m.rapid && (m.power ?? 0) > 0 && m.words.x !== undefined);
+    expect(fired.length).toBeGreaterThan(0);
+    for (const m of fired) {
+      expect(m.words.x!).toBeGreaterThan(-1e-9);
+      expect(m.words.x!).toBeLessThanOrEqual(10 + 1e-9);
+    }
+  });
+
+  it('flat behavior is untouched: a flat bitmap still burns the strip (G94, Y steps)', () => {
+    const flat = bmp({ presentation: undefined, wrapDiameter: undefined });
+    const res = generateJobOp(op, ctxFor(flat, { ...cylStock, axisMode: '3-axis' }));
+    expect(res.error).toBeNull();
+    // same flat-shape contract as before round 2: positioning rapid at
+    // the face rect's min corner, first row at the pixel-row CENTER
+    // (origin.y + 0.5·py)
+    expect(res.moves[0]).toEqual({
+      words: { x: -10, y: -14.95 },
+      feed: 0,
+      rapid: true,
+    });
+    expect(res.moves.some((m) => m.words.a !== undefined)).toBe(false);
+  });
+
+  it('a wrapped bitmap off the stock axis fails loud with the engrave wording', () => {
+    const off = bmp({ transform: { ...identityTransform(), position: { x: 0, y: 0, z: 5 } } });
+    const res = generateJobOp(op, ctxFor(off, cylStock));
+    expect(res.error).toMatch(/must sit ON the stock axis/);
+  });
+
+  it('flat and wrapped artwork in one op refuses to mix frames', () => {
+    const flat = bmp({ id: 'prim-flat', presentation: undefined, wrapDiameter: undefined });
+    const ctx = ctxFor(bmp(), cylStock);
+    ctx.primitives = [bmp(), flat];
+    ctx.sources = sourcesFor(null, null, identityTransform(), ctx.primitives);
+    const res = generateJobOp({ ...op, featureIds: [`p:${bmpId}:bitmap:0`, 'p:prim-flat:bitmap:0'] }, ctx);
+    expect(res.error).toMatch(/one frame/);
+  });
+
+  it('a wrapped bitmap in a re-clamped section loud-fails (the engrave rule)', () => {
+    const ctx = {
+      ...ctxFor(bmp(), cylStock),
+      // a framed section: present machine coords unchanged (the map itself
+      // is irrelevant — the wrap must refuse before it runs)
+      sectionFrame: (p: { x: number; y: number; z: number }) =>
+        new THREE.Vector3(p.x, p.y, p.z),
+    };
+    const res = generateJobOp(op, ctx);
+    expect(res.error).toMatch(/wrapped artwork cannot run in a re-clamped/);
+  });
+});

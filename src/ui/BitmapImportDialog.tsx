@@ -12,7 +12,13 @@
  * something sized related"); rotary depth defaults to r/2 ("maybe r/2").
  * The geometry choice is BY STOCK — box stock yields a flat relief,
  * cylinder stock one wrapped on the rotation axis. The dithered-bitmap
- * face is FLAT ONLY (the raster op defers wrapped/4th-axis raster).
+ * face follows the same by-stock choice (round 2, 2026-11-24; round 3 —
+ * Alice's transposed mapping — the IMAGE WIDTH runs around, the IMAGE
+ * HEIGHT along the tube): 3-axis sits flat on the top extents, 4-axis
+ * wraps the image's width around the stock, force-scaled under one turn
+ * (the >360° ruling). The Rotate 90° button turns the IMAGE — in wrapped
+ * mode the fit re-runs on the new aspect (a 90° swap re-checks the
+ * one-turn force-scale), never turning the tube.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -23,7 +29,7 @@ import { heightmapBoxGeometry, heightmapCylinderGeometry } from '../core/heightm
 import { halftoneArtwork } from '../core/halftone';
 import { rotaryCalibrationOf, type Stock } from '../core/types';
 import type { ImportedArtwork } from '../core/vectorImport';
-import { bitmapFaceDims } from './primitives';
+import { bitmapFaceDims, bitmapWrappedFit } from './primitives';
 import { NumberField } from './fields';
 
 export type BitmapImportResult =
@@ -225,10 +231,19 @@ export function BitmapImportDialog(props: Props) {
   }, [gray, face, spacing, angleDeg]);
   const dots = useMemo(() => (halftone.art ? dotsOf(halftone.art) : []), [halftone.art]);
 
-  // The dithered-bitmap face (FLAT ONLY — never wraps): the image's aspect
-  // fitted inside the flat top extents. Recomputed on the current gray so
-  // the rotate button moves the readout and the Confirm agrees with it.
+  // The dithered-bitmap face (round 2, 2026-11-24; round 3 transposed):
+  // 3-axis fits the flat top extents; 4-axis WRAPS — bitmapWrappedFit
+  // pins the face's axial edge (its width) to the stock X span carrying
+  // the IMAGE'S HEIGHT, and the face's arc edge carries the IMAGE'S
+  // WIDTH — force-scaled under one turn (Alice's 2026-11-24 ruling).
+  // Recomputed on the current gray so the rotate button moves the
+  // readout and the Confirm agrees with it.
+  const isRotary = stock.axisMode === '4-axis';
   const bitmapFace = useMemo(() => bitmapFaceDims(gray, stock), [gray, stock]);
+  const fit = useMemo(
+    () => (isRotary ? bitmapWrappedFit(gray, stock) : null),
+    [gray, stock, isRotary],
+  );
 
   const blocked =
     tab === 'heightmap'
@@ -353,9 +368,14 @@ export function BitmapImportDialog(props: Props) {
               so one import suits any material
             </p>
             <p className="hint">
-              fits the stock top at {bitmapFace.width.toFixed(1)} × {bitmapFace.height.toFixed(1)} mm
-              {stock.axisMode === '4-axis' && stock.kind === 'cylinder'
-                ? ' (flat strip above the crown — raster never wraps)'
+              {stock.axisMode === '4-axis'
+                ? `wraps ${bitmapFace.height.toFixed(1)} mm of arc (the image's width runs around) × ${bitmapFace.width.toFixed(1)} mm along the axis (the image's height)` +
+                  (stock.kind === 'cylinder'
+                    ? ` — ${(bitmapFace.height / (2 * Math.PI * rotaryCalibrationOf(stock).effectiveRadius) * 360).toFixed(0)}° of the turn, left edge at the around-origin`
+                    : '')
+                : `fits the stock top at ${bitmapFace.width.toFixed(1)} × ${bitmapFace.height.toFixed(1)} mm`}
+              {fit && fit.scale < 1
+                ? ` · scaled ×${fit.scale.toFixed(2)} to fit one turn`
                 : ''}
             </p>
           </>
