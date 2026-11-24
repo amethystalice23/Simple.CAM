@@ -81,6 +81,10 @@ export function InterlaceCouponDialog(props: CalibrationPanelProps) {
   const lasers = lasersForCoupons(props.tools);
   const initial = lasers.find((t) => t.id === props.initialToolId) ?? lasers[0];
   const [laserId, setLaserId] = useState(initial?.id ?? '');
+  // the range boxes (Alice's follow-up ruling): the ladder derives from
+  // these live — prefill −0.5…+0.5 gives 5 + 5 steps of 0.1 plus the zero
+  const [from, setFrom] = useState(-0.5);
+  const [to, setTo] = useState(0.5);
   useEscape(props.onClose);
 
   const laser = lasers.find((t) => t.id === laserId) ?? initial;
@@ -88,14 +92,16 @@ export function InterlaceCouponDialog(props: CalibrationPanelProps) {
   const result: PlanResult<InterlaceCouponV2> = useMemo(() => {
     if (!laser) return { plan: null, error: null };
     try {
-      return { plan: planInterlaceCouponV2(props.stock), error: null };
+      return { plan: planInterlaceCouponV2(props.stock, from, to), error: null };
     } catch (e) {
       return { plan: null, error: String(e instanceof Error ? e.message : e) };
     }
-  }, [laser, props.stock]);
+  }, [laser, props.stock, from, to]);
+
+  const degenerate = result.plan !== null && result.plan.values.length < 2;
 
   const generate = () => {
-    if (!laser || !result.plan) return;
+    if (!laser || !result.plan || degenerate) return;
     const { ops, primitives } = materializeInterlaceCoupon(result.plan, props.stock, laser);
     if (ops.length === 0) return;
     props.onGenerate(ops, primitives);
@@ -111,34 +117,59 @@ export function InterlaceCouponDialog(props: CalibrationPanelProps) {
           </button>
         </h2>
         <p className="cal-intro">
-          Nine small patches burned in <strong>one pass</strong> — a 1×1cm grid of single-pixel
-          columns each, at interlace offsets −0.48 to +0.48mm in 0.12mm steps, zero included.
-          Each patch carries a text label naming its setting.
+          Small 1×1cm patches burned in <strong>one pass</strong> — a grid of single-pixel columns
+          each, at interlace offsets across the range you set. The nonzero settings split into two
+          rows (ascending left→right); the zero reference burns as its own column beside them,
+          centered across the seam. Every patch carries a text label naming its setting.
         </p>
 
         <LaserSelect {...props} laserId={laserId} onPick={setLaserId} lasers={lasers} />
+        {laser && (
+          <div className="cal-axes">
+            <NumberField
+              label="From (mm)"
+              value={from}
+              step={0.01}
+              title="the range's low end, signed mm — the ladder's first patch burns exactly here"
+              onCommit={setFrom}
+            />
+            <NumberField
+              label="To (mm)"
+              value={to}
+              step={0.01}
+              title="the range's high end, signed mm — the last patch burns exactly here; zero is always included when it falls inside the range"
+              onCommit={setTo}
+            />
+          </div>
+        )}
 
         {result.plan && (
           <div className="cal-legend">
             <p className="hint">
               ladder:{' '}
-              {result.plan.ladder.map((v) => (
+              {result.plan.values.map((v) => (
                 <strong key={v}>{interlaceLabel(v)} </strong>
               ))}
-              — {result.plan.rows} row{result.plan.rows === 1 ? '' : 's'} ×{' '}
-              {result.plan.perRow} patches of {INTERLACE_PATCH_MM}×{INTERLACE_PATCH_MM}mm,{' '}
-              {result.plan.gap}mm between blocks, labels at {result.plan.labelCap}mm cap
+              — step {result.plan.steps.map((s) => s.toFixed(3)).join(' / ')}mm
+            </p>
+            <p className="hint">
+              {result.plan.values.length} patches of {INTERLACE_PATCH_MM}×{INTERLACE_PATCH_MM}mm —
+              row 1: {result.plan.row1.length}, row 2: {result.plan.row2.length}
+              {result.plan.zero !== null ? ', zero column beside the rows' : ''};{' '}
+              {result.plan.gap.toFixed(1)}mm between blocks (fits{' '}
+              {result.plan.labelWidth.toFixed(1)}mm labels at {result.plan.labelCap}mm cap)
             </p>
             <p className="hint">
               total size ≈ {result.plan.size.x.toFixed(0)} × {result.plan.size.y.toFixed(0)}mm on
-              the stock{result.plan.rows > 1 ? ` (${result.plan.rows} rows across the span)` : ''}
+              the stock
             </p>
             <p className="hint">
-              the read: burn once, compare the 9 patches with a loupe or camera — the{' '}
-              <strong>sharpest</strong>, cleanest patch's label is your interlace offset value.
-              Enter it in the raster op's <strong>Interlace offset (mm)</strong> field: a POSITION
-              fix on serpentine reverse rows only — it will NOT fix run-start fade-in (that lever
-              is min power or lead-in).
+              the read: burn once, compare the patches with a loupe or camera — the{' '}
+              <strong>sharpest</strong>, cleanest patch's label is your interlace offset value
+              (the zero column is the unmodified reference to judge against). Enter it in the
+              raster op's <strong>Interlace offset (mm)</strong> field: a POSITION fix on
+              serpentine reverse rows only — it will NOT fix run-start fade-in (that lever is min
+              power or lead-in).
             </p>
           </div>
         )}
@@ -154,7 +185,7 @@ export function InterlaceCouponDialog(props: CalibrationPanelProps) {
           <button type="button" className="secondary" onClick={props.onClose}>
             Cancel
           </button>
-          <button type="button" onClick={generate} disabled={!laser || !result.plan}>
+          <button type="button" onClick={generate} disabled={!laser || !result.plan || degenerate}>
             Generate Toolpaths
           </button>
         </div>

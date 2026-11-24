@@ -12,9 +12,11 @@ import type { JobOp, Primitive, Stock, Tool } from '../../core/types';
 import { rotaryCalibrationOf } from '../../core/types';
 import { bitmapKernelGray, sourcesFor } from '../featureSources';
 import {
+  deriveInterlaceLadder,
   generateJobOp,
-  INTERLACE_LADDER_MM,
-  INTERLACE_BLOCK_GAP_MM,
+  INTERLACE_GAP_CLEARANCE_MM,
+  INTERLACE_MAX_PER_SIDE,
+  INTERLACE_MIN_BLOCK_GAP_MM,
   INTERLACE_PATCH_MM,
   interlaceLabel,
   laserCouponLadder,
@@ -138,53 +140,122 @@ describe('laserCouponLadder — the slot layout both panels and both materialize
 });
 
 // --------------------------------------------------------------- interlace
-// v2 (Alice's 2026-11-24 ruling): nine 1×1cm patches at 0.12mm interlace
-// steps within ±0.5, zero included, each labeled — one pass, replacing the
-// whole-stock twin-bitmap design.
+// v2 (Alice's 2026-11-24 rulings): the ladder derives from RANGE BOXES on
+// the panel (prefill −0.5…+0.5 → 5 + 5 steps of 0.1 + the zero reference),
+// the nonzero values split into two rows, zero burns as its OWN column
+// beside them centered across the seam, and the block gap derives from the
+// widest label so labels never overlap.
 
-describe('planInterlaceCouponV2 — the ladder and the row layout', () => {
-  it('the ladder: 0.12mm multiples within ±0.5, zero included, ascending', () => {
-    expect(INTERLACE_LADDER_MM).toEqual([-0.48, -0.36, -0.24, -0.12, 0, 0.12, 0.24, 0.36, 0.48]);
-    expect(INTERLACE_LADDER_MM).toContain(0);
-    for (const v of INTERLACE_LADDER_MM) {
-      expect(Math.abs(v)).toBeLessThanOrEqual(0.5 + 1e-9);
-      expect(v / 0.12).toBeCloseTo(Math.round(v / 0.12), 9);
-    }
-    // the label text reads unambiguously — sign explicit, zero bare
+describe('deriveInterlaceLadder — the range boxes', () => {
+  it('prefill −0.5…+0.5: 5 + 5 steps of 0.1 plus the zero reference', () => {
+    const l = deriveInterlaceLadder(-0.5, 0.5);
+    expect(l.values).toEqual([
+      -0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5,
+    ]);
+    expect(l.zeroIndex).toBe(5);
+    expect(l.steps).toEqual([0.1, 0.1]);
+    expect(l.warnings).toEqual([]);
+  });
+
+  it('asymmetric −0.2…+0.4: zero included, per-side even steps', () => {
+    const l = deriveInterlaceLadder(-0.2, 0.4);
+    expect(l.values).toEqual([-0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4]);
+    expect(l.zeroIndex).toBe(2);
+    expect(l.steps).toEqual([0.1, 0.1]);
+  });
+
+  it('zero absent 0.1…0.9: one inclusive span, nine steps of 0.1', () => {
+    const l = deriveInterlaceLadder(0.1, 0.9);
+    expect(l.values).toEqual([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+    expect(l.zeroIndex).toBeNull();
+    expect(l.steps).toEqual([0.1]);
+  });
+
+  it('a backwards range reads as swapped (the wedge precedent)', () => {
+    const l = deriveInterlaceLadder(0.5, -0.5);
+    expect(l.values).toEqual(deriveInterlaceLadder(-0.5, 0.5).values);
+    expect(l.warnings.length).toBeGreaterThan(0);
+  });
+
+  it('a degenerate range (equal endpoints) warns and yields no ladder', () => {
+    const l = deriveInterlaceLadder(0.3, 0.3);
+    expect(l.values).toEqual([]);
+    expect(l.warnings.some((w) => /two distinct values/.test(w))).toBe(true);
+  });
+
+  it('a wide range clamps to 10 per side (21 patches incl. zero) and warns', () => {
+    const l = deriveInterlaceLadder(-5, 5);
+    expect(l.values).toHaveLength(2 * INTERLACE_MAX_PER_SIDE + 1);
+    expect(l.values[l.zeroIndex!]).toBe(0);
+    expect(l.values.filter((v) => v < 0)).toHaveLength(INTERLACE_MAX_PER_SIDE);
+    expect(l.warnings.some((w) => /clamped/.test(w))).toBe(true);
+  });
+
+  it('labels read unambiguously: sign explicit, zero bare, trailing zeros trimmed', () => {
     expect(interlaceLabel(0)).toBe('0');
-    expect(interlaceLabel(-0.48)).toBe('-0.48');
-    expect(interlaceLabel(0.36)).toBe('+0.36');
-  });
-
-  it('the 50mm rod fits 3 patches per row, 3 rows, no warnings', () => {
-    const plan = planInterlaceCouponV2(ROD);
-    expect(plan.perRow).toBe(3);
-    expect(plan.rows).toBe(3);
-    expect(plan.patch).toBe(INTERLACE_PATCH_MM);
-    expect(plan.slotHeight).toBeGreaterThan(INTERLACE_PATCH_MM); // room for the label
-    expect(plan.warnings).toEqual([]);
-    expect(plan.size.y).toBeCloseTo(3 * plan.slotHeight + 2 * INTERLACE_BLOCK_GAP_MM, 6);
-  });
-
-  it('a wide box wraps into 2 rows; a patch narrower than the stock warns', () => {
-    const boxPlan = planInterlaceCouponV2(BOX); // 100mm span → 7 per row
-    expect(boxPlan.perRow).toBe(7);
-    expect(boxPlan.rows).toBe(2);
-    const tiny = { ...BOX, sizeX: 8 };
-    expect(planInterlaceCouponV2(tiny).warnings.length).toBeGreaterThan(0);
+    expect(interlaceLabel(-0.5)).toBe('-0.5');
+    expect(interlaceLabel(0.125)).toBe('+0.125');
+    expect(interlaceLabel(-0.375)).toBe('-0.375');
+    expect(interlaceLabel(0.4)).toBe('+0.4');
   });
 });
 
-describe('materializeInterlaceCoupon v2 — nine patches + labels, one pass', () => {
-  const plan = planInterlaceCouponV2(ROD);
+describe('planInterlaceCouponV2 — rows, zero column, derived gap, live totals', () => {
+  // the tests' rod is only 50mm along X — the 5+5+zero grid needs more, so
+  // the layout tests run on a 100mm rod (the app's default stock length)
+  const LONGROD: Stock = { ...ROD, length: 100 };
 
-  it('materializes 9 patch bitmaps + 9 text labels and 10 ops (9 raster + 1 engrave)', () => {
-    const { ops, primitives } = materializeInterlaceCoupon(plan, ROD, LASER);
-    expect(ops).toHaveLength(10);
-    expect(primitives).toHaveLength(18);
+  it('prefill plan: two even rows of 5 + the zero column; gap fits the labels', () => {
+    const plan = planInterlaceCouponV2(LONGROD);
+    expect(plan.values).toHaveLength(11);
+    expect(plan.row1).toEqual([-0.5, -0.4, -0.3, -0.2, -0.1]);
+    expect(plan.row2).toEqual([0.1, 0.2, 0.3, 0.4, 0.5]);
+    expect(plan.zero).toBe(0);
+    expect(plan.gap).toBeCloseTo(
+      Math.max(INTERLACE_MIN_BLOCK_GAP_MM, plan.labelWidth - plan.patch + INTERLACE_GAP_CLEARANCE_MM),
+      9,
+    );
+    expect(plan.gap).toBeGreaterThanOrEqual(INTERLACE_MIN_BLOCK_GAP_MM);
+    expect(plan.slotHeight).toBeGreaterThan(INTERLACE_PATCH_MM); // room for the label
+    expect(plan.size.y).toBeCloseTo(2 * plan.slotHeight + plan.gap, 6);
+    expect(plan.size.x).toBeCloseTo(5 * plan.patch + 4 * plan.gap + plan.gap + plan.patch, 6);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('asymmetric range: rows as even as possible (negatives first)', () => {
+    const plan = planInterlaceCouponV2(LONGROD, -0.2, 0.4);
+    expect(plan.values).toHaveLength(7);
+    expect(plan.row1).toEqual([-0.2, -0.1, 0.1]);
+    expect(plan.row2).toEqual([0.2, 0.3, 0.4]);
+    expect(plan.zero).toBe(0);
+  });
+
+  it('zero-absent range: no zero column, rows split 5+4', () => {
+    const plan = planInterlaceCouponV2(LONGROD, 0.1, 0.9);
+    expect(plan.values).toHaveLength(9);
+    expect(plan.row1).toHaveLength(5);
+    expect(plan.row2).toHaveLength(4);
+    expect(plan.zero).toBeNull();
+    expect(plan.size.x).toBeCloseTo(5 * plan.patch + 4 * plan.gap, 6);
+  });
+
+  it('the 50mm rod cannot fit the row grid along X and says so', () => {
+    const plan = planInterlaceCouponV2(ROD);
+    expect(plan.warnings.some((w) => /run past the edge/.test(w))).toBe(true);
+  });
+});
+
+describe('materializeInterlaceCoupon v2 — patches + labels + zero column', () => {
+  const LONGROD: Stock = { ...ROD, length: 100 };
+  const plan = planInterlaceCouponV2(LONGROD);
+
+  it('materializes 11 patch bitmaps + 11 text labels and 12 ops (11 raster + 1 engrave)', () => {
+    const { ops, primitives } = materializeInterlaceCoupon(plan, LONGROD, LASER);
+    expect(ops).toHaveLength(12);
+    expect(primitives).toHaveLength(22);
     const rasters = ops.filter((o) => o.kind === 'rasterEngrave');
     const engraves = ops.filter((o) => o.kind === 'engrave');
-    expect(rasters).toHaveLength(9);
+    expect(rasters).toHaveLength(11);
     expect(engraves).toHaveLength(1); // ONE op burns every label
     const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
       Primitive,
@@ -194,14 +265,17 @@ describe('materializeInterlaceCoupon v2 — nine patches + labels, one pass', ()
       Primitive,
       { kind: 'text' }
     >[];
-    expect(bitmaps).toHaveLength(9);
-    expect(texts).toHaveLength(9);
-    // each patch: serpentine at its ladder setting, the SAME 1cm grid,
-    // no rate overrides — the settings are the only variable
+    expect(bitmaps).toHaveLength(11);
+    expect(texts).toHaveLength(11);
+    // every ladder value burned exactly once, serpentine, at its setting
+    const burned = rasters.map(
+      (op) => (op as Extract<JobOp, { kind: 'rasterEngrave' }>).interlace,
+    );
+    expect(new Set(burned)).toEqual(new Set(plan.values));
+    expect(burned).toContain(0); // the zero reference burns too
     rasters.forEach((op, i) => {
       const r = op as Extract<JobOp, { kind: 'rasterEngrave' }>;
       expect(r.sweep).toBe('serpentine');
-      expect(r.interlace).toBe(INTERLACE_LADDER_MM[i]);
       expect(r.pitch).toBe(RASTER_PITCH_MM);
       expect(r.toolId).toBe(LASER.id);
       expect(r.featureIds).toEqual([`p:${bitmaps[i].id}:bitmap:0`]);
@@ -226,7 +300,7 @@ describe('materializeInterlaceCoupon v2 — nine patches + labels, one pass', ()
     });
     // the labels: one text primitive per setting, its text IS the setting
     texts.forEach((t, i) => {
-      expect(t.text).toBe(interlaceLabel(INTERLACE_LADDER_MM[i]));
+      expect(t.text).toBe(interlaceLabel(burned[i]!));
       expect(t.size).toBe(3); // INTERLACE_LABEL_CAP_MM
       expect(t.paths.length).toBeGreaterThan(0);
       expect(t.presentation).toBe('wrapped');
@@ -240,38 +314,7 @@ describe('materializeInterlaceCoupon v2 — nine patches + labels, one pass', ()
     expect(e.toolId).toBe(LASER.id);
   });
 
-  it('wrapped: patches in a row along X, labels above on the arc', () => {
-    const { primitives } = materializeInterlaceCoupon(plan, ROD, LASER);
-    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
-      Primitive,
-      { kind: 'bitmap' }
-    >[];
-    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
-      Primitive,
-      { kind: 'text' }
-    >[];
-    // row 0 holds perRow=3 blocks: X spacing is exactly patch + gap
-    const xs = bitmaps.slice(0, 3).map((b) => b.transform.position.x);
-    expect(xs[1] - xs[0]).toBeCloseTo(INTERLACE_PATCH_MM + plan.gap, 6);
-    expect(xs[2] - xs[1]).toBeCloseTo(INTERLACE_PATCH_MM + plan.gap, 6);
-    // on the axis (the wrapped drop convention), own Ø = the stock's
-    for (const b of bitmaps) {
-      expect(b.presentation).toBe('wrapped');
-      expect(b.transform.position.z).toBeCloseTo(0, 6);
-      expect(b.transform.position.y).toBe(0);
-    }
-    // the label rides ABOVE its patch: ascending arc = more-negative Rx
-    for (let i = 0; i < 9; i++) {
-      expect(texts[i].transform.rotationDeg.x).toBeLessThan(bitmaps[i].transform.rotationDeg.x);
-      expect(texts[i].transform.position.x).toBeCloseTo(bitmaps[i].transform.position.x, 6);
-      // the patch sits BELOW the row slot's center, the label above it
-      expect(Math.abs(bitmaps[i].transform.rotationDeg.x)).toBeLessThan(
-        Math.abs(laserCouponLadder(ROD, plan.rows, plan.gap, plan.slotHeight).place(Math.floor(i / 3)).rotationDeg.x),
-      );
-    }
-  });
-
-  it('flat stock: patches on the crown, labels above in +Y, rows centered', () => {
+  it('flat: the zero column sits after the rows, centered across the seam', () => {
     const boxPlan = planInterlaceCouponV2(BOX);
     const { primitives } = materializeInterlaceCoupon(boxPlan, BOX, LASER);
     const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
@@ -282,23 +325,99 @@ describe('materializeInterlaceCoupon v2 — nine patches + labels, one pass', ()
       Primitive,
       { kind: 'text' }
     >[];
-    expect(bitmaps[0].presentation).toBeUndefined(); // flat like an import
-    expect(texts[0].presentation).toBe('flat');
-    for (let i = 0; i < 9; i++) {
-      expect(bitmaps[i].transform.position.z).toBeCloseTo(20, 6); // the crown
-      expect(texts[i].transform.position.z).toBeCloseTo(20, 6);
-      expect(texts[i].transform.position.y).toBeGreaterThan(bitmaps[i].transform.position.y);
-      expect(texts[i].transform.position.x).toBeCloseTo(bitmaps[i].transform.position.x, 6);
+    // patches burn in plan order: row 1, row 2, zero last
+    const row1 = bitmaps.slice(0, boxPlan.row1.length);
+    const zero = bitmaps[bitmaps.length - 1];
+    // row spacing is patch + gap along X, left-aligned ascending
+    for (let i = 1; i < row1.length; i++) {
+      expect(row1[i].transform.position.x - row1[i - 1].transform.position.x).toBeCloseTo(
+        boxPlan.patch + boxPlan.gap,
+        6,
+      );
     }
-    // row 1 holds the remaining 2 patches, centered under the 7 above
-    const row1 = bitmaps.slice(7).map((b) => b.transform.position.x);
-    const row0Mid = (bitmaps[0].transform.position.x + bitmaps[6].transform.position.x) / 2;
-    expect((row1[0] + row1[1]) / 2).toBeCloseTo(row0Mid, 6);
+    // the zero column is a full gap past the row grid's right edge
+    const rowsRight = Math.max(...row1.map((b) => b.transform.position.x)) + boxPlan.patch / 2;
+    expect(zero.transform.position.x - rowsRight).toBeCloseTo(boxPlan.gap + boxPlan.patch / 2, 6);
+    // ... and centered across the seam between the two row slots
+    const slot = laserCouponLadder(BOX, 2, boxPlan.gap, boxPlan.slotHeight);
+    const seamY = (slot.place(0).position.y + slot.place(1).position.y) / 2;
+    expect(zero.transform.position.y).toBeCloseTo(seamY, 6);
+    // zero's label rides directly above the zero patch
+    const zeroLabel = texts[texts.length - 1];
+    expect(zeroLabel.transform.position.x).toBeCloseTo(zero.transform.position.x, 6);
+    expect(zeroLabel.transform.position.y).toBeGreaterThan(zero.transform.position.y);
+    expect(zeroLabel.text).toBe('0');
+  });
+
+  it('flat: no label rect intersects another label or a neighbor patch', () => {
+    const boxPlan = planInterlaceCouponV2(BOX);
+    const { primitives } = materializeInterlaceCoupon(boxPlan, BOX, LASER);
+    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
+      Primitive,
+      { kind: 'bitmap' }
+    >[];
+    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
+      Primitive,
+      { kind: 'text' }
+    >[];
+    // primitives interleave bitmap,label per patch — own pairs may touch
+    const rects = [
+      ...bitmaps.map((b, i) => ({
+        x0: b.transform.position.x - b.width / 2,
+        x1: b.transform.position.x + b.width / 2,
+        y0: b.transform.position.y - b.height / 2,
+        y1: b.transform.position.y + b.height / 2,
+        owner: i,
+        kind: 'patch' as const,
+      })),
+      ...texts.map((t, i) => ({
+        x0: t.transform.position.x - t.width / 2,
+        x1: t.transform.position.x + t.width / 2,
+        y0: t.transform.position.y - t.height / 2,
+        y1: t.transform.position.y + t.height / 2,
+        owner: i,
+        kind: 'label' as const,
+      })),
+    ];
+    // a VIOLATION is two rects from DIFFERENT patches intersecting — a
+    // label may overhang its own patch
+    const overlaps = (a: (typeof rects)[number], b: (typeof rects)[number]): boolean =>
+      a.owner !== b.owner &&
+      a.x0 < b.x1 - 1e-6 && b.x0 < a.x1 - 1e-6 && a.y0 < b.y1 - 1e-6 && b.y0 < a.y1 - 1e-6;
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        expect(overlaps(rects[i], rects[j]), `rects ${i} (${rects[i].kind}) and ${j} (${rects[j].kind}) overlap`).toBe(false);
+      }
+    }
+  });
+
+  it('wrapped: the zero column centers across the seam on the arc', () => {
+    const { primitives } = materializeInterlaceCoupon(plan, LONGROD, LASER);
+    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
+      Primitive,
+      { kind: 'bitmap' }
+    >[];
+    const row1 = bitmaps.slice(0, plan.row1.length);
+    const row2 = bitmaps.slice(plan.row1.length, plan.row1.length + plan.row2.length);
+    const zero = bitmaps[bitmaps.length - 1];
+    const mid = (a: number, b: number) => (a + b) / 2;
+    // the zero patch's Rx sits BETWEEN the two rows' patch rotations —
+    // centered across the seam (ascending arc = more-negative Rx)
+    const r1 = row1[0].transform.rotationDeg.x;
+    const r2 = row2[0].transform.rotationDeg.x;
+    expect(zero.transform.rotationDeg.x).toBeLessThan(r1);
+    expect(zero.transform.rotationDeg.x).toBeGreaterThan(r2);
+    // its arc offset from row 1 equals row 2's from it (the seam midpoint
+    // of the SLOT bases; the patch offset dPatch is common to all three,
+    // so the zero rotation is the slot-midpoint MINUS that common offset)
+    const seamExpect = mid(r1, r2) - ((plan.slotHeight - plan.patch) / 2) * (180 / (Math.PI * 8.175));
+    expect(zero.transform.rotationDeg.x).toBeCloseTo(seamExpect, 3);
+    expect(zero.transform.position.y).toBe(0);
   });
 
   it('generates every op cleanly through the real pipeline (wrapped 4-axis)', () => {
-    const { ops, primitives } = materializeInterlaceCoupon(plan, ROD, LASER);
-    const c = ctx(ROD, primitives);
+    const { ops, primitives } = materializeInterlaceCoupon(plan, LONGROD, LASER);
+    const c = ctx(LONGROD, primitives);
     for (const op of ops) {
       const res = generateJobOp(op, c);
       expect(res.error, `${op.id}: ${res.error}`).toBeNull();
@@ -314,7 +433,7 @@ describe('materializeInterlaceCoupon v2 — nine patches + labels, one pass', ()
     }
   });
 
-  it('generates cleanly on flat stock too (labels + patches)', () => {
+  it('generates cleanly on flat stock too (labels + patches + zero column)', () => {
     const boxPlan = planInterlaceCouponV2(BOX);
     const { ops, primitives } = materializeInterlaceCoupon(boxPlan, BOX, LASER);
     const c = ctx(BOX, primitives);
@@ -324,7 +443,15 @@ describe('materializeInterlaceCoupon v2 — nine patches + labels, one pass', ()
       expect(res.moves.length).toBeGreaterThan(0);
     }
   });
+
+  it('a degenerate range materializes nothing', () => {
+    const empty = planInterlaceCouponV2(BOX, 0.3, 0.3);
+    const { ops, primitives } = materializeInterlaceCoupon(empty, BOX, LASER);
+    expect(ops).toHaveLength(0);
+    expect(primitives).toHaveLength(0);
+  });
 });
+
 
 // ---------------------------------------------------------------- the wedge
 
