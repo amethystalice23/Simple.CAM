@@ -55,6 +55,12 @@ export function CalibrationDialog(props: Props) {
   const initialTool =
     cuttingTools.find((t) => t.id === props.initialToolId) ?? cuttingTools[0];
 
+  // the "Numbers" layer: the grid's labels burn with a LASER tool when the
+  // job has one (preselected the same way — the last-used tool if it is a
+  // laser). Without one the coupon cuts unlabeled — warn, never block.
+  const lasers = useMemo(() => props.tools.filter((t) => t.type === 'laser'), [props.tools]);
+  const laser = lasers.find((t) => t.id === props.initialToolId) ?? lasers[0] ?? null;
+
   const [toolId, setToolId] = useState(initialTool?.id ?? '');
   const [rowParam, setRowParam] = useState<MatrixParam>(DEFAULT_ROW_PARAM);
   const [colParam, setColParam] = useState<MatrixParam>(DEFAULT_COL_PARAM);
@@ -170,7 +176,13 @@ export function CalibrationDialog(props: Props) {
 
   const generate = () => {
     if (!plan || plan.error || !tool) return;
-    const { ops, primitives } = materializeTestPattern(plan, tool, props.materialId);
+    const { ops, primitives } = materializeTestPattern(plan, tool, props.materialId, {
+      laser,
+      axisZ:
+        props.stock.kind === 'cylinder' && props.stock.axisMode === '4-axis'
+          ? rotaryCalibrationOf(props.stock).axisZ
+          : 0,
+    });
     if (ops.length === 0) return;
     props.onGenerate(ops, primitives);
   };
@@ -361,6 +373,27 @@ export function CalibrationDialog(props: Props) {
             ? `Ø${round2(surfaceDiameter)} stock`
             : `${props.stock.sizeX} × ${props.stock.sizeY} stock`}
           .
+        </p>
+
+        <p className="hint">
+          {laser && plan && !plan.error ? (
+            m === 'rotary' ? (
+              <>
+                labels: {plan.rows} strand labels burn in the −X margin with{' '}
+                <strong>{toolOptionLabel(laser)}</strong> (one laser engrave op, no power override)
+                — the groupings read off the X ladder in the ops panel, the grooves leave no room
+                to label them on the cylinder.
+              </>
+            ) : (
+              <>
+                labels: {plan.cols} column labels above the top row + {plan.rows} rotated row
+                labels in the left margin, burning with{' '}
+                <strong>{toolOptionLabel(laser)}</strong> (one laser engrave op, no power override).
+              </>
+            )
+          ) : (
+            <>no laser tool in the job — the cells burn unlabeled (add a laser on the Tools tab to label the coupon)</>
+          )}
         </p>
 
         <div className="dialog-buttons">

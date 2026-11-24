@@ -57,6 +57,7 @@ import type {
   CylChamferEdge,
   DrillOp,
   JobOp,
+  MatrixParam,
   ModelTransform,
   Move,
   OpRates,
@@ -1079,6 +1080,7 @@ export function materializeTestPattern(
   plan: TestPatternPlan,
   tool: Tool,
   materialId: string,
+  labels?: { laser: Tool; axisZ: number },
 ): { ops: JobOp[]; primitives: Primitive[] } {
   if (plan.error) return { ops: [], primitives: [] };
   const plungeFeed = presetRates('pocket', tool, materialId).plungeFeed;
@@ -1181,6 +1183,139 @@ export function materializeTestPattern(
         });
       }
     }
+  }
+
+  // the "Numbers" layer (Alice, 2026-11-24): text labels for the grid —
+  // one per column above the top row and one per row in the left margin
+  // (flat), or the strand values in the −X margin (rotary — the grooves
+  // occupy every phase at every grouping, so per-column labels have no
+  // groove-free home on the cylinder). Burned by ONE laser engrave op, no
+  // ⚡ overrides; without a laser tool the coupon cuts unlabeled
+  // (warn-don't-block).
+  if (labels && plan.rows > 0 && plan.cols > 0) {
+    const value = (param: MatrixParam, v: number): string =>
+      param === 'feed' || param === 'spindleRpm'
+        ? String(Math.round(v))
+        : String(Math.round(v * 100) / 100);
+    const colTexts = plan.colValues.map((v) => value(plan.colParam, v));
+    const rowTexts = plan.rowValues.map((v) => value(plan.rowParam, v));
+    let labelIds: string[] = [];
+    /** the cap that fits the longest label into `band` mm — the
+     *  auto-shrink the compact-chart idiom uses */
+    const fitCap = (texts: string[], band: number): number => {
+      const longest = texts.reduce((a, b) => (b.length >= a.length ? b : a));
+      const len = layoutTextPaths({
+        text: longest,
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: INTERLACE_LABEL_CAP_MM,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }).width;
+      return Math.max(1.2, Math.min(INTERLACE_LABEL_CAP_MM, (INTERLACE_LABEL_CAP_MM * Math.max(band, 1)) / Math.max(len, 1e-6)));
+    };
+    const pushLabel = (
+      text: string,
+      cap: number,
+      paths: Vec2[][],
+      w: number,
+      h: number,
+      wrapped: boolean,
+      transform: ModelTransform,
+    ) => {
+      const label: Extract<Primitive, { kind: 'text' }> = {
+        kind: 'text',
+        id: nextPrimitiveId(),
+        text,
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: cap,
+        letterSpacing: 0,
+        wrapWidth: 0,
+        paths,
+        width: w,
+        height: h,
+        presentation: wrapped ? 'wrapped' : 'flat',
+        wrapDiameter: wrapped ? plan.rotary?.surfaceDiameter ?? 1 : 1,
+        transform,
+      };
+      primitives.push(label);
+      for (let k = 0; k < paths.length; k++) labelIds.push(`p:${label.id}:path:${k}`);
+    };
+
+    if (plan.mode === 'rotary' && plan.rotary) {
+      // strand labels in the −X margin: UNROTATED (the text runs around
+      // the arc, cap-height along X inside the 3mm margin), arc-centered
+      // on each strand's phase, cap auto-shrunk to the strand pitch
+      const rt = plan.rotary;
+      const band = (Math.PI * rt.surfaceDiameter) / plan.rows - 1;
+      const cap = fitCap(rowTexts, band);
+      const marginX = rt.groupXs[0] - 1.5;
+      rowTexts.forEach((text, s) => {
+        const l = layoutTextPaths({
+          text,
+          fontId: DEFAULT_TEXT_FONT_ID,
+          size: cap,
+          letterSpacing: 0,
+          wrapWidth: 0,
+        });
+        pushLabel(text, cap, l.paths, l.width, l.height, true, {
+          position: { x: marginX, y: 0, z: labels.axisZ },
+          rotationDeg: { x: -(s * rt.spinStep), y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        });
+      });
+    }
+
+    if (plan.mode === 'flat' && plan.flat) {
+      const f = plan.flat;
+      const blockTop = f.y0 + plan.rows * f.cellH + (plan.rows - 1) * f.spacing;
+      // column labels: horizontal above the top row (the top margin is
+      // only ~one tool Ø deep — no room to rotate), bottom-anchored just
+      // above the grown origin cell's top edge
+      const colCap = Math.min(fitCap(colTexts, f.cellW + f.spacing - 1), f.spacing - 0.3);
+      colTexts.forEach((text, c) => {
+        const l = layoutTextPaths({
+          text,
+          fontId: DEFAULT_TEXT_FONT_ID,
+          size: colCap,
+          letterSpacing: 0,
+          wrapWidth: 0,
+        });
+        pushLabel(text, colCap, l.paths, l.width, l.height, false, unitTransform({
+          x: f.x0 + c * (f.cellW + f.spacing) + f.cellW / 2,
+          y: blockTop + f.originGrowth + 0.15 + l.height / 2,
+          z: f.crownZ,
+        }));
+      });
+      // row labels: rotated 90° (book-spine, reading bottom-up) in the
+      // left margin, right-aligned clear of the grown origin cell
+      const rowCap = Math.min(fitCap(rowTexts, f.cellH + f.spacing - 1), f.spacing - 0.3);
+      rowTexts.forEach((text, r) => {
+        const rot = rotateLayout90(
+          layoutTextPaths({
+            text,
+            fontId: DEFAULT_TEXT_FONT_ID,
+            size: rowCap,
+            letterSpacing: 0,
+            wrapWidth: 0,
+          }),
+        );
+        pushLabel(text, rowCap, rot.paths, rot.width, rot.height, false, unitTransform({
+          x: f.x0 - f.originGrowth - 0.15 - rot.width / 2,
+          y: f.y0 + (plan.rows - 1 - r) * (f.cellH + f.spacing) + f.cellH / 2,
+          z: f.crownZ,
+        }));
+      });
+    }
+
+    ops.push({
+      kind: 'engrave',
+      id: `jobop-${++opCount}`,
+      toolId: labels.laser.id,
+      featureIds: labelIds,
+      depth: 0.1,
+      stepDown: 0.1,
+      fillMode: 'outlines',
+    });
   }
 
   return { ops, primitives };
