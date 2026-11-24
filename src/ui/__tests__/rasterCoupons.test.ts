@@ -12,31 +12,30 @@ import type { JobOp, Primitive, Stock, Tool } from '../../core/types';
 import { rotaryCalibrationOf } from '../../core/types';
 import { bitmapKernelGray, sourcesFor } from '../featureSources';
 import {
+  chartColumnLabel,
+  chartRowLabel,
+  CHART_CELL_MM,
+  CHART_MAX_ROWS,
+  deriveChartGrid,
   deriveInterlaceLadder,
-  deriveWedgeLadder,
   generateJobOp,
   INTERLACE_GAP_CLEARANCE_MM,
+  INTERLACE_LABEL_CLEAR_MM,
   INTERLACE_MAX_PER_SIDE,
   INTERLACE_MIN_BLOCK_GAP_MM,
   INTERLACE_PATCH_MM,
   interlaceLabel,
   laserCouponLadder,
-  materializeGreyscaleWedge,
+  materializeGreyscaleChart,
   materializeInterlaceCoupon,
+  planGreyscaleChart,
   planInterlaceCouponV2,
-  planWedgeCouponV2,
-  wedgeLabel,
-  WEDGE_BAND_MM,
-  WEDGE_GAP_CLEARANCE_MM,
-  WEDGE_LABEL_CAP_MM,
-  WEDGE_MIN_BLOCK_GAP_MM,
   type GenContext,
 } from '../jobGeneration';
 import {
   DEFAULT_COLUMN_SPACING_MM,
   gridToGray,
   planInterlaceCoupon,
-  WEDGE_GRAY_REFS,
 } from '../../cam/rasterCoupons';
 import { RASTER_PITCH_MM } from '../../cam/rasterEngrave';
 import { CALIBRATION_GENERATORS, calibrationGenerator } from '../CalibrationLauncher';
@@ -458,159 +457,153 @@ describe('materializeInterlaceCoupon v2 — patches + labels + zero column', () 
 });
 
 
-// ---------------------------------------------------------------- the wedge
-// v2 (Alice's 2026-11-24): the interlace idioms applied to the wedge —
-// range boxes derive the band ladder (prefill 0.05…1.0 → 10 bands),
-// compact square blocks at the Band height field, a label above every
-// band, the 25/50/75% refs as a column beside the rows.
+// ------------------------------------------------------------ the chart
+// v3 (Alice's 2026-11-24, matched to the MakeraStudio ground truth —
+// examples/MakeraStudiolaser_grid_TOP_*.nc): power columns stepped along X
+// (S0.1…S0.9 stepped + the S1 reference at the right edge), feed rows
+// fastest at top (F3000 first), a 6×6mm solid cell per column×row with its
+// own ⚡ feed+power override, text labels per column/row (the "Numbers"
+// layer).
 
-describe('deriveWedgeLadder — the power range boxes', () => {
-  it('prefill 0.05…1.0: ten ascending bands, endpoints exact', () => {
-    const l = deriveWedgeLadder(0.05, 1);
-    expect(l.bands).toHaveLength(10);
-    expect(l.bands[0]).toBeCloseTo(0.05, 9);
-    expect(l.bands[l.bands.length - 1]).toBe(1); // exact maxPower, no dust
-    for (let i = 1; i < l.bands.length; i++) {
-      expect(l.bands[i]).toBeGreaterThan(l.bands[i - 1]);
-      // even increments (bands round to 6 decimals for clean labels)
-      expect(l.bands[i] - l.bands[i - 1]).toBeCloseTo(l.steps[0], 5);
-    }
-    expect(l.warnings).toEqual([]);
+describe('deriveChartGrid — columns, reference, feed rows', () => {
+  it('prefill 0.1…1.0 step 0.1: nine stepped columns + the S1 reference', () => {
+    const g = deriveChartGrid(0.1, 1, 0.1, [3000, 2500, 2000, 1500, 1000]);
+    expect(g.stepped).toEqual([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+    expect(g.ref).toBe(1);
+    expect(g.feeds).toEqual([3000, 2500, 2000, 1500, 1000]);
+    expect(g.warnings).toEqual([]);
   });
 
-  it('an in-range count derives from the range (0.5…1.0 → 5 bands of 0.125)', () => {
-    const l = deriveWedgeLadder(0.5, 1);
-    expect(l.bands).toEqual([0.5, 0.625, 0.75, 0.875, 1]);
-    expect(l.steps).toEqual([0.125]);
-    expect(l.warnings).toEqual([]);
+  it('a To off the ladder lands as the reference only (0.1…0.95 step 0.1)', () => {
+    const g = deriveChartGrid(0.1, 0.95, 0.1, [2000]);
+    expect(g.stepped).toEqual([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+    expect(g.ref).toBe(0.95);
   });
 
-  it('a narrow range squeezes to the old 3-band floor and warns', () => {
-    const l = deriveWedgeLadder(0.05, 0.1);
-    expect(l.bands).toHaveLength(3);
-    expect(l.bands[0]).toBeCloseTo(0.05, 9);
-    expect(l.bands[2]).toBeCloseTo(0.1, 9);
-    expect(l.warnings.some((w) => /squeezes/.test(w))).toBe(true);
+  it('a backwards range swaps with a warning', () => {
+    const g = deriveChartGrid(1, 0.1, 0.1, [2000]);
+    expect(g.stepped[0]).toBeCloseTo(0.1, 9);
+    expect(g.ref).toBe(1); // the swapped hi becomes the S1 reference
+    expect(g.warnings.some((w) => /swapped/.test(w))).toBe(true);
   });
 
-  it('an inverted range reads as swapped (the wedge precedent)', () => {
-    const l = deriveWedgeLadder(0.9, 0.2);
-    expect(l.bands[0]).toBeCloseTo(0.2, 9);
-    expect(l.bands[l.bands.length - 1]).toBeCloseTo(0.9, 9);
-    expect(l.warnings.some((w) => /swapped/.test(w))).toBe(true);
+  it('From ≥ To yields no stepped columns (the degenerate gate)', () => {
+    const g = deriveChartGrid(0.5, 0.5, 0.1, [2000]);
+    expect(g.stepped).toEqual([]);
+    expect(g.warnings.some((w) => /at least two columns/.test(w))).toBe(true);
   });
 
-  it('an equal range warns flat and still derives bands', () => {
-    const l = deriveWedgeLadder(0.5, 0.5);
-    expect(l.bands.every((b) => Math.abs(b - 0.5) < 1e-9)).toBe(true);
-    expect(l.bands.length).toBeGreaterThanOrEqual(3);
-    expect(l.warnings.some((w) => /flat/.test(w))).toBe(true);
+  it('a non-positive step falls back to 0.1 with a warning', () => {
+    const g = deriveChartGrid(0.1, 1, 0, [2000]);
+    expect(g.stepped).toHaveLength(9);
+    expect(g.warnings.some((w) => /step must be positive/.test(w))).toBe(true);
   });
 
-  it('band labels are beam-power percent (the ⚡ unit), trimmed', () => {
-    expect(wedgeLabel(0.05)).toBe('5%');
-    expect(wedgeLabel(1)).toBe('100%');
-    expect(wedgeLabel(0.156)).toBe('15.6%');
+  it('feeds: unordered warns fastest-first, over 10 clamps, junk drops', () => {
+    const asc = deriveChartGrid(0.1, 1, 0.1, [1000, 2000]);
+    expect(asc.warnings.some((w) => /fastest-first/.test(w))).toBe(true);
+    const many = deriveChartGrid(0.1, 1, 0.1, Array.from({ length: 12 }, (_, i) => 3000 - i));
+    expect(many.feeds).toHaveLength(CHART_MAX_ROWS);
+    expect(many.warnings.some((w) => /clamped/.test(w))).toBe(true);
+    const junk = deriveChartGrid(0.1, 1, 0.1, [3000, NaN, 0, 1000]);
+    expect(junk.feeds).toEqual([3000, 1000]);
+    expect(junk.warnings.some((w) => /not positive numbers/.test(w))).toBe(true);
+  });
+
+  it('labels: columns read S0.1-style, rows read F3000-style', () => {
+    expect(chartColumnLabel(0.1)).toBe('S0.1');
+    expect(chartColumnLabel(1)).toBe('S1');
+    expect(chartColumnLabel(0.35)).toBe('S0.35');
+    expect(chartRowLabel(3000)).toBe('F3000');
+    expect(chartRowLabel(1000.4)).toBe('F1000');
   });
 });
 
-describe('planWedgeCouponV2 — rows, refs column, derived gap, live totals', () => {
-  const LONGROD: Stock = { ...ROD, length: 100 };
+describe('planGreyscaleChart — extent, labels, live warnings', () => {
+  // Ø50 × 150mm: room for the whole prefill chart on the arc and along X
+  const BIGROD: Stock = {
+    ...ROD,
+    length: 150,
+    calibration: { ...ROD.calibration, effectiveRadius: 25 },
+  };
 
-  it('prefill plan: 10 bands in two even rows + the refs column', () => {
-    const plan = planWedgeCouponV2(LONGROD);
-    expect(plan.bands).toHaveLength(10);
-    expect(plan.row1).toHaveLength(5);
-    expect(plan.row2).toHaveLength(5);
-    expect(plan.grayRefs).toEqual([0.25, 0.5, 0.75]);
-    expect(plan.patch).toBe(WEDGE_BAND_MM);
+  it('prefill plan: 10 columns × 5 rows, labels sized, extent live', () => {
+    const plan = planGreyscaleChart(BIGROD);
+    expect(plan.columns).toHaveLength(9);
+    expect(plan.ref).toBe(1);
+    expect(plan.feeds).toHaveLength(5);
+    expect(plan.cell).toBe(CHART_CELL_MM);
+    // the column gap derives from the widest column label (the interlace rule)
+    expect(plan.gap).toBeGreaterThanOrEqual(INTERLACE_MIN_BLOCK_GAP_MM);
     expect(plan.gap).toBeCloseTo(
-      Math.max(WEDGE_MIN_BLOCK_GAP_MM, plan.labelWidth - plan.patch + WEDGE_GAP_CLEARANCE_MM),
+      Math.max(INTERLACE_MIN_BLOCK_GAP_MM, plan.labelWidth - plan.cell + INTERLACE_GAP_CLEARANCE_MM),
       9,
     );
-    expect(plan.slotHeight).toBeGreaterThan(WEDGE_BAND_MM); // room for the label
-    expect(plan.size.y).toBeCloseTo(2 * plan.slotHeight + plan.gap, 6);
-    // the refs column rides a full gap+patch past the band grid
-    expect(plan.size.x).toBeCloseTo(5 * plan.patch + 4 * plan.gap + plan.gap + plan.patch, 6);
+    // the extent: feed margin + 10 columns along X; 5 cell rows + the
+    // label band above the top row along the ladder direction
+    expect(plan.feedMargin).toBeGreaterThan(0);
+    expect(plan.size.x).toBeCloseTo(plan.feedMargin + 10 * plan.cell + 9 * plan.gap, 6);
+    expect(plan.size.y).toBeCloseTo(
+      5 * plan.cell + 4 * plan.gap + INTERLACE_LABEL_CLEAR_MM + plan.labelHeight,
+      6,
+    );
     expect(plan.warnings).toEqual([]);
   });
 
-  it('a narrow power range still lays out (3 bands, one row + refs)', () => {
-    const plan = planWedgeCouponV2(LONGROD, 0.05, 0.1);
-    expect(plan.row1).toHaveLength(2);
-    expect(plan.row2).toHaveLength(1);
-    expect(plan.size.x).toBeCloseTo(2 * plan.patch + plan.gap + plan.gap + plan.patch, 6);
-  });
-
-  it('a wide range warns when it exceeds the stock span', () => {
-    const long = planWedgeCouponV2(LONGROD, 0, 1, 20); // 20mm blocks overflow
-    expect(long.warnings.some((w) => /run past the edge/.test(w))).toBe(true);
+  it('a big cell size warns when the chart outgrows the span', () => {
+    const big = planGreyscaleChart(BIGROD, 0.1, 1, 0.1, [3000], 20);
+    expect(big.warnings.some((w) => /run past the edge/.test(w))).toBe(true);
   });
 });
 
-describe('materializeGreyscaleWedge v2 — bands + labels + refs column', () => {
-  const LONGROD: Stock = { ...ROD, length: 100 };
-  const plan = planWedgeCouponV2(LONGROD);
+describe('materializeGreyscaleChart — cells, overrides, labels', () => {
+  const BIGROD: Stock = {
+    ...ROD,
+    length: 150,
+    calibration: { ...ROD.calibration, effectiveRadius: 25 },
+  };
+  const plan = planGreyscaleChart(BIGROD);
+  const COLS = plan.columns.length + 1; // 10 incl. the S1 reference
 
-  it('materializes 10 band bitmaps + 10 labels + refs block + refs label (22 prims, 12 ops)', () => {
-    const { ops, primitives } = materializeGreyscaleWedge(plan, LONGROD, LASER);
-    expect(ops).toHaveLength(12); // 10 band rasters + 1 refs raster + 1 engrave
-    expect(primitives).toHaveLength(22); // (10 bands + refs) × (bitmap + label)
+  it('materializes 50 cell bitmaps + ops, 15 labels, 51 ops total at prefill', () => {
+    const { ops, primitives } = materializeGreyscaleChart(plan, BIGROD, LASER);
+    const cells = plan.feeds.length * COLS; // 5 × 10 = 50
+    expect(ops).toHaveLength(cells + 1); // one raster per cell + ONE label engrave
+    expect(primitives).toHaveLength(cells + COLS + plan.feeds.length); // 50 + 10 + 5
     const rasters = ops.filter((o) => o.kind === 'rasterEngrave');
     const engraves = ops.filter((o) => o.kind === 'engrave');
-    expect(rasters).toHaveLength(11);
-    expect(engraves).toHaveLength(1); // ONE op burns every label
-    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
-      Primitive,
-      { kind: 'bitmap' }
-    >[];
-    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
-      Primitive,
-      { kind: 'text' }
-    >[];
-    expect(bitmaps).toHaveLength(11);
-    expect(texts).toHaveLength(11);
-    // every band burns as its own raster at ITS power (the ⚡ override),
-    // ascending with the ladder; the refs raster carries NO override
-    rasters.forEach((op, i) => {
-      const r = op as Extract<JobOp, { kind: 'rasterEngrave' }>;
-      expect(r.pitch).toBe(RASTER_PITCH_MM);
-      expect(r.featureIds).toEqual([`p:${bitmaps[i].id}:bitmap:0`]);
-      if (i < plan.bands.length) {
-        expect(r.rates?.spindleRpm).toBe(Math.round(plan.bands[i] * 100));
-      } else {
-        expect(r.rates).toBeUndefined(); // the refs burn at the JOB's power
+    expect(rasters).toHaveLength(cells);
+    expect(engraves).toHaveLength(1);
+    // every ⚡ override is the exact column×row combination: power climbs
+    // along each row, the FEED steps down the rows fastest-first
+    const ratesList = rasters.map((o) => (o as Extract<JobOp, { kind: 'rasterEngrave' }>).rates);
+    const powers = [...plan.columns, plan.ref];
+    for (let r = 0; r < plan.feeds.length; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const r0 = ratesList[r * COLS + c];
+        expect(r0?.feed).toBe(plan.feeds[r]);
+        expect(r0?.spindleRpm).toBe(Math.round(powers[c] * 100));
       }
-      expect(bitmaps[i].width).toBeCloseTo(WEDGE_BAND_MM, 6);
-      expect(bitmaps[i].height).toBeCloseTo(WEDGE_BAND_MM, 6);
-    });
-    // the band bitmaps are SOLID black; the refs bitmap carries the fixed
-    // gray slices (read after the bitmapKernelGray round-trip)
-    for (let i = 0; i < plan.bands.length; i++) {
-      expect(bitmapKernelGray(bitmaps[i].gray).data.every((v) => v === 0)).toBe(true);
     }
-    const refs = bitmapKernelGray(bitmaps[bitmaps.length - 1].gray);
-    const slices = [...new Set([...Array(refs.width).keys()].map((x) => refs.data[x]))].sort(
-      (a, b) => a - b,
-    );
-    expect(slices).toEqual(WEDGE_GRAY_REFS.map((g) => Math.round(255 * g)));
-    // the labels: one per band (its S as percent) + the refs label
-    texts.forEach((t, i) => {
-      expect(t.text).toBe(i < plan.bands.length ? wedgeLabel(plan.bands[i]) : 'refs');
-      expect(t.size).toBe(WEDGE_LABEL_CAP_MM);
-      expect(t.presentation).toBe('wrapped');
-    });
-    // the engrave op targets EVERY label path, and nothing else
-    const e = engraves[0] as Extract<JobOp, { kind: 'engrave' }>;
-    const allPaths = texts.flatMap((t) => t.paths.map((_, k) => `p:${t.id}:path:${k}`));
-    expect(e.featureIds).toHaveLength(allPaths.length);
-    expect(new Set(e.featureIds)).toEqual(new Set(allPaths));
-    expect(e.toolId).toBe(LASER.id);
+    // the LAST column is the S1 reference at every row
+    for (let r = 0; r < plan.feeds.length; r++) {
+      expect(ratesList[r * COLS + COLS - 1]?.spindleRpm).toBe(100);
+    }
+    // every cell bitmap is the solid CELL×CELL square
+    const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
+      Primitive,
+      { kind: 'bitmap' }
+    >[];
+    expect(bitmaps).toHaveLength(cells);
+    for (const b of bitmaps) {
+      expect(b.width).toBeCloseTo(CHART_CELL_MM, 6);
+      expect(b.height).toBeCloseTo(CHART_CELL_MM, 6);
+      expect(bitmapKernelGray(b.gray).data.every((v) => v === 0)).toBe(true);
+    }
   });
 
-  it('flat: bands in rows on the crown, refs column after them, on the seam', () => {
-    const boxPlan = planWedgeCouponV2(BOX);
-    const { primitives } = materializeGreyscaleWedge(boxPlan, BOX, LASER);
+  it('labels: one power label per column above the top row, one feed label per row (flat)', () => {
+    const { primitives } = materializeGreyscaleChart(plan, BOX, LASER);
     const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
       Primitive,
       { kind: 'bitmap' }
@@ -619,38 +612,33 @@ describe('materializeGreyscaleWedge v2 — bands + labels + refs column', () => 
       Primitive,
       { kind: 'text' }
     >[];
-    const row1 = bitmaps.slice(0, boxPlan.row1.length);
-    const refs = bitmaps[bitmaps.length - 1];
-    // rows left-aligned ascending along X, patches + gap apart
-    for (let i = 1; i < row1.length; i++) {
-      expect(row1[i].transform.position.x - row1[i - 1].transform.position.x).toBeCloseTo(
-        boxPlan.patch + boxPlan.gap,
-        6,
-      );
+    expect(texts).toHaveLength(COLS + plan.feeds.length);
+    const topCellY = bitmaps[0].transform.position.y; // row 0 = the top row
+    // the power labels (first COLS texts) sit above the TOP row's cells —
+    // the top row is the FASTEST feed (row 0 typed → highest slot)
+    const powerLabels = texts.slice(0, COLS);
+    expect(powerLabels.map((t) => t.text)).toEqual(
+      [...plan.columns, plan.ref].map((p) => chartColumnLabel(p)),
+    );
+    for (const t of powerLabels) {
+      expect(t.transform.position.y).toBeGreaterThan(topCellY);
     }
-    // the refs column sits a full gap past the band grid's right edge,
-    // centered across the seam between the two row slots
-    const rowsRight = Math.max(...row1.map((b) => b.transform.position.x)) + boxPlan.patch / 2;
-    expect(refs.transform.position.x - rowsRight).toBeCloseTo(boxPlan.gap + boxPlan.patch / 2, 6);
-    const slot = laserCouponLadder(BOX, 2, boxPlan.gap, boxPlan.slotHeight);
-    const seamY = (slot.place(0).position.y + slot.place(1).position.y) / 2;
-    expect(refs.transform.position.y).toBeCloseTo(seamY, 6);
-    // the refs label rides directly above the refs block
-    const refsLabel = texts[texts.length - 1];
-    expect(refsLabel.text).toBe('refs');
-    expect(refsLabel.transform.position.x).toBeCloseTo(refs.transform.position.x, 6);
-    expect(refsLabel.transform.position.y).toBeGreaterThan(refs.transform.position.y);
-    // every label sits above its own block, on the crown
-    for (let i = 0; i < texts.length; i++) {
-      expect(texts[i].transform.position.z).toBeCloseTo(20, 6);
-      expect(texts[i].transform.position.y).toBeGreaterThan(bitmaps[i].transform.position.y);
-      expect(texts[i].transform.position.x).toBeCloseTo(bitmaps[i].transform.position.x, 6);
+    // the feed labels: F3000 (fastest, top row) first, one per row
+    const feedLabels = texts.slice(COLS);
+    expect(feedLabels.map((t) => t.text)).toEqual(plan.feeds.map((f) => chartRowLabel(f)));
+    expect(feedLabels[0].text).toBe('F3000');
+    // they sit LEFT of the grid at their row's cell height
+    const gridLeft = Math.min(...bitmaps.map((b) => b.transform.position.x));
+    for (const t of feedLabels) {
+      expect(t.transform.position.x).toBeLessThan(gridLeft);
     }
+    const ys = feedLabels.map((t) => t.transform.position.y);
+    for (let i = 1; i < ys.length; i++) expect(ys[i]).not.toBeCloseTo(ys[i - 1], 3);
   });
 
-  it('flat: no label rect intersects another label or a neighbor block', () => {
-    const boxPlan = planWedgeCouponV2(BOX);
-    const { primitives } = materializeGreyscaleWedge(boxPlan, BOX, LASER);
+  it('flat: no label rect intersects another label or any cell', () => {
+    const boxPlan = planGreyscaleChart(BOX);
+    const { primitives } = materializeGreyscaleChart(boxPlan, BOX, LASER);
     const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
       Primitive,
       { kind: 'bitmap' }
@@ -660,72 +648,84 @@ describe('materializeGreyscaleWedge v2 — bands + labels + refs column', () => 
       { kind: 'text' }
     >[];
     const rects = [
-      ...bitmaps.map((b, i) => ({
+      ...bitmaps.map((b) => ({
         x0: b.transform.position.x - b.width / 2,
         x1: b.transform.position.x + b.width / 2,
         y0: b.transform.position.y - b.height / 2,
         y1: b.transform.position.y + b.height / 2,
-        owner: i,
-        kind: 'block' as const,
       })),
-      ...texts.map((t, i) => ({
+      ...texts.map((t) => ({
         x0: t.transform.position.x - t.width / 2,
         x1: t.transform.position.x + t.width / 2,
         y0: t.transform.position.y - t.height / 2,
         y1: t.transform.position.y + t.height / 2,
-        owner: i,
-        kind: 'label' as const,
       })),
     ];
-    // a VIOLATION is two rects from DIFFERENT blocks intersecting — a
-    // label may overhang its own block
-    const overlaps = (a: (typeof rects)[number], b: (typeof rects)[number]): boolean =>
-      a.owner !== b.owner &&
-      a.x0 < b.x1 - 1e-6 && b.x0 < a.x1 - 1e-6 && a.y0 < b.y1 - 1e-6 && b.y0 < a.y1 - 1e-6;
     for (let i = 0; i < rects.length; i++) {
       for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i];
+        const b = rects[j];
         expect(
-          overlaps(rects[i], rects[j]),
-          `rects ${i} (${rects[i].kind}) and ${j} (${rects[j].kind}) overlap`,
+          a.x0 < b.x1 - 1e-6 && b.x0 < a.x1 - 1e-6 && a.y0 < b.y1 - 1e-6 && b.y0 < a.y1 - 1e-6,
+          `rects ${i} and ${j} overlap`,
         ).toBe(false);
       }
     }
   });
 
-  it('wrapped: the refs column centers across the seam on the arc', () => {
-    const { primitives } = materializeGreyscaleWedge(plan, LONGROD, LASER);
+  it('wrapped: rows stack on the arc fastest-at-top, labels bent face-up', () => {
+    const { primitives } = materializeGreyscaleChart(plan, BIGROD, LASER);
     const bitmaps = primitives.filter((p) => p.kind === 'bitmap') as Extract<
       Primitive,
       { kind: 'bitmap' }
     >[];
-    const row1 = bitmaps.slice(0, plan.row1.length);
-    const row2 = bitmaps.slice(plan.row1.length, plan.row1.length + plan.row2.length);
-    const refs = bitmaps[bitmaps.length - 1];
-    const r1 = row1[0].transform.rotationDeg.x;
-    const r2 = row2[0].transform.rotationDeg.x;
-    // the refs block's Rx sits BETWEEN the two rows' rotations — centered
-    // across the seam (ascending arc = more-negative Rx)
-    expect(refs.transform.rotationDeg.x).toBeLessThan(r1);
-    expect(refs.transform.rotationDeg.x).toBeGreaterThan(r2);
-    const seamExpect =
-      (r1 + r2) / 2 - ((plan.slotHeight - plan.patch) / 2) * (180 / (Math.PI * 8.175));
-    expect(refs.transform.rotationDeg.x).toBeCloseTo(seamExpect, 3);
-    expect(refs.transform.position.y).toBe(0);
+    const texts = primitives.filter((p) => p.kind === 'text') as Extract<
+      Primitive,
+      { kind: 'text' }
+    >[];
+    // on the axis (the wrapped drop convention)
+    for (const b of bitmaps) {
+      expect(b.transform.position.y).toBe(0);
+      expect(b.transform.position.z).toBeCloseTo(0, 6);
+    }
+    // ascending arc = more-negative Rx: the fastest row (row 0) rides the
+    // HIGHEST slot → its cells carry the most-negative rotation
+    const rowRot = (r: number) => bitmaps[r * COLS].transform.rotationDeg.x;
+    for (let r = 1; r < plan.feeds.length; r++) {
+      expect(rowRot(r)).toBeGreaterThan(rowRot(r - 1)); // slower → less arc
+    }
+    // the power labels ride ABOVE the top row (more-negative Rx than it)
+    const powerLabels = texts.slice(0, COLS);
+    for (const t of powerLabels) {
+      expect(t.transform.rotationDeg.x).toBeLessThan(rowRot(0));
+    }
+    // the feed labels sit at their rows' cell heights (same Rx as the row)
+    const feedLabels = texts.slice(COLS);
+    for (let r = 0; r < plan.feeds.length; r++) {
+      expect(feedLabels[r].transform.rotationDeg.x).toBeCloseTo(rowRot(r), 6);
+    }
   });
 
   it('generates every op cleanly through the real pipeline (wrapped 4-axis)', () => {
-    const { ops, primitives } = materializeGreyscaleWedge(plan, LONGROD, LASER);
-    const c = ctx(LONGROD, primitives);
+    const { ops, primitives } = materializeGreyscaleChart(plan, BIGROD, LASER);
+    const c = ctx(BIGROD, primitives);
     for (const op of ops) {
       const res = generateJobOp(op, c);
       expect(res.error, `${op.id}: ${res.error}`).toBeNull();
       expect(res.moves.length).toBeGreaterThan(0);
+      // no CUT move of a RASTER carries both x and a (G93 never appears in
+      // a raster); the label engrave op is a vector burn
+      if (op.kind !== 'rasterEngrave') continue;
+      for (const m of res.moves) {
+        if (m.rapid) continue;
+        expect(m.words.x === undefined || m.words.a === undefined).toBe(true);
+      }
     }
   });
 
-  it('generates cleanly on flat stock too (bands + labels + refs)', () => {
-    const boxPlan = planWedgeCouponV2(BOX);
-    const { ops, primitives } = materializeGreyscaleWedge(boxPlan, BOX, LASER);
+  it('generates cleanly on flat stock too (cells + labels)', () => {
+    const boxPlan = planGreyscaleChart(BOX);
+    const { ops, primitives } = materializeGreyscaleChart(boxPlan, BOX, LASER);
     const c = ctx(BOX, primitives);
     for (const op of ops) {
       const res = generateJobOp(op, c);

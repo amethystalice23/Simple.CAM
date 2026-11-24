@@ -16,14 +16,9 @@ import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
 import {
   DEFAULT_COLUMN_SPACING_MM,
-  DEFAULT_WEDGE_MIN_POWER,
-  grayPatches,
   gridToGray,
-  MAX_WEDGE_BANDS,
-  MIN_WEDGE_BANDS,
   planInterlaceCoupon,
   solidBand,
-  WEDGE_GRAY_REFS,
 } from '../cam/rasterCoupons';
 import { chamfer } from '../cam/chamfer';
 import { vcarveFlat, vbitConeHeight } from '../cam/vcarveFlat';
@@ -1811,188 +1806,211 @@ const slotCountOf = (plan: InterlaceCouponV2): number =>
   plan.row2.length > 0 ? 2 : plan.row1.length > 0 ? 1 : 0;
 
 /**
- * The GREYSCALE STEP WEDGE v2 (Alice's 2026-11-24: "update the greyscale
- * power coupon using similar styling and lessons learnt from the interlace
- * generator"): the same idioms as the interlace coupon, translated to
- * bands —
+ * The GREYSCALE POWER CHART v3 (Alice's 2026-11-24, matched to the
+ * MakeraStudio ground truth — examples/MakeraStudiolaser_grid_TOP_*.nc):
+ * a 2D calibration chart of raster squares. POWER steps along X (one
+ * column per S, ascending), FEED steps down Y (one row per F, FASTEST AT
+ * TOP — Makera's F3000 row first), and the chart's right-edge column
+ * repeats max power as the 100% REFERENCE (Makera repeats their S1
+ * column there). Each cell is a CELL×CELL mm solid-black square burned as
+ * its own rasterEngrave op at that column's S and that row's F (the ⚡
+ * feed + beam-power override — the exact column×row combination, like
+ * Makera's one toolpath per square). Text labels (the "Numbers" layer,
+ * burned S1 in Makera's file) label the chart: one power label per column
+ * above the TOP row, one feed label per row left of the grid.
  *
- * 1. RANGE BOXES: Min/Max power (0–1, the op field's unit) derive the
- *    band ladder live. Count = round((max−min)/0.1) clamped to the old
- *    3..10 rule, bands an inclusive linspace from min to max (endpoints
- *    exact); min ≥ max swaps (the wedge precedent), min == max warns flat.
- * 2. COMPACT: the coupon no longer tiles the whole stock — each band is a
- *    square block at the Band height field (default 10mm, the interlace
- *    patch size), bands fill rows along the stock's span (ascending first
- *    half row 1, rest row 2 — the interlace split), the whole footprint
- *    centered like the interlace grid.
- * 3. LABELS: a text label above every band (its S as percent — the ⚡
- *    beam-power unit), the interlace no-overlap gap derivation (gap =
- *    max(3.5, widest label − patch + 2)), labels may overhang their own
- *    band, never touch a neighbor.
- * 4. REFERENCE COLUMN: the fixed 25/50/75% dithered patches (the old
- *    gray-refs slot) burn as ONE block in its own column AFTER the bands —
- *    the zero column's analogue — centered across the two rows' seam, its
- *    label above, one raster op at the JOB's power (no override).
+ * The interlace idioms carry over: rows stack through laserCouponLadder's
+ * slots (flat crown strip / wrapped arc, fastest at top = highest slot),
+ * the no-overlap gap derives from the widest label, everything lays out
+ * from the panel's live fields — nothing tiles the whole stock.
+ *
+ * DERIVATION: the stepped columns run From, From+step, … strictly below
+ * To (so at the prefill 0.1 → 1.0 step 0.1 the stepped columns are
+ * S0.1…S0.9); To itself burns as the right-edge reference column — the
+ * chart's last column, always present. The feeds burn in the order
+ * typed (fastest first by convention), capped at the testPattern 10-row
+ * cap.
  */
 
-/** the band ladder's target step, S units (0–1) — the prefill 0.05…1.0
- *  range derives 10 bands */
-const WEDGE_TARGET_STEP = 0.1;
-/** the block-gap floor + clearance — the interlace idiom, reused */
-export const WEDGE_MIN_BLOCK_GAP_MM = 3.5;
-export const WEDGE_GAP_CLEARANCE_MM = 2;
-/** each band is a square block of this side, mm (the interlace patch
- *  size — "1x1cm is enough") */
-export const WEDGE_BAND_MM = 10;
-/** clearance between a block's top edge and its label, mm */
-export const WEDGE_LABEL_CLEAR_MM = 1.5;
-/** label cap height, mm — the interlace idiom, reused */
-export const WEDGE_LABEL_CAP_MM = 3;
+/** the block-gap floor + clearance + label geometry — the interlace
+ *  idioms, shared verbatim (deduped: one set of constants) */
+const COUPON_MIN_BLOCK_GAP_MM = INTERLACE_MIN_BLOCK_GAP_MM;
+const COUPON_GAP_CLEARANCE_MM = INTERLACE_GAP_CLEARANCE_MM;
+const COUPON_LABEL_CLEAR_MM = INTERLACE_LABEL_CLEAR_MM;
+const COUPON_LABEL_CAP_MM = INTERLACE_LABEL_CAP_MM;
+/** each cell is a square raster block of this side, mm — Makera's chart
+ *  uses 6×6mm squares */
+export const CHART_CELL_MM = 6;
+/** the feeds field's row cap — the testPattern divisions cap */
+export const CHART_MAX_ROWS = 10;
 
-export interface WedgeLadder {
-  /** ascending S levels, min..max inclusive, count in the old 3..10 rule */
-  bands: number[];
-  /** the derived step between bands, S units */
-  steps: number[];
+export interface ChartGrid {
+  /** the stepped power columns ascending (From..below To) */
+  stepped: number[];
+  /** the right-edge reference column's power (= To) */
+  ref: number;
+  /** the feed rows in typed order, fastest first by convention */
+  feeds: number[];
   warnings: string[];
 }
 
-const round6w = (v: number): number => Math.round(v * 1e6) / 1e6;
+const round6c = (v: number): number => Math.round(v * 1e6) / 1e6;
 
 /**
- * Derive the band ladder from the power range boxes. min ≥ max swaps
- * (the wedge precedent); min == max warns "flat" and still derives the
- * clamped count (a flat ladder is a legal, useless read — the warning
- * says so). Count = round((max−min)/0.1) clamped into the old 3..10
- * rule, warning when the range wants fewer than 3 (squeezed) or the
- * clamp bites. Bands are an inclusive linspace — both endpoints exact.
+ * Derive the chart's columns and rows from the panel fields. from > to
+ * swaps (the wedge precedent); a non-positive step falls back to 0.1
+ * with a warning; feeds not strictly descending warn (the chart reads
+ * fastest-first) and clamp at CHART_MAX_ROWS.
  */
-export function deriveWedgeLadder(min: number, max: number): WedgeLadder {
+export function deriveChartGrid(
+  from: number,
+  to: number,
+  step: number,
+  feeds: number[],
+): ChartGrid {
   const warnings: string[] = [];
   const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
-  let lo = Number.isFinite(min) ? clamp01(min) : DEFAULT_WEDGE_MIN_POWER;
-  let hi = Number.isFinite(max) ? clamp01(max) : 1;
-  if (min > max) {
+  let lo = Number.isFinite(from) ? clamp01(from) : 0.1;
+  let hi = Number.isFinite(to) ? clamp01(to) : 1;
+  if (from > to) {
     warnings.push(
-      `minPower ${min} was above maxPower ${max} — read as swapped; the ladder ascends ${max} → ${min}`,
+      `the power range ran backwards (from ${from} above to ${to}) — read as swapped; the columns ascend ${to} → ${from}`,
     );
     [lo, hi] = [hi, lo];
   }
-  // +1e-9: 0.95/0.1 lands at 9.499…98 in floats — half-step counts round
-  // UP so the prefill 0.05…1.0 range derives its 10 bands
-  const rawCount = Math.round((hi - lo) / WEDGE_TARGET_STEP + 1e-9);
-  let count = Math.min(MAX_WEDGE_BANDS, Math.max(MIN_WEDGE_BANDS, rawCount));
-  if (rawCount < MIN_WEDGE_BANDS) {
-    warnings.push(
-      `the range wants ${Math.max(rawCount, 1)} band(s) — the wedge squeezes to ${MIN_WEDGE_BANDS}; the read may be too coarse`,
-    );
-  } else if (rawCount > MAX_WEDGE_BANDS) {
-    warnings.push(`the range wants ${rawCount} bands — clamped to ${MAX_WEDGE_BANDS}`);
+  let st = Number.isFinite(step) && step > 0 ? step : 0.1;
+  if (!(step > 0)) {
+    warnings.push('the power step must be positive — fell back to 0.1');
   }
-  if (Math.abs(hi - lo) < 1e-9) {
-    warnings.push(
-      `minPower equals maxPower (${hi}) — the ladder is flat; every band burns at the same level`,
-    );
+  const stepped: number[] = [];
+  for (let v = lo; v < hi - 1e-9 && stepped.length < CHART_MAX_ROWS; v += st) {
+    stepped.push(round6c(v));
   }
-  const rawStep = count > 1 ? (hi - lo) / (count - 1) : 0;
-  const bands: number[] = [];
-  for (let k = 0; k < count; k++) bands.push(round6w(lo + k * rawStep));
-  bands[count - 1] = hi; // exact maxPower on the last rung — no float dust
-  return { bands, steps: [round6w(rawStep)], warnings };
+  // degenerate: nothing stepped (From ≥ To, or the step ate the range)
+  if (stepped.length === 0) {
+    warnings.push('the power range needs From below To (at least two columns incl. the reference)');
+  }
+  const cleanFeeds = feeds.filter((f) => Number.isFinite(f) && f > 0);
+  if (cleanFeeds.length !== feeds.length) {
+    warnings.push('the feeds list held entries that are not positive numbers — they were dropped');
+  }
+  if (cleanFeeds.length === 0) {
+    warnings.push('the feeds list needs at least one feed');
+  }
+  if (cleanFeeds.length > CHART_MAX_ROWS) {
+    warnings.push(
+      `the feeds list wants ${cleanFeeds.length} rows — clamped to ${CHART_MAX_ROWS} (the test-pattern cap)`,
+    );
+    cleanFeeds.length = CHART_MAX_ROWS;
+  }
+  for (let i = 1; i < cleanFeeds.length; i++) {
+    if (cleanFeeds[i] > cleanFeeds[i - 1]) {
+      warnings.push(
+        'the feeds are not fastest-first — rows burn in the order typed, fastest at top by convention',
+      );
+      break;
+    }
+  }
+  return { stepped, ref: hi, feeds: cleanFeeds, warnings };
 }
 
-/**
- * The label text for a band: its S as BEAM POWER percent (the ⚡ unit the
- * op's spindleRpm slot carries), 0.1% precision, trailing ".0" trimmed —
- * "5%", "15.6%", "100%".
- */
-export const wedgeLabel = (band: number): string => {
-  const p = Math.round(band * 1000) / 10;
-  return Number.isInteger(p) ? `${p}%` : `${p.toFixed(1)}%`;
+/** a column's label: "S0.1", "S1" — the S value, trailing zeros trimmed */
+export const chartColumnLabel = (power: number): string => {
+  const mag = Math.abs(round6c(power));
+  const t = mag.toFixed(4).replace(/\.?0+$/, '');
+  return `S${t}`;
 };
 
-export interface GreyscaleWedgeV2 {
-  min: number;
-  max: number;
-  /** the ascending band ladder (row1 + row2 merged) */
-  bands: number[];
-  /** the derived step, S units */
-  steps: number[];
-  /** row 1 = the ascending first half of the bands, row 2 the rest */
-  row1: number[];
-  row2: number[];
-  /** the FIXED dithered reference grays (the refs column's slices) */
-  grayRefs: number[];
-  /** the square block's side, mm (the Band height field) */
-  patch: number;
-  /** mm between blocks — derived from the widest label (the interlace rule) */
+/** a row's label: "F3000" */
+export const chartRowLabel = (feed: number): string => `F${Math.round(feed)}`;
+
+export interface GreyscaleChart {
+  from: number;
+  to: number;
+  step: number;
+  /** the stepped power columns ascending (the reference excluded) */
+  columns: number[];
+  /** the right-edge reference column's power (= To) */
+  ref: number;
+  /** the feed rows, typed order (fastest first by convention) */
+  feeds: number[];
+  /** the square cell's side, mm (the Cell size field) */
+  cell: number;
+  /** mm between columns — derived from the widest label (the interlace rule) */
   gap: number;
   /** mm — the widest label's width */
   labelWidth: number;
   labelCap: number;
   labelHeight: number;
-  /** one row slot's height: patch + label clearance + label box */
-  slotHeight: number;
-  /** the coupon's face size, mm (x along the span incl. the refs column,
-   *  y the ladder direction) */
+  /** mm of left margin the feed labels need */
+  feedMargin: number;
+  /** the coupon's face size, mm — x along the stock (feed labels + grid),
+   *  y the ladder direction (arc on wrapped stock) */
   size: { x: number; y: number };
   warnings: string[];
 }
 
 /**
- * Plan the wedge v2 against the stock and the CURRENT range + band size:
- * ladder derives, every label lays out at the shared cap so the gap
- * derives from the actual widest label, rows split like the interlace
- * grid, the refs column sizes in. Pure; deterministic; the panel calls it
+ * Plan the chart against the stock and the CURRENT fields: column labels
+ * and feed labels lay out at the shared cap, the column gap derives from
+ * the widest column label, the left margin from the widest feed label,
+ * and the extent computes live. Pure; deterministic; the panel calls it
  * on every edit.
  */
-export function planWedgeCouponV2(
+export function planGreyscaleChart(
   stock: Stock,
-  min = DEFAULT_WEDGE_MIN_POWER,
-  max = 1,
-  bandHeight = WEDGE_BAND_MM,
-): GreyscaleWedgeV2 {
-  const ladder = deriveWedgeLadder(min, max);
-  const patch = Math.max(2, bandHeight);
-  // every label lays out at the shared cap — the widest sets the gap
-  const labelLayouts = ladder.bands.map((b) =>
+  from = 0.1,
+  to = 1,
+  step = 0.1,
+  feeds: number[] = [3000, 2500, 2000, 1500, 1000],
+  cell = CHART_CELL_MM,
+): GreyscaleChart {
+  const grid = deriveChartGrid(from, to, step, feeds);
+  const side = Math.max(1, cell);
+  // labels: one per column (S…) + one per row (F…) at the shared cap
+  const colLabels = [...grid.stepped, grid.ref].map((p) =>
     layoutTextPaths({
-      text: wedgeLabel(b),
+      text: chartColumnLabel(p),
       fontId: DEFAULT_TEXT_FONT_ID,
-      size: WEDGE_LABEL_CAP_MM,
+      size: COUPON_LABEL_CAP_MM,
       letterSpacing: 0,
       wrapWidth: 0,
     }),
   );
-  const refsLayout = layoutTextPaths({
-    text: 'refs',
-    fontId: DEFAULT_TEXT_FONT_ID,
-    size: WEDGE_LABEL_CAP_MM,
-    letterSpacing: 0,
-    wrapWidth: 0,
-  });
-  const labelWidth = Math.max(0, ...labelLayouts.map((l) => l.width), refsLayout.width);
-  const labelHeight = labelLayouts[0]?.height ?? refsLayout.height;
-  const gap = Math.max(
-    WEDGE_MIN_BLOCK_GAP_MM,
-    labelWidth - patch + WEDGE_GAP_CLEARANCE_MM,
+  const rowLabels = grid.feeds.map((f) =>
+    layoutTextPaths({
+      text: chartRowLabel(f),
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: COUPON_LABEL_CAP_MM,
+      letterSpacing: 0,
+      wrapWidth: 0,
+    }),
   );
-  const split = Math.ceil(ladder.bands.length / 2);
-  const row1 = ladder.bands.slice(0, split);
-  const row2 = ladder.bands.slice(split);
-  const slotHeight = patch + WEDGE_LABEL_CLEAR_MM + labelHeight;
-  const slotCount = row2.length > 0 ? 2 : 1;
-  const maxCols = Math.max(row1.length, row2.length, 1);
-  const gridW = maxCols * patch + (maxCols - 1) * gap;
-  const totalX = gridW + gap + patch; // the refs column always rides after
-  const totalY = slotCount * slotHeight + (slotCount - 1) * gap;
+  const labelHeight = colLabels[0]?.height ?? rowLabels[0]?.height ?? 3;
+  const maxColLabelW = Math.max(0, ...colLabels.map((l) => l.width));
+  const maxRowLabelW = Math.max(0, ...rowLabels.map((l) => l.width));
+  // the column pitch must clear the power labels above the top row
+  const gap = Math.max(
+    COUPON_MIN_BLOCK_GAP_MM,
+    maxColLabelW - side + COUPON_GAP_CLEARANCE_MM,
+  );
+  // the feed labels need a left margin clear of the grid
+  const feedMargin = maxRowLabelW + gap;
+  const rows = grid.feeds.length;
+  const cols = grid.stepped.length + 1; // + the reference column
+  const gridW = cols * side + (cols - 1) * gap;
+  const totalX = feedMargin + gridW;
+  // the rows are cell-sized slots; only the TOP row carries the label row
+  // (one label per column) — the label band rides above the last slot
+  const totalY =
+    rows * side + (rows - 1) * gap + COUPON_LABEL_CLEAR_MM + labelHeight;
 
-  const warnings: string[] = [...ladder.warnings];
+  const warnings: string[] = [...grid.warnings];
   const [x0, x1] = stockSpan(stock, 'x');
   const spanX = Math.max(x1 - x0, 1);
   if (totalX > spanX + 1e-9) {
     warnings.push(
-      `the grid needs ~${totalX.toFixed(0)}mm along the stock but the span is ${spanX.toFixed(0)}mm — bands will run past the edge`,
+      `the chart needs ~${totalX.toFixed(0)}mm along the stock but the span is ${spanX.toFixed(0)}mm — cells will run past the edge`,
     );
   }
   if (stock.kind === 'cylinder' && stock.axisMode === '4-axis') {
@@ -2011,89 +2029,71 @@ export function planWedgeCouponV2(
     }
   }
   return {
-    min,
-    max,
-    bands: ladder.bands,
-    steps: ladder.steps,
-    row1,
-    row2,
-    grayRefs: [...WEDGE_GRAY_REFS],
-    patch,
+    from,
+    to,
+    step,
+    columns: grid.stepped,
+    ref: grid.ref,
+    feeds: grid.feeds,
+    cell: side,
     gap,
-    labelWidth,
-    labelCap: WEDGE_LABEL_CAP_MM,
+    labelWidth: maxColLabelW,
+    labelCap: COUPON_LABEL_CAP_MM,
     labelHeight,
-    slotHeight,
+    feedMargin,
     size: { x: totalX, y: totalY },
     warnings,
   };
 }
 
 /**
- * Materialize the wedge v2: ONE solid-band bitmap + ONE rasterEngrave op
- * per band (the op's power pins the band's S level — the spindleRpm slot
- * is beam power %, so band S_i lands as an explicit ⚡ override) + ONE
- * text label per band burned by ONE engrave op; the FIXED 25/50/75%
- * dithered refs burn as ONE block in its own column after the bands,
- * centered across the two rows' seam (the zero column's analogue), one
- * raster op at the JOB's power (no override). Layout mirrors the
- * interlace coupon: rows left-aligned ascending along the span, the whole
- * footprint centered, labels above their blocks, the derived gap keeps
- * every label clear of its neighbors.
+ * Materialize the chart: ONE bitmap primitive (a solid CELL×CELL mm black
+ * square) + ONE rasterEngrave op per cell, the op's ⚡ override carrying
+ * the exact column×row combination (feed = the row's F, spindleRpm = the
+ * column's S as beam %). The TEXT labels — one power label per column
+ * above the top row, one feed label per row left of the grid — burn as
+ * ONE engrave op (Makera's "Numbers" layer). Layout: feed rows stack
+ * through laserCouponLadder's slots, FASTEST AT TOP (row 0 typed = the
+ * highest slot); columns ascend left→right with the To reference as the
+ * right-edge column; flat = the crown strip, wrapped = bent around the
+ * arc face-up.
  */
-export function materializeGreyscaleWedge(
-  plan: GreyscaleWedgeV2,
+export function materializeGreyscaleChart(
+  plan: GreyscaleChart,
   stock: Stock,
   laser: Tool,
 ): { ops: JobOp[]; primitives: Primitive[] } {
   const wrapped = stock.kind === 'cylinder' && stock.axisMode === '4-axis';
   const cal = rotaryCalibrationOf(stock);
-  const rowsLadder = laserCouponLadder(stock, plan.row2.length > 0 ? 2 : 1, plan.gap, plan.slotHeight);
+  const rows = plan.feeds.length;
+  const cols = plan.columns.length + 1; // + the reference column
+  const rowsLadder = laserCouponLadder(stock, rows, plan.gap, plan.cell);
   const pitch = RASTER_PITCH_MM;
   const px = {
-    w: Math.max(1, Math.round(plan.patch / pitch)),
-    h: Math.max(1, Math.round(plan.patch / pitch)),
+    w: Math.max(1, Math.round(plan.cell / pitch)),
+    h: Math.max(1, Math.round(plan.cell / pitch)),
   };
-  const face = { width: plan.patch, height: plan.patch };
+  const face = { width: plan.cell, height: plan.cell };
+  const cellGray = couponStoredGray(solidBand(px.w, px.h), wrapped);
   const degPerMm = 180 / (Math.PI * cal.effectiveRadius);
   const primitives: Primitive[] = [];
   const ops: JobOp[] = [];
   const labelIds: string[] = [];
-  const maxCols = Math.max(plan.row1.length, plan.row2.length, 1);
-  const gridW = maxCols * plan.patch + (maxCols - 1) * plan.gap;
-  const totalW = gridW + plan.gap + plan.patch; // the refs column
+  // the whole footprint (feed-label margin + grid) centers on the stock
+  const gridW = cols * plan.cell + (cols - 1) * plan.gap;
   const [x0, x1] = stockSpan(stock, 'x');
-  const leftX = (x0 + x1) / 2 - totalW / 2;
-  const colX = (col: number): number => leftX + col * (plan.patch + plan.gap) + plan.patch / 2;
+  const leftX = (x0 + x1) / 2 - (plan.feedMargin + gridW) / 2 + plan.feedMargin;
+  const colX = (c: number): number => leftX + c * (plan.cell + plan.gap) + plan.cell / 2;
+  // every column's power: the stepped ladder, then the To reference
+  const colPowers = [...plan.columns, plan.ref];
 
-  /** one block + its label: the interlace burnPatch idiom — the block in
-   *  the slot's lower band, the label above it ("a text label above it"). */
-  const burnBlock = (
+  /** one label primitive + its path ids (the engrave op's targets) */
+  const burnLabel = (
     labelText: string,
-    sourceName: string,
     x: number,
     base: ModelTransform,
-    gray: { width: number; height: number; data: Uint8Array },
-    opRates: { spindleRpm: number } | undefined,
+    labelDy: number,
   ) => {
-    const dPatch = -(plan.slotHeight - plan.patch) / 2;
-    const blockT: ModelTransform = wrapped
-      ? {
-          ...base,
-          position: { x, y: 0, z: cal.axisZ },
-          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - dPatch * degPerMm },
-        }
-      : { ...base, position: { x, y: base.position.y + dPatch, z: base.position.z } };
-    const prim = bitmapCouponPrimitive(gray, face, blockT, wrapped, stock, sourceName);
-    primitives.push(prim);
-    ops.push({
-      kind: 'rasterEngrave',
-      id: `jobop-${++opCount}`,
-      toolId: laser.id,
-      featureIds: [`p:${prim.id}:bitmap:0`],
-      pitch,
-      ...(opRates ? { rates: opRates } : {}),
-    });
     const lay = layoutTextPaths({
       text: labelText,
       fontId: DEFAULT_TEXT_FONT_ID,
@@ -2101,7 +2101,6 @@ export function materializeGreyscaleWedge(
       letterSpacing: 0,
       wrapWidth: 0,
     });
-    const labelDy = plan.slotHeight / 2 - plan.labelHeight / 2;
     const labelT: ModelTransform = wrapped
       ? {
           ...base,
@@ -2128,62 +2127,56 @@ export function materializeGreyscaleWedge(
     for (let k = 0; k < lay.paths.length; k++) labelIds.push(`p:${labelPrim.id}:path:${k}`);
   };
 
-  const rows: { values: number[] }[] = [
-    { values: plan.row1 },
-    ...(plan.row2.length > 0 ? [{ values: plan.row2 }] : []),
-  ];
-  rows.forEach((row, r) => {
-    const base = rowsLadder.place(r);
-    row.values.forEach((band, col) =>
-      burnBlock(
-        wedgeLabel(band),
-        `step wedge — band ${wedgeLabel(band)}`,
-        colX(col),
-        base,
-        couponStoredGray(solidBand(px.w, px.h), wrapped),
-        { spindleRpm: Math.round(band * 100) },
-      ),
-    );
-  });
-
-  // the refs column: AFTER the bands, centered across the seam (the zero
-  // column's analogue) — the FIXED 25/50/75% dithered slices burn at the
-  // JOB's power (no override; the laser tool's own % decides)
+  // the power labels: a label ROW above the TOP row (the fastest feed's
+  // row), one per column — the label band above the top slot's cells
   {
-    const base0 = rowsLadder.place(0);
-    const baseLast = rowsLadder.place(Math.max(rows.length - 1, 0));
-    const refsX = leftX + gridW + plan.gap + plan.patch / 2;
-    const dPatch = -(plan.slotHeight - plan.patch) / 2;
-    const refsBase: ModelTransform = wrapped
-      ? {
-          position: { x: refsX, y: 0, z: cal.axisZ },
-          rotationDeg: {
-            x: (base0.rotationDeg.x + baseLast.rotationDeg.x) / 2 + dPatch * degPerMm,
-            y: 0,
-            z: 0,
-          },
-          scale: { x: 1, y: 1, z: 1 },
-        }
-      : {
-          position: {
-            x: refsX,
-            y: (base0.position.y + baseLast.position.y) / 2 - dPatch,
-            z: base0.position.z,
-          },
-          rotationDeg: { x: 0, y: 0, z: 0 },
-          scale: { x: 1, y: 1, z: 1 },
-        };
-    burnBlock(
-      'refs',
-      'step wedge — gray refs (25/50/75%)',
-      refsX,
-      refsBase,
-      couponStoredGray(grayPatches(plan.grayRefs, px.w, px.h), wrapped),
-      undefined,
-    );
+    const topBase = rowsLadder.place(rows - 1);
+    const labelDy = plan.cell / 2 + COUPON_LABEL_CLEAR_MM + plan.labelHeight / 2;
+    colPowers.forEach((power, c) => {
+      burnLabel(chartColumnLabel(power), colX(c), topBase, labelDy);
+    });
   }
 
-  // ONE engrave op burns every label
+  // feed rows: typed order, FASTEST AT TOP — row 0 rides the highest slot
+  plan.feeds.forEach((feed, i) => {
+    const slot = rows - 1 - i;
+    const base = rowsLadder.place(slot);
+    // the row's cells: one bitmap + one op each, at this row's F — cells
+    // sit CENTERED in their cell-sized slots (the label band lives above
+    // the top row only)
+    colPowers.forEach((power, c) => {
+      const cellT: ModelTransform = { ...base, position: { ...base.position, x: colX(c) } };
+      const prim = bitmapCouponPrimitive(
+        cellGray,
+        face,
+        cellT,
+        wrapped,
+        stock,
+        `power chart — ${chartColumnLabel(power)} ${chartRowLabel(feed)}`,
+      );
+      primitives.push(prim);
+      ops.push({
+        kind: 'rasterEngrave',
+        id: `jobop-${++opCount}`,
+        toolId: laser.id,
+        featureIds: [`p:${prim.id}:bitmap:0`],
+        pitch,
+        rates: { feed, spindleRpm: Math.round(power * 100) },
+      });
+    });
+    // the row's feed label, LEFT of the grid at the cell's height
+    const feedLabelText = chartRowLabel(feed);
+    const feedLay = layoutTextPaths({
+      text: feedLabelText,
+      fontId: DEFAULT_TEXT_FONT_ID,
+      size: plan.labelCap,
+      letterSpacing: 0,
+      wrapWidth: 0,
+    });
+    burnLabel(feedLabelText, leftX - plan.gap - feedLay.width / 2, base, 0);
+  });
+
+  // ONE engrave op burns every label (Makera's "Numbers" layer)
   ops.push({
     kind: 'engrave',
     id: `jobop-${++opCount}`,

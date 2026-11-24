@@ -13,19 +13,19 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { DEFAULT_WEDGE_MIN_POWER } from '../cam/rasterCoupons';
 import type { Tool } from '../core/types';
 import { toolOptionLabel } from './toolNames';
 import {
-  materializeGreyscaleWedge,
+  materializeGreyscaleChart,
   materializeInterlaceCoupon,
+  planGreyscaleChart,
   planInterlaceCouponV2,
-  planWedgeCouponV2,
   interlaceLabel,
-  wedgeLabel,
+  chartColumnLabel,
+  chartRowLabel,
+  CHART_CELL_MM,
   INTERLACE_PATCH_MM,
-  WEDGE_BAND_MM,
-  type GreyscaleWedgeV2,
+  type GreyscaleChart,
   type InterlaceCouponV2,
 } from './jobGeneration';
 import { NumberField } from './fields';
@@ -192,40 +192,55 @@ export function InterlaceCouponDialog(props: CalibrationPanelProps) {
   );
 }
 
-// ------------------------------------------------------------- step wedge
+// ------------------------------------------------------------- power chart
 
 export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
   const lasers = lasersForCoupons(props.tools);
   const initial = lasers.find((t) => t.id === props.initialToolId) ?? lasers[0];
   const [laserId, setLaserId] = useState(initial?.id ?? '');
-  // the range boxes + band size (the interlace idioms, Alice's 2026-11-24
-  // follow-up): the band ladder derives from these live
-  const [min, setMin] = useState(DEFAULT_WEDGE_MIN_POWER);
-  const [max, setMax] = useState(1);
-  const [bandHeight, setBandHeight] = useState(WEDGE_BAND_MM);
+  // the chart's live fields (matched to the MakeraStudio ground truth):
+  // power columns from the range + step, feed rows fastest first, and the
+  // 6×6mm cell size — the extent derives, nothing tiles the whole stock
+  const [from, setFrom] = useState(0.1);
+  const [to, setTo] = useState(1);
+  const [step, setStep] = useState(0.1);
+  const [feedsText, setFeedsText] = useState('3000, 2500, 2000, 1500, 1000');
+  const [cell, setCell] = useState(CHART_CELL_MM);
   useEscape(props.onClose);
 
   const laser = lasers.find((t) => t.id === laserId) ?? initial;
 
-  const result: PlanResult<GreyscaleWedgeV2> = useMemo(() => {
+  const feeds = useMemo(
+    () =>
+      feedsText
+        .split(/[\s,]+/)
+        .map((t) => parseFloat(t))
+        .filter((v) => Number.isFinite(v) && v > 0),
+    [feedsText],
+  );
+
+  const result: PlanResult<GreyscaleChart> = useMemo(() => {
     if (!laser) return { plan: null, error: null };
     try {
-      return { plan: planWedgeCouponV2(props.stock, min, max, bandHeight), error: null };
+      return { plan: planGreyscaleChart(props.stock, from, to, step, feeds, cell), error: null };
     } catch (e) {
       return { plan: null, error: String(e instanceof Error ? e.message : e) };
     }
-  }, [laser, props.stock, min, max, bandHeight]);
+  }, [laser, props.stock, from, to, step, feeds, cell]);
+
+  const degenerate =
+    result.plan !== null && (result.plan.columns.length === 0 || result.plan.feeds.length === 0);
 
   const generate = () => {
-    if (!laser || !result.plan || result.plan.bands.length < 2) return;
-    const { ops, primitives } = materializeGreyscaleWedge(result.plan, props.stock, laser);
+    if (!laser || !result.plan || degenerate) return;
+    const { ops, primitives } = materializeGreyscaleChart(result.plan, props.stock, laser);
     if (ops.length === 0) return;
     props.onGenerate(ops, primitives);
   };
 
   return (
     <div className="modal-overlay">
-      <div className="modal cal-modal" role="dialog" aria-modal="true" aria-label="Greyscale power coupon">
+      <div className="modal cal-modal" role="dialog" aria-modal="true" aria-label="Greyscale power chart">
         <h2>
           Greyscale power
           <button type="button" className="icon-btn" title="Close (Esc)" onClick={props.onClose}>
@@ -233,38 +248,56 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
           </button>
         </h2>
         <p className="cal-intro">
-          A compact step-wedge: labeled square bands burned in a row across the power range you
-          set, plus the fixed 25/50/75% gray patches in a reference block beside them. Match each
-          gray patch to the closest-matching band — those pairs are the material's{' '}
-          <strong>power curve</strong>, the calibration the greyscale raster mode will read.
+          The power chart, matched to the machine's own grid: raster squares stepped by{' '}
+          <strong>power along X</strong> and <strong>feed down the rows</strong> (fastest at top),
+          the max-power reference repeated at the right edge, and every square labeled. Burn once;
+          read the chart off the stock.
         </p>
 
         <LaserSelect {...props} laserId={laserId} onPick={setLaserId} lasers={lasers} />
         {laser && (
           <div className="cal-axes">
             <NumberField
-              label="Min power"
-              value={min}
+              label="From power"
+              value={from}
               min={0}
               step={0.01}
-              title="the ladder's floor, 0–1 — the first band burns exactly here; diodes barely lase below ~5%"
-              onCommit={setMin}
+              title="the leftmost column's S, 0–1 — fine steps near the nothing→burnt flip are what the chart is for"
+              onCommit={setFrom}
             />
             <NumberField
-              label="Max power"
-              value={max}
+              label="To power"
+              value={to}
               min={0}
               step={0.01}
-              title="the ladder's top, 0–1 — the last band burns exactly here"
-              onCommit={setMax}
+              title="the right-edge reference column's S, 0–1 — repeated at full power so every feed row has its burn-everything baseline"
+              onCommit={setTo}
             />
             <NumberField
-              label="Band height (mm)"
-              value={bandHeight}
-              min={2}
+              label="Step"
+              value={step}
+              min={0.01}
+              step={0.01}
+              title="the power increment between columns, S units — finer steps read the flip point closer"
+              onCommit={setStep}
+            />
+            <label className="field">
+              <span>Feeds (fastest first)</span>
+              <input
+                type="text"
+                value={feedsText}
+                onChange={(e) => setFeedsText(e.target.value)}
+                placeholder="3000, 2500, 2000, 1500, 1000"
+                title="the feed rows, mm/min, comma or space separated — the FIRST feed burns the TOP row; up to 10 rows"
+              />
+            </label>
+            <NumberField
+              label="Cell size (mm)"
+              value={cell}
+              min={1}
               step={1}
-              title="each band is a square block of this side, mm — bigger is easier to read and photograph; the band COUNT derives from the power range, not from this"
-              onCommit={setBandHeight}
+              title="each chart square's side, mm — the machine's own chart uses 6×6mm squares at 0.15mm line pitch"
+              onCommit={setCell}
             />
           </div>
         )}
@@ -272,27 +305,28 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
         {result.plan && (
           <div className="cal-legend">
             <p className="hint">
-              ladder:{' '}
-              {result.plan.bands.map((b) => (
-                <strong key={b}>{wedgeLabel(b)} </strong>
+              powers:{' '}
+              {[...result.plan.columns, result.plan.ref].map((p) => (
+                <strong key={p}>{chartColumnLabel(p)} </strong>
               ))}
-              — step {result.plan.steps.map((s) => s.toFixed(3)).join(' / ')}
+              — step {result.plan.step.toFixed(2)}, S{result.plan.ref.toFixed(2)} reference at the
+              right edge
             </p>
             <p className="hint">
-              {result.plan.bands.length} bands of {result.plan.patch}×{result.plan.patch}mm —
-              row 1: {result.plan.row1.length}, row 2: {result.plan.row2.length}, refs column
-              (25/50/75%) beside the rows; {result.plan.gap.toFixed(1)}mm between blocks (fits{' '}
-              {result.plan.labelWidth.toFixed(1)}mm labels at {result.plan.labelCap}mm cap)
+              feeds: {result.plan.feeds.map((f) => chartRowLabel(f)).join(' / ')} —{' '}
+              {result.plan.columns.length + 1} × {result.plan.feeds.length} ={' '}
+              {(result.plan.columns.length + 1) * result.plan.feeds.length} cells of{' '}
+              {result.plan.cell}×{result.plan.cell}mm
             </p>
             <p className="hint">
               total size ≈ {result.plan.size.x.toFixed(0)} × {result.plan.size.y.toFixed(0)}mm on
               the stock
             </p>
             <p className="hint">
-              the read: burn the wedge, then match each gray patch (25 / 50 / 75%) to the
-              closest-matching band — the band whose burn looks the same tone is the power that
-              material's gray needs. Note the pairs down; that ladder is the material's power
-              curve.
+              the read: burn once; the nothing→burnt flip shows along the power axis at each feed —
+              the lowest power that fully burns at your chosen feed is the sweet spot, minus a
+              safety margin (fine steps nearby); each row also carries the{' '}
+              {chartColumnLabel(result.plan.ref)} reference at its right edge.
             </p>
           </div>
         )}
@@ -311,7 +345,7 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
           <button
             type="button"
             onClick={generate}
-            disabled={!laser || !result.plan || result.plan.bands.length < 2}
+            disabled={!laser || !result.plan || degenerate}
           >
             Generate Toolpaths
           </button>
