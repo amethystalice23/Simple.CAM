@@ -265,16 +265,18 @@ interface Props {
  * The WRAPPED bitmap's curved strip geometry: the face bends onto the
  * bitmap's own Ø (round 2, 2026-11-24; round 3 — Alice's transposed
  * mapping — the IMAGE WIDTH runs AROUND, the IMAGE HEIGHT along the tube,
- * image LEFT edge at the low arc, image TOP toward +X). The arc window
- * stays centered at local angle 0. The angle derives from the
+ * image LEFT edge at the low arc; round 4 — her "wrapped face down"
+ * field verdict flipped the axial leg FACE UP: image TOP toward −X). The
+ * arc window stays centered at local angle 0. The angle derives from the
  * ARCHITECTURAL radius (wrapDiameter/2) so the wrap math matches the
  * burn; the RENDER radius sits +0.05 radially out (the wrap-shade's
  * round-4 lift) so the strip never z-fights the stock. UVs carry the
  * mapping: u 0→1 runs the ARC from the around-origin (image LEFT) up —
- * image left→right = ascending A; v 0→1 runs AXIAL from the small-X end
- * (v 0 = canvas BOTTOM, the image's bottom row) to +X (canvas top) —
- * CanvasTexture's default flipY puts the canvas' bottom row at v 0 and
- * its top row at v 1, exactly the top-toward-+X convention.
+ * image left→right = ascending A, unchanged by round 4; v 0→1 runs AXIAL
+ * from the +X end (v 0 = canvas BOTTOM, the image's bottom row) to −X
+ * (v 1 = canvas top) — CanvasTexture's default flipY puts the canvas'
+ * bottom row at v 0 and its top row at v 1, exactly the FACE-UP
+ * top-toward-−X convention.
  */
 const BITMAP_STRIP_MAX_EDGE_MM = 2; // the wrap-shade's fineness rule
 const BITMAP_STRIP_SEGMENTS_CAP = 720; // a full-turn face never exceeds this
@@ -291,8 +293,8 @@ function bitmapStripGeometry(
     const s = -p.height / 2 + (p.height * i) / seg; // low arc = image LEFT edge
     const u = i / seg;
     for (const [x, v] of [
-      [-p.width / 2, 0], // small X = the image's bottom row (v 0)
-      [p.width / 2, 1], // +X = the image's top row (v 1)
+      [-p.width / 2, 1], // −X = the image's TOP row (v 1 — face up)
+      [p.width / 2, 0], // +X = the image's bottom row (v 0)
     ] as const) {
       const q = bitmapWrappedLocalPoint(diameter, x, s);
       const scale = rr / r0;
@@ -2602,12 +2604,12 @@ export function Viewport({
         // default flipY maps the canvas' TOP row to the plane's +y, which
         // is exactly the artworkLocalPoints convention; no re-derivation.
         // WRAPPED: the face bends onto the bitmap's own Ø (round 2; round
-        // 3 the transposed mapping) — a curved strip over its arc window,
-        // radial +0.05 lift (the wrap-shade's round-4 lift) to clear the
-        // stock. UVs carry the recorded convention: canvas u runs the ARC
-        // from the around-origin (image LEFT edge, left→right = ascending
-        // A); canvas v runs AXIAL (v 0 = the image's bottom row at the
-        // small-X end, v 1 = its top row at +X — top toward +X).
+        // 3 the transposed mapping; round 4 FACE UP) — a curved strip over
+        // its arc window, radial +0.05 lift (the wrap-shade's round-4
+        // lift) to clear the stock. UVs carry the recorded convention:
+        // canvas u runs the ARC from the around-origin (image LEFT edge,
+        // left→right = ascending A); canvas v runs AXIAL (v 1 = the
+        // image's top row at −X — face up; v 0 = its bottom row at +X).
         const gw = Math.max(p.gray.width, 1);
         const gh = Math.max(p.gray.height, 1);
         const cv = document.createElement('canvas');

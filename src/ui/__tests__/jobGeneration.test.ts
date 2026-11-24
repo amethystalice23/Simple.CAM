@@ -3494,13 +3494,14 @@ describe('rasterEngrave — wrapped bitmap (4th-axis frame)', () => {
     expect(res.summary).toContain('wrapped Ø50.0mm, 30.0mm arc');
   });
 
-  it('burns the TRANSPOSED image (round 3): image top lands at +X, left edge at the around-origin', () => {
+  it('burns the TRANSPOSED image FACE UP (round 4): image top lands at −X, left edge at the around-origin', () => {
     // image 2×2, black ONLY at its top-left pixel. The kernel bitmap is
-    // the image transposed with both axes flipped (bitmapKernelGray), so
-    // the pixel lands at kernel col 1, row 1 → on a pitch-1 face 20×30 it
-    // fires x ∈ [0, 10) (the HIGH-X half — the image's TOP toward +X) on
-    // machine rows 0..14 (the LOW-ARC half — the image's LEFT edge at the
-    // burn's around-origin).
+    // the image transposed with a vertical flip (bitmapKernelGray), so
+    // the pixel lands at kernel col 0, row 1 → on a pitch-1 face 20×30 it
+    // fires x ∈ [−10, 0) (the LOW-X half — the image's TOP toward −X, the
+    // FACE-UP default; round 4 flipped round 3's axial leg) on machine
+    // rows 0..14 (the LOW-ARC half — the image's LEFT edge at the burn's
+    // around-origin, unchanged by round 4).
     const corner = bmp({
       gray: { width: 2, height: 2, data: Uint8Array.from([0, 255, 255, 255]) },
       width: 20,
@@ -3511,8 +3512,8 @@ describe('rasterEngrave — wrapped bitmap (4th-axis frame)', () => {
     const fired = res.moves.filter((m) => !m.rapid && (m.power ?? 0) > 0 && m.words.x !== undefined);
     expect(fired.length).toBeGreaterThan(0);
     for (const m of fired) {
-      expect(m.words.x!).toBeGreaterThan(-1e-9);
-      expect(m.words.x!).toBeLessThanOrEqual(10 + 1e-9);
+      expect(m.words.x!).toBeGreaterThanOrEqual(-10 - 1e-9);
+      expect(m.words.x!).toBeLessThan(1e-9);
     }
   });
 

@@ -3241,8 +3241,8 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               // the face's four corners through the bitmap's own bend
               // (bitmapWrappedLocalPoint: the image LEFT edge sits at the
               // low arc — the around-origin, image left→right = ascending
-              // A — and the image TOP toward +X; the recorded convention of
-              // the transposed mapping) then out through the primitive
+              // A — and the image TOP toward −X, FACE UP; the recorded
+              // round-3/4 convention) then out through the primitive
               // transform
               const bend = (x: number, s: number) =>
                 xf0(bitmapWrappedLocalPoint(diameter, x, s));
@@ -3347,8 +3347,9 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
               toolId: tool.id,
               // the kernel contract (face {width: axial, height: arc}, bitmap
               // columns axial + rows burned bottom-first from the around-
-              // origin) under the transposed mapping takes the image
-              // TRANSPOSED with both axes flipped (bitmapKernelGray); flat
+              // origin) under the face-up transposed mapping takes the
+              // image TRANSPOSED with a vertical flip (bitmapKernelGray —
+              // image top toward −X, left edge at the around-origin); flat
               // faces keep the image as-is
               bitmap: f.frame ? bitmapKernelGray(f.prim.gray) : f.prim.gray,
               face: { width: f.prim.width, height: f.prim.height },

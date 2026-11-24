@@ -4,7 +4,7 @@ import { rotateGray90 } from '../core/bitmapImport';
 import { round2, rotaryCalibrationOf } from '../core/types';
 import type { ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
 import { alignAxisToStock, alignToStock, dropToSurface, stockSpan } from './placement';
-import { artworkSnapGeometry, bitmapSnapGeometry, primitiveGeometry } from './featureSources';
+import { artworkSnapGeometry, bitmapSnapGeometry, flipGrayVertical, primitiveGeometry } from './featureSources';
 import { NumInput } from './fields';
 import { bitmapWrappedFit, resizePrimitive, revertPrimitive, scaleForSize } from './primitives';
 
@@ -213,6 +213,17 @@ export function ModelPanel(props: Props) {
       gray: g,
       width: fit.face.width,
       height: fit.face.height,
+    });
+  };
+  // the ⇅ flip (round 4, 2026-11-24 — Alice: "you probably want a button
+  // to flip it"): end-for-end along the image's rows, same stateless
+  // gray-rewrite mechanism as the rotate buttons; aspect is untouched so
+  // the face dims stand
+  const flipBitmapImage = () => {
+    if (!selectedPrimitive || selectedPrimitive.kind !== 'bitmap') return;
+    props.onPrimitiveChange({
+      ...selectedPrimitive,
+      gray: flipGrayVertical(selectedPrimitive.gray),
     });
   };
   // Flipping flat↔wrapped (round 3, Alice's flip-repose ruling) re-poses
@@ -619,12 +630,14 @@ export function ModelPanel(props: Props) {
         <p className="subhead">Rotation (°)</p>
         {wrappedBitmap ? (
           <>
-            {/* ROUND 3: a wrapped bitmap's rotation is THE IMAGE'S — the
-                tube never turns. The transform fields read inert (locked);
-                these two buttons rewrite the primitive's gray, ±90° at a
-                press (two = 180°, end-for-end), re-fitting the face. */}
+            {/* ROUND 3 (rotation) + ROUND 4 (⇅ flip): a wrapped bitmap's
+                orientation is THE IMAGE'S — the tube never turns. The
+                transform fields read inert (locked); these buttons rewrite
+                the primitive's gray — ±90° re-fits the face, the flip is
+                end-for-end along the rows. */}
             <p className="hint">
-              wrapped rotates the image on the tube (left edge stays the
+              wrapped rotation and flip act on the image (the top of the
+              image burns at the −X end, face up; the left edge stays the
               around-origin) — the tube itself never turns
             </p>
             {AXES.map((a) => (
@@ -647,6 +660,13 @@ export function ModelPanel(props: Props) {
                 onClick={() => rotateBitmapImage(1)}
               >
                 ↻ image +90°
+              </button>
+              <button
+                type="button"
+                title="Flip the source image end-for-end along its rows (top for bottom) — for a source that lands upside down"
+                onClick={flipBitmapImage}
+              >
+                ⇅ Flip
               </button>
             </div>
           </>

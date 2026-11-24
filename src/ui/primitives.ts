@@ -272,10 +272,12 @@ export function bitmapFaceDims(
  * kernel contract (width = the AXIAL span, the stock's X extent; height =
  * the ARC length): the axial edge fits the image's HEIGHT, the arc edge
  * the image's WIDTH, so aspect here is arc/axial = grayW/grayH. ORIENTATION
- * (the default within the mapping): the image's LEFT edge sits at the
- * around-origin (left→right = ascending A), the image's TOP toward +X —
- * the Model tab's image-rotate buttons are the escape for any residual
- * flip. The >360° ruling (Alice, 2026-11-24: "no need to permit greater
+ * (the default within the mapping; round 4 — Alice's field verdict "you
+ * have wrapped it face down" — flipped the axial leg): the image's LEFT
+ * edge sits at the around-origin (left→right = ascending A, unchanged) and
+ * the image's TOP toward −X — the default wraps FACE UP; the Model tab's
+ * image-rotate/flip buttons are the escape for any residual orientation.
+ * The >360° ruling (Alice, 2026-11-24: "no need to permit greater
  * than 360° wrapping, force a scale down if the dropped artwork would
  * exceed that"): an arc longer than the circumference 2πR takes ONE
  * uniform scale-down (aspect preserved) that lands it exactly one turn —

@@ -9,6 +9,7 @@ import {
   bitmapKernelGray,
   bitmapSnapGeometry,
   expandHalftonePaths,
+  flipGrayVertical,
   opEdgeSource,
   parseNamespacedId,
   primitiveGeometry,
@@ -541,19 +542,20 @@ describe('sourcesFor: bitmap artwork source', () => {
   });
 });
 
-describe('bitmapKernelGray: the kernel image under the transposed wrap (round 3)', () => {
-  it('transposes with both axes flipped: image top toward +X, left edge at the around-origin', () => {
+describe('bitmapKernelGray: the kernel image under the face-up wrap (round 4)', () => {
+  it('transposes with a vertical flip: image top toward −X, left edge at the around-origin', () => {
     // image 2 cols × 3 rows:
     //   A B
     //   C D
     //   E F   (A..F = 10..60)
     // The kernel bitmap (columns = axial X, rows burned bottom-first from
     // the around-origin) must be:
-    //   row 0 (high arc)  F D B
-    //   row 1 (low arc)   E C A
+    //   row 0 (high arc)  B D F
+    //   row 1 (low arc)   A C E
     // — kernel row ny−1 = image column 0 (the LEFT edge at the
-    // around-origin) scanned small-X → high-X as E, C, A (so the image's
-    // TOP, A, lands at +X), ascending A reads the image left→right.
+    // around-origin) scanned small-X → high-X as A, C, E (so the image's
+    // TOP, A, lands at −X — FACE UP; round 4 flipped the round-3 axial
+    // leg), ascending A reads the image left→right.
     const img = {
       width: 2,
       height: 3,
@@ -562,7 +564,21 @@ describe('bitmapKernelGray: the kernel image under the transposed wrap (round 3)
     const k = bitmapKernelGray(img);
     expect(k.width).toBe(3); // the image's rows run axial
     expect(k.height).toBe(2); // the image's columns run the arc
-    expect(Array.from(k.data)).toEqual([60, 40, 20, 50, 30, 10]);
+    expect(Array.from(k.data)).toEqual([20, 40, 60, 10, 30, 50]);
+  });
+
+  it('flipGrayVertical: end-for-end along the rows, dims untouched', () => {
+    const img = {
+      width: 2,
+      height: 3,
+      data: Uint8Array.from([10, 20, 30, 40, 50, 60]),
+    };
+    const f = flipGrayVertical(img);
+    expect(f).not.toBe(img);
+    expect(f.width).toBe(2);
+    expect(f.height).toBe(3);
+    expect(Array.from(f.data)).toEqual([50, 60, 30, 40, 10, 20]);
+    expect(Array.from(flipGrayVertical(f).data)).toEqual([10, 20, 30, 40, 50, 60]); // involutive
   });
 });
 

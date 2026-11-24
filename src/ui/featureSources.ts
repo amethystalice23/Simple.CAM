@@ -13,7 +13,6 @@
  */
 
 import * as THREE from 'three';
-import { rotateGray90 } from '../core/bitmapImport';
 import { detectFeatures, type DetectedFeatures, type DetectAxis } from '../cam/features';
 import { segmentsForRadius } from './meshSegments';
 import {
@@ -140,20 +139,23 @@ export function artworkSnapGeometry(
 
 /**
  * The WRAPPED bitmap's local bend (round 2, 2026-11-24; round 3 the same
- * day — Alice's transposed-mapping ruling): the face rect bends onto the
- * bitmap's OWN cylinder (`wrapDiameter`), axis ∥ local X (the
- * wrapped-artwork primitive convention), the arc window centered at local
- * angle 0 (the +Z top). Face width = the AXIAL span along local X — the
- * image's HEIGHT runs along the tube (image top toward +X); face height =
- * the ARC LENGTH around — the image's WIDTH runs the arc, ascending
- * toward +Y — the A direction (atan2(y, z) sense everywhere the rotary
- * math runs). ORIENTATION (the recorded default): the image's LEFT edge
- * sits at the LOW-ARC end (s = −h/2, the around-origin) — image
- * left→right = ascending A — and the image's TOP toward +X. Rotation is
- * the IMAGE's (the Model tab's rotate buttons rewrite p.gray; the strip's
- * 3D transform never rotates in wrapped mode). Callers pass (x, s) in
- * face mm: x ∈ [−w/2, w/2] axial, s ∈ [−h/2, h/2] arc. Flat display
- * (Viewport's PlaneGeometry) is the degenerate r → ∞.
+ * day — Alice's transposed-mapping ruling; round 4 — her field verdict
+ * "you have wrapped it face down": the AXIAL leg flipped so the default
+ * wraps FACE UP): the face rect bends onto the bitmap's OWN cylinder
+ * (`wrapDiameter`), axis ∥ local X (the wrapped-artwork primitive
+ * convention), the arc window centered at local angle 0 (the +Z top).
+ * Face width = the AXIAL span along local X — the image's HEIGHT runs
+ * along the tube (image TOP toward −X, face-up); face height = the ARC
+ * LENGTH around — the image's WIDTH runs the arc, ascending toward +Y —
+ * the A direction (atan2(y, z) sense everywhere the rotary math runs).
+ * ORIENTATION (the recorded default): the image's LEFT edge sits at the
+ * LOW-ARC end (s = −h/2, the around-origin) — image left→right =
+ * ascending A, unchanged by round 4 (she reported upside-down, not
+ * mirrored). Rotation/flip is the IMAGE's (the Model tab's rotate/flip
+ * buttons rewrite p.gray; the strip's 3D transform never rotates in
+ * wrapped mode). Callers pass (x, s) in face mm: x ∈ [−w/2, w/2] axial,
+ * s ∈ [−h/2, h/2] arc. Flat display (Viewport's PlaneGeometry) is the
+ * degenerate r → ∞.
  */
 export function bitmapWrappedLocalPoint(
   wrapDiameter: number,
@@ -166,28 +168,48 @@ export function bitmapWrappedLocalPoint(
 }
 
 /**
- * The source image AS THE KERNEL CONSUMES IT for a wrapped face (round 3,
- * 2026-11-24): the kernel's contract is face {width: AXIAL, height: ARC}
- * with a bitmap whose columns run axial (grid col 0 at the small-X edge —
- * runStart k·px from x0mm) and whose rows run the arc BURNED BOTTOM-FIRST
- * from the around-origin (machine row j reads grid row ny−1−j). Under the
- * transposed mapping — image WIDTH around, image HEIGHT along X, image
- * LEFT edge at the around-origin, image TOP toward +X — that bitmap is
- * the image TRANSPOSED with both axes flipped: kernel pixel (col c, row r)
- * = image(col W−1−r, row H−1−c). Spot-check: kernel row ny−1 (burned
- * first, at the around-origin) = image column 0 — the LEFT edge ✓; kernel
- * col 0 (small X) = image row H−1 — the BOTTOM at −X, so the TOP lands
- * at +X ✓. Concretely it is rotateGray90 (CW) followed by a vertical
- * flip. Never touches the primitive — the stored image stays raw.
+ * The source image AS THE KERNEL CONSUMES IT for a wrapped face (round 3;
+ * round 4, 2026-11-24 — Alice's "wrapped face down" field verdict flipped
+ * the axial leg face-up): the kernel's contract is face {width: AXIAL,
+ * height: ARC} with a bitmap whose columns run axial (grid col 0 at the
+ * small-X edge — runStart k·px from x0mm) and whose rows run the arc
+ * BURNED BOTTOM-FIRST from the around-origin (machine row j reads grid
+ * row ny−1−j). Under the face-up mapping — image WIDTH around, image
+ * HEIGHT along X, image LEFT edge at the around-origin, image TOP toward
+ * −X — that bitmap is kernel pixel (col c, row r) = image(col W−1−r,
+ * row c): the transpose with a vertical flip, i.e. a 90° CCW turn of the
+ * source. Spot-check: kernel row ny−1 (burned first, at the around-
+ * origin) = image column 0 — the LEFT edge ✓ (unchanged by round 4);
+ * kernel col 0 (small X) = image row 0 — the TOP at −X ✓ face-up. Never
+ * touches the primitive — the stored image stays raw.
  */
 export function bitmapKernelGray(
   gray: { width: number; height: number; data: Uint8Array },
 ): { width: number; height: number; data: Uint8Array } {
-  const { width: w, height: h, data } = rotateGray90(gray); // CW transpose
+  const { width: w, height: h, data } = gray;
+  const out = new Uint8Array(w * h);
+  for (let c = 0; c < h; c++) {
+    for (let r = 0; r < w; r++) {
+      // kernel (col c, row r) = image(col W−1−r, row c)
+      out[r * h + c] = data[c * w + (w - 1 - r)];
+    }
+  }
+  return { width: h, height: w, data: out };
+}
+
+/**
+ * FLIP the image end-for-end along its rows (round 4, 2026-11-24 — the
+ * Model tab's "⇅ Flip": the escape for an upside-down source under the
+ * face-up wrap default; stateless and cumulative like the rotate
+ * buttons). Aspect and dims are untouched — only the row order flips.
+ */
+export function flipGrayVertical(
+  gray: { width: number; height: number; data: Uint8Array },
+): { width: number; height: number; data: Uint8Array } {
+  const { width: w, height: h, data } = gray;
   const out = new Uint8Array(w * h);
   for (let r = 0; r < h; r++) {
     for (let c = 0; c < w; c++) {
-      // flipV over the CW-rotated image
       out[r * w + c] = data[(h - 1 - r) * w + c];
     }
   }
