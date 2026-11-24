@@ -1180,6 +1180,24 @@ pre {
   color: #d8dde2;
   font-variant-numeric: tabular-nums;
 }
+/* the launcher's generator buttons: one ideogram + label + hint per row */
+.cal-launch { display: flex; flex-direction: column; gap: 8px; }
+.cal-launch > button {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  text-align: left;
+  background: #232830;
+  border: 1px solid #31373e;
+  border-radius: 6px;
+  color: #d8dde2;
+  cursor: pointer;
+}
+.cal-launch > button:hover { background: #31373e; }
+.cal-launch .cal-ideogram { font-size: 24px; width: 30px; text-align: center; }
+.cal-launch-label { display: flex; flex-direction: column; gap: 2px; font-size: 14px; font-weight: 600; }
+.cal-launch-hint { font-size: 11px; font-weight: 400; color: #9aa4ad; }
 .dialog-buttons {
   display: flex;
   justify-content: flex-end;

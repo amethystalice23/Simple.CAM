@@ -14,6 +14,13 @@ import { slotToolWidth, spiralCarve } from '../cam/spiralCarve';
 import { thread, threadDepth, threadFaceDiameter } from '../cam/thread';
 import { threadMill } from '../cam/threadMill';
 import { planCell, type MatrixDefaults, type TestPatternPlan } from '../cam/testPattern';
+import {
+  gridToGray,
+  grayPatches,
+  solidBand,
+  type GreyscaleWedgePlan,
+  type InterlaceCouponPlan,
+} from '../cam/rasterCoupons';
 import { chamfer } from '../cam/chamfer';
 import { vcarveFlat, vbitConeHeight } from '../cam/vcarveFlat';
 import { drill } from '../cam/drill';
@@ -1176,6 +1183,250 @@ export function materializeTestPattern(
     }
   }
 
+  return { ops, primitives };
+}
+
+/**
+ * LASER CALIBRATION COUPONS (src/cam/rasterCoupons.ts): the raster analogue
+ * of materializeTestPattern — a laser-coupon plan materializes into
+ * ORDINARY ops (rasterEngrave, one per burn) over ordinary bitmap
+ * primitives, stacked in "slots" so each burn is its own clickable, editable,
+ * savable record. Regenerate = delete + Generate again, like the cutting
+ * coupon.
+ *
+ * Slot layout (`laserCouponLadder`): 3-axis stock stacks the slots along Y
+ * above the crown; 4-axis stock bends each slot around the arc (the bitmap
+ * drop's wrapped convention — its own Ø of the stock's effective radius,
+ * centered on the rotation axis, rotated to its arc position). Slot 0 sits
+ * lowest, the ladder ascends with the plans' ascending bands/sweeps. The
+ * gap keeps adjacent burns far enough apart that a loupe never reads them
+ * into one coupon.
+ */
+
+/** mm between stacked coupon bitmaps (the read stays per-sweep/per-band) */
+export const COUPON_GAP_MM = 2;
+
+export interface LaserCouponLadder {
+  /** true = 4-axis stock: the slots bend around the arc; false = flat,
+   *  slots along Y above the crown */
+  wrapped: boolean;
+  /** per-slot face mm: x = the axial/top span (every slot copies it), y =
+   *  the slot's height (arc or Y) — what the PLANNERS take as their span */
+  span: { x: number; y: number };
+  /** machine transform of slot i (0 = lowest; the ladder ascends like the
+   *  plans' ascending bands). Flat slots sit on the crown; wrapped slots
+   *  rotate their wrap window about the rotation axis to theirs. */
+  place: (slot: number) => ModelTransform;
+}
+
+/**
+ * Lay out `count` coupon slots over the stock's usable laser face: 3-axis
+ * stacks them along Y above the crown, 4-axis spreads them over the arc.
+ * An explicit `slotY` pins the slot height (the interlace coupon's plan grid
+ * fixes its face); the default splits the span evenly.
+ */
+export function laserCouponLadder(
+  stock: Stock,
+  count: number,
+  gap = COUPON_GAP_MM,
+  slotY?: number,
+): LaserCouponLadder {
+  if (count < 1) throw new Error('coupon ladder needs at least one slot');
+  const [x0, x1] = stockSpan(stock, 'x');
+  const spanX = Math.max(x1 - x0, 1);
+  if (stock.kind === 'cylinder' && stock.axisMode === '4-axis') {
+    const radius = stock.calibration.effectiveRadius;
+    const circ = 2 * Math.PI * radius;
+    const axisZ = stock.calibration.axisZ;
+    const height = slotY ?? Math.max((circ - gap * (count - 1)) / count, 1);
+    // slot i's wrap window centers at arc c_i (rotationDeg.x = Rx angle;
+    // the bend centers at local angle 0, and a +Rx rotation moves a +Z
+    // point toward −Y — the ASCENDING arc is the negative rotation)
+    const degPerMm = 180 / (Math.PI * radius);
+    return {
+      wrapped: true,
+      span: { x: spanX, y: height },
+      place: (slot) => ({
+        position: { x: (x0 + x1) / 2, y: 0, z: axisZ },
+        rotationDeg: {
+          x: -(height / 2 + slot * (height + gap)) * degPerMm,
+          y: 0,
+          z: 0,
+        },
+        scale: { x: 1, y: 1, z: 1 },
+      }),
+    };
+  }
+  const [y0, y1] = stockSpan(stock, 'y');
+  const [, z1] = stockSpan(stock, 'z');
+  const height = slotY ?? Math.max((y1 - y0 - gap * (count - 1)) / count, 1);
+  return {
+    wrapped: false,
+    span: { x: spanX, y: height },
+    place: (slot) => ({
+      position: {
+        x: (x0 + x1) / 2,
+        y: y0 + height / 2 + slot * (height + gap),
+        z: z1, // flat bitmaps present on the crown plane (the import path)
+      },
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    }),
+  };
+}
+
+/**
+ * The coupon's KERNEL grid (columns/bands along machine X, rows around)
+ * as the gray a coupon bitmap STORES: the wrapped generation path consumes
+ * bitmapKernelGray(prim.gray) — the image transposed with a vertical flip,
+ * the face-up convention (image WIDTH runs around, HEIGHT along the tube)
+ * — so the wrapped storage is that mapping's INVERSE: transpose with the
+ * rows flipped. Flat coupons store the kernel grid as-is (the flat burn
+ * consumes the image directly).
+ */
+function couponStoredGray(
+  kernel: { width: number; height: number; data: Uint8Array },
+  wrapped: boolean,
+): { width: number; height: number; data: Uint8Array } {
+  if (!wrapped) return kernel;
+  const out = new Uint8Array(kernel.width * kernel.height);
+  for (let i = 0; i < kernel.height; i++) {
+    // image col i runs around; image row j carries the axial index
+    for (let j = 0; j < kernel.width; j++) {
+      out[j * kernel.height + i] = kernel.data[(kernel.height - 1 - i) * kernel.width + j];
+    }
+  }
+  return { width: kernel.height, height: kernel.width, data: out };
+}
+
+/** One coupon bitmap primitive: the plan's gray on a face rect placed in
+ *  its slot. Wrapped slots (4-axis) carry the import path's presentation:
+ *  'wrapped' with the STOCK's effective Ø (the drop's own-Ø default). */
+function bitmapCouponPrimitive(
+  gray: { width: number; height: number; data: Uint8Array },
+  face: { width: number; height: number },
+  transform: ModelTransform,
+  wrapped: boolean,
+  stock: Stock,
+  name: string,
+): Extract<Primitive, { kind: 'bitmap' }> {
+  return {
+    kind: 'bitmap',
+    id: nextPrimitiveId(),
+    sourceName: name,
+    gray,
+    width: face.width,
+    height: face.height,
+    ...(wrapped
+      ? { presentation: 'wrapped' as const, wrapDiameter: rotaryCalibrationOf(stock).effectiveRadius * 2 }
+      : {}),
+    transform,
+  };
+}
+
+/**
+ * Materialize the interlace coupon (planInterlaceCoupon): TWO identical
+ * column-grid bitmaps (serpentine slot lowest, one-way above) + one
+ * rasterEngrave op per sweep — same pitch, same fallback feed/power, the
+ * sweep field the only difference. The user burns it, reads the column
+ * shift between the two sweeps with a loupe/camera, and enters that offset
+ * into the serpentine op's interlace field (sign per the knob's definition:
+ * signed mm on REVERSE-row fired runs).
+ */
+export function materializeInterlaceCoupon(
+  plan: InterlaceCouponPlan,
+  stock: Stock,
+  laser: Tool,
+): { ops: JobOp[]; primitives: Primitive[] } {
+  // the burned face reads off the plan's grid at the plan's pitch — the
+  // op's resample (round(face/pitch)) reproduces the planned grid exactly
+  const face = { width: plan.grid.width * plan.pitch, height: plan.grid.height * plan.pitch };
+  const ladder = laserCouponLadder(stock, 2, COUPON_GAP_MM, face.height);
+  const gray = couponStoredGray(gridToGray(plan.grid, (x) => plan.columns.includes(x)), ladder.wrapped);
+  const sweeps = ['serpentine', 'one-way'] as const;
+  const sweepName: Record<(typeof sweeps)[number], string> = {
+    serpentine: 'serpentine sweep',
+    'one-way': 'one-way sweep',
+  };
+  const primitives = sweeps.map((sweep, i) =>
+    bitmapCouponPrimitive(gray, face, ladder.place(i), ladder.wrapped, stock, `interlace coupon — ${sweepName[sweep]}`),
+  );
+  const ops = sweeps.map(
+    (sweep, i): JobOp => ({
+      kind: 'rasterEngrave',
+      id: `jobop-${++opCount}`,
+      toolId: laser.id,
+      featureIds: [`p:${primitives[i].id}:bitmap:0`],
+      pitch: plan.pitch,
+      sweep,
+    }),
+  );
+  return { ops, primitives };
+}
+
+/**
+ * Materialize the greyscale step wedge (planGreyscaleWedge): one SOLID
+ * band bitmap + one raster op per band (the op's power pins the band's S
+ * level — the spindleRpm slot is beam power %, so band S_i lands as an
+ * explicit ⚡ override), plus one gray-refs bitmap of 25/50/75% dithered
+ * patches + one op at the JOB's power (no override — the laser tool's own
+ * %). The refs slot sits above the ascending ladder. The user matches each
+ * gray patch to the closest-matching band: that pairing IS the material's
+ * power curve (the phase-2 greyscale mode's data entry is NOT this round).
+ */
+export function materializeGreyscaleWedge(
+  plan: GreyscaleWedgePlan,
+  stock: Stock,
+  laser: Tool,
+): { ops: JobOp[]; primitives: Primitive[] } {
+  const slot = laserCouponLadder(stock, plan.bands.length + 1);
+  const pitch = RASTER_PITCH_MM;
+  const faceH = Math.min(plan.bandHeight, slot.span.y);
+  const face = { width: slot.span.x, height: faceH };
+  const px = {
+    w: Math.max(1, Math.round(face.width / pitch)),
+    h: Math.max(1, Math.round(face.height / pitch)),
+  };
+  const wrapped = slot.wrapped;
+  const primitives: Extract<Primitive, { kind: 'bitmap' }>[] = [];
+  const ops: JobOp[] = [];
+  plan.bands.forEach((band, i) => {
+    const prim = bitmapCouponPrimitive(
+      couponStoredGray(solidBand(px.w, px.h), wrapped),
+      face,
+      slot.place(i),
+      wrapped,
+      stock,
+      `step wedge — band ${i + 1}, S ${Math.round(band * 100)}%`,
+    );
+    primitives.push(prim);
+    ops.push({
+      kind: 'rasterEngrave',
+      id: `jobop-${++opCount}`,
+      toolId: laser.id,
+      featureIds: [`p:${prim.id}:bitmap:0`],
+      pitch,
+      rates: { spindleRpm: Math.round(band * 100) },
+    });
+  });
+  // the gray-refs slot: the FIXED 25/50/75% patches burn at the JOB's
+  // power — no override, the laser tool's own % decides
+  const refs = bitmapCouponPrimitive(
+    couponStoredGray(grayPatches(plan.grayRefs, px.w, px.h), wrapped),
+    face,
+    slot.place(plan.bands.length),
+    wrapped,
+    stock,
+    'step wedge — gray refs (25/50/75%)',
+  );
+  primitives.push(refs);
+  ops.push({
+    kind: 'rasterEngrave',
+    id: `jobop-${++opCount}`,
+    toolId: laser.id,
+    featureIds: [`p:${refs.id}:bitmap:0`],
+    pitch,
+  });
   return { ops, primitives };
 }
 
@@ -2521,7 +2772,10 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             entryPose: prevExit,
             clipCtx: clipCtx ?? undefined,
           });
-          moves.push(...r.moves);
+          // chunked: a big op's move list overflows the spread (~65k args)
+          for (let i = 0; i < r.moves.length; i += 4096) {
+            moves.push(...r.moves.slice(i, i + 4096));
+          }
           minutes += r.estimatedMinutes;
           a = r.endA;
           swept += patch.cells.length;
@@ -3371,7 +3625,11 @@ function generateJobOpInner(op: JobOp, ctx: GenContext): OpResult {
             // raster feed (an extinguish + G0 reposition between faces,
             // exactly like engraveLaser between paths)
             if (moves.length > 0) moves.push({ words: {}, feed, power: 0 });
-            moves.push(...res.moves);
+            // a coupon-scale raster carries ~10^5 moves — a spread push
+            // blows the call stack past ~65k args, so append in chunks
+            for (let i = 0; i < res.moves.length; i += 4096) {
+              moves.push(...res.moves.slice(i, i + 4096));
+            }
             minutes += res.estimatedMinutes;
             firedRuns += res.firedRuns;
             gridBits.push(`${res.grid.width}×${res.grid.height}`);

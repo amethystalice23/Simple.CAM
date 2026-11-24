@@ -74,7 +74,7 @@ import { displayFrameFor, sectionCrownZ, sectionFixtureId, sectionMode, stockTop
 import { decimateForDetection } from '../cam/decimate';
 import { AboutBox } from './AboutBox';
 import { ExportDialog } from './ExportDialog';
-import { CalibrationDialog } from './CalibrationDialog';
+import { CalibrationLauncher, calibrationGenerator } from './CalibrationLauncher';
 import { SimulateDialog } from './SimulateDialog';
 import { HelpDialog } from './HelpDialog';
 import { BitmapImportDialog, type BitmapImportResult } from './BitmapImportDialog';
@@ -161,8 +161,10 @@ export function App() {
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null);
   /** the "Export g-code" dialog is open */
   const [showExport, setShowExport] = useState(false);
-  /** the calibration-coupon generator dialog is open (top-bar button) */
-  const [showCalibration, setShowCalibration] = useState(false);
+  /** the calibration launcher is open (top-bar button); the value names
+   *  the open generator — 'launcher' = the popup list, a registry id = that
+   *  generator's dialog */
+  const [calibrationView, setCalibrationView] = useState<string | null>(null);
   /** the about box is open (click the product name in the header) */
   const [showAbout, setShowAbout] = useState(false);
   /** the carve simulator dialog is open (top-bar "Simulate…") */
@@ -1697,16 +1699,17 @@ export function App() {
     setExpandedOpId(op.id);
   };
 
-  /** the Calibration dialog's Generate: append the materialized coupon —
+  /** the Calibration generators' Generate: append the materialized coupon —
    * ordinary ops the user can examine, toggle, edit, and save — plus the
-   * flat mode's per-cell outline primitives. The debounced recalc pass
-   * picks the new ops up on the next tick. */
+   * coupon's primitives (laser bitmaps, the flat mode's per-cell outline
+   * plates). The debounced recalc pass picks the new ops up on the next
+   * tick. */
   const generateCalibration = (newOps: JobOp[], newPrimitives: Primitive[]) => {
     if (newPrimitives.length > 0) setPrimitives((prev) => [...prev, ...newPrimitives]);
     if (newOps.length > 0) {
       setOps((prev) => [...prev, ...newOps]);
       setLastToolId(newOps[0].toolId);
-      setShowCalibration(false);
+      setCalibrationView(null);
     }
   };
 
@@ -2262,8 +2265,8 @@ export function App() {
           <span className="header-sep" aria-hidden />
           <button
             type="button"
-            title="Generate a feed/speed test-pattern coupon as ordinary toolpaths"
-            onClick={() => setShowCalibration(true)}
+            title="Generate a calibration coupon as ordinary toolpaths — feeds & speeds, laser interlacing, greyscale power"
+            onClick={() => setCalibrationView('launcher')}
           >
             Calibration…
           </button>
@@ -2602,16 +2605,29 @@ export function App() {
           onClose={() => setShowExport(false)}
         />
       )}
-      {showCalibration && (
-        <CalibrationDialog
-          tools={tools}
-          stock={stock}
-          materialId={stock.materialId}
-          initialToolId={lastToolId}
-          onClose={() => setShowCalibration(false)}
-          onGenerate={generateCalibration}
+      {calibrationView === 'launcher' && (
+        <CalibrationLauncher
+          onClose={() => setCalibrationView(null)}
+          onOpen={(id) => setCalibrationView(id)}
         />
       )}
+      {calibrationView &&
+        calibrationView !== 'launcher' &&
+        (() => {
+          const entry = calibrationGenerator(calibrationView);
+          if (!entry) return null;
+          const Panel = entry.component;
+          return (
+            <Panel
+              tools={tools}
+              stock={stock}
+              materialId={stock.materialId}
+              initialToolId={lastToolId}
+              onClose={() => setCalibrationView(null)}
+              onGenerate={generateCalibration}
+            />
+          );
+        })()}
       {bitmapImport && (
         <BitmapImportDialog
           name={bitmapImport.name}
