@@ -309,8 +309,8 @@ export function GreyscaleWedgeDialog(props: CalibrationPanelProps) {
               {[...result.plan.columns, result.plan.ref].map((p) => (
                 <strong key={p}>{chartColumnLabel(p)} </strong>
               ))}
-              — step {result.plan.step.toFixed(2)}, S{result.plan.ref.toFixed(2)} reference at the
-              right edge
+              — step {result.plan.step.toFixed(2)} ({(result.plan.step * 100).toFixed(0)}% power),{' '}
+              {chartColumnLabel(result.plan.ref)} reference at the right edge
             </p>
             <p className="hint">
               feeds: {result.plan.feeds.map((f) => chartRowLabel(f)).join(' / ')} —{' '}

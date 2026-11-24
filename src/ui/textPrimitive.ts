@@ -56,6 +56,22 @@ export function layoutTextPaths(spec: TextSpec): TextLayoutPaths {
 }
 
 /**
+ * Rotate a laid-out label 90° CCW about its center — the compact-chart
+ * idiom (Alice, 2026-11-24: "turn the text 90° and you can then squeeze
+ * all the columns together"). The label's advance (+x) points UP after
+ * rotation, so the text reads bottom-up along its column edge; the glyph
+ * tops face left. Width and height swap (a rotated "10%" at 3mm cap is
+ * ~3.4mm wide × its text length tall). The rotation is BAKED into the
+ * stored points — the primitive's transform semantics stay flat, and the
+ * wrapped bend composes (the stored advance maps to the arc/axial as
+ * ever).
+ */
+export function rotateLayout90(lay: TextLayoutPaths): TextLayoutPaths {
+  const paths = lay.paths.map((path) => path.map((q) => ({ x: -q.y, y: q.x })));
+  return { paths, width: lay.height, height: lay.width };
+}
+
+/**
  * The + Text constructor — mirror of artworkFromImport's frame choice:
  * 3-axis lands FLAT on the stock crown (centered), 4-axis lands WRAPPED
  * on the stock's effective Ø with the transform centered on the rotation

@@ -15,6 +15,7 @@ import {
   chartColumnLabel,
   chartRowLabel,
   CHART_CELL_MM,
+  CHART_GAP_MM,
   CHART_MAX_ROWS,
   deriveChartGrid,
   deriveInterlaceLadder,
@@ -510,10 +511,11 @@ describe('deriveChartGrid — columns, reference, feed rows', () => {
     expect(junk.warnings.some((w) => /not positive numbers/.test(w))).toBe(true);
   });
 
-  it('labels: columns read S0.1-style, rows read F3000-style', () => {
-    expect(chartColumnLabel(0.1)).toBe('S0.1');
-    expect(chartColumnLabel(1)).toBe('S1');
-    expect(chartColumnLabel(0.35)).toBe('S0.35');
+  it('labels: columns read as PERCENT (S is laser power), rows read F3000-style', () => {
+    expect(chartColumnLabel(0.1)).toBe('10%');
+    expect(chartColumnLabel(1)).toBe('100%');
+    expect(chartColumnLabel(0.35)).toBe('35%');
+    expect(chartColumnLabel(0.156)).toBe('15.6%');
     expect(chartRowLabel(3000)).toBe('F3000');
     expect(chartRowLabel(1000.4)).toBe('F1000');
   });
@@ -533,20 +535,23 @@ describe('planGreyscaleChart — extent, labels, live warnings', () => {
     expect(plan.ref).toBe(1);
     expect(plan.feeds).toHaveLength(5);
     expect(plan.cell).toBe(CHART_CELL_MM);
-    // the column gap derives from the widest column label (the interlace rule)
-    expect(plan.gap).toBeGreaterThanOrEqual(INTERLACE_MIN_BLOCK_GAP_MM);
-    expect(plan.gap).toBeCloseTo(
-      Math.max(INTERLACE_MIN_BLOCK_GAP_MM, plan.labelWidth - plan.cell + INTERLACE_GAP_CLEARANCE_MM),
-      9,
-    );
+    // the rotated labels shrink the gap to the laser-natural minimum
+    expect(plan.gap).toBe(CHART_GAP_MM);
+    // the feed labels' cap auto-shrinks so the rotated text fits one row band
+    expect(plan.feedLabelCap).toBeLessThan(plan.labelCap);
+    expect(plan.feedLabelCap).toBeGreaterThanOrEqual(1.2);
     // the extent: feed margin + 10 columns along X; 5 cell rows + the
-    // label band above the top row along the ladder direction
+    // rotated label band above the top row along the ladder direction
     expect(plan.feedMargin).toBeGreaterThan(0);
     expect(plan.size.x).toBeCloseTo(plan.feedMargin + 10 * plan.cell + 9 * plan.gap, 6);
     expect(plan.size.y).toBeCloseTo(
-      5 * plan.cell + 4 * plan.gap + INTERLACE_LABEL_CLEAR_MM + plan.labelHeight,
+      5 * plan.cell + 4 * plan.gap + INTERLACE_LABEL_CLEAR_MM + 12,
       6,
     );
+    // THE CARD TEST (Alice's anodized blanks ~85×54): the prefill chart
+    // squeezes under ~90mm wide and ~55mm tall
+    expect(plan.size.x).toBeLessThan(90);
+    expect(plan.size.y).toBeLessThan(55);
     expect(plan.warnings).toEqual([]);
   });
 
@@ -622,15 +627,22 @@ describe('materializeGreyscaleChart — cells, overrides, labels', () => {
     );
     for (const t of powerLabels) {
       expect(t.transform.position.y).toBeGreaterThan(topCellY);
+      // ROTATED 90°: the label's footprint is cap-height wide × text
+      // length tall — narrow enough to fit inside its column's band
+      expect(t.width).toBeLessThanOrEqual(plan.labelCap + 0.5);
+      expect(t.height).toBeGreaterThan(plan.cell);
     }
     // the feed labels: F3000 (fastest, top row) first, one per row
     const feedLabels = texts.slice(COLS);
     expect(feedLabels.map((t) => t.text)).toEqual(plan.feeds.map((f) => chartRowLabel(f)));
     expect(feedLabels[0].text).toBe('F3000');
-    // they sit LEFT of the grid at their row's cell height
+    // they sit LEFT of the grid at their row's cell height, ROTATED —
+    // their rotated length fits inside one row band (cell + gap − 1)
     const gridLeft = Math.min(...bitmaps.map((b) => b.transform.position.x));
     for (const t of feedLabels) {
       expect(t.transform.position.x).toBeLessThan(gridLeft);
+      expect(t.height).toBeLessThanOrEqual(plan.cell + plan.gap - 1 + 1e-6);
+      expect(t.width).toBeLessThanOrEqual(plan.feedLabelCap + 0.5);
     }
     const ys = feedLabels.map((t) => t.transform.position.y);
     for (let i = 1; i < ys.length; i++) expect(ys[i]).not.toBeCloseTo(ys[i - 1], 3);

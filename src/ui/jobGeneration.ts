@@ -80,7 +80,7 @@ import { transformFn } from './featureOverlays';
 import { bitmapKernelGray, bitmapWrappedLocalPoint, boxTopFaceId, resolveFeature, splitSelection, unmatchedIds, type FeatureSource } from './featureSources';
 import { nextPrimitiveId, unitTransform } from './primitives';
 import { stockFootprint, stockSpan, stockTopZ } from './placement';
-import { DEFAULT_TEXT_FONT_ID, layoutTextPaths } from './textPrimitive';
+import { DEFAULT_TEXT_FONT_ID, layoutTextPaths, rotateLayout90 } from './textPrimitive';
 
 export interface GeneratedOp {
   moves: Move[];
@@ -1815,14 +1815,23 @@ const slotCountOf = (plan: InterlaceCouponV2): number =>
  * column there). Each cell is a CELL×CELL mm solid-black square burned as
  * its own rasterEngrave op at that column's S and that row's F (the ⚡
  * feed + beam-power override — the exact column×row combination, like
- * Makera's one toolpath per square). Text labels (the "Numbers" layer,
- * burned S1 in Makera's file) label the chart: one power label per column
- * above the TOP row, one feed label per row left of the grid.
+ * Makera's one toolpath per square). Text labels (the "Numbers" layer)
+ * label the chart: one label per column above the top row, one per row
+ * left of the grid.
  *
- * The interlace idioms carry over: rows stack through laserCouponLadder's
- * slots (flat crown strip / wrapped arc, fastest at top = highest slot),
- * the no-overlap gap derives from the widest label, everything lays out
- * from the panel's live fields — nothing tiles the whole stock.
+ * COMPACT (Alice's follow-up rulings, 2026-11-24): labels read as PERCENT
+ * ("what does S0.1 mean?... put that as a percentage") and are ROTATED
+ * 90° ("turn the text 90° and you can then squeeze all the columns
+ * together... ideally onto my anodised aluminium business card blanks").
+ * The rotation is baked into the stored points (rotateLayout90 — the
+ * primitive's transform semantics stay flat), so a rotated label's
+ * footprint is cap-height wide × text-length tall: the column gap
+ * shrinks to the laser-natural CHART_GAP_MM = 2mm (the rotated labels'
+ * ~cap-height X-footprint fits inside the cell's own band), and the feed
+ * labels' cap auto-shrinks until their rotated length fits one row band
+ * (cell + gap − 1mm of clearance). Prefill extent lands ≈ 82 × 51mm —
+ * inside a business-card blank. The no-overlap invariant holds across
+ * every label and cell rect.
  *
  * DERIVATION: the stepped columns run From, From+step, … strictly below
  * To (so at the prefill 0.1 → 1.0 step 0.1 the stepped columns are
@@ -1832,17 +1841,23 @@ const slotCountOf = (plan: InterlaceCouponV2): number =>
  * cap.
  */
 
-/** the block-gap floor + clearance + label geometry — the interlace
- *  idioms, shared verbatim (deduped: one set of constants) */
-const COUPON_MIN_BLOCK_GAP_MM = INTERLACE_MIN_BLOCK_GAP_MM;
-const COUPON_GAP_CLEARANCE_MM = INTERLACE_GAP_CLEARANCE_MM;
-const COUPON_LABEL_CLEAR_MM = INTERLACE_LABEL_CLEAR_MM;
-const COUPON_LABEL_CAP_MM = INTERLACE_LABEL_CAP_MM;
+/** the laser-natural minimum between squares, mm — with the labels
+ *  rotated 90° nothing wider sits between the cells, so this constant no
+ *  longer derives from label widths (the pre-rounds rule was 3.5mm) */
+export const CHART_GAP_MM = 2;
 /** each cell is a square raster block of this side, mm — Makera's chart
  *  uses 6×6mm squares */
 export const CHART_CELL_MM = 6;
 /** the feeds field's row cap — the testPattern divisions cap */
 export const CHART_MAX_ROWS = 10;
+/** clearance between a block's top edge and its label, mm (the interlace
+ *  idiom) */
+const CHART_LABEL_CLEAR_MM = INTERLACE_LABEL_CLEAR_MM;
+/** label cap height for the column labels, mm (the interlace idiom) */
+const CHART_LABEL_CAP_MM = INTERLACE_LABEL_CAP_MM;
+/** clearance the rotated feed labels keep from each other and from the
+ *  grid, mm */
+const CHART_FEED_CLEAR_MM = 1;
 
 export interface ChartGrid {
   /** the stepped power columns ascending (From..below To) */
@@ -1883,7 +1898,9 @@ export function deriveChartGrid(
     warnings.push('the power step must be positive — fell back to 0.1');
   }
   const stepped: number[] = [];
-  for (let v = lo; v < hi - 1e-9 && stepped.length < CHART_MAX_ROWS; v += st) {
+  for (let k = 0; k < CHART_MAX_ROWS; k++) {
+    const v = lo + k * st; // index-based — no float accumulation drift
+    if (v >= hi - 1e-9) break;
     stepped.push(round6c(v));
   }
   // degenerate: nothing stepped (From ≥ To, or the step ate the range)
@@ -1914,11 +1931,14 @@ export function deriveChartGrid(
   return { stepped, ref: hi, feeds: cleanFeeds, warnings };
 }
 
-/** a column's label: "S0.1", "S1" — the S value, trailing zeros trimmed */
+/**
+ * A column's label as PERCENT (Alice: "what does S0.1 mean?... put that
+ * as a percentage") — S is laser power 0–1, so S0.1 reads "10%"; 0.1%
+ * precision, trailing ".0" trimmed.
+ */
 export const chartColumnLabel = (power: number): string => {
-  const mag = Math.abs(round6c(power));
-  const t = mag.toFixed(4).replace(/\.?0+$/, '');
-  return `S${t}`;
+  const p = Math.round(round6c(power) * 1000) / 10;
+  return `${Number.isInteger(p) ? p : p.toFixed(1)}%`;
 };
 
 /** a row's label: "F3000" */
@@ -1936,13 +1956,14 @@ export interface GreyscaleChart {
   feeds: number[];
   /** the square cell's side, mm (the Cell size field) */
   cell: number;
-  /** mm between columns — derived from the widest label (the interlace rule) */
+  /** mm between squares — the laser-natural minimum (rotated labels) */
   gap: number;
-  /** mm — the widest label's width */
-  labelWidth: number;
+  /** the column labels' cap height, mm */
   labelCap: number;
-  labelHeight: number;
-  /** mm of left margin the feed labels need */
+  /** the FEED labels' cap height, mm — auto-shrunk so the rotated text
+   *  length fits one row band (see the section doc) */
+  feedLabelCap: number;
+  /** mm of left margin the rotated feed labels need */
   feedMargin: number;
   /** the coupon's face size, mm — x along the stock (feed labels + grid),
    *  y the ladder direction (arc on wrapped stock) */
@@ -1951,11 +1972,11 @@ export interface GreyscaleChart {
 }
 
 /**
- * Plan the chart against the stock and the CURRENT fields: column labels
- * and feed labels lay out at the shared cap, the column gap derives from
- * the widest column label, the left margin from the widest feed label,
- * and the extent computes live. Pure; deterministic; the panel calls it
- * on every edit.
+ * Plan the chart against the stock and the CURRENT fields: the column
+ * labels lay out at CHART_LABEL_CAP_MM and rotate 90° (their footprint =
+ * cap height wide), the feed labels' cap shrinks until their rotated
+ * length fits one row band, and the extent computes live. Pure;
+ * deterministic; the panel calls it on every edit.
  */
 export function planGreyscaleChart(
   stock: Stock,
@@ -1967,43 +1988,55 @@ export function planGreyscaleChart(
 ): GreyscaleChart {
   const grid = deriveChartGrid(from, to, step, feeds);
   const side = Math.max(1, cell);
-  // labels: one per column (S…) + one per row (F…) at the shared cap
+  // the column labels at the shared cap, rotated: footprint = cap height
+  // wide × text length tall (the tallest sets the top label band)
   const colLabels = [...grid.stepped, grid.ref].map((p) =>
-    layoutTextPaths({
-      text: chartColumnLabel(p),
-      fontId: DEFAULT_TEXT_FONT_ID,
-      size: COUPON_LABEL_CAP_MM,
-      letterSpacing: 0,
-      wrapWidth: 0,
-    }),
+    rotateLayout90(
+      layoutTextPaths({
+        text: chartColumnLabel(p),
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: CHART_LABEL_CAP_MM,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }),
+    ),
   );
-  const rowLabels = grid.feeds.map((f) =>
-    layoutTextPaths({
-      text: chartRowLabel(f),
-      fontId: DEFAULT_TEXT_FONT_ID,
-      size: COUPON_LABEL_CAP_MM,
-      letterSpacing: 0,
-      wrapWidth: 0,
-    }),
+  const maxColLabelLen = Math.max(0, ...colLabels.map((l) => l.height));
+  // the feed labels rotate too — auto-shrink their cap until the rotated
+  // text length fits one row band (cell + gap − clearance); measure the
+  // longest feed text at the shared cap and scale linearly
+  const maxFeedText = grid.feeds.map(chartRowLabel).reduce((a, b) => (b.length > a.length ? b : a), 'F3000');
+  const feedLenAtCap = layoutTextPaths({
+    text: maxFeedText,
+    fontId: DEFAULT_TEXT_FONT_ID,
+    size: CHART_LABEL_CAP_MM,
+    letterSpacing: 0,
+    wrapWidth: 0,
+  }).width;
+  const band = side + CHART_GAP_MM - CHART_FEED_CLEAR_MM;
+  const feedLabelCap = Math.max(
+    1.2,
+    Math.min(CHART_LABEL_CAP_MM, (CHART_LABEL_CAP_MM * band) / Math.max(feedLenAtCap, 1e-6)),
   );
-  const labelHeight = colLabels[0]?.height ?? rowLabels[0]?.height ?? 3;
-  const maxColLabelW = Math.max(0, ...colLabels.map((l) => l.width));
-  const maxRowLabelW = Math.max(0, ...rowLabels.map((l) => l.width));
-  // the column pitch must clear the power labels above the top row
-  const gap = Math.max(
-    COUPON_MIN_BLOCK_GAP_MM,
-    maxColLabelW - side + COUPON_GAP_CLEARANCE_MM,
+  const feedLabelLayouts = grid.feeds.map((f) =>
+    rotateLayout90(
+      layoutTextPaths({
+        text: chartRowLabel(f),
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: feedLabelCap,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }),
+    ),
   );
-  // the feed labels need a left margin clear of the grid
-  const feedMargin = maxRowLabelW + gap;
+  const maxFeedLabelW = Math.max(0, ...feedLabelLayouts.map((l) => l.width));
+  const feedMargin = maxFeedLabelW + CHART_GAP_MM;
   const rows = grid.feeds.length;
   const cols = grid.stepped.length + 1; // + the reference column
-  const gridW = cols * side + (cols - 1) * gap;
+  const gridW = cols * side + (cols - 1) * CHART_GAP_MM;
   const totalX = feedMargin + gridW;
-  // the rows are cell-sized slots; only the TOP row carries the label row
-  // (one label per column) — the label band rides above the last slot
   const totalY =
-    rows * side + (rows - 1) * gap + COUPON_LABEL_CLEAR_MM + labelHeight;
+    rows * side + (rows - 1) * CHART_GAP_MM + CHART_LABEL_CLEAR_MM + maxColLabelLen;
 
   const warnings: string[] = [...grid.warnings];
   const [x0, x1] = stockSpan(stock, 'x');
@@ -2036,10 +2069,9 @@ export function planGreyscaleChart(
     ref: grid.ref,
     feeds: grid.feeds,
     cell: side,
-    gap,
-    labelWidth: maxColLabelW,
-    labelCap: COUPON_LABEL_CAP_MM,
-    labelHeight,
+    gap: CHART_GAP_MM,
+    labelCap: CHART_LABEL_CAP_MM,
+    feedLabelCap,
     feedMargin,
     size: { x: totalX, y: totalY },
     warnings,
@@ -2051,12 +2083,13 @@ export function planGreyscaleChart(
  * square) + ONE rasterEngrave op per cell, the op's ⚡ override carrying
  * the exact column×row combination (feed = the row's F, spindleRpm = the
  * column's S as beam %). The TEXT labels — one power label per column
- * above the top row, one feed label per row left of the grid — burn as
- * ONE engrave op (Makera's "Numbers" layer). Layout: feed rows stack
- * through laserCouponLadder's slots, FASTEST AT TOP (row 0 typed = the
- * highest slot); columns ascend left→right with the To reference as the
- * right-edge column; flat = the crown strip, wrapped = bent around the
- * arc face-up.
+ * above the top row (bottom-anchored, reading bottom-up), one feed label
+ * per row left of the grid (reading bottom-up, centered on its row's cell
+ * height) — burn as ONE engrave op (Makera's "Numbers" layer). Layout:
+ * feed rows stack through laserCouponLadder's slots, FASTEST AT TOP (row
+ * 0 typed = the highest slot); columns ascend left→right with the To
+ * reference as the right-edge column; flat = the crown strip, wrapped =
+ * bent around the arc face-up.
  */
 export function materializeGreyscaleChart(
   plan: GreyscaleChart,
@@ -2087,33 +2120,36 @@ export function materializeGreyscaleChart(
   // every column's power: the stepped ladder, then the To reference
   const colPowers = [...plan.columns, plan.ref];
 
-  /** one label primitive + its path ids (the engrave op's targets) */
+  /** lay out + rotate one label, burn it, and collect its path ids */
   const burnLabel = (
     labelText: string,
+    cap: number,
     x: number,
     base: ModelTransform,
-    labelDy: number,
+    dy: number,
   ) => {
-    const lay = layoutTextPaths({
-      text: labelText,
-      fontId: DEFAULT_TEXT_FONT_ID,
-      size: plan.labelCap,
-      letterSpacing: 0,
-      wrapWidth: 0,
-    });
+    const lay = rotateLayout90(
+      layoutTextPaths({
+        text: labelText,
+        fontId: DEFAULT_TEXT_FONT_ID,
+        size: cap,
+        letterSpacing: 0,
+        wrapWidth: 0,
+      }),
+    );
     const labelT: ModelTransform = wrapped
       ? {
           ...base,
           position: { x, y: 0, z: cal.axisZ },
-          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - labelDy * degPerMm },
+          rotationDeg: { ...base.rotationDeg, x: base.rotationDeg.x - dy * degPerMm },
         }
-      : { ...base, position: { x, y: base.position.y + labelDy, z: base.position.z } };
+      : { ...base, position: { x, y: base.position.y + dy, z: base.position.z } };
     const labelPrim: Extract<Primitive, { kind: 'text' }> = {
       kind: 'text',
       id: nextPrimitiveId(),
       text: labelText,
       fontId: DEFAULT_TEXT_FONT_ID,
-      size: plan.labelCap,
+      size: cap,
       letterSpacing: 0,
       wrapWidth: 0,
       paths: lay.paths,
@@ -2128,22 +2164,38 @@ export function materializeGreyscaleChart(
   };
 
   // the power labels: a label ROW above the TOP row (the fastest feed's
-  // row), one per column — the label band above the top slot's cells
+  // row), one per column — bottom-anchored just above the cells, reading
+  // bottom-up along the column edge
   {
     const topBase = rowsLadder.place(rows - 1);
-    const labelDy = plan.cell / 2 + COUPON_LABEL_CLEAR_MM + plan.labelHeight / 2;
     colPowers.forEach((power, c) => {
-      burnLabel(chartColumnLabel(power), colX(c), topBase, labelDy);
+      // the rotated label's own height sets its center: bottom edge sits
+      // CHART_LABEL_CLEAR_MM above the cell's top edge
+      const len = rotateLayout90(
+        layoutTextPaths({
+          text: chartColumnLabel(power),
+          fontId: DEFAULT_TEXT_FONT_ID,
+          size: plan.labelCap,
+          letterSpacing: 0,
+          wrapWidth: 0,
+        }),
+      ).height;
+      burnLabel(
+        chartColumnLabel(power),
+        plan.labelCap,
+        colX(c),
+        topBase,
+        plan.cell / 2 + CHART_LABEL_CLEAR_MM + len / 2,
+      );
     });
   }
 
-  // feed rows: typed order, FASTEST AT TOP — row 0 rides the highest slot
+  // feed rows: typed order, FASTEST AT TOP — row 0 rides the highest slot.
+  // Cells sit CENTERED in their cell-sized slots (the label band lives
+  // above the top row and in the left margin).
   plan.feeds.forEach((feed, i) => {
     const slot = rows - 1 - i;
     const base = rowsLadder.place(slot);
-    // the row's cells: one bitmap + one op each, at this row's F — cells
-    // sit CENTERED in their cell-sized slots (the label band lives above
-    // the top row only)
     colPowers.forEach((power, c) => {
       const cellT: ModelTransform = { ...base, position: { ...base.position, x: colX(c) } };
       const prim = bitmapCouponPrimitive(
@@ -2165,15 +2217,7 @@ export function materializeGreyscaleChart(
       });
     });
     // the row's feed label, LEFT of the grid at the cell's height
-    const feedLabelText = chartRowLabel(feed);
-    const feedLay = layoutTextPaths({
-      text: feedLabelText,
-      fontId: DEFAULT_TEXT_FONT_ID,
-      size: plan.labelCap,
-      letterSpacing: 0,
-      wrapWidth: 0,
-    });
-    burnLabel(feedLabelText, leftX - plan.gap - feedLay.width / 2, base, 0);
+    burnLabel(chartRowLabel(feed), plan.feedLabelCap, leftX - plan.gap - plan.feedLabelCap / 2, base, 0);
   });
 
   // ONE engrave op burns every label (Makera's "Numbers" layer)
