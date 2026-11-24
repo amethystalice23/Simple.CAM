@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import * as THREE from 'three';
-import { round2 } from '../core/types';
+import { rotateGray90 } from '../core/bitmapImport';
+import { round2, rotaryCalibrationOf } from '../core/types';
 import type { ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
-import { alignAxisToStock, alignToStock, dropToSurface } from './placement';
-import { artworkSnapGeometry, primitiveGeometry } from './featureSources';
+import { alignAxisToStock, alignToStock, dropToSurface, stockSpan } from './placement';
+import { artworkSnapGeometry, bitmapSnapGeometry, flipGrayVertical, primitiveGeometry } from './featureSources';
 import { NumInput } from './fields';
-import { resizePrimitive, revertPrimitive, scaleForSize } from './primitives';
+import { bitmapWrappedFit, resizePrimitive, revertPrimitive, scaleForSize } from './primitives';
 
 interface Props {
   /** null when no STL is loaded — primitives still work (the whole point) */
@@ -110,7 +111,9 @@ export function ModelPanel(props: Props) {
     const shape = !isModel
       ? selectedPrimitive!.kind === 'artwork'
         ? artworkSnapGeometry(selectedPrimitive!)
-        : primitiveGeometry(selectedPrimitive!)
+        : selectedPrimitive!.kind === 'bitmap'
+          ? bitmapSnapGeometry(selectedPrimitive!)
+          : primitiveGeometry(selectedPrimitive!)
       : geometry!;
     const t = fn(shape);
     // snapped positions are auto-filled numbers — they read clean at 2dp
@@ -153,13 +156,17 @@ export function ModelPanel(props: Props) {
         ? `cylinder Ø${selectedPrimitive.diameter.toFixed(1)} × ${selectedPrimitive.length.toFixed(1)}`
         : selectedPrimitive.kind === 'artwork'
           ? `${artworkKind(selectedPrimitive)} · ${selectedPrimitive.paths.length} path(s)`
-          : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
+          : selectedPrimitive.kind === 'bitmap'
+            ? `bitmap artwork · ${selectedPrimitive.width.toFixed(1)} × ${selectedPrimitive.height.toFixed(1)}mm`
+            : `box ${selectedPrimitive.size.x.toFixed(1)} × ${selectedPrimitive.size.y.toFixed(1)} × ${selectedPrimitive.size.z.toFixed(1)}`);
   const rowLabel = (p: Primitive) =>
     p.kind === 'cylinder'
       ? `cylinder Ø${p.diameter.toFixed(1)} × ${p.length.toFixed(1)}`
       : p.kind === 'artwork'
         ? `${artworkKind(p)} · ${p.paths.length} path(s)`
-        : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
+        : p.kind === 'bitmap'
+          ? `bitmap artwork · ${p.width.toFixed(1)} × ${p.height.toFixed(1)}mm`
+          : `box ${p.size.x.toFixed(1)} × ${p.size.y.toFixed(1)} × ${p.size.z.toFixed(1)}`;
   /** the row's SECOND line: type + size, mirroring the model row's shape
    * (filename on top, file type + dims under) */
   const rowMeta = (p: Primitive) =>
@@ -184,6 +191,58 @@ export function ModelPanel(props: Props) {
     setActive({ ...active, scale: { x: s, y: s, z: s } });
   };
   const revertArtworkScale = () => setActive({ ...active, scale: { x: 1, y: 1, z: 1 } });
+
+  // WRAPPED bitmap (round 3, 2026-11-24 — Alice: "if i rotate it rotates
+  // the already wrapped tube, not the image on the tube"): rotation is
+  // THE IMAGE'S — every rotation control rewrites the primitive's gray
+  // before the around/axial mapping, never the strip's 3D transform. A
+  // 90° step swaps which image axis runs around vs axial, so the
+  // one-turn force-scale re-fits (bitmapWrappedFit on the rotated gray);
+  // 180° flips the image end-for-end at unchanged dims.
+  const wrappedBitmap =
+    selectedPrimitive !== null &&
+    selectedPrimitive.kind === 'bitmap' &&
+    selectedPrimitive.presentation === 'wrapped';
+  const rotateBitmapImage = (turns: number) => {
+    if (!selectedPrimitive || selectedPrimitive.kind !== 'bitmap') return;
+    let g = selectedPrimitive.gray;
+    for (let n = ((turns % 4) + 4) % 4; n > 0; n--) g = rotateGray90(g);
+    const fit = bitmapWrappedFit(g, props.stock); // re-run the force-scale
+    props.onPrimitiveChange({
+      ...selectedPrimitive,
+      gray: g,
+      width: fit.face.width,
+      height: fit.face.height,
+    });
+  };
+  // the ⇅ flip (round 4, 2026-11-24 — Alice: "you probably want a button
+  // to flip it"): end-for-end along the image's rows, same stateless
+  // gray-rewrite mechanism as the rotate buttons; aspect is untouched so
+  // the face dims stand
+  const flipBitmapImage = () => {
+    if (!selectedPrimitive || selectedPrimitive.kind !== 'bitmap') return;
+    props.onPrimitiveChange({
+      ...selectedPrimitive,
+      gray: flipGrayVertical(selectedPrimitive.gray),
+    });
+  };
+  // Flipping flat↔wrapped (round 3, Alice's flip-repose ruling) re-poses
+  // exactly as the import path would: centered on the stock, Z on the
+  // rotation axis when wrapped / on the stock crown when flat — a flat
+  // strip can never end up invisible inside the stock — and rotation
+  // zeroes (the import pose; wrapped keeps it locked from here).
+  const reposeOnPresentation = (presentation: 'flat' | 'wrapped'): ModelTransform => ({
+    ...selectedPrimitive!.transform,
+    rotationDeg: { x: 0, y: 0, z: 0 },
+    position: {
+      x: (stockSpan(props.stock, 'x')[0] + stockSpan(props.stock, 'x')[1]) / 2,
+      y: (stockSpan(props.stock, 'y')[0] + stockSpan(props.stock, 'y')[1]) / 2,
+      z:
+        presentation === 'wrapped'
+          ? rotaryCalibrationOf(props.stock).axisZ
+          : stockSpan(props.stock, 'z')[1],
+    },
+  });
 
   return (
     <>
@@ -457,6 +516,76 @@ export function ModelPanel(props: Props) {
               </>
             )}
           </>
+        ) : selectedPrimitive && selectedPrimitive.kind === 'bitmap' ? (
+          <>
+            {/* BITMAP presentation (round 2, 2026-11-24): 3-axis keeps the
+             *  flat strip; 4-axis (or the user's call) wraps the face onto
+             *  the bitmap's own Ø — the artwork primitive's frame choice,
+             *  same fields. W/H drive the ONE uniform scale like flat
+             *  artwork; in wrapped mode H is the ARC around the Ø. */}
+            <label className="field">
+              <span>Presentation</span>
+              <select
+                value={selectedPrimitive.presentation ?? 'flat'}
+                onChange={(e) => {
+                  const presentation = e.target.value as 'flat' | 'wrapped';
+                  props.onPrimitiveChange({
+                    ...selectedPrimitive,
+                    presentation,
+                    // first wrap: the stock's effective Ø stands in (the
+                    // artwork convention) until the ⇩-style pick exists
+                    ...(presentation === 'wrapped' && !selectedPrimitive.wrapDiameter
+                      ? {
+                          wrapDiameter: Math.max(
+                            1,
+                            rotaryCalibrationOf(props.stock).effectiveRadius * 2,
+                          ),
+                        }
+                      : {}),
+                    // round 3: the flip re-poses as the import path would
+                    transform: reposeOnPresentation(presentation),
+                  });
+                }}
+              >
+                <option value="flat">flat</option>
+                <option value="wrapped">wrapped</option>
+              </select>
+            </label>
+            {selectedPrimitive.presentation === 'wrapped' && (
+              <div className="axis-row wide">
+                <span className="axis-label">Ø</span>
+                <NumInput
+                  value={selectedPrimitive.wrapDiameter ?? 0}
+                  step={0.5}
+                  onCommit={(v) =>
+                    props.onPrimitiveChange({
+                      ...selectedPrimitive,
+                      wrapDiameter: Math.max(0.5, v),
+                    })
+                  }
+                />
+              </div>
+            )}
+            <SizeField
+              label="W"
+              value={selectedPrimitive.width * active.scale.x}
+              onCommit={(v) => commitArtworkScale(v / Math.max(selectedPrimitive.width, 1e-9))}
+              onRevert={revertArtworkScale}
+            />
+            <SizeField
+              label="H"
+              value={selectedPrimitive.height * active.scale.y}
+              onCommit={(v) => commitArtworkScale(v / Math.max(selectedPrimitive.height, 1e-9))}
+              onRevert={revertArtworkScale}
+            />
+            <InfoTip
+              text={`scale ×${active.scale.x.toFixed(2)} — the dithered raster burns this face${
+                selectedPrimitive.presentation === 'wrapped'
+                  ? ' around the Ø (H is the arc; one turn is the ceiling)'
+                  : ''
+              }; ↺ reverts to the imported size`}
+            />
+          </>
         ) : selectedPrimitive ? (
           AXES.map((a) => (
             <SizeField
@@ -499,18 +628,62 @@ export function ModelPanel(props: Props) {
         </div>
 
         <p className="subhead">Rotation (°)</p>
-        {AXES.map((a) => (
-          <div className="axis-row" key={`rot-${a}`}>
-            <span className="axis-label">{a.toUpperCase()}</span>
-            <NumInput value={active.rotationDeg[a]} step={15} onCommit={(v) => setRotation(a, v)} />
-            <button type="button" onClick={() => bumpRot(a, -90)}>
-              −90°
-            </button>
-            <button type="button" onClick={() => bumpRot(a, 90)}>
-              +90°
-            </button>
-          </div>
-        ))}
+        {wrappedBitmap ? (
+          <>
+            {/* ROUND 3 (rotation) + ROUND 4 (⇅ flip): a wrapped bitmap's
+                orientation is THE IMAGE'S — the tube never turns. The
+                transform fields read inert (locked); these buttons rewrite
+                the primitive's gray — ±90° re-fits the face, the flip is
+                end-for-end along the rows. */}
+            <p className="hint">
+              wrapped rotation and flip act on the image (the top of the
+              image burns at the −X end, face up; the left edge stays the
+              around-origin) — the tube itself never turns
+            </p>
+            {AXES.map((a) => (
+              <div className="axis-row" key={`rot-${a}`}>
+                <span className="axis-label">{a.toUpperCase()}</span>
+                <NumInput value={active.rotationDeg[a]} step={15} onCommit={() => {}} disabled />
+              </div>
+            ))}
+            <div className="buttons">
+              <button
+                type="button"
+                title="Rotate the source image −90° — swaps which image axis runs around vs along the tube and re-fits the face"
+                onClick={() => rotateBitmapImage(-1)}
+              >
+                ↺ image −90°
+              </button>
+              <button
+                type="button"
+                title="Rotate the source image +90° — swaps which image axis runs around vs along the tube and re-fits the face"
+                onClick={() => rotateBitmapImage(1)}
+              >
+                ↻ image +90°
+              </button>
+              <button
+                type="button"
+                title="Flip the source image end-for-end along its rows (top for bottom) — for a source that lands upside down"
+                onClick={flipBitmapImage}
+              >
+                ⇅ Flip
+              </button>
+            </div>
+          </>
+        ) : (
+          AXES.map((a) => (
+            <div className="axis-row" key={`rot-${a}`}>
+              <span className="axis-label">{a.toUpperCase()}</span>
+              <NumInput value={active.rotationDeg[a]} step={15} onCommit={(v) => setRotation(a, v)} />
+              <button type="button" onClick={() => bumpRot(a, -90)}>
+                −90°
+              </button>
+              <button type="button" onClick={() => bumpRot(a, 90)}>
+                +90°
+              </button>
+            </div>
+          ))
+        )}
       </section>
       )}
     </>

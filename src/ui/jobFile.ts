@@ -9,7 +9,11 @@ import { isDepthBearingJobOp } from '../core/types';
 import type { JobOp, ModelTransform, Primitive, Stock, Tool } from '../core/types';
 
 export const JOB_FORMAT = 'simple.cam job';
-export const JOB_VERSION = 1;
+/** v2 (2026-11-24): the 'bitmap' artwork primitive — laser raster engrave.
+ *  Its grayscale array rides as `gray.base64` in the file (converted to
+ *  the runtime Uint8Array on load); older builds refuse the file at the
+ *  version gate rather than meet an unknown primitive kind. */
+export const JOB_VERSION = 2;
 
 export interface JobFile {
   format: string;
@@ -323,6 +327,78 @@ export function decodeStl(b64: string): Uint8Array {
   return out;
 }
 
+/**
+ * Bitmap artwork in job files (v2): the grayscale array rides as base64
+ * under `gray.base64` — JSON.stringify of a Uint8Array produces an
+ * index-keyed object that silently breaks the dither's row-major math on
+ * load. Same chunked conversion as the STL, cached by array identity
+ * (the debounced autosave re-encodes per edit otherwise — a large photo
+ * would pay it every keystroke). `gray.data` never appears in a file;
+ * `gray.base64` never survives a parse.
+ */
+const grayBase64Cache = new WeakMap<Uint8Array, string>();
+
+export function encodeGray(data: Uint8Array): string {
+  const hit = grayBase64Cache.get(data);
+  if (hit !== undefined) return hit;
+  const b64 = encodeStl(data); // byte-array generic; the name is the STL's
+  grayBase64Cache.set(data, b64);
+  return b64;
+}
+
+export function decodeGray(b64: string): Uint8Array {
+  return decodeStl(b64);
+}
+
+/** The FILE form of a primitive: bitmaps swap their runtime array for
+ *  `gray.base64`; everything else serializes as-is. */
+function primitiveForFile(p: Primitive): unknown {
+  if (p.kind !== 'bitmap') return p;
+  const { data: _data, ...rest } = p.gray;
+  void _data;
+  return { ...p, gray: { ...rest, base64: encodeGray(p.gray.data) } };
+}
+
+/** The RUNTIME form: a saved bitmap's base64 becomes the Uint8Array the
+ *  dither and the viewport texture read. IDEMPOTENT — a primitive that
+ *  already carries the array (parseJobFile ran) passes through, so both
+ *  load paths can normalize safely. Malformed grayscale is a hard error
+ *  (silently keeping the base64 string would break every raster at
+ *  generation AND blank the viewport's texture loop). */
+function primitiveFromSaved(p: Primitive): Primitive {
+  if (p.kind !== 'bitmap') return p;
+  if (p.gray.data instanceof Uint8Array) return p; // already runtime form
+  const saved = p.gray as unknown as { width?: unknown; height?: unknown; base64?: unknown };
+  if (
+    typeof saved.width !== 'number' ||
+    typeof saved.height !== 'number' ||
+    typeof saved.base64 !== 'string'
+  ) {
+    throw new Error('the job file’s bitmap artwork is malformed — reimport the image');
+  }
+  return {
+    ...p,
+    gray: {
+      width: saved.width,
+      height: saved.height,
+      data: decodeGray(saved.base64),
+    },
+  };
+}
+
+/**
+ * Normalize saved primitives to runtime form — the ONE conversion both
+ * load paths pass: parseJobFile (opened .cam.json files) AND the
+ * IndexedDB autosave restore (loadAutosave hands back the raw FILE form
+ * — gray.base64, no array — and its consumer applyJob never runs the
+ * parser; the 2026-11-24 reload blank-page crash was exactly that gap:
+ * the viewport's texture loop read gray.data[i] off undefined and React
+ * unmounted the tree).
+ */
+export function normalizePrimitives(primitives: Primitive[]): Primitive[] {
+  return primitives.map(primitiveFromSaved);
+}
+
 export function saveJobFile(state: SaveableState): JobFile {
   const used = new Set(state.ops.map((op) => op.toolId));
   return {
@@ -330,7 +406,10 @@ export function saveJobFile(state: SaveableState): JobFile {
     version: JOB_VERSION,
     stock: state.stock,
     transform: state.transform,
-    primitives: state.primitives,
+    // the FILE form of a bitmap carries base64 in place of the runtime
+    // array (primitiveForFile) — the JobFile type names the RUNTIME
+    // shape, same cast convention as the parsed-JSON side
+    primitives: state.primitives.map(primitiveForFile) as Primitive[],
     ops: state.ops,
     tools: state.tools.filter((t) => used.has(t.id)),
     model: state.modelBytes
@@ -352,7 +431,12 @@ export function parseJobFile(text: string): JobFile {
   if (!parsed.stock || !parsed.transform || !Array.isArray(parsed.ops) || !Array.isArray(parsed.primitives)) {
     throw new Error('job file is missing required sections');
   }
-  return { ...parsed, stock: normalizeStock(parsed.stock), ops: normalizeJobOps(parsed.ops) };
+  return {
+    ...parsed,
+    stock: normalizeStock(parsed.stock),
+    ops: normalizeJobOps(parsed.ops),
+    primitives: normalizePrimitives(parsed.primitives),
+  };
 }
 
 /** Serialize + download (kept apart from the pure save/parse for testing). */

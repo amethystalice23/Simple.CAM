@@ -30,7 +30,7 @@ import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { deriveBaseline } from './toolNames';
 import { decodeBitmapFile, type GrayBitmap } from '../core/bitmapImport';
 import { planeExtents, transformFn } from './featureOverlays';
-import { opEdgeSource, resolveFeature, sourcesFor, splitSelection, stockAxisInModelSpace } from './featureSources';
+import { expandHalftonePaths, opEdgeSource, resolveFeature, sourcesFor, splitSelection, stockAxisInModelSpace } from './featureSources';
 import {
   cylChamferTargetsFromSelection,
   pocketRegionsFromSelection,
@@ -40,6 +40,7 @@ import { internalMinorDiameter } from '../cam/threadMill';
 import { ModelPanel } from './ModelPanel';
 import {
   artworkFromImport,
+  bitmapFromImport,
   boxFromPlane,
   cylinderFromCircle,
   defaultBox,
@@ -66,7 +67,7 @@ import { sectionEndIndex, sectionLabel } from './opsSections';
 import type { StandingGrid } from '../cam/rotaryCarve';
 import { isHeavyGenOp } from './genWorkerProtocol';
 import { GEN_CANCELLED, useGenWorker } from './useGenWorker';
-import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
+import { decodeStl, downloadJobFile, JOB_FORMAT, jobFingerprint, normalizeJobOps, normalizePrimitives, normalizeStock, parseJobFile, saveJobFile } from './jobFile';
 import { loadAutosave, saveAutosave } from './jobStorage';
 import * as THREE from 'three';
 import { displayFrameFor, sectionCrownZ, sectionFixtureId, sectionMode, stockTopZ } from './placement';
@@ -81,6 +82,7 @@ import { simStepDownFor } from '../sim/stepDown';
 import { useCarveSim } from './useCarveSim';
 import { useSimTransport } from './useSimTransport';
 import { TransportBar } from './TransportBar';
+import { Toasts, useToasts } from './Toasts';
 import { OpsPanel } from './OpsPanel';
 import { OP_KIND_COLORS } from './opColors';
 import { createSuggestedOp, describePickedFeature, suggestToolFor, type SuggestCandidate } from './opSuggest';
@@ -185,6 +187,9 @@ export function App() {
    * always says what just happened instead of going stale (Alice,
    * 2026-11-11). Null = the fallback defaults (model dims / drop hint). */
   const [statusNote, setStatusNote] = useState<string | null>(null);
+  // transient notices (the Toasts pattern — ToolPanel had it first): the
+  // wrapped-raster drop's forced >360° scale-down warns here
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   const [stock, setStock] = useState<Stock>(initialStock);
   const [transform, setTransform] = useState<ModelTransform>(identityTransform());
   const [tab, setTab] = useState<Tab>('stock');
@@ -507,6 +512,13 @@ export function App() {
       }
       for (const e of source.features.edges) {
         map[e.id] = `L${Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z).toFixed(1)}`;
+      }
+      for (const p of source.features.paths) {
+        map[p.id] = 'artwork line';
+      }
+      // bitmap artwork: the op rows should read the artwork, not the raw id
+      for (const b of source.features.bitmaps ?? []) {
+        map[b.id] = `bitmap ${b.width.toFixed(0)} × ${b.height.toFixed(0)} mm`;
       }
       // one batched mesh pass for ALL planes — the per-plane planeExtent
       // call went quadratic on fine meshes (this re-runs on every stock
@@ -901,13 +913,18 @@ export function App() {
       // through and still selects (the stuck-banner wedge, 2026-11-03)
     }
     if (editingOpId) {
+      // halftone artwork selects WHOLE (SPEC 2026-11-23 piece 1): a click
+      // on any dot expands to every path of that artwork. Toggling stays
+      // symmetrical — all-in removes the whole artwork, else it adds.
+      const selIds = expandHalftonePaths(primitives, sources, id);
       const p = featureMachinePoint(id);
       setOps((prev) =>
         prev.map((o) => {
           if (o.id !== editingOpId) return o;
-          const featureIds = o.featureIds.includes(id)
-            ? o.featureIds.filter((x) => x !== id)
-            : [...o.featureIds, id];
+          const allIn = selIds.every((x) => o.featureIds.includes(x));
+          const featureIds = allIn
+            ? o.featureIds.filter((x) => !selIds.includes(x))
+            : [...o.featureIds, ...selIds.filter((x) => !o.featureIds.includes(x))];
           let next = { ...o, featureIds } as JobOp;
           if (o.featureIds.length === 0 && o.kind === 'threadMill') {
             // the rim/wall/facet click resolves the whole thread spec: Ø,
@@ -932,7 +949,13 @@ export function App() {
       );
       return;
     }
-    setSelection((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setSelection((prev) => {
+      const selIds = expandHalftonePaths(primitives, sources, id);
+      const allIn = selIds.every((x) => prev.includes(x));
+      return allIn
+        ? prev.filter((x) => !selIds.includes(x))
+        : [...prev, ...selIds.filter((x) => !prev.includes(x))];
+    });
   };
 
   const clearSelection = () => {
@@ -952,8 +975,12 @@ export function App() {
    *  editing, else the global one). No prefill logic on bulk select: the
    *  depth-prefill on the first path click is a single-click nicety, not
    *  something to run once per 500 dots. */
-  const boxSelect = (ids: string[]) => {
-    if (ids.length === 0) return;
+  const boxSelect = (idsIn: string[]) => {
+    if (idsIn.length === 0) return;
+    // halftone artwork bulk-selects WHOLE (SPEC 2026-11-23 piece 1): a
+    // band over any dots expands to the whole artwork before the union —
+    // a rubber band never deselects, so no toggle check here
+    const ids = idsIn.flatMap((x) => expandHalftonePaths(primitives, sources, x));
     if (editingOpId) {
       setOps((prev) =>
         prev.map((o) => {
@@ -1030,6 +1057,10 @@ export function App() {
       setStatusNote(null); // the fallback shows the fresh relief dims
       return;
     }
+    if (result.kind === 'bitmap') {
+      confirmBitmapArtwork(result.name, result.gray);
+      return;
+    }
     const p = artworkFromImport(result.art, stock, {
       name: result.name,
       kind: 'halftone',
@@ -1037,6 +1068,28 @@ export function App() {
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
     setStatusNote(`imported halftone artwork ${result.name}`);
+  };
+
+  /** A DITHERED-BITMAP confirm (SPEC 2026-11-23): the RAW grayscale lands
+   *  as one bitmap artifact — 3-axis keeps the flat branch (face dims fit
+   *  the aspect inside the flat top extents; center, crown); 4-axis wraps
+   *  (round 2, 2026-11-24; round 3 the transposed mapping — image width
+   *  around, image height along X). bitmapFromImport is the single
+   *  placement choke point: a wrapped fit over one turn comes back
+   *  force-scaled (Alice's 2026-11-24 ruling — 360° is the ceiling) and
+   *  the applied scale warns here as a toast. Dithering happens when the
+   *  rasterEngrave op generates, never here: the method is
+   *  material-dependent intent. */
+  const confirmBitmapArtwork = (name: string, gray: GrayBitmap) => {
+    const p = bitmapFromImport(gray, stock, { name }, (scale) =>
+      pushToast(
+        `would wrap past one turn — scaled the artwork ×${scale.toFixed(2)} to fit 360°`,
+        'warn',
+      ),
+    );
+    setPrimitives((prev) => [...prev, p]);
+    setSelectedObjectId(p.id);
+    setStatusNote(`imported bitmap artwork ${name}`);
   };
 
   /** Create a primitive, sized from the selection when it matches the kind. */
@@ -1974,19 +2027,24 @@ export function App() {
    * The applied job becomes the "saved" baseline for dirty tracking. */
   const applyJob = (job: ReturnType<typeof parseJobFile>) => {
     // imported files normalize inside parseJobFile; the autosave restore
-    // skips it, so normalize here — the one gate both load paths pass
+    // skips it, so normalize here — the one gate both load paths pass.
+    // normalizePrimitives is the load paths' shared bitmap conversion
+    // (gray.base64 → the runtime array; idempotent for parsed files):
+    // the autosave hands back raw FILE form, and the viewport's texture
+    // loop reads gray.data — the 2026-11-24 reload blank-page crash.
     const ops = normalizeJobOps(job.ops);
     const stock = normalizeStock(job.stock);
+    const primitives = normalizePrimitives(job.primitives);
     setStock(stock);
-    setPrimitives(job.primitives);
+    setPrimitives(primitives);
     setOps(ops);
     seedJobOpIds(ops);
-    seedPrimitiveIds(job.primitives);
+    seedPrimitiveIds(primitives);
     setGenerated({});
     setEditingOpId(null);
     setExpandedOpId(null);
     setSelection([]);
-    setSelectedObjectId(job.model ? 'model' : (job.primitives[0]?.id ?? null));
+    setSelectedObjectId(job.model ? 'model' : (primitives[0]?.id ?? null));
     setPreviewMoves(null);
     carveSim.dispose(); // the sim carved the previous job's moves
     setShowSim(false);
@@ -2580,6 +2638,7 @@ export function App() {
           onClose={() => setShowSimulate(false)}
         />
       )}
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

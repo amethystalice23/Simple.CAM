@@ -67,6 +67,16 @@ export const OP_HELP: Record<JobOp['kind'], OpHelpDoc> = {
       'Drop an SVG or DXF on the viewport to add artwork.',
     ],
   },
+  rasterEngrave: {
+    what: 'Burns a photo or bitmap with the laser as a dithered 1-bit raster — the machine carves no material, the beam darkens pixels at constant power, row by row like a printer.',
+    points: [
+      'Import the image through the import dialogue’s dithered-bitmap tab; the artwork stays grayscale, the dither method is chosen here.',
+      'Atkinson (default) suits photos; Bayer gives a repeatable screen-door pattern; halftone reuses the dot screen.',
+      'Serpentine sweeps alternate row direction (fast). One-way re-runs every row the same way with rapid returns — the quality mode for the interlace artifact.',
+      'Interlace compensation shifts reverse-row fired runs; calibrate it with the test-pattern coupon, a loupe reads the offset.',
+      'Flat artwork only; wrapped/4th-axis raster comes later.',
+    ],
+  },
   vcarveFlat: {
     what: 'Fills closed painted shapes with a V-bit groove at varying depth — deepest down each stroke’s middle, tapering to nothing at the edges. This is how you carve letters and logos with crisp corners.',
     points: [

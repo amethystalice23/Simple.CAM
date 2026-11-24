@@ -50,3 +50,28 @@ no stamp appears.
 Open item: the Z1's epsilon axis (5th actuator) has no known G-code word
 form; a B-word line would be refused loudly today. Revisit if one appears
 in the wild.
+
+## Post emission — wrapped laser raster (src/cam/rasterEngrave.ts `frame`, 2026-11-24)
+
+Pinned by goldens `src/post/__tests__/golden/raster-engrave-wrapped-*.nc`.
+Assumptions the emitted stream bakes in:
+
+- `G1 A<n> F<n>` in G94 (mm-min mode, deg/min A feed — `ROTARY_FEED_DEG_MIN`
+  = 2376) is legal for beam-off row steps. Same form the rotary facing ops
+  already emit in G94 (face-cylinder.nc, cyl-chamfer.nc goldens); the raster
+  adds only the modal `S0` power word on top. F re-emitted on feed change,
+  modal in between — Studio relies on modal F across rotary moves too
+  (makera-dialect.md "4th axis").
+- A is raw ABSOLUTE, no mod-360: the corpus runs continuous rotation to
+  `A7200`/`A65160` before a G92.4 re-zero (makera-dialect.md "4th axis").
+  Row 0 positions by the shortest rotation from `startA`, then rows ascend
+  monotonically — a wrapped raster never rotates continuously past one
+  wrap, so no `G92.4 A0 S0` shrink is injected for this shape when the
+  ladder stays ≤ 360 (the footer backstop is value-conditional, firing
+  only when the final A passes 360).
+- `G92.4 A0 R0` + `G0 Y0` header lines are the 4th-axis datum/centerline
+  form, already pinned by the existing rotary goldens; the raster body
+  adds no further Y word (corpus: wrapped bodies never contain another Y).
+- No G93 anywhere: no wrapped raster move coordinates A with a linear axis
+  (row steps are pure-A; positioning and one-way returns are axis-separate
+  rapids — engrave.ts precedent).

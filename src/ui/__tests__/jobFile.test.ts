@@ -8,6 +8,7 @@ import {
   JOB_FORMAT,
   JOB_VERSION,
   normalizeJobOps,
+  normalizePrimitives,
   normalizeStock,
   parseJobFile,
   saveJobFile,
@@ -568,5 +569,134 @@ describe('model-less jobs with primitive-targeted ops', () => {
     if (op.kind !== 'chamfer') throw new Error('kind');
     expect(op.featureIds).toEqual(['p:prim-1:circle-abc123']);
     expect(op.mode).toBe('add');
+  });
+});
+
+describe('bitmap artwork serialization (v2)', () => {
+  const gray = {
+    width: 3,
+    height: 2,
+    // deliberately non-trivial bytes (0/1/255 patterns) with a value
+    // above 127 so a base64 bug cannot pass by luck
+    data: new Uint8Array([0, 1, 255, 128, 200, 42]),
+  };
+  const bitmap: Primitive = {
+    kind: 'bitmap',
+    id: 'prim-9',
+    sourceName: 'photo.png',
+    gray,
+    width: 30,
+    height: 20,
+    transform: identityTransform(),
+  };
+  const rasterOp: JobOp = {
+    id: 'jobop-7',
+    toolId: 't-laser',
+    featureIds: ['p:prim-9:bitmap:0'],
+    kind: 'rasterEngrave',
+  };
+  const laserTools: Tool[] = [
+    { id: 't-laser', name: 'Beam', type: 'laser', diameter: 0.1, spindleRpm: 30 },
+  ];
+
+  it('round-trips the grayscale array through base64 and back', () => {
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [bitmap],
+      ops: [rasterOp],
+      tools: laserTools,
+      modelName: 'none',
+      modelBytes: null,
+    });
+    // the FILE form carries base64, never the raw array (JSON would
+    // turn a Uint8Array into an index-keyed object)
+    const saved = file.primitives[0] as unknown as {
+      gray: { base64?: string; data?: unknown };
+    };
+    expect(typeof saved.gray.base64).toBe('string');
+    expect(saved.gray.data).toBeUndefined();
+    const parsed = parseJobFile(JSON.stringify(file));
+    const back = parsed.primitives[0];
+    if (back.kind !== 'bitmap') throw new Error('kind');
+    expect(back.gray.data).toBeInstanceOf(Uint8Array);
+    expect(Array.from(back.gray.data)).toEqual([0, 1, 255, 128, 200, 42]);
+    expect(back.gray.width).toBe(3);
+    expect(back.gray.height).toBe(2);
+  });
+
+  it('refuses a malformed grayscale section loudly', () => {
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [bitmap],
+      ops: [rasterOp],
+      tools: laserTools,
+      modelName: 'none',
+      modelBytes: null,
+    });
+    const raw = JSON.parse(JSON.stringify(file)) as {
+      primitives: { gray: Record<string, unknown> }[];
+    };
+    delete raw.primitives[0].gray.base64;
+    expect(() => parseJobFile(JSON.stringify(raw))).toThrow(/malformed/);
+  });
+});
+
+describe('normalizePrimitives (the autosave-restore gate)', () => {
+  const bitmapPrim = {
+    kind: 'bitmap',
+    id: 'prim-9',
+    gray: { width: 2, height: 1, data: new Uint8Array([0, 255]) },
+    width: 20,
+    height: 10,
+    transform: identityTransform(),
+  } as Primitive;
+  const cylinder: Primitive = {
+    kind: 'cylinder',
+    id: 'prim-3',
+    diameter: 16,
+    length: 50,
+    original: { diameter: 16, length: 50 },
+    transform: identityTransform(),
+  };
+
+  it('converts FILE-form base64 to the runtime array (the reload path)', () => {
+    // the IndexedDB autosave hands back saveJobFile's output shape:
+    // gray.base64, no data — loadAutosave's consumer normalizes with this
+    const file = saveJobFile({
+      stock: boxStock,
+      transform: identityTransform(),
+      primitives: [bitmapPrim, cylinder],
+      ops: [],
+      tools: [],
+      modelName: 'none',
+      modelBytes: null,
+    });
+    const fileForm = file.primitives[0] as unknown as {
+      gray: { base64: string };
+    };
+    const restored = normalizePrimitives([
+      { ...bitmapPrim, gray: { width: 2, height: 1, base64: fileForm.gray.base64 } } as unknown as Primitive,
+      cylinder,
+    ]);
+    const bmp = restored[0] as Extract<Primitive, { kind: 'bitmap' }>;
+    expect(bmp.gray.data).toBeInstanceOf(Uint8Array);
+    expect(Array.from(bmp.gray.data)).toEqual([0, 255]);
+    expect(restored[1]).toEqual(cylinder); // non-bitmaps pass through
+  });
+
+  it('is idempotent — a primitive that already carries the array passes through', () => {
+    const once = normalizePrimitives([bitmapPrim]);
+    const twice = normalizePrimitives(once);
+    expect(twice[0]).toEqual(once[0]); // same reference shape, no throw
+  });
+
+  it('throws loudly on malformed grayscale (corrupt autosave → start fresh)', () => {
+    expect(() =>
+      normalizePrimitives([
+        { ...bitmapPrim, gray: { width: 2, height: 1 } } as unknown as Primitive,
+      ]),
+    ).toThrow(/malformed/);
   });
 });

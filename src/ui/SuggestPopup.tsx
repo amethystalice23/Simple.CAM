@@ -38,6 +38,7 @@ const KIND_COLORS: Record<FeatureKnowledge['kind'], string> = {
   path: '#b48cff', // lavender
   radialChain: '#35d0ba', // teal
   thread: '#e0a05a', // amber
+  bitmap: '#f5a3c7', // pink — the raster engrave family
 };
 
 const KIND_LABELS: Record<FeatureKnowledge['kind'], string> = {
@@ -47,6 +48,7 @@ const KIND_LABELS: Record<FeatureKnowledge['kind'], string> = {
   path: 'Artwork',
   radialChain: 'Curved edge',
   thread: 'Thread',
+  bitmap: 'Bitmap artwork',
 };
 
 export function opKindLabel(kind: JobOp['kind']): string {

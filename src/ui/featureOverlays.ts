@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import type { CircleFeature, ModelTransform, Vec3 } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 import { densifyWrappedPath } from './artworkFillRegions';
+import { bitmapWrappedLocalPoint } from './featureSources';
 
 /** In-plane extent of a plane group's member-triangle footprint. */
 export interface PlaneExtent {
@@ -157,7 +158,7 @@ export function planeExtents(
 
 /** One manually selected item in measure mode (right-click). */
 export interface MeasurePick {
-  kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain' | 'thread';
+  kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain' | 'thread' | 'bitmap';
   index: number;
   /** machine-space center used for distance computation */
   center: THREE.Vector3;
@@ -405,6 +406,59 @@ export interface FeatureOverlayData {
 /** Model-space point → machine-space point under a transform. */
 const round1 = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(1));
 
+/**
+ * A bitmap artwork's face-rect corner loop, machine space (docs/PLAN.md
+ * "Laser raster engrave", SPEC 2026-11-23): x ∈ [−w/2, w/2], y ∈
+ * [−h/2, h/2] at local z=0 — the face rect is symmetric about the
+ * origin, so the halftone v-down flip never shows here. Four corners in
+ * loop order; callers close the loop themselves (LineLoop, or the
+ * hover line pushes the closing segment). Drawn wherever overlays draw,
+ * never in hoverLineGeometry (already 'bitmap'-shaped, deliberately
+ * empty).
+ * WRAPPED (`wrapped` given): the loop bends onto the bitmap's own Ø —
+ * the same bitmapWrappedLocalPoint the Viewport's curved strip renders —
+ * and the arc edges densify (~2 mm) so the drawn outline rides the
+ * curve. The kernel's v-down reading puts the image BOTTOM edge at the
+ * low arc (−h/2), matching the burn's around-origin end.
+ */
+export function bitmapFaceOutline(
+  width: number,
+  height: number,
+  xf: (v: Vec3) => THREE.Vector3,
+  wrapped?: { diameter: number } | null,
+): THREE.Vector3[] {
+  if (!wrapped || !(wrapped.diameter > 0)) {
+    return (
+      [
+        { x: -width / 2, y: -height / 2, z: 0 },
+        { x: width / 2, y: -height / 2, z: 0 },
+        { x: width / 2, y: height / 2, z: 0 },
+        { x: -width / 2, y: height / 2, z: 0 },
+        // the flat artwork convention: local centered frame → the
+        // primitive's transform places it like artwork's path points
+      ] as Vec3[]
+    ).map((v) => xf(v));
+  }
+  const D = wrapped.diameter;
+  const w = width / 2;
+  const h = height / 2;
+  const bend = (x: number, s: number): Vec3 => bitmapWrappedLocalPoint(D, x, s);
+  const arcSteps = Math.max(2, Math.ceil(height / 2));
+  const pts: Vec3[] = [
+    bend(-w, -h), // bottom edge (the burn's leading edge), −w → w
+    bend(w, -h),
+  ];
+  for (let i = 1; i < arcSteps; i++) {
+    pts.push(bend(w, -h + (height * i) / arcSteps)); // right arc edge up
+  }
+  pts.push(bend(w, h));
+  pts.push(bend(-w, h)); // top edge, w → −w
+  for (let i = arcSteps - 1; i > 0; i--) {
+    pts.push(bend(-w, -h + (height * i) / arcSteps)); // left arc edge down
+  }
+  return pts.map((v) => xf(v));
+}
+
 export function transformFn(t: ModelTransform): (v: Vec3) => THREE.Vector3 {
   const rot = new THREE.Quaternion().setFromEuler(
     new THREE.Euler(
@@ -540,6 +594,20 @@ export function buildFeatureOverlayData(
     pathSamples.push(draw);
     pathMid.push(pts[Math.floor(pts.length / 2)].clone());
     pathText.push(`artwork · L ${len.toFixed(2)} mm`);
+  }
+
+  // bitmap artwork (SPEC 2026-11-23): the face-rect outline rides with the
+  // amber line work — it is the body around the Viewport's textured face
+  // plane. Deliberately NO pathSamples entry: the plane mesh is the hover
+  // and pick surface (raycast), so these lines must never enter the
+  // per-path index machinery and shift every path highlight by one.
+  for (const b of features.bitmaps ?? []) {
+    const loop = bitmapFaceOutline(b.width, b.height, xf, wrapped);
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i];
+      const c = loop[(i + 1) % loop.length];
+      pathPos.push(a.x, a.y, a.z, c.x, c.y, c.z);
+    }
   }
 
   // constant-radius chains: closed silhouette outlines (slot walls),
@@ -887,11 +955,14 @@ export function findNearestFeatures(
 /** A crisp single-feature outline for the hovered feature. */
 export function hoverLineGeometry(
   data: FeatureOverlayData,
-  kind: 'edge' | 'circle' | 'path' | 'radialChain' | 'thread',
+  kind: 'edge' | 'circle' | 'path' | 'radialChain' | 'thread' | 'bitmap',
   index: number,
 ): THREE.BufferGeometry {
   const positions: number[] = [];
-  if (kind === 'edge') {
+  if (kind === 'bitmap') {
+    // the bitmap artwork highlight draws with its own face-plane outline
+    // (the viewport's bitmap overlay); nothing to build here
+  } else if (kind === 'edge') {
     const s = data.edgeSamples[index];
     positions.push(s[0].x, s[0].y, s[0].z, s[s.length - 1].x, s[s.length - 1].y, s[s.length - 1].z);
   } else if (kind === 'path') {

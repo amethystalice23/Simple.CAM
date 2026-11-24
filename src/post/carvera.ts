@@ -647,7 +647,13 @@ export function postCarvera(input: PostInput): string {
         // there; in G94 emit on change for readability (harmless either way).
         const withFeed = st.mode === 'G93' || m.feed !== st.lastFeed;
         if (withFeed) st.lastFeed = m.feed;
-        lines.push(emitMotion(`G1 ${wordsLine(m, withFeed, sWord)}`, m.comment));
+        const body = wordsLine(m, withFeed, sWord);
+        // A wordless beam-off move whose power is ALREADY modal (the
+        // generator's final extinguish after a row that ended dark — the
+        // raster one-way sweep ends that way) would emit a bare `G1 `:
+        // no coordinates, no S, no F — noise on the wire, and a redundant
+        // S0 stamp would contradict the modal-S rule. Skip the line.
+        if (body !== '') lines.push(emitMotion(`G1 ${body}`, m.comment));
       }
     }
     // the beam enables only once the head is AT focus height: after the

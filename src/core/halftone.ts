@@ -45,6 +45,28 @@ export interface HalftoneParams {
   minCoverage?: number;
 }
 
+/**
+ * Dot radius from coverage, in mm — the printing-correct tone curve.
+ * Area-true r = s·√(c/π) up to the axial touch point (c = π/4, r = s/2);
+ * above it a linear blend to the lattice-corner bound r = s/√2 at c = 1
+ * (chain-dot: neighbors meet exactly at the cell corners, solid black
+ * prints solid). The area-true curve alone tops out at 0.564·s and leaves
+ * corner pinholes at full black — the two stated anchors (50% grey → 50%
+ * area, 100% → corner-meeting) both hold on this curve.
+ *
+ * SHARED (2026-11-24): dither.ts reuses this curve as the raster
+ * threshold operator's dot-placement rule — the one tone response for
+ * both the vector (mill) and raster (laser) screens.
+ */
+export function halftoneDotRadius(spacing: number, coverage: number): number {
+  const s = spacing;
+  const c = Math.min(1, Math.max(0, coverage));
+  const rArea = s * Math.sqrt(c / Math.PI);
+  if (rArea <= s / 2) return rArea;
+  const t = (c - TOUCH) / (1 - TOUCH);
+  return s / 2 + (s / Math.SQRT2 - s / 2) * Math.min(1, Math.max(0, t));
+}
+
 export function halftoneArtwork(gray: GrayBitmap, p: HalftoneParams): ImportedArtwork {
   const s = p.spacing;
   const floor = p.minCoverage ?? 0.04;
@@ -104,28 +126,12 @@ export function halftoneArtwork(gray: GrayBitmap, p: HalftoneParams): ImportedAr
     return 1 - sum / (SUBGRID * SUBGRID) / 255;
   };
 
-  /**
-   * Dot radius from coverage. Area-true curve r = s·√(c/π) up to the
-   * axial touch point (c = π/4, r = s/2); above it a linear blend to
-   * the lattice-corner bound r = s/√2 at c = 1 (chain-dot: neighbors
-   * meet exactly at the cell corners, solid black prints solid). The
-   * area-true curve alone tops out at 0.564·s and leaves corner
-   * pinholes at full black — the two stated anchors (50% grey → 50%
-   * area, 100% → corner-meeting) both hold on this curve.
-   */
-  const dotRadius = (c: number): number => {
-    const rArea = s * Math.sqrt(c / Math.PI);
-    if (rArea <= s / 2) return rArea;
-    const t = Math.min(1, Math.max(0, (c - TOUCH) / (1 - TOUCH)));
-    return s / 2 + (s / Math.SQRT2 - s / 2) * t;
-  };
-
   const paths: Vec2[][] = [];
   const meta: { closed: boolean; filled: boolean }[] = [];
   for (const c of centers) {
     const cov = coverage(c.x, c.y);
     if (cov < floor) continue;
-    const r = dotRadius(cov);
+    const r = halftoneDotRadius(s, cov);
     const ring: Vec2[] = [];
     for (let k = 0; k < 24; k++) {
       const a = (2 * Math.PI * k) / 24;

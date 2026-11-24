@@ -10,6 +10,7 @@ import type {
   CircleFeature,
   EdgeFeature,
   HoleFeature,
+  BitmapFeature,
   ModelTransform,
   PathFeature,
   PlaneFeature,
@@ -38,6 +39,10 @@ export interface DetectedFeatures {
   /** artwork line work — only artwork sources carry any (empty for
    * meshes; the detector never emits paths) */
   paths: PathFeature[];
+  /** BITMAP artwork — one feature per 'bitmap' primitive (the whole
+   *  artwork; nothing inside it is selectable). Absent on every mesh
+   *  detector output and old fixtures. */
+  bitmaps?: BitmapFeature[];
   /** raw-geometry triangle index → plane index (−1 for degenerate drops) */
   faceToPlane: Int32Array;
   /**

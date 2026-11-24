@@ -1,13 +1,24 @@
 /**
- * The bitmap-import dialogue (drop a PNG/JPEG/…): one image, two
+ * The bitmap-import dialogue (drop a PNG/JPEG/…): one image, three
  * destinations. "Heightmap" builds a relief MODEL carved down from the
  * stock crown (the model slot); "Artwork / Halftone" screens the image
- * into dot line work for the engrave pipeline (an artwork primitive).
- * Alice's 2026-10-31 rulings: the second tab is "Artwork / Halftone";
- * the dot pitch field is "Dot spacing", not "period" ("period is an odd
- * name for it, perhaps something sized related"); rotary depth defaults
- * to r/2 ("maybe r/2"). The geometry choice is BY STOCK — box stock
- * yields a flat relief, cylinder stock one wrapped on the rotation axis.
+ * into dot line work for the engrave pipeline (an artwork primitive);
+ * "Dithered bitmap" keeps the RAW grayscale as one artwork primitive the
+ * laser's rasterEngrave op dithers at generate time (SPEC 2026-11-23 —
+ * the method is applied at the OP because it is material-dependent
+ * intent; the artwork stays grayscale). Alice's 2026-10-31 rulings: the
+ * second tab is "Artwork / Halftone"; the dot pitch field is "Dot
+ * spacing", not "period" ("period is an odd name for it, perhaps
+ * something sized related"); rotary depth defaults to r/2 ("maybe r/2").
+ * The geometry choice is BY STOCK — box stock yields a flat relief,
+ * cylinder stock one wrapped on the rotation axis. The dithered-bitmap
+ * face follows the same by-stock choice (round 2, 2026-11-24; round 3 —
+ * Alice's transposed mapping — the IMAGE WIDTH runs around, the IMAGE
+ * HEIGHT along the tube): 3-axis sits flat on the top extents, 4-axis
+ * wraps the image's width around the stock, force-scaled under one turn
+ * (the >360° ruling). The Rotate 90° button turns the IMAGE — in wrapped
+ * mode the fit re-runs on the new aspect (a 90° swap re-checks the
+ * one-turn force-scale), never turning the tube.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -18,11 +29,13 @@ import { heightmapBoxGeometry, heightmapCylinderGeometry } from '../core/heightm
 import { halftoneArtwork } from '../core/halftone';
 import { rotaryCalibrationOf, type Stock } from '../core/types';
 import type { ImportedArtwork } from '../core/vectorImport';
+import { bitmapFaceDims, bitmapWrappedFit } from './primitives';
 import { NumberField } from './fields';
 
 export type BitmapImportResult =
   | { kind: 'heightmap'; geometry: BufferGeometry; name: string }
-  | { kind: 'halftone'; art: ImportedArtwork; name: string };
+  | { kind: 'halftone'; art: ImportedArtwork; name: string }
+  | { kind: 'bitmap'; gray: GrayBitmap; name: string };
 
 interface Props {
   name: string;
@@ -32,7 +45,7 @@ interface Props {
   onCancel: () => void;
 }
 
-type Tab = 'heightmap' | 'halftone';
+type Tab = 'heightmap' | 'halftone' | 'bitmap';
 
 /** depth > 0 always; a box defaults to its own thickness (Alice,
  * 2026-10-31: "the stock thickness for boxes") and never carves THROUGH
@@ -218,12 +231,37 @@ export function BitmapImportDialog(props: Props) {
   }, [gray, face, spacing, angleDeg]);
   const dots = useMemo(() => (halftone.art ? dotsOf(halftone.art) : []), [halftone.art]);
 
-  const blocked = tab === 'heightmap' ? !heightmap.geometry : !halftone.art;
+  // The dithered-bitmap face (round 2, 2026-11-24; round 3 transposed):
+  // 3-axis fits the flat top extents; 4-axis WRAPS — bitmapWrappedFit
+  // pins the face's axial edge (its width) to the stock X span carrying
+  // the IMAGE'S HEIGHT, and the face's arc edge carries the IMAGE'S
+  // WIDTH — force-scaled under one turn (Alice's 2026-11-24 ruling).
+  // Recomputed on the current gray so the rotate button moves the
+  // readout and the Confirm agrees with it.
+  const isRotary = stock.axisMode === '4-axis';
+  const bitmapFace = useMemo(() => bitmapFaceDims(gray, stock), [gray, stock]);
+  const fit = useMemo(
+    () => (isRotary ? bitmapWrappedFit(gray, stock) : null),
+    [gray, stock, isRotary],
+  );
+
+  const blocked =
+    tab === 'heightmap'
+      ? !heightmap.geometry
+      : tab === 'halftone'
+        ? !halftone.art
+        : false; // a grayscale image is always importable as bitmap artwork
 
   const confirm = () => {
     if (tab === 'heightmap') {
       if (!heightmap.geometry) return;
       props.onConfirm({ kind: 'heightmap', geometry: heightmap.geometry, name: props.name });
+      return;
+    }
+    if (tab === 'bitmap') {
+      // NO dithering here — the artwork stays grayscale; the rasterEngrave
+      // op applies the method (material-dependent intent, the spec's rule)
+      props.onConfirm({ kind: 'bitmap', gray, name: props.name });
       return;
     }
     if (!halftone.art) return;
@@ -234,7 +272,7 @@ export function BitmapImportDialog(props: Props) {
     <div className="modal-overlay">
       <div className="modal" role="dialog" aria-modal="true">
         <h2>Import image — {props.name}</h2>
-        <p className="hint">the same image can become a carved relief or dot line work</p>
+        <p className="hint">the same image can become a carved relief, dot line work, or dithered raster artwork</p>
         <div className="segmented wide">
           <button
             type="button"
@@ -249,6 +287,13 @@ export function BitmapImportDialog(props: Props) {
             onClick={() => setTab('halftone')}
           >
             Artwork / Halftone
+          </button>
+          <button
+            type="button"
+            className={tab === 'bitmap' ? 'active' : ''}
+            onClick={() => setTab('bitmap')}
+          >
+            Dithered bitmap
           </button>
         </div>
         <button type="button" className="secondary" onClick={() => setGray(rotateGray90(gray))}>
@@ -314,6 +359,25 @@ export function BitmapImportDialog(props: Props) {
                 engraves as line work like a dropped SVG
               </p>
             )}
+          </>
+        )}
+        {tab === 'bitmap' && (
+          <>
+            <p className="hint">
+              the image stays grayscale — the dither method is picked on the raster operation,
+              so one import suits any material
+            </p>
+            <p className="hint">
+              {stock.axisMode === '4-axis'
+                ? `wraps ${bitmapFace.height.toFixed(1)} mm of arc (the image's width runs around) × ${bitmapFace.width.toFixed(1)} mm along the axis (the image's height)` +
+                  (stock.kind === 'cylinder'
+                    ? ` — ${(bitmapFace.height / (2 * Math.PI * rotaryCalibrationOf(stock).effectiveRadius) * 360).toFixed(0)}° of the turn, left edge at the around-origin`
+                    : '')
+                : `fits the stock top at ${bitmapFace.width.toFixed(1)} × ${bitmapFace.height.toFixed(1)} mm`}
+              {fit && fit.scale < 1
+                ? ` · scaled ×${fit.scale.toFixed(2)} to fit one turn`
+                : ''}
+            </p>
           </>
         )}
         <div className="dialog-buttons">

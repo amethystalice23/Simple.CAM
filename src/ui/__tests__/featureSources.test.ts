@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { identityTransform } from '../../core/types';
 import type { Primitive } from '../../core/types';
-import { detectFeatures } from '../../cam/features';
+import { detectFeatures, type DetectedFeatures } from '../../cam/features';
 import {
   artworkLocalPoints,
   artworkSnapGeometry,
+  bitmapKernelGray,
+  bitmapSnapGeometry,
+  expandHalftonePaths,
+  flipGrayVertical,
   opEdgeSource,
   parseNamespacedId,
   primitiveGeometry,
@@ -480,5 +484,187 @@ describe('stockAxisInModelSpace', () => {
     expect(axis).not.toBeUndefined();
     expect(axis!.dir.x).toBeCloseTo(1, 9);
     expect(axis!.point.z).toBeCloseTo(0, 9);
+  });
+});
+
+// DITHERED-BITMAP artwork sources (SPEC 2026-11-23)
+describe('sourcesFor: bitmap artwork source', () => {
+  const bitmapPrim = (id: string): Extract<Primitive, { kind: 'bitmap' }> => ({
+    kind: 'bitmap',
+    id,
+    sourceName: 'photo.png',
+    gray: { width: 4, height: 4, data: new Uint8Array(16).fill(200) },
+    width: 20,
+    height: 10,
+    transform: identityTransform(),
+  });
+
+  it('publishes ONE bitmap feature, flat frame, empty geometry', () => {
+    const [src] = sourcesFor(null, null, identityTransform(), [bitmapPrim('prim-1')]);
+    expect(src.features.bitmaps).toHaveLength(1);
+    expect(src.features.bitmaps![0].id).toBe('p:prim-1:bitmap:0');
+    expect(src.features.bitmaps![0].width).toBe(20);
+    expect(src.features.bitmaps![0].height).toBe(10);
+    expect(src.features.paths).toHaveLength(0); // never exploded into paths
+    expect(src.artworkFrame).toEqual({ kind: 'flat' });
+    expect(src.geometry.getAttribute('position')).toBeUndefined();
+  });
+
+  it('resolves the feature id to kind bitmap', () => {
+    const sources = sourcesFor(null, null, identityTransform(), [bitmapPrim('prim-1')]);
+    const r = resolveFeature(sources, 'p:prim-1:bitmap:0');
+    expect(r).not.toBeNull();
+    expect(r!.kind).toBe('bitmap');
+  });
+
+  it('a wrapped presentation publishes the wrapped frame (round 2)', () => {
+    const wrapped = { ...bitmapPrim('prim-2'), presentation: 'wrapped' as const, wrapDiameter: 50 };
+    const [src] = sourcesFor(null, null, identityTransform(), [wrapped]);
+    expect(src.artworkFrame).toEqual({ kind: 'wrapped', diameter: 50 });
+  });
+
+  it('wrapped snap geometry bends the face onto its Ø (bbox reads the curve)', () => {
+    const wrapped = { ...bitmapPrim('prim-3'), presentation: 'wrapped' as const, wrapDiameter: 50 };
+    const geo = bitmapSnapGeometry(wrapped);
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox!;
+    // Ø50, face 20 wide × 10 of arc: arc ±5 mm of the centered window
+    // bends the arc edges to y = 25·sin(±0.2) = ±4.9667, z ≈ 24.5–25 —
+    // NOT a flat rect's z=0 and ±5
+    expect(bb.min.x).toBeCloseTo(-10);
+    expect(bb.max.x).toBeCloseTo(10);
+    expect(bb.min.y).toBeCloseTo(25 * Math.sin(-0.2), 4);
+    expect(bb.max.y).toBeCloseTo(25 * Math.sin(0.2), 4);
+    // the arc samples step 2 mm of s, so the nearest to the window's
+    // center is ±1 mm → the crown z sits just shy of the Ø
+    expect(bb.max.z).toBeCloseTo(25 * Math.cos(1 / 25), 4);
+    expect(bb.max.z - bb.min.z).toBeGreaterThan(0.01);
+  });
+});
+
+describe('bitmapKernelGray: the kernel image under the face-up wrap (round 4)', () => {
+  it('transposes with a vertical flip: image top toward −X, left edge at the around-origin', () => {
+    // image 2 cols × 3 rows:
+    //   A B
+    //   C D
+    //   E F   (A..F = 10..60)
+    // The kernel bitmap (columns = axial X, rows burned bottom-first from
+    // the around-origin) must be:
+    //   row 0 (high arc)  B D F
+    //   row 1 (low arc)   A C E
+    // — kernel row ny−1 = image column 0 (the LEFT edge at the
+    // around-origin) scanned small-X → high-X as A, C, E (so the image's
+    // TOP, A, lands at −X — FACE UP; round 4 flipped the round-3 axial
+    // leg), ascending A reads the image left→right.
+    const img = {
+      width: 2,
+      height: 3,
+      data: Uint8Array.from([10, 20, 30, 40, 50, 60]),
+    };
+    const k = bitmapKernelGray(img);
+    expect(k.width).toBe(3); // the image's rows run axial
+    expect(k.height).toBe(2); // the image's columns run the arc
+    expect(Array.from(k.data)).toEqual([20, 40, 60, 10, 30, 50]);
+  });
+
+  it('flipGrayVertical: end-for-end along the rows, dims untouched', () => {
+    const img = {
+      width: 2,
+      height: 3,
+      data: Uint8Array.from([10, 20, 30, 40, 50, 60]),
+    };
+    const f = flipGrayVertical(img);
+    expect(f).not.toBe(img);
+    expect(f.width).toBe(2);
+    expect(f.height).toBe(3);
+    expect(Array.from(f.data)).toEqual([50, 60, 30, 40, 10, 20]);
+    expect(Array.from(flipGrayVertical(f).data)).toEqual([10, 20, 30, 40, 50, 60]); // involutive
+  });
+});
+
+describe('expandHalftonePaths: whole-artwork selection', () => {
+  const halftonePrim = (id: string): Extract<Primitive, { kind: 'artwork' }> => ({
+    kind: 'artwork',
+    id,
+    sourceKind: 'halftone',
+    paths: [
+      [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+      [{ x: 2, y: 2 }],
+      [{ x: 3, y: 3 }],
+    ],
+    width: 10,
+    height: 10,
+    presentation: 'flat',
+    wrapDiameter: 20,
+    wrapAngle: 180,
+    transform: identityTransform(),
+  });
+  const svgPrim = (id: string): Primitive => ({
+    ...halftonePrim(id),
+    sourceKind: 'svg' as const,
+  });
+
+  it('expands one halftone path click to every path of the artwork', () => {
+    const prims = [halftonePrim('prim-1')];
+    const sources = sourcesFor(null, null, identityTransform(), prims);
+    expect(expandHalftonePaths(prims, sources, 'p:prim-1:path:1')).toEqual([
+      'p:prim-1:path:0',
+      'p:prim-1:path:1',
+      'p:prim-1:path:2',
+    ]);
+  });
+
+  it('keeps non-halftone artwork per-path selectable', () => {
+    const prims = [svgPrim('prim-2')];
+    const sources = sourcesFor(null, null, identityTransform(), prims);
+    expect(expandHalftonePaths(prims, sources, 'p:prim-2:path:1')).toEqual([
+      'p:prim-2:path:1',
+    ]);
+  });
+
+  it('passes through non-path, bare and unknown ids alone', () => {
+    const prims = [halftonePrim('prim-1')];
+    const sources = sourcesFor(null, null, identityTransform(), prims);
+    expect(expandHalftonePaths(prims, sources, 'p:prim-1:bitmap:0')).toEqual([
+      'p:prim-1:bitmap:0',
+    ]);
+    expect(expandHalftonePaths(prims, sources, 'model-face')).toEqual(['model-face']);
+    expect(expandHalftonePaths(prims, sources, 'p:prim-99:path:0')).toEqual(['p:prim-99:path:0']);
+  });
+});
+
+describe('bitmapFaceOutline + buildFeatureOverlayData: the face-rect body', () => {
+  it('draws the bitmap face outline with the amber line work (4 closed edges)', () => {
+    const feats: DetectedFeatures = {
+      planes: [],
+      circles: [],
+      edges: [],
+      radialChains: [],
+      threads: [],
+      paths: [],
+      bitmaps: [{ kind: 'bitmap', id: 'b', width: 20, height: 10 }],
+      faceToPlane: new Int32Array(0),
+      planeLoops: [],
+    };
+    const data = buildFeatureOverlayData(feats, identityTransform());
+    const pos = data.pathLines.geometry.getAttribute('position') as THREE.BufferAttribute;
+    // 4 edges × 2 vertices × 3 floats
+    expect(pos.count).toBe(8);
+    // a face corner lands where the local rect says (±10, ±5, 0)
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      minX = Math.min(minX, pos.getX(i));
+      maxX = Math.max(maxX, pos.getX(i));
+      minY = Math.min(minY, pos.getY(i));
+      maxY = Math.max(maxY, pos.getY(i));
+    }
+    expect(maxX - minX).toBeCloseTo(20);
+    expect(maxY - minY).toBeCloseTo(10);
+    // and NO path samples follow — the plane mesh owns hover/picking, so
+    // the per-path highlight indices can never shift
+    expect(data.pathSamples).toHaveLength(0);
   });
 });

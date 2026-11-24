@@ -4,6 +4,7 @@ import { identityTransform } from '../../core/types';
 import type { CircleFeature, Stock } from '../../core/types';
 import { detectFeatures } from '../../cam/features';
 import {
+  bitmapFromImport,
   boxFromPlane,
   cylinderFromCircle,
   defaultBox,
@@ -15,6 +16,22 @@ import {
   scaledDims,
   seedPrimitiveIds,
 } from '../primitives';
+
+const gray = (w: number, h: number): { width: number; height: number; data: Uint8Array } => ({
+  width: w,
+  height: h,
+  data: new Uint8Array(w * h).fill(128), // a flat mid-gray — never dithered at import
+});
+
+const boxStock: Extract<Stock, { kind: 'box' }> = {
+  kind: 'box',
+  sizeX: 40,
+  sizeY: 20,
+  sizeZ: 10,
+  origin: { x: 'min', y: 'min', z: 'min' },
+  axisMode: '3-axis',
+  materialId: 'aluminum-6061',
+};
 
 const cylinderStock: Extract<Stock, { kind: 'cylinder' }> = {
   kind: 'cylinder',
@@ -213,5 +230,97 @@ describe('seedPrimitiveIds', () => {
       { kind: 'box' as const, id: 'weird', size: { x: 1, y: 1, z: 1 }, original: { x: 1, y: 1, z: 1 }, transform: identityTransform() },
     ]);
     expect(/^prim-\d+$/.test(nextPrimitiveId())).toBe(true);
+  });
+});
+
+// DITHERED-BITMAP artwork (SPEC 2026-11-23): the Confirm-path constructor —
+// the RAW grayscale lands on the primitive (the wrapped kernel image is
+// derived at generation, round 3).
+describe('bitmapFromImport', () => {
+  it("fits the image aspect inside a box stock's flat top extents", () => {
+    const p = bitmapFromImport(gray(100, 200), boxStock, { name: 'photo.png' });
+    if (p.kind !== 'bitmap') return;
+    // extents 40 × 20, image aspect 0.5 → height-bound: 10 × 20
+    expect(p.width).toBeCloseTo(10);
+    expect(p.height).toBeCloseTo(20);
+  });
+
+  it('width-fits when the image is wide', () => {
+    const p = bitmapFromImport(gray(400, 100), boxStock);
+    if (p.kind !== 'bitmap') return;
+    // aspect 4: width-bound at 40, height 10 (inside 20)
+    expect(p.width).toBeCloseTo(40);
+    expect(p.height).toBeCloseTo(10);
+  });
+
+  it('places the face at the stock center, Z on the crown', () => {
+    const p = bitmapFromImport(gray(10, 10), boxStock);
+    if (p.kind !== 'bitmap') return;
+    expect(p.transform.position).toEqual({ x: 20, y: 10, z: 10 });
+    expect(p.transform.rotationDeg).toEqual({ x: 0, y: 0, z: 0 });
+    expect(p.transform.scale).toEqual({ x: 1, y: 1, z: 1 });
+  });
+
+  it('keeps the grayscale raw and labels the row with the file name', () => {
+    const g = gray(4, 4);
+    const p = bitmapFromImport(g, boxStock, { name: 'photo.png' });
+    if (p.kind !== 'bitmap') return;
+    expect(p.gray).toBe(g); // NO dithering at import — the op applies the method
+    expect(p.sourceName).toBe('photo.png');
+    expect(p.id).toMatch(/^prim-\d+$/);
+  });
+
+  it('a standing cylinder fits inside its crown-circle square', () => {
+    const standing: Extract<Stock, { kind: 'cylinder' }> = {
+      ...cylinderStock,
+      axisMode: '3-axis',
+    };
+    const p = bitmapFromImport(gray(100, 100), standing);
+    if (p.kind !== 'bitmap') return;
+    expect(p.width).toBeCloseTo(50); // Ø50 → bounding square 50 × 50
+    expect(p.height).toBeCloseTo(50);
+  });
+
+  it('a 4-axis cylinder wraps: image width around, image height along X (round 3, transposed)', () => {
+    // round 3 (2026-11-24): Alice's transposed mapping — the image's
+    // WIDTH runs AROUND, its HEIGHT ALONG the tube. The face rect keeps
+    // the kernel contract (width = the axial span, 100 long; height =
+    // the arc around Ø50): the axial edge carries the image's height
+    // (400 px over 100 mm) and the arc carries its width — 100 px over
+    // 100 × (100/400) = 25 mm of arc
+    const p = bitmapFromImport(gray(100, 400), cylinderStock);
+    if (p.kind !== 'bitmap') return;
+    expect(p.presentation).toBe('wrapped');
+    expect(p.wrapDiameter).toBeCloseTo(50);
+    expect(p.width).toBeCloseTo(100); // axial: the image's height
+    expect(p.height).toBeCloseTo(25); // arc: the image's width
+    // the wrapped face sits ON THE AXIS (the generator's on-axis check),
+    // never on the crown
+    expect(p.transform.position).toEqual({ x: 50, y: 0, z: 0 });
+  });
+
+  it('a wide image force-scales down past one turn (the >360° ruling, transposed fit)', () => {
+    // the image's WIDTH runs the arc now: aspect W/H = 4 → the arc would
+    // be 100 · 4 = 400 mm — over the 2πR = 157.08 circumference. One
+    // uniform scale-down: 157.08/400 = 0.3927, face 39.27 (axial) ×
+    // 157.08 (arc), and the confirming UI gets the applied scale.
+    const seen: number[] = [];
+    const p = bitmapFromImport(gray(400, 100), cylinderStock, { name: 'wide.png' }, (s) =>
+      seen.push(s),
+    );
+    if (p.kind !== 'bitmap') return;
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeCloseTo((2 * Math.PI * 25) / 400, 6);
+    expect(p.width).toBeCloseTo(100 * seen[0], 6);
+    expect(p.height).toBeCloseTo(2 * Math.PI * 25, 6);
+  });
+
+  it('a tall image under one turn reports no scale (the transposed default)', () => {
+    // round 3: a TALL image (100 × 400) fits the default Ø50×100 stock —
+    // arc 25 mm, axial 100 mm — exactly what force-scaled under the
+    // round-2 mapping
+    const seen: number[] = [];
+    bitmapFromImport(gray(100, 400), cylinderStock, undefined, (s) => seen.push(s));
+    expect(seen).toHaveLength(0);
   });
 });

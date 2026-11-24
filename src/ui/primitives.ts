@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import type { CircleFeature, ModelTransform, Primitive, Stock, Vec3 } from '../core/types';
+import { rotaryCalibrationOf, type CircleFeature, type ModelTransform, type Primitive, type Stock, type Vec3 } from '../core/types';
 import type { DetectedFeatures } from '../cam/features';
 import { stockSpan } from './placement';
 import { planeExtent, transformFn } from './featureOverlays';
@@ -69,6 +69,7 @@ export function resizePrimitive(
   uniform: boolean,
 ): Primitive {
   if (p.kind === 'artwork') return p; // line work: no box dimensions to resize
+  if (p.kind === 'bitmap') return p; // raster artwork: the W/H fields drive scale
   if (p.kind === 'cylinder') {
     const dims = scaledDims({ x: p.diameter, y: p.length, z: 0 }, axis, value, uniform);
     return { ...p, diameter: dims.x, length: dims.y };
@@ -79,6 +80,7 @@ export function resizePrimitive(
 /** Revert a primitive dimension to its creation value; uniform reverts all. */
 export function revertPrimitive(p: Primitive, axis: 'x' | 'y' | 'z', uniform = false): Primitive {
   if (p.kind === 'artwork') return p; // line work: nothing to revert
+  if (p.kind === 'bitmap') return p; // raster artwork: nothing to revert
   if (p.kind === 'cylinder') {
     if (uniform) return { ...p, diameter: p.original.diameter, length: p.original.length };
     return axis === 'x' ? { ...p, diameter: p.original.diameter } : { ...p, length: p.original.length };
@@ -210,6 +212,143 @@ export function artworkFromImport(
       x: (x0 + x1) / 2,
       y: (y0 + y1) / 2,
       z: rotary ? (z0 + z1) / 2 : z1, // wrapped: the axis; flat: the crown
+    }),
+  };
+}
+
+/**
+ * DITHERED-BITMAP artwork primitive (docs/PLAN.md "Laser raster engrave",
+ * SPEC 2026-11-23): the dropped image's RAW grayscale on one primitive —
+ * dithering is material-dependent intent, so the method applies at the
+ * rasterEngrave op, never at import. Mirror of artworkFromImport's frame
+ * choice: 3-axis lands FLAT (the face dims fit the image's aspect inside
+ * the flat top extents, transform at the stock center, Z on the crown);
+ * 4-axis lands WRAPPED (round 2, 2026-11-24; round 3 the same day —
+ * Alice's field ruling — the IMAGE WIDTH runs AROUND, its HEIGHT ALONG
+ * the tube; the face rect keeps the kernel contract width=axial,
+ * height=arc, see bitmapWrappedFit) with the transform centered on the
+ * ROTATION AXIS; the >360° ruling force-scales a one-turn-plus fit. The
+ * primitive keeps the RAW image — the wrapped generation path transposes
+ * it (bitmapKernelGray), the import never does.
+ */
+
+/** The flat top extents the bitmap face fits inside, mm: the stock's own
+ * X/Y span — a box's footprint, a standing cylinder's crown-circle square,
+ * a 4-axis cylinder's axial length × Ø strip (the flat region above the
+ * crown). stockSpan already encodes each shape's geometry. */
+export function bitmapFaceExtents(stock: Stock): { w: number; h: number } {
+  const [x0, x1] = stockSpan(stock, 'x');
+  const [y0, y1] = stockSpan(stock, 'y');
+  return { w: Math.max(x1 - x0, 1e-6), h: Math.max(y1 - y0, 1e-6) };
+}
+
+/** The bitmap face dims: the image's aspect fitted inside the flat extents
+ * (the bitmap stretches onto the face, so fitting the aspect keeps pixels
+ * square). Shared by the import dialogue's readout and the Confirm path —
+ * one face per (image, stock). 4-AXIS STOCK: the face WRAPS (round 2) —
+ * width is the axial span, height the arc around — so the wrapped fit
+ * (bitmapWrappedFit) owns this branch, force-scaled under one turn. */
+export function bitmapFaceDims(
+  gray: { width: number; height: number },
+  stock: Stock,
+): { width: number; height: number } {
+  if (stock.axisMode === '4-axis') return bitmapWrappedFit(gray, stock).face;
+  const ext = bitmapFaceExtents(stock);
+  const aspect = Math.max(gray.width, 1) / Math.max(gray.height, 1);
+  let width = ext.w;
+  let height = width / aspect;
+  if (height > ext.h) {
+    height = ext.h;
+    width = height * aspect;
+  }
+  return { width, height };
+}
+
+/**
+ * The WRAPPED face fit (round 3, 2026-11-24 — Alice's field ruling on the
+ * round-2 mapping: "it is a portrait format image but the vertical axis
+ * wraps and horizontal is along the x axis"): the IMAGE WIDTH runs AROUND
+ * the tube and the IMAGE HEIGHT runs ALONG it. The face rect keeps the
+ * kernel contract (width = the AXIAL span, the stock's X extent; height =
+ * the ARC length): the axial edge fits the image's HEIGHT, the arc edge
+ * the image's WIDTH, so aspect here is arc/axial = grayW/grayH. ORIENTATION
+ * (the default within the mapping; round 4 — Alice's field verdict "you
+ * have wrapped it face down" — flipped the axial leg): the image's LEFT
+ * edge sits at the around-origin (left→right = ascending A, unchanged) and
+ * the image's TOP toward −X — the default wraps FACE UP; the Model tab's
+ * image-rotate/flip buttons are the escape for any residual orientation.
+ * The >360° ruling (Alice, 2026-11-24: "no need to permit greater
+ * than 360° wrapping, force a scale down if the dropped artwork would
+ * exceed that"): an arc longer than the circumference 2πR takes ONE
+ * uniform scale-down (aspect preserved) that lands it exactly one turn —
+ * `scale` carries what was applied (1 = untouched). bitmapFromImport is
+ * the single choke point that reports it (the drop toast); the dialogue's
+ * readout calls this too so it shows the face that will actually land.
+ */
+export function bitmapWrappedFit(
+  gray: { width: number; height: number },
+  stock: Stock,
+): { face: { width: number; height: number }; scale: number } {
+  const r = rotaryCalibrationOf(stock).effectiveRadius;
+  const circ = 2 * Math.PI * r;
+  const ext = bitmapFaceExtents(stock);
+  const arcPerAxial = Math.max(gray.width, 1) / Math.max(gray.height, 1);
+  let width = ext.w; // the axial edge — carries the image's HEIGHT
+  let height = width * arcPerAxial; // the arc edge — carries the image's WIDTH
+  let scale = 1;
+  if (height > circ) {
+    scale = circ / height;
+    width *= scale;
+    height = circ;
+  }
+  return { face: { width, height }, scale };
+}
+
+/** The Confirm-path constructor: mirror of artworkFromImport's flat branch
+ *  for a grayscale source. 4-AXIS STOCK: the face WRAPS (round 2, 2026-
+ *  11-24) — presentation 'wrapped', the bitmap's own Ø from the stock's
+ *  effective radius, transform centered on the ROTATION AXIS (the
+ *  wrapped-artwork convention; the on-axis generation check needs it),
+ *  and the >360° ruling's forced scale-down applies here — THE single
+ *  choke point every dropped bitmap passes; `onScaleDown` reports the
+ *  applied scale so the confirming UI surfaces the drop toast. */
+export function bitmapFromImport(
+  gray: { width: number; height: number; data: Uint8Array },
+  stock: Stock,
+  /** the file it came from — the objects list labels the row with it */
+  source?: { name: string },
+  /** fired when the wrapped fit exceeded one turn and was force-scaled —
+   *  carries the applied uniform scale (e.g. 0.42) */
+  onScaleDown?: (scale: number) => void,
+): Extract<Primitive, { kind: 'bitmap' }> {
+  const [x0, x1] = stockSpan(stock, 'x');
+  const [y0, y1] = stockSpan(stock, 'y');
+  const crown = stockSpan(stock, 'z')[1];
+  const cal = rotaryCalibrationOf(stock);
+  const rotary = stock.axisMode === '4-axis';
+  const wrapD = Math.max(1, cal.effectiveRadius * 2);
+  let face: { width: number; height: number };
+  if (rotary) {
+    const fit = bitmapWrappedFit(gray, stock);
+    face = fit.face;
+    if (fit.scale < 1) onScaleDown?.(fit.scale);
+  } else {
+    face = bitmapFaceDims(gray, stock);
+  }
+  return {
+    kind: 'bitmap',
+    id: nextPrimitiveId(),
+    sourceName: source?.name,
+    gray,
+    width: face.width,
+    height: face.height,
+    ...(rotary ? { presentation: 'wrapped' as const, wrapDiameter: wrapD } : {}),
+    transform: unitTransform({
+      x: (x0 + x1) / 2,
+      y: (y0 + y1) / 2,
+      // wrapped: the rotation axis (the on-axis generation check expects
+      // it); flat: the crown
+      z: rotary ? cal.axisZ : crown,
     }),
   };
 }
