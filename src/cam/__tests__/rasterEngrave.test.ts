@@ -66,11 +66,11 @@ describe('rasterEngrave — emission shape (mirrors the dialect)', () => {
     // final extinguish. Rows 0..2 fold Y into the lit... no: the last
     // span of every row is LIT here, so each row = lit span + pure-Y
     // corner move; the last row = lit span only, + extinguish.
-    expect(r.moves[0]).toMatchObject({ rapid: true, words: { x: 0, y: 0 } });
+    expect(r.moves[0]).toMatchObject({ rapid: true, words: { x: 0, y: 0.5 } }); // row 0 at its pixel CENTER
     expect(r.moves[1]).toMatchObject({ rapid: true, words: { z: 11 }, comment: 'laser focus height' });
     const body = render(r.moves.slice(2));
     expect(body[0]).toBe('S0.3 x4'); // row 0: one full-face lit run
-    expect(body[1]).toBe('S0 y1'); // corner move (beam-off)
+    expect(body[1]).toBe('S0 y1.5'); // corner move (beam-off) — row 1's center
     expect(body.length).toBe(4 * 2 - 1 + 1); // 3 corner rows + last row + extinguish
     expect(body[body.length - 1]).toBe('S0 ∅');
     // zero rapids after the opening pair
@@ -147,6 +147,18 @@ describe('rasterEngrave — emission shape (mirrors the dialect)', () => {
     expect(last.words).toEqual({});
     expect(last.power).toBe(0);
     expect(last.rapid).toBeFalsy();
+  });
+
+  it('rows sit at pixel-row CENTERS — symmetric face coverage (2026-11-24 ruling)', () => {
+    // the probe-measured diagnosis: rows at pixel edges left the face's
+    // bottom edge unburned (15.15 of 16mm at 1mm pitch). The X runs
+    // traverse their whole span, but the Y step has no traversal — the
+    // burn line must CENTER its pixel row: (j + 0.5)·py.
+    const r = rasterEngrave({ ...BASE, bitmap: solid(4, 4, 0) });
+    const ys = r.moves
+      .filter((m) => m.words.y !== undefined)
+      .map((m) => (m.words as { y: number }).y);
+    expect(ys).toEqual([0.5, 1.5, 2.5, 3.5]); // positioning + 3 corners
   });
 });
 

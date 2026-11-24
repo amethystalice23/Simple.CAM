@@ -216,10 +216,16 @@ export function rasterEngrave(op: RasterEngraveParams): RasterEngraveResult {
   let minutes = 0;
 
   // pixel column k BURNS the machine span [k·px, (k+1)·px) — a one-pixel
-  // run is a full pixel wide, not a zero-length flash
+  // run is a full pixel wide, not a zero-length flash. Rows sit at
+  // PIXEL-ROW CENTERS (Alice, 2026-11-24: probe-measured — rows at the
+  // row edges left the face's bottom ~0.85 of 16mm unburned; the X runs
+  // traverse their whole span but the Y step has no traversal, so each
+  // burn line must center its pixel row. Studio's first row at Y0.5, not
+  // Y0, corroborates a centered/margined convention): row j burns at
+  // (j + 0.5)·py, symmetric over the face.
   const runStart = (r: Run): number => x0mm + r.x0 * px;
   const runEnd = (r: Run): number => x0mm + (r.x1 + 1) * px;
-  const ym = (j: number): number => op.origin.y + j * py;
+  const ym = (j: number): number => op.origin.y + (j + 0.5) * py;
 
   // the ONE positioning rapid + the op's one Z move to focus height
   // (the post arms M3 after it; from here the beam can only meet the

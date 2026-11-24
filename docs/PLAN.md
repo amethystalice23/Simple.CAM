@@ -257,11 +257,20 @@ selection; halftone vector artwork also whole-artwork), the op case +
 suggest + panel fields, post goldens ×3 (serpentine / one-way /
 halftone, src/post/__tests__/golden/raster-engrave-*.nc), job file v2
 (grayscale as `gray.base64`). Deliberate calls recorded for the field
-run: raster `leadIn` defaults **0**, NOT the vector's inherited 0.3
+per-move modulation stays phase 2). Deliberate calls recorded for the
+field run: raster rows sit at PIXEL-ROW CENTERS, `(j + 0.5)·pitch`
+(Alice's 2026-11-24 go-ahead on the sim-probe diagnosis — rows at
+pixel edges left the face's bottom strip unburned, 15.15 of 16mm at
+1mm pitch; X runs traverse their span but the Y step has no traversal;
+Studio's first row at Y0.5 corroborates a centered convention); raster
+`leadIn` defaults **0**, NOT the vector's inherited 0.3
 (a raster lead burns authored-white pixels — at 0.1mm pitch 0.3mm
 bridges three pixels ahead of every fired run; the coupon can raise
 it); our beam-off S word emits `S0` (trimmed), not Studio's literal
-`S0.0` — identical to the committed vector-laser goldens. Still open:
+`S0.0` — identical to the committed vector-laser goldens. The sim
+needed NO changes for raster ops (probed end-to-end through the posted
+round-trip: parse carries the S words, marking blackens the full fired
+face, beam-off spans exit before grid scanning). Still open:
 the INTERLACE CALIBRATION COUPON (testPattern/CalibrationDialog flow —
 the knob ships with one-way as the escape hatch) and greyscale
 per-material modulation (phase 2 below).
