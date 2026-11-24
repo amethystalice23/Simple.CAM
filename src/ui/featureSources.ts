@@ -369,6 +369,31 @@ export function parseNamespacedId(id: string): { primId: string; featureId: stri
   return m ? { primId: m[1], featureId: m[2] } : null;
 }
 
+/**
+ * SELECTION GRANULARITY (docs/PLAN.md "Laser raster engrave", SPEC
+ * 2026-11-23 piece 1): halftone-source vector artwork stops being
+ * per-path selectable — clicking any dot selects the WHOLE artwork. The
+ * raster/cut pipeline reads the picture as one piece, so per-dot picking
+ * has no value and twenty-thousand-path selections only break things.
+ * A `p:<primId>:path:<n>` id whose primitive came from the halftone
+ * screener expands to ALL of that source's path ids; non-halftone
+ * artwork (SVG/DXF drops) keeps per-path selection, and every other id
+ * passes through alone.
+ */
+export function expandHalftonePaths(
+  primitives: Primitive[],
+  sources: FeatureSource[],
+  id: string,
+): string[] {
+  const parsed = parseNamespacedId(id);
+  if (!parsed || !/^path:\d+$/.test(parsed.featureId)) return [id];
+  const prim = primitives.find((p) => p.id === parsed.primId);
+  if (!prim || prim.kind !== 'artwork' || prim.sourceKind !== 'halftone') return [id];
+  const source = sources.find((s) => s.id === parsed.primId);
+  if (!source) return [id];
+  return source.features.paths.map((f) => f.id);
+}
+
 /** The op-edge source id — `o:`-prefixed feature ids route here. */
 export const OP_EDGE_SOURCE_ID = 'op-edges';
 

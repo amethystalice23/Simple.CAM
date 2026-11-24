@@ -216,6 +216,68 @@ export function artworkFromImport(
   };
 }
 
+/**
+ * DITHERED-BITMAP artwork primitive (docs/PLAN.md "Laser raster engrave",
+ * SPEC 2026-11-23): the dropped image's RAW grayscale on one primitive —
+ * dithering is material-dependent intent, so the method applies at the
+ * rasterEngrave op, never at import. The FLAT branch of artworkFromImport:
+ * the face dims fit the image's aspect INSIDE the flat top extents (never
+ * wrap — the raster op is flat-only v1), the transform sits at the stock
+ * center with Z on the crown.
+ */
+
+/** The flat top extents the bitmap face fits inside, mm: the stock's own
+ * X/Y span — a box's footprint, a standing cylinder's crown-circle square,
+ * a 4-axis cylinder's axial length × Ø strip (the flat region above the
+ * crown). stockSpan already encodes each shape's geometry. */
+export function bitmapFaceExtents(stock: Stock): { w: number; h: number } {
+  const [x0, x1] = stockSpan(stock, 'x');
+  const [y0, y1] = stockSpan(stock, 'y');
+  return { w: Math.max(x1 - x0, 1e-6), h: Math.max(y1 - y0, 1e-6) };
+}
+
+/** The bitmap face dims: the image's aspect fitted inside the flat extents
+ * (the bitmap stretches onto the face, so fitting the aspect keeps pixels
+ * square). Shared by the import dialogue's readout and the Confirm path —
+ * one face per (image, stock). */
+export function bitmapFaceDims(
+  gray: { width: number; height: number },
+  stock: Stock,
+): { width: number; height: number } {
+  const ext = bitmapFaceExtents(stock);
+  const aspect = Math.max(gray.width, 1) / Math.max(gray.height, 1);
+  let width = ext.w;
+  let height = width / aspect;
+  if (height > ext.h) {
+    height = ext.h;
+    width = height * aspect;
+  }
+  return { width, height };
+}
+
+/** The Confirm-path constructor: mirror of artworkFromImport's flat branch
+ * for a grayscale source. */
+export function bitmapFromImport(
+  gray: { width: number; height: number; data: Uint8Array },
+  stock: Stock,
+  /** the file it came from — the objects list labels the row with it */
+  source?: { name: string },
+): Extract<Primitive, { kind: 'bitmap' }> {
+  const [x0, x1] = stockSpan(stock, 'x');
+  const [y0, y1] = stockSpan(stock, 'y');
+  const crown = stockSpan(stock, 'z')[1];
+  const face = bitmapFaceDims(gray, stock);
+  return {
+    kind: 'bitmap',
+    id: nextPrimitiveId(),
+    sourceName: source?.name,
+    gray,
+    width: face.width,
+    height: face.height,
+    transform: unitTransform({ x: (x0 + x1) / 2, y: (y0 + y1) / 2, z: crown }),
+  };
+}
+
 /** Default tab: 10×10×5 box sitting on the stock top, centered. */
 export function defaultBox(stock: Stock): Primitive {
   const [x0, x1] = stockSpan(stock, 'x');

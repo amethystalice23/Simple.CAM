@@ -1,13 +1,18 @@
 /**
- * The bitmap-import dialogue (drop a PNG/JPEG/…): one image, two
+ * The bitmap-import dialogue (drop a PNG/JPEG/…): one image, three
  * destinations. "Heightmap" builds a relief MODEL carved down from the
  * stock crown (the model slot); "Artwork / Halftone" screens the image
- * into dot line work for the engrave pipeline (an artwork primitive).
- * Alice's 2026-10-31 rulings: the second tab is "Artwork / Halftone";
- * the dot pitch field is "Dot spacing", not "period" ("period is an odd
- * name for it, perhaps something sized related"); rotary depth defaults
- * to r/2 ("maybe r/2"). The geometry choice is BY STOCK — box stock
- * yields a flat relief, cylinder stock one wrapped on the rotation axis.
+ * into dot line work for the engrave pipeline (an artwork primitive);
+ * "Dithered bitmap" keeps the RAW grayscale as one artwork primitive the
+ * laser's rasterEngrave op dithers at generate time (SPEC 2026-11-23 —
+ * the method is applied at the OP because it is material-dependent
+ * intent; the artwork stays grayscale). Alice's 2026-10-31 rulings: the
+ * second tab is "Artwork / Halftone"; the dot pitch field is "Dot
+ * spacing", not "period" ("period is an odd name for it, perhaps
+ * something sized related"); rotary depth defaults to r/2 ("maybe r/2").
+ * The geometry choice is BY STOCK — box stock yields a flat relief,
+ * cylinder stock one wrapped on the rotation axis. The dithered-bitmap
+ * face is FLAT ONLY (the raster op defers wrapped/4th-axis raster).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -18,11 +23,13 @@ import { heightmapBoxGeometry, heightmapCylinderGeometry } from '../core/heightm
 import { halftoneArtwork } from '../core/halftone';
 import { rotaryCalibrationOf, type Stock } from '../core/types';
 import type { ImportedArtwork } from '../core/vectorImport';
+import { bitmapFaceDims } from './primitives';
 import { NumberField } from './fields';
 
 export type BitmapImportResult =
   | { kind: 'heightmap'; geometry: BufferGeometry; name: string }
-  | { kind: 'halftone'; art: ImportedArtwork; name: string };
+  | { kind: 'halftone'; art: ImportedArtwork; name: string }
+  | { kind: 'bitmap'; gray: GrayBitmap; name: string };
 
 interface Props {
   name: string;
@@ -32,7 +39,7 @@ interface Props {
   onCancel: () => void;
 }
 
-type Tab = 'heightmap' | 'halftone';
+type Tab = 'heightmap' | 'halftone' | 'bitmap';
 
 /** depth > 0 always; a box defaults to its own thickness (Alice,
  * 2026-10-31: "the stock thickness for boxes") and never carves THROUGH
@@ -218,12 +225,28 @@ export function BitmapImportDialog(props: Props) {
   }, [gray, face, spacing, angleDeg]);
   const dots = useMemo(() => (halftone.art ? dotsOf(halftone.art) : []), [halftone.art]);
 
-  const blocked = tab === 'heightmap' ? !heightmap.geometry : !halftone.art;
+  // The dithered-bitmap face (FLAT ONLY — never wraps): the image's aspect
+  // fitted inside the flat top extents. Recomputed on the current gray so
+  // the rotate button moves the readout and the Confirm agrees with it.
+  const bitmapFace = useMemo(() => bitmapFaceDims(gray, stock), [gray, stock]);
+
+  const blocked =
+    tab === 'heightmap'
+      ? !heightmap.geometry
+      : tab === 'halftone'
+        ? !halftone.art
+        : false; // a grayscale image is always importable as bitmap artwork
 
   const confirm = () => {
     if (tab === 'heightmap') {
       if (!heightmap.geometry) return;
       props.onConfirm({ kind: 'heightmap', geometry: heightmap.geometry, name: props.name });
+      return;
+    }
+    if (tab === 'bitmap') {
+      // NO dithering here — the artwork stays grayscale; the rasterEngrave
+      // op applies the method (material-dependent intent, the spec's rule)
+      props.onConfirm({ kind: 'bitmap', gray, name: props.name });
       return;
     }
     if (!halftone.art) return;
@@ -234,7 +257,7 @@ export function BitmapImportDialog(props: Props) {
     <div className="modal-overlay">
       <div className="modal" role="dialog" aria-modal="true">
         <h2>Import image — {props.name}</h2>
-        <p className="hint">the same image can become a carved relief or dot line work</p>
+        <p className="hint">the same image can become a carved relief, dot line work, or dithered raster artwork</p>
         <div className="segmented wide">
           <button
             type="button"
@@ -249,6 +272,13 @@ export function BitmapImportDialog(props: Props) {
             onClick={() => setTab('halftone')}
           >
             Artwork / Halftone
+          </button>
+          <button
+            type="button"
+            className={tab === 'bitmap' ? 'active' : ''}
+            onClick={() => setTab('bitmap')}
+          >
+            Dithered bitmap
           </button>
         </div>
         <button type="button" className="secondary" onClick={() => setGray(rotateGray90(gray))}>
@@ -314,6 +344,20 @@ export function BitmapImportDialog(props: Props) {
                 engraves as line work like a dropped SVG
               </p>
             )}
+          </>
+        )}
+        {tab === 'bitmap' && (
+          <>
+            <p className="hint">
+              the image stays grayscale — the dither method is picked on the raster operation,
+              so one import suits any material
+            </p>
+            <p className="hint">
+              fits the stock top at {bitmapFace.width.toFixed(1)} × {bitmapFace.height.toFixed(1)} mm
+              {stock.axisMode === '4-axis' && stock.kind === 'cylinder'
+                ? ' (flat strip above the crown — raster never wraps)'
+                : ''}
+            </p>
           </>
         )}
         <div className="dialog-buttons">

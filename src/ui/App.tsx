@@ -30,7 +30,7 @@ import { BUILT_IN_TOOLS } from '../core/builtInTools';
 import { deriveBaseline } from './toolNames';
 import { decodeBitmapFile, type GrayBitmap } from '../core/bitmapImport';
 import { planeExtents, transformFn } from './featureOverlays';
-import { opEdgeSource, resolveFeature, sourcesFor, splitSelection, stockAxisInModelSpace } from './featureSources';
+import { expandHalftonePaths, opEdgeSource, resolveFeature, sourcesFor, splitSelection, stockAxisInModelSpace } from './featureSources';
 import {
   cylChamferTargetsFromSelection,
   pocketRegionsFromSelection,
@@ -40,6 +40,7 @@ import { internalMinorDiameter } from '../cam/threadMill';
 import { ModelPanel } from './ModelPanel';
 import {
   artworkFromImport,
+  bitmapFromImport,
   boxFromPlane,
   cylinderFromCircle,
   defaultBox,
@@ -508,6 +509,13 @@ export function App() {
       for (const e of source.features.edges) {
         map[e.id] = `L${Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y, e.b.z - e.a.z).toFixed(1)}`;
       }
+      for (const p of source.features.paths) {
+        map[p.id] = 'artwork line';
+      }
+      // bitmap artwork: the op rows should read the artwork, not the raw id
+      for (const b of source.features.bitmaps ?? []) {
+        map[b.id] = `bitmap ${b.width.toFixed(0)} × ${b.height.toFixed(0)} mm`;
+      }
       // one batched mesh pass for ALL planes — the per-plane planeExtent
       // call went quadratic on fine meshes (this re-runs on every stock
       // edit, sources depends on it)
@@ -901,13 +909,18 @@ export function App() {
       // through and still selects (the stuck-banner wedge, 2026-11-03)
     }
     if (editingOpId) {
+      // halftone artwork selects WHOLE (SPEC 2026-11-23 piece 1): a click
+      // on any dot expands to every path of that artwork. Toggling stays
+      // symmetrical — all-in removes the whole artwork, else it adds.
+      const selIds = expandHalftonePaths(primitives, sources, id);
       const p = featureMachinePoint(id);
       setOps((prev) =>
         prev.map((o) => {
           if (o.id !== editingOpId) return o;
-          const featureIds = o.featureIds.includes(id)
-            ? o.featureIds.filter((x) => x !== id)
-            : [...o.featureIds, id];
+          const allIn = selIds.every((x) => o.featureIds.includes(x));
+          const featureIds = allIn
+            ? o.featureIds.filter((x) => !selIds.includes(x))
+            : [...o.featureIds, ...selIds.filter((x) => !o.featureIds.includes(x))];
           let next = { ...o, featureIds } as JobOp;
           if (o.featureIds.length === 0 && o.kind === 'threadMill') {
             // the rim/wall/facet click resolves the whole thread spec: Ø,
@@ -932,7 +945,13 @@ export function App() {
       );
       return;
     }
-    setSelection((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setSelection((prev) => {
+      const selIds = expandHalftonePaths(primitives, sources, id);
+      const allIn = selIds.every((x) => prev.includes(x));
+      return allIn
+        ? prev.filter((x) => !selIds.includes(x))
+        : [...prev, ...selIds.filter((x) => !prev.includes(x))];
+    });
   };
 
   const clearSelection = () => {
@@ -952,8 +971,12 @@ export function App() {
    *  editing, else the global one). No prefill logic on bulk select: the
    *  depth-prefill on the first path click is a single-click nicety, not
    *  something to run once per 500 dots. */
-  const boxSelect = (ids: string[]) => {
-    if (ids.length === 0) return;
+  const boxSelect = (idsIn: string[]) => {
+    if (idsIn.length === 0) return;
+    // halftone artwork bulk-selects WHOLE (SPEC 2026-11-23 piece 1): a
+    // band over any dots expands to the whole artwork before the union —
+    // a rubber band never deselects, so no toggle check here
+    const ids = idsIn.flatMap((x) => expandHalftonePaths(primitives, sources, x));
     if (editingOpId) {
       setOps((prev) =>
         prev.map((o) => {
@@ -1030,6 +1053,10 @@ export function App() {
       setStatusNote(null); // the fallback shows the fresh relief dims
       return;
     }
+    if (result.kind === 'bitmap') {
+      confirmBitmapArtwork(result.name, result.gray);
+      return;
+    }
     const p = artworkFromImport(result.art, stock, {
       name: result.name,
       kind: 'halftone',
@@ -1037,6 +1064,18 @@ export function App() {
     setPrimitives((prev) => [...prev, p]);
     setSelectedObjectId(p.id);
     setStatusNote(`imported halftone artwork ${result.name}`);
+  };
+
+  /** A DITHERED-BITMAP confirm (SPEC 2026-11-23): the RAW grayscale lands
+   *  as one bitmap artifact — same flat branch as the halftone artwork
+   *  (face dims fit the aspect inside the flat top extents; center, crown).
+   *  Dithering happens when the rasterEngrave op generates, never here:
+   *  the method is material-dependent intent. */
+  const confirmBitmapArtwork = (name: string, gray: GrayBitmap) => {
+    const p = bitmapFromImport(gray, stock, { name });
+    setPrimitives((prev) => [...prev, p]);
+    setSelectedObjectId(p.id);
+    setStatusNote(`imported bitmap artwork ${name}`);
   };
 
   /** Create a primitive, sized from the selection when it matches the kind. */

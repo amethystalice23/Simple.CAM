@@ -24,6 +24,14 @@ interface Props {
   currentId: string;
   /** tools the ops already carry, T-numbered, in T order */
   inUse: ToolInUse[];
+  /**
+   * KIND-SCOPED pick list (SPEC 2026-11-23: the rasterEngrave op accepts
+   * the laser only, so its list narrows to lasers). Absent = every tool —
+   * the engrave precedent: the panel lists the whole library and the
+   * generator's gate stays the truth. The trigger still shows whatever
+   * the op carries — an off-list current tool reads as the problem it is.
+   */
+  allowedTypes?: Tool['type'][];
   onChange: (toolId: string) => void;
 }
 
@@ -74,6 +82,10 @@ export function ToolPicker(props: Props) {
   }, [open]);
 
   const current = props.tools.find((t) => t.id === props.currentId);
+  const allowed = (t: Tool): boolean =>
+    props.allowedTypes === undefined || props.allowedTypes.includes(t.type);
+  const filtered = props.tools.filter(allowed);
+  const inUseRows = props.inUse.filter((e) => allowed(e.tool));
   const numOf = new Map(props.inUse.map(({ tool, n }) => [tool.id, n]));
 
   const row = (t: Tool) => {
@@ -138,13 +150,13 @@ export function ToolPicker(props: Props) {
           aria-label="Tools"
           style={{ top: pos.top, left: pos.left }}
         >
-          {props.inUse.length > 0 && (
+          {inUseRows.length > 0 && (
             <div className="tool-popup-head in-use">
               In use — assigned to operations
             </div>
           )}
-          {props.inUse.map(({ tool }) => row(tool))}
-          {groupToolsBySubtype(props.tools).map((g) => (
+          {inUseRows.map(({ tool }) => row(tool))}
+          {groupToolsBySubtype(filtered).map((g) => (
             <div key={g.label} className="tool-group">
               <div className="tool-popup-head">{g.label}</div>
               {g.tools.map(row)}

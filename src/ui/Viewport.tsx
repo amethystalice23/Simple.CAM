@@ -12,22 +12,7 @@ import type { FeatureSource } from './featureSources';
 import { primitiveGeometry, primitivePose } from './featureSources';
 import { segmentsForRadius } from './meshSegments';
 import { NavCube } from './navcube';
-import {
-  buildFeatureOverlayData,
-  connectorLine,
-  findNearestFeatures,
-  hoverLineGeometry,
-  measureText,
-  pickFromNearest,
-  planeHighlightMesh,
-  planePick,
-  pxPerMmAt,
-  sampleVisibleAt,
-  transformFn,
-  PATH_COLOR,
-  PLANE_SELECT,
-  SELECT_COLOR,
-  GLOBAL_SELECT_COLOR,
+import { bitmapFaceOutline, buildFeatureOverlayData, connectorLine, findNearestFeatures, hoverLineGeometry, measureText, pickFromNearest, planeHighlightMesh, planePick, pxPerMmAt, sampleVisibleAt, transformFn, PATH_COLOR, PATH_HOVER, PLANE_SELECT, SELECT_COLOR, GLOBAL_SELECT_COLOR,
   SLICE_COLOR,
   type FeatureOverlayData,
   type MeasurePick,
@@ -110,6 +95,12 @@ function picksFromSelection(
       // A chain: highlighted (via the selection line walk), but not a
       // measurement pick — a chain's silhouette is a closed seam, not a
       // measurable point.
+      continue;
+    }
+    if (s.kind === 'bitmap') {
+      // bitmap artwork (SPEC 2026-11-23): also not a measurement pick —
+      // the selection outline (the face-rect LineLoop in the selection
+      // walk) carries the highlight; a bitmap's pixel center is noise
       continue;
     }
     out.push({
@@ -339,6 +330,16 @@ export function Viewport({
   const fillShadeMeshesRef = useRef<THREE.Mesh[]>([]);
   /** primitive meshes (non-indexed, source-aligned) for plane raycast picks */
   const primMeshesRef = useRef<THREE.Mesh[]>([]);
+  /**
+   * BITMAP artwork face meshes (SPEC 2026-11-23): the textured plane IS
+   * the pick and hover target — raycast here, resolve to
+   * `p:<id>:bitmap:0`. Kept OUT of primMeshesRef: that list feeds the
+   * occlusion gate and the faceToPlane plane picks, and the artwork
+   * precedent is exactly no-mesh (the bitmap's face would otherwise
+   * shadow artwork features and never resolve a plane). userData carries
+   * `sourceId` + `bitmapFeatureId`.
+   */
+  const bitmapMeshesRef = useRef<THREE.Mesh[]>([]);
   const sourcesRef = useRef(sources);
   sourcesRef.current = sources;
   const hoverLineRef = useRef<THREE.LineSegments | null>(null);
@@ -651,7 +652,9 @@ export function Viewport({
                     ? feats?.radialChains[pick.index]?.id
                     : pick.kind === 'thread'
                       ? feats?.threads[pick.index]?.id
-                      : feats?.edges[pick.index]?.id;
+                      : pick.kind === 'bitmap'
+                        ? feats?.bitmaps?.[pick.index]?.id
+                        : feats?.edges[pick.index]?.id;
           if (id) onToggleSelectRef.current(id);
         }
       }
@@ -796,12 +799,15 @@ export function Viewport({
       }
       // plane fallback: raycast the model mesh and the primitive meshes,
       // resolving the hit face through the OWNING source's faceToPlane —
-      // suppressed for the Ø pick (circles only)
+      // suppressed for the Ø pick (circles only). Bitmap artwork faces join
+      // the same raycast (SPEC 2026-11-23): the display plane IS the pick
+      // target, its hit resolves straight to the bitmap feature id.
       if (!pickAllows('plane')) return null;
       const model = modelRef.current;
       const meshes: THREE.Object3D[] = [
         ...(model && model.visible ? [model] : []),
         ...primMeshesRef.current,
+        ...bitmapMeshesRef.current,
       ];
       if (meshes.length === 0) return null;
       raycaster.setFromCamera(new THREE.Vector2((mx / w) * 2 - 1, -(my / h) * 2 + 1), camera);
@@ -810,6 +816,18 @@ export function Viewport({
           hit.object === model ? 'model' : (hit.object.userData.sourceId as string | undefined);
         const source = sourcesRef.current.find((s) => s.id === sourceId);
         if (!source) continue;
+        const ud = hit.object.userData as { sourceId?: string; bitmapFeatureId?: string };
+        if (ud.bitmapFeatureId) {
+          // the whole artwork is one feature — nothing per-pixel to resolve
+          return {
+            kind: 'bitmap',
+            index: 0,
+            center: hit.point.clone(),
+            color: PATH_COLOR,
+            text: 'bitmap artwork',
+            sourceId: ud.sourceId as string,
+          };
+        }
         const fi = hit.faceIndex ?? -1;
         if (fi < 0 || fi >= source.features.faceToPlane.length) continue;
         const planeIdx = source.features.faceToPlane[fi];
@@ -874,6 +892,52 @@ export function Viewport({
         setLabel(null);
         hideHoverPlane();
         return;
+      }
+      // raster artwork hover (SPEC 2026-11-23): the display plane IS the
+      // hover surface — a hit draws the face-rect outline (the same loop
+      // the selection walk draws) in the hover tint. Deliberately not in
+      // hoverLineGeometry: the bitmap publishes no sample-snap candidates,
+      // the raycast decides.
+      raycaster.setFromCamera(
+        new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          -((e.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        camera,
+      );
+      const bmHit = raycaster.intersectObjects(bitmapMeshesRef.current, false)[0] ?? null;
+      if (bmHit) {
+        const source = sourcesRef.current.find(
+          (s) => s.id === (bmHit.object.userData as { sourceId?: string }).sourceId,
+        );
+        const b = source?.features.bitmaps?.[0];
+        if (source && b) {
+          const xf = transformFn(source.transform);
+          const loop = bitmapFaceOutline(b.width, b.height, xf);
+          const positions: number[] = [];
+          for (let i = 0; i < loop.length; i++) {
+            const a = loop[i];
+            const c = loop[(i + 1) % loop.length];
+            positions.push(a.x, a.y, a.z, c.x, c.y, c.z);
+          }
+          hoverLine.geometry.dispose();
+          hoverLine.geometry = new THREE.BufferGeometry();
+          hoverLine.geometry.setAttribute(
+            'position',
+            new THREE.Float32BufferAttribute(positions, 3),
+          );
+          (hoverLine.material as THREE.LineBasicMaterial).color.setHex(PATH_HOVER);
+          hoverLine.visible = true;
+          hideHoverPlane();
+          const rep = xf({ x: 0, y: 0, z: 0 });
+          const proj = rep.clone().project(camera);
+          setLabel({
+            text: 'bitmap artwork',
+            x: ((proj.x + 1) / 2) * rect.width + 12,
+            y: ((1 - proj.y) / 2) * rect.height - 14,
+          });
+          return;
+        }
       }
       const model = modelRef.current;
       const meshes: THREE.Object3D[] = [
@@ -1722,6 +1786,23 @@ export function Viewport({
           group.add(mesh);
           selObjects.push(mesh);
         }
+      } else if (sel.kind === 'bitmap') {
+        // bitmap artwork (SPEC 2026-11-23): the highlight is the face-rect
+        // LineLoop in the op's selection color — hoverLineGeometry
+        // deliberately returns an empty geometry for 'bitmap' (the
+        // artwork-overlay convention), so the loop is built here from the
+        // feature's own face dims, through the source transform
+        const b = entry.source.features.bitmaps?.[sel.index];
+        if (b) {
+          const xf = transformFn(entry.source.transform);
+          const loop = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints(bitmapFaceOutline(b.width, b.height, xf)),
+            new THREE.LineBasicMaterial({ color: selColor, transparent: true, depthTest: false }),
+          );
+          loop.renderOrder = 6;
+          group.add(loop);
+          selObjects.push(loop);
+        }
       } else {
         const line = new THREE.LineSegments(
           hoverLineGeometry(entry.data, sel.kind, sel.index),
@@ -2437,11 +2518,60 @@ export function Viewport({
     const group = featureGroupRef.current;
     if (!group) return;
     const objs: THREE.Mesh[] = [];
+    const bitmapObjs: THREE.Mesh[] = [];
     for (const p of primitives) {
       if (p.kind === 'artwork') {
         // line work, not a volume: it renders as its amber path overlay
         // (buildFeatureOverlayData), and neither occludes the raycast
         // pickers nor is face-pickable — no solid mesh to build here
+        continue;
+      }
+      if (p.kind === 'bitmap') {
+        // DITHERED-BITMAP artwork (SPEC 2026-11-23): the textured face
+        // plane IS the display, the hover surface and the pick target —
+        // registered in bitmapMeshesRef, never primMeshesRef (the artwork
+        // precedent: no volume, no occlusion). Orientation: image row 0
+        // (TOP) lands at local +y — the halftone v-down convention. The
+        // heightmap/preview corpus settled the flip: CanvasTexture's
+        // default flipY maps the canvas' TOP row to the plane's +y, which
+        // is exactly the artworkLocalPoints convention; no re-derivation.
+        const gw = Math.max(p.gray.width, 1);
+        const gh = Math.max(p.gray.height, 1);
+        const cv = document.createElement('canvas');
+        cv.width = gw;
+        cv.height = gh;
+        const ctx = cv.getContext('2d')!;
+        const img = ctx.createImageData(gw, gh);
+        for (let i = 0; i < gw * gh; i++) {
+          const l = p.gray.data[i] ?? 0;
+          img.data[i * 4] = l;
+          img.data[i * 4 + 1] = l;
+          img.data[i * 4 + 2] = l;
+          img.data[i * 4 + 3] = 255;
+        }
+        ctx.putImageData(img, 0, 0);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const sel = p.id === selectedObjectId;
+        const mesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(p.width, p.height),
+          new THREE.MeshBasicMaterial({
+            map: tex,
+            side: THREE.DoubleSide,
+            depthTest: false, // feature-overlay x-ray reading, like the amber lines
+            color: sel ? 0xffe0a0 : 0xffffff, // the selected tint, on map
+          }),
+        );
+        mesh.userData = { sourceId: p.id, bitmapFeatureId: `p:${p.id}:bitmap:0` };
+        const pose = primitivePose(p); // never hand-compose rotations
+        mesh.position.copy(pose.position);
+        mesh.quaternion.copy(pose.quaternion);
+        mesh.scale.copy(pose.scale);
+        mesh.renderOrder = 2;
+        // the Model layer covers EVERY authored object (see the volumes below)
+        mesh.visible = displayLayers.model;
+        group.add(mesh);
+        bitmapObjs.push(mesh);
         continue;
       }
       const indexed = primitiveGeometry(p);
@@ -2486,7 +2616,16 @@ export function Viewport({
       objs.push(mesh);
     }
     primMeshesRef.current = objs;
+    bitmapMeshesRef.current = bitmapObjs;
     return () => {
+      for (const m of bitmapObjs) {
+        group.remove(m);
+        m.geometry.dispose();
+        const mat = m.material as THREE.MeshBasicMaterial;
+        mat.map?.dispose();
+        mat.dispose();
+      }
+      bitmapMeshesRef.current = [];
       for (const m of objs) {
         group.remove(m);
         m.geometry.dispose();
@@ -2508,6 +2647,7 @@ export function Viewport({
   // rebuilds) and on every toggle
   useEffect(() => {
     for (const m of primMeshesRef.current) m.visible = displayLayers.model;
+    for (const m of bitmapMeshesRef.current) m.visible = displayLayers.model;
   }, [displayLayers.model, primitives, stock, selectedObjectId]);
 
   return (

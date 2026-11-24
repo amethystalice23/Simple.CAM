@@ -7,6 +7,7 @@ import {
 } from '../core/types';
 import type { AxisMode, JobOp, OpRates, OriginEdge, Primitive, Stock, Tool } from '../core/types';
 import { round2 } from '../core/types';
+import { DITHER_METHODS, DEFAULT_DITHER_METHOD, type DitherMethod } from '../core/dither';
 import type { GeneratedOp } from './jobGeneration';
 import {
   advisedOpRates,
@@ -1690,6 +1691,102 @@ function ParamFields(props: {
           <InfoTip text="fill: the raster clears the selected closed painted regions — scanlines along the machine's fast X (axial on a wrapped logo), a hole inside a filled loop stays untouched (the ankh's counter), the same depth ladder per scanline, laser as ever a single pass. 'fill then outline' runs the raster FIRST with the outlines traced on top; 'fill only' skips them. Closed-but-unpainted paths (fill=none) outline only" />
         </>
       );
+    case 'rasterEngrave': {
+      // LASER RASTER ENGRAVE (SPEC 2026-11-23): the image dithers at
+      // generate time from the RAW grayscale — no depth or step-down
+      // fields here, the beam cuts no material
+      const method = op.method ?? DEFAULT_DITHER_METHOD;
+      return (
+        <>
+          <InfoTip text="laser raster: the whole artwork dithers to fire/skip pixels — no depth, no step-downs, one pass. Power comes from the tool (or the ⚡ override); every line moves at the same raster feed, even the beam-off travel" />
+          <label
+            className="field"
+            title="How the grayscale turns into fire/skip pixels — an artistic choice, not a saved one: the artwork keeps its grays and the method applies here, so you can re-run any image with any material's favorite"
+          >
+            <span>Dither method</span>
+            <select
+              value={method}
+              onChange={(e) => upd({ method: e.target.value as DitherMethod } as Partial<JobOp>)}
+            >
+              {DITHER_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {DITHER_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {method === 'halftone' && (
+            <NumberField
+              label="Screen cell (mm)"
+              value={op.screenSpacing ?? 0.5}
+              min={0.05}
+              step={0.05}
+              title="Halftone screen only — the cell size, mm. Each cell decides one dot from the pixels it covers; smaller cells keep more tone detail"
+              onCommit={(v) => upd({ screenSpacing: Math.max(v, 0.05) } as Partial<JobOp>)}
+            />
+          )}
+          <label
+            className="field"
+            title="Row spacing and pixel size, mm — 0.1 matches the machine's own Laser Image output. Too fine a pitch on a big face floods the file with millions of short moves"
+          >
+            <span>Pixel pitch (mm)</span>
+            {/* the vcarve "auto" pattern: empty = the generator's default,
+                a value forces it (a hand-edited pitch sticks) */}
+            <input
+              type="number"
+              step={0.05}
+              min={0.05}
+              placeholder="0.1"
+              value={op.pitch ?? ''}
+              onChange={(e) => {
+                const s = e.target.value;
+                if (s === '') return upd({ pitch: undefined } as Partial<JobOp>);
+                const v = parseFloat(s);
+                if (Number.isFinite(v) && v >= 0.05) upd({ pitch: v } as Partial<JobOp>);
+              }}
+            />
+          </label>
+          <label
+            className="field"
+            title="Serpentine: every second row runs backwards, no travel between rows — fast. One-way: each return is a rapid — slower, and the honest option if you see drift on the turns"
+          >
+            <span>Sweep</span>
+            <select
+              value={op.sweep ?? 'serpentine'}
+              onChange={(e) =>
+                upd({ sweep: e.target.value as 'serpentine' | 'one-way' } as Partial<JobOp>)
+              }
+            >
+              <option value="serpentine">Serpentine</option>
+              <option value="one-way">One-way</option>
+            </select>
+          </label>
+          <NumberField
+            label="Interlace (mm)"
+            value={op.interlace ?? 0}
+            step={0.05}
+            title="Shifts alternate rows sideways, signed mm — compensates the small offset Studio users report on reverse rows (the beam settles ~3 ms per turn, about half a pixel). Calibrate on the test coupon; it fixes position only, never under-burn"
+            onCommit={(v) => upd({ interlace: v } as Partial<JobOp>)}
+          />
+          <NumberField
+            label="Lead-in (mm)"
+            value={op.leadIn ?? 0}
+            min={0}
+            step={0.1}
+            title="Lit travel before each fired run, mm — a buffer against the beam's power ramp-up. It burns pixels that were white, so every run's leading edge gains a small over-burn. 0 matches the machine's own output"
+            onCommit={(v) => upd({ leadIn: Math.max(v, 0) } as Partial<JobOp>)}
+          />
+          <NumberField
+            label="Min power (0–1)"
+            value={op.minPower ?? 0}
+            min={0}
+            step={0.05}
+            title="Floor on the fired power level — diodes barely lase below about 0.1–0.15, so the darkest fired pixel never drops under this"
+            onCommit={(v) => upd({ minPower: Math.min(Math.max(v, 0), 1) } as Partial<JobOp>)}
+          />
+        </>
+      );
+    }
     case 'vcarveFlat':
       return (
         <>
@@ -1724,6 +1821,19 @@ function ParamFields(props: {
       );
   }
 }
+
+/** the dither method dropdown's plain names (the spec's list — the
+ *  internal values stay the kernel's) */
+const DITHER_LABELS: Record<DitherMethod, string> = {
+  atkinson: 'Atkinson',
+  'floyd-steinberg': 'Floyd–Steinberg',
+  jarvis: 'Jarvis',
+  stucki: 'Stucki',
+  burkes: 'Burkes',
+  sierra: 'Sierra',
+  bayer8: 'Bayer 8×8',
+  halftone: 'Halftone screen',
+};
 
 export function OpsPanel(props: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
@@ -2131,7 +2241,17 @@ export function OpsPanel(props: Props) {
                           {PICK_BANNERS[props.picking!.kind]}
                         </button>
                       ) : (
-                        ['pocket', 'profile', 'drill', 'chamfer', 'cylChamfer', 'engrave', 'vcarveFlat', 'threadMill'].includes(op.kind) && (
+                        [
+                          'pocket',
+                          'profile',
+                          'drill',
+                          'chamfer',
+                          'cylChamfer',
+                          'engrave',
+                          'rasterEngrave', // its one target: bitmap artwork features
+                          'vcarveFlat',
+                          'threadMill',
+                        ].includes(op.kind) && (
                           <button
                             type="button"
                             className={editing ? '' : 'secondary'}
@@ -2172,9 +2292,20 @@ export function OpsPanel(props: Props) {
                         tools={props.tools}
                         currentId={op.toolId}
                         inUse={inUse}
+                        // SPEC 2026-11-23: the raster op accepts the laser
+                        // module only — the pick list narrows for it (other
+                        // kinds keep the full library, per the engrave
+                        // precedent: the generator's gate is the truth)
+                        allowedTypes={op.kind === 'rasterEngrave' ? ['laser'] : undefined}
                         onChange={(toolId) => changeTool(op, toolId)}
                       />
                     </label>
+                  )}
+                  {op.kind === 'rasterEngrave' && props.tools.find((t) => t.id === op.toolId)?.type !== 'laser' && (
+                    <InfoTip
+                      warn
+                      text="raster engrave needs the laser module — pick the laser from the tool library"
+                    />
                   )}
                   <ParamFields
                     op={op}

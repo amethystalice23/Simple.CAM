@@ -157,7 +157,7 @@ export function planeExtents(
 
 /** One manually selected item in measure mode (right-click). */
 export interface MeasurePick {
-  kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain' | 'thread';
+  kind: 'edge' | 'circle' | 'plane' | 'path' | 'radialChain' | 'thread' | 'bitmap';
   index: number;
   /** machine-space center used for distance computation */
   center: THREE.Vector3;
@@ -405,6 +405,33 @@ export interface FeatureOverlayData {
 /** Model-space point → machine-space point under a transform. */
 const round1 = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(1));
 
+/**
+ * A bitmap artwork's face-rect corner loop, machine space (docs/PLAN.md
+ * "Laser raster engrave", SPEC 2026-11-23): x ∈ [−w/2, w/2], y ∈
+ * [−h/2, h/2] at local z=0 — the face rect is symmetric about the
+ * origin, so the halftone v-down flip never shows here. Four corners in
+ * loop order; callers close the loop themselves (LineLoop, or the
+ * hover line pushes the closing segment). Drawn wherever overlays draw,
+ * never in hoverLineGeometry (already 'bitmap'-shaped, deliberately
+ * empty).
+ */
+export function bitmapFaceOutline(
+  width: number,
+  height: number,
+  xf: (v: Vec3) => THREE.Vector3,
+): THREE.Vector3[] {
+  return (
+    [
+      { x: -width / 2, y: -height / 2, z: 0 },
+      { x: width / 2, y: -height / 2, z: 0 },
+      { x: width / 2, y: height / 2, z: 0 },
+      { x: -width / 2, y: height / 2, z: 0 },
+      // the flat artwork convention: local centered frame → the
+      // primitive's transform places it like artwork's path points
+    ] as Vec3[]
+  ).map((v) => xf(v));
+}
+
 export function transformFn(t: ModelTransform): (v: Vec3) => THREE.Vector3 {
   const rot = new THREE.Quaternion().setFromEuler(
     new THREE.Euler(
@@ -540,6 +567,20 @@ export function buildFeatureOverlayData(
     pathSamples.push(draw);
     pathMid.push(pts[Math.floor(pts.length / 2)].clone());
     pathText.push(`artwork · L ${len.toFixed(2)} mm`);
+  }
+
+  // bitmap artwork (SPEC 2026-11-23): the face-rect outline rides with the
+  // amber line work — it is the body around the Viewport's textured face
+  // plane. Deliberately NO pathSamples entry: the plane mesh is the hover
+  // and pick surface (raycast), so these lines must never enter the
+  // per-path index machinery and shift every path highlight by one.
+  for (const b of features.bitmaps ?? []) {
+    const loop = bitmapFaceOutline(b.width, b.height, xf);
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i];
+      const c = loop[(i + 1) % loop.length];
+      pathPos.push(a.x, a.y, a.z, c.x, c.y, c.z);
+    }
   }
 
   // constant-radius chains: closed silhouette outlines (slot walls),
