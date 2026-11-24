@@ -246,6 +246,26 @@ browser eyeball of the wrapped artwork before first metal.
 
 ### Laser raster engrave — dithered bitmap artwork (SPEC 2026-11-23; supersedes the 2026-10-28 halftone-only verdict)
 
+**IMPLEMENTED 2026-11-24** (branch feat/raster-engrave) — `dither.ts`
+(8 methods: Atkinson default, Floyd–Steinberg, Jarvis, Stucki, Burkes,
+Sierra, Bayer 8×8, halftone-as-threshold; area-weighted resample),
+`rasterEngrave` generator (src/cam/rasterEngrave.ts) mirroring the
+dialect (constant-velocity serpentine, run coalescing, S stamps on run
+boundaries, row-step folds, one-way G0-return divergence), the
+`'bitmap'` primitive (grayscale stays on the artwork, whole-artwork
+selection; halftone vector artwork also whole-artwork), the op case +
+suggest + panel fields, post goldens ×3 (serpentine / one-way /
+halftone, src/post/__tests__/golden/raster-engrave-*.nc), job file v2
+(grayscale as `gray.base64`). Deliberate calls recorded for the field
+run: raster `leadIn` defaults **0**, NOT the vector's inherited 0.3
+(a raster lead burns authored-white pixels — at 0.1mm pitch 0.3mm
+bridges three pixels ahead of every fired run; the coupon can raise
+it); our beam-off S word emits `S0` (trimmed), not Studio's literal
+`S0.0` — identical to the committed vector-laser goldens. Still open:
+the INTERLACE CALIBRATION COUPON (testPattern/CalibrationDialog flow —
+the knob ships with one-way as the escape hatch) and greyscale
+per-material modulation (phase 2 below).
+
 Ground truth, measured from the corpus 2026-11-23:
 `examples/MakeraStudio_TOP_20260926153254.nc` (Z1 "Laser Image") —
 1-bit DITHERED raster at CONSTANT power (S0.3/S0.0 only, 52,279 G1s,
